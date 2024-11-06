@@ -24,6 +24,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
@@ -837,9 +838,15 @@ DeviceAddr AllocateBuffer(Buffer *buffer) {
         GraphTracker::instance().track_allocate(buffer);
         return 0;
     }
-    // TODO: Validate correct sub-device manager id
-    auto& allocator = buffer->device()->get_initialized_allocator(buffer->sub_device_id());
+    if (buffer->sub_device_manager_id().has_value()) {
+        TT_FATAL(*(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            *buffer->sub_device_manager_id(),
+            buffer->device()->get_active_sub_device_manager_id());
+    }
+    auto allocator = buffer->allocator();
     DeviceAddr allocated_addr;
+
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
             *allocator,
@@ -876,8 +883,13 @@ void DeallocateBuffer(Buffer *buffer) {
         TracyFreeN(reinterpret_cast<void const *>(buffer->address()), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
     }
 #endif
-    // TODO: Validate correct sub-device manager id
-    auto& allocator = buffer->device()->get_initialized_allocator(buffer->sub_device_id());
+    if (buffer->sub_device_manager_id().has_value()) {
+        TT_FATAL(*(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            *buffer->sub_device_manager_id(),
+            buffer->device()->get_active_sub_device_manager_id());
+    }
+    auto allocator = buffer->allocator();
     allocator::deallocate_buffer(*allocator, buffer);
 }
 
@@ -1140,38 +1152,72 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
 }
 
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, std::optional<DeviceAddr> address, std::optional<uint32_t> sub_device_id) {
-    if (address.has_value()) {
-        return Buffer::create(
-            config.device, *address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, sub_device_id);
-    } else {
-        return Buffer::create(
-            config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, sub_device_id);
-    }
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
+    return Buffer::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
 }
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, std::optional<DeviceAddr> address, std::optional<uint32_t> sub_device_id) {
-    if (address.has_value()) {
-        return Buffer::create(
-            config.device,
-            *address,
-            config.size,
-            config.page_size,
-            config.buffer_type,
-            config.buffer_layout,
-            config.shard_parameters,
-            std::nullopt,
-            sub_device_id);
-    } else {
-        return Buffer::create(
-            config.device,
-            config.size,
-            config.page_size,
-            config.buffer_type,
-            config.buffer_layout,
-            config.shard_parameters,
-            std::nullopt,
-            sub_device_id);
-    }
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device,
+        address,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        std::nullopt,
+        std::nullopt);
+}
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, SubDeviceId sub_device_id) {
+    return Buffer::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        std::nullopt,
+        std::nullopt,
+        sub_device_id);
+}
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
+    return Buffer::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt,
+        std::nullopt);
+}
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device,
+        address,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt,
+        std::nullopt);
+}
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, SubDeviceId sub_device_id) {
+    return Buffer::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt,
+        sub_device_id);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
@@ -1283,7 +1329,7 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
 
 void ReleaseTrace(Device *device, const uint32_t tid) { device->release_trace(tid); }
 
-void Synchronize(Device *device, const std::optional<uint8_t> cq_id, tt::stl::Span<const uint32_t> sub_device_ids) {
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         if (cq_id.has_value()) {
             Finish(device->command_queue(cq_id.value()), sub_device_ids);

@@ -10,6 +10,7 @@
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
 /** @file */
@@ -282,6 +283,29 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 /**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
+
+/**
 *  Creates a pre-allocated interleaved DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
@@ -289,11 +313,32 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
 *  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
-*  | address         | Device address of the buffer. Default will calculate address      | std::optional<DeviceAddr> |             | No       |
-*  | sub_device_id   | The sub-device id to allocate on. Default is the global allocator | std::optional<uint32_t>   |             | No       |
-
+*  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
 */
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, std::optional<DeviceAddr> address = std::nullopt, std::optional<uint32_t> sub_device_id = std::nullopt);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, SubDeviceId sub_device_id);
+
+/**
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
+*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Creates a pre-allocated sharded DRAM or L1 buffer on device
@@ -303,10 +348,9 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, std:
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
 *  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*  | address         | Device address of the buffer. Default will calculate address      | std::optional<DeviceAddr> |             | No       |
-*  | sub_device_id   | The sub-device id to allocate on. Default is the global allocator | std::optional<uint32_t>   |             | No       |
+*  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
 */
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, std::optional<DeviceAddr> address = std::nullopt, std::optional<uint32_t> sub_device_id = std::nullopt);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, SubDeviceId sub_device_id);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
@@ -479,7 +523,7 @@ void EnqueueReadBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<uint32_t> &dst,
     bool blocking,
-    tt::stl::Span<const uint32_t> sub_device_ids = {});
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Reads a buffer from the device
@@ -499,7 +543,7 @@ void EnqueueReadBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void *dst,
     bool blocking,
-    tt::stl::Span<const uint32_t> sub_device_ids = {});
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a buffer to the device
@@ -520,7 +564,7 @@ void EnqueueWriteBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<uint32_t> &src,
     bool blocking,
-    tt::stl::Span<const uint32_t> sub_device_ids = {});
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a buffer to the device
@@ -540,7 +584,7 @@ void EnqueueWriteBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking,
-    tt::stl::Span<const uint32_t> sub_device_ids = {});
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a program to the device and launches it
@@ -565,7 +609,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
  * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
-void Finish(CommandQueue &cq, tt::stl::Span<const uint32_t> sub_device_ids = {});
+void Finish(CommandQueue &cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
@@ -662,7 +706,7 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
  * | event          | An event that will be populated by this function, and inserted in CQ              | std::shared_ptr<Event>        |                                    | Yes      |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
-void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event, tt::stl::Span<const uint32_t> sub_device_ids = {});
+void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
@@ -706,7 +750,7 @@ bool EventQuery(const std::shared_ptr<Event> &event);
  * | cq_id          | The specific command queue id to synchronize  .                                   | uint8_t                       |                                    | No       |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
-void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const uint32_t> sub_device_ids = {});
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace v0
 }  // namespace tt_metal

@@ -1,5 +1,9 @@
 CreateBuffer
 =================
 
-.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const InterleavedBufferConfig &config, std::optional<DeviceAddr> address, std::optional<uint32_t> sub_device_id);
-.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const ShardedBufferConfig &config, std::optional<DeviceAddr> address, std::optional<uint32_t> sub_device_id);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const InterleavedBufferConfig &config);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const ShardedBufferConfig &config);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const InterleavedBufferConfig &config, SubDeviceId sub_device_id);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const ShardedBufferConfig &config, SubDeviceId sub_device_id);
