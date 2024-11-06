@@ -210,11 +210,6 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         this->cb_ptr += tile_idx * tile_info.tile_size;
 
         // Check for unprintable data, and return error as necessary
-        if ((tile_idx + 1) * tile_info.tile_size > CB_PAGE_SIZE(this->cb_id)) {
-            this->cb_ptr = CB_PAGE_SIZE(this->cb_id); // Save the page size we weren't expecting so host can read.
-            this->return_code = DPrintErrorBadTileIdx;
-            return;
-        }
         if (this->cb_ptr < L1_UNRESERVED_BASE || this->cb_ptr >= MEM_L1_SIZE) {
             this->return_code = DPrintErrorBadPointer;
             return; // bad tile pointer, return
