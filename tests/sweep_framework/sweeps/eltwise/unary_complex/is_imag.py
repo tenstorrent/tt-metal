@@ -97,27 +97,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-    # print(f"pcc {pcc} input_a_dtype {input_a_dtype}")
     return [pcc, e2e_perf]
 
 
-# from tests.sweep_framework.permutations import *
 
-# start_time = start_measuring_time()
-# for suite in parameters.keys():
-#     device_id = 0
-#     device = ttnn.open_device(device_id=device_id)
-#     suite_vectors = list(permutations(parameters[suite]))
-#     print(len(suite_vectors))
-#     for vector in suite_vectors:
-#         try:
-#             passed, _ = run(**vector, device=device)
-#             if passed[0] != True:
-#                 print(passed)
-#         except Exception as e:
-#             print(e)
-
-#     ttnn.close_device(device)
-
-# e2e_perf = stop_measuring_time(start_time)
-# print(f"time {e2e_perf / 1000000000}s")
