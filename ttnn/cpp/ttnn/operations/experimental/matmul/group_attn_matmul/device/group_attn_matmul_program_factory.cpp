@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     // Only first 32 of cores mcast KV heads to match num_rows_in_one_tile in reader kernel, so these coordinates are static if we cache on compute_with_storage_grid_size
     // TODO: If this is not the case, then we should set reader_runtime_args to max possible size and update sender noc coordinates based on input
-    CoreCoord mcast_sender_grid = ((CoreRangeSet) num_cores_to_corerange_set(TILE_HEIGHT, compute_with_storage_grid_size, row_major)).bounding_box().grid_size();
+    CoreCoord mcast_sender_grid = ((CoreRangeSet) num_cores_to_corerangeset(TILE_HEIGHT, compute_with_storage_grid_size, row_major)).bounding_box().grid_size();
     std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
     std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
     for(uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         }
     );
 
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
         out_subblock_w,
         out_subblock_num_tiles,
@@ -341,7 +341,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         // Mcast receiver args
         // NOTE: If Q_HEADS < 32, have all cores in mcast grid participate in semaphore syncing because we mcast KV_HEADS from/to the same CB
         // Otherwise, data corruption if sender is in mcast grid and it starts populating its mcast CB as other senders are sending
-        CoreRangeSet mcast_receiver_cores = num_cores_to_corerange_set(Q_HEADS, compute_with_storage_grid_size, row_major);
+        CoreRangeSet mcast_receiver_cores = num_cores_to_corerangeset(Q_HEADS, compute_with_storage_grid_size, row_major);
         CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
         uint32_t mcast_num_dests = mcast_receiver_cores.num_cores(); // same as num_active_cores if Q_HEADS >= 32; also, always same as Q_HEADS
         uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();

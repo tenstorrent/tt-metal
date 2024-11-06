@@ -46,15 +46,15 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         adjusted_input_shape[dim] = (is_tile_dim) ? tt::constants::TILE_HEIGHT : 1;
         adjusted_input_shape_wo_padding[dim] = 1;
 
-        std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
 
-        tt::operations::primary::expand_to_max_dim(input_dim, adjusted_input_shape);
-        tt::operations::primary::expand_to_max_dim(output_dim, output_shape);
-        tt::operations::primary::expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
-        tt::operations::primary::expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
+        expand_to_max_dim(input_dim, adjusted_input_shape);
+        expand_to_max_dim(output_dim, output_shape);
+        expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
+        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
             TT_FATAL(input_dim[i] == output_dim[i], "Input and output dimensions do not match at index {}.", i);
@@ -66,8 +66,8 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
     } else {
         TT_FATAL(!is_tile_dim, "Dimension {} should not be a tile dimension when keepdim is false.", dim);
 
-        std::vector<uint32_t> expected_output_shape;
-        std::vector<uint32_t> expected_output_shape_wo_padding;
+        ttnn::SmallVector<uint32_t> expected_output_shape;
+        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_rank; ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
@@ -97,8 +97,8 @@ void MorehNormOperation::validate_inputs(
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
     const auto dim = operation_attributes.dim;
-    tt::operations::primary::check_tensor(input, "moreh_norm", "input");
-    tt::operations::primary::check_tensor(output, "moreh_norm", "output");
+    check_tensor(input, "moreh_norm", "input");
+    check_tensor(output, "moreh_norm", "output");
     validate_input_tensor_with_dim(input, dim);
     if (output.has_value())
         validate_output_tensor_with_keepdim(input, output.value(), dim, operation_attributes.keepdim);
@@ -144,8 +144,8 @@ MorehNormOperation::shape_return_value_t MorehNormOperation::compute_output_shap
         return Shape{tt::tt_metal::LegacyShape(shape, padding)};
     }
 
-    std::vector<uint32_t> shape;
-    std::vector<Padding::PadDimension> pad_dimensions;
+    ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
     const std::size_t output_rank = is_tile_dim ? input_rank : input_rank - 1;
     auto input_padding = input_shape.padding();
     for (int i = 0; i < input_rank; ++i) {

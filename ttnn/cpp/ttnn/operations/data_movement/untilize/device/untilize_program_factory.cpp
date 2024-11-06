@@ -135,11 +135,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
-    vector<uint32_t> compute_args_cliff = {
+    std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff ,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -184,26 +184,24 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        if (!full_cores.core_coord_in_core_ranges(core)) {
+        if (!full_cores.contains(core)) {
             continue;
         }
         // reader runtime args
-        vector<uint32_t> reader_rt_args;
         auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
-        reader_rt_args = {
+        const std::array reader_rt_args = {
             src0_buffer->address(),               // src_addr
             ntiles_per_core,  // ntiles
             tile_start_id                         // start_id
         };
 
-        std::vector<uint32_t> writer_rt_args;
-        writer_rt_args = {
+        const std::array writer_rt_args = {
             dst_buffer->address(),           // dst_addr
             nsticks_per_core,  // nsticks
             stick_size,               // block_size_nbytes
             ntiles_per_core,                // ntiles_per_core
             TILE_WIDTH * output.element_size(),               // tile_width_size
-            0, //start stick id = 0, since parallelizing on height
+            std::uint32_t{0}, //start stick id = 0, since parallelizing on height
             offset_within_stick
         };
 
@@ -218,22 +216,20 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
         // reader runtime args
-        std::vector<uint32_t> reader_rt_args;
         auto ntiles_per_core_cliff = ntiles_per_block * nblocks_per_core_cliff;
-        reader_rt_args = {
+        const std::array reader_rt_args = {
             src0_buffer->address(),               // src_addr
             ntiles_per_core_cliff,  // ntiles
             tile_start_id                         // start_id
         };
 
-        std::vector<uint32_t> writer_rt_args;
-        writer_rt_args = {
+        const std::array writer_rt_args = {
             dst_buffer->address(),           // dst_addr
             nsticks_per_core,  // nsticks
             stick_size,               // block_size_nbytes
             ntiles_per_core_cliff,                // ntiles_per_core
             TILE_WIDTH * output.element_size(),               // tile_width_size
-            0, //start stick id = 0, since parallelizing on height
+            std::uint32_t{0}, //start stick id = 0, since parallelizing on height
             offset_within_stick
         };
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
@@ -291,7 +287,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t stick_s = a.get_legacy_shape()[-1];
     uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
+    uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
 
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
@@ -332,7 +328,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         uint32_t num_cores = all_cores.num_cores();
         ncores = num_cores;
         core_range = all_cores;
-        core_range_cliff = CoreRangeSet({});
+        core_range_cliff = CoreRangeSet();
         ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
         nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
         nblocks_per_core_cliff = 0;
@@ -388,7 +384,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     } else {
         bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-        vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
+        std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
 
         unary_reader_kernel_id = CreateKernel(
             program,
@@ -410,7 +406,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         if (src_block_sharded) {
-            vector<uint32_t> writer_ct_args = {
+            std::vector<uint32_t> writer_ct_args = {
                 (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
             unary_writer_kernel_id = CreateKernel(
                 program,
@@ -420,7 +416,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         } else {
             bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
             uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(block_size_nbytes) : 0;
-            vector<uint32_t> writer_ct_args = {
+            std::vector<uint32_t> writer_ct_args = {
                 (uint32_t)out_is_dram,
                 (uint32_t)stick_size_is_power_of_two,
                 (uint32_t)log2_stick_size,
@@ -437,11 +433,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
-    vector<uint32_t> compute_args_cliff = {
+    std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -482,11 +478,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        if (!full_cores.core_coord_in_core_ranges(core)) {
+        if (!full_cores.contains(core)) {
             continue;
         }
         // reader runtime args
-        vector<uint32_t> reader_rt_args;
+        std::vector<uint32_t> reader_rt_args;
 
         if (src_sharded) {
             reader_rt_args = {
@@ -503,7 +499,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         // ntiles_per_block * nblocks_per_core);
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args;
+        std::vector<uint32_t> writer_rt_args;
         if (out_sharded) {
             writer_rt_args = {
                 ntiles_per_block * nblocks_per_core  // ntiles
@@ -574,7 +570,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
         // reader runtime args
-        vector<uint32_t> reader_rt_args;
+        std::vector<uint32_t> reader_rt_args;
 
         if (src_sharded) {
             reader_rt_args = {
@@ -591,7 +587,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         // nblocks_per_core_cliff);
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args;
+        std::vector<uint32_t> writer_rt_args;
         if (out_sharded) {
             writer_rt_args = {
                 ntiles_per_block * nblocks_per_core_cliff  // ntiles
@@ -754,7 +750,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Writer compile-time args
-    vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         num_sticks,
         stick_size,
@@ -763,7 +759,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         num_full_blocks_in_row,
         num_leftover_tiles,
         leftover_width_in_row,
-        0};
+        std::uint32_t{0}};
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
@@ -791,7 +787,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
         uint32_t(num_tiles_per_block)               // per_core_block_tile_cnt
     };

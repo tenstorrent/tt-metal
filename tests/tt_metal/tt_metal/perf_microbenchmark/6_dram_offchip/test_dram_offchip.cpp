@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
             log_error(
                 LogTest,
                 "Metal library and test code should be build with "
-                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+                "profiler option using ./build_metal.sh --enable-profiler");
 #endif
             auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
             TT_FATAL(
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::Buffer input_buffer(
+        auto input_buffer = Buffer::create(
             device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -212,7 +212,7 @@ int main(int argc, char **argv) {
             num_tiles_per_core_group_1,
             num_tiles_per_core_group_2,
             kernel,
-            input_buffer.address(),
+            input_buffer->address(),
             num_reqs_at_a_time,
             single_tile_size,
             tile_format);
@@ -221,14 +221,14 @@ int main(int argc, char **argv) {
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
         if (access_type == 0) {
-            tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
+            tt_metal::detail::WriteToBuffer(*input_buffer, input_vec);
         } else {
             for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
                 uint32_t num_tiles_per_core = 0;
-                if (core_group_1.core_coord_in_core_ranges(core)) {
+                if (core_group_1.contains(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_1;
-                } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                } else if (core_group_2.contains(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_2;
                 } else {
                     TT_ASSERT(false, "Core not in specified core ranges");
@@ -276,7 +276,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         pass = validation(
             device,
-            input_buffer,
+            *input_buffer,
             input_vec,
             num_cores,
             num_cores_y,
@@ -411,15 +411,15 @@ bool assign_runtime_args_to_program(
     for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
-        std::vector<uint32_t> kernel_args = {
+        const std::array kernel_args = {
             (std::uint32_t)input_buffer_addr,
             (std::uint32_t)(num_tiles_used),
             (std::uint32_t)num_blocks,
@@ -451,9 +451,9 @@ bool validation(
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             uint32_t num_tiles_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
@@ -483,9 +483,9 @@ bool validation(
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             uint32_t num_tiles_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
@@ -514,7 +514,7 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;

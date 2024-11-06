@@ -13,6 +13,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -163,11 +164,11 @@ int main(int argc, char** argv) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     int core_index = i * num_cores_c + j;
 
-                    vector<uint32_t> reader_runtime_args;
-                    vector<uint32_t> writer_runtime_args;
+                    std::array<uint32_t, 255> reader_runtime_args;
+                    std::array<uint32_t, 255> writer_runtime_args;
                     for (uint32_t k = 0; k < 255; ++k) {
-                        reader_runtime_args.push_back(core_index + k);
-                        writer_runtime_args.push_back(core_index + k);
+                        reader_runtime_args[k] = core_index + k;
+                        writer_runtime_args[k] = core_index + k;
                     }
 
                     SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);

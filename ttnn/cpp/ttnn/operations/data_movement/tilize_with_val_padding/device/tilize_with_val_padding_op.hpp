@@ -8,12 +8,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 
 namespace ttnn::operations::data_movement {
 
 struct TilizeWithValPadding {
     const tt::tt_metal::LegacyShape output_tensor_shape;
-    const float pad_value;
+    const PadValue pad_value;
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     const bool use_multicore;

@@ -8,32 +8,29 @@
 
 namespace ttnn {
 
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile) {
-    SimpleShape physical_shape = logical_shape;
-    auto rank = physical_shape.rank();
-    if (layout == Layout::TILE) {
-        auto tile_height = tt::constants::TILE_HEIGHT;
-        auto tile_width = tt::constants::TILE_WIDTH;
-        if (tile.has_value()) {
-            auto tile_shape = tile.value().get_tile_shape();
-            tile_height = tile_shape[0];
-            tile_width = tile_shape[1];
-        }
-        if (rank >= 1) {
-            physical_shape[rank - 1] = (physical_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
-            if (rank >= 2) {
-                physical_shape[rank - 2] = (physical_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
-            }
-        }
+namespace types {
+
+const Shape Shape::to_rank(size_t new_rank) const {
+    auto padded_shape = value;
+    auto shape = value.without_padding();
+
+    SmallVector<uint32_t> new_shape(new_rank, 1);
+    SmallVector<uint32_t> new_padded_shape(new_rank, 1);
+
+    int cur_idx = static_cast<int>(rank()) - 1;
+    int new_idx = static_cast<int>(new_rank) - 1;
+    for(;cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+        new_shape[new_idx] = shape[cur_idx];
+        new_padded_shape[new_idx] = padded_shape[cur_idx];
     }
-    if (layout == Layout::ROW_MAJOR) {
-        auto element_size = tt::tt_metal::tensor_impl::element_size_bytes(data_type);
-        auto row_alignment = sizeof(uint32_t) / element_size;
-        if (rank >= 1) {
-            physical_shape[rank - 1] = (physical_shape[rank - 1] + row_alignment - 1) / row_alignment * row_alignment;
-        }
+    for(;cur_idx >= 0; cur_idx--) {
+        TT_FATAL(shape[cur_idx] == 1, "Can't convert shape rank");
+        TT_FATAL(padded_shape[cur_idx] == 1, "Can't convert shape rank");
     }
-    return physical_shape;
+
+    return Shape(std::move(new_shape), std::move(new_padded_shape));
+}
+
 }
 
 }
@@ -91,7 +88,7 @@ Padding::Padding(const std::initializer_list<PadDimension> pad_dimensions, PadVa
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
-Padding::Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value) :
+Padding::Padding(tt::stl::Span<const PadDimension> pad_dimensions, PadValue pad_value) :
     rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
@@ -141,7 +138,7 @@ LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions) :
+LegacyShape::LegacyShape(tt::stl::Span<const uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
@@ -151,7 +148,7 @@ LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions, const
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions, const Padding& padding) :
+LegacyShape::LegacyShape(tt::stl::Span<const uint32_t> dimensions, const Padding& padding) :
     rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
@@ -183,7 +180,7 @@ const Padding& LegacyShape::padding() const {
 
 const LegacyShape LegacyShape::without_padding() const {
     auto padding = this->padding_;
-    std::vector<std::uint32_t> shape_without_padding;
+    ttnn::SmallVector<uint32_t> shape_without_padding;
     for (auto index = 0; index < this->rank(); index++) {
         const auto dimension = this->operator[](index);
         auto&& [front_pad, back_pad] = padding.pad_dimensions_[index];
@@ -197,7 +194,7 @@ ttnn::SimpleShape LegacyShape::logical_shape() const
 {
     const LegacyShape logical = without_padding();
 
-    std::vector<uint32_t> values(rank());
+    ttnn::SmallVector<uint32_t> values(rank());
     for (size_t i = 0; i < values.size(); i++) {
         values[i] = logical[i];
     }
@@ -213,6 +210,15 @@ const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
             rank - 1,
             normalized_index);
     return normalized_index;
+}
+
+Array4D LegacyShape::to_array_4D() const {
+    TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
+    Array4D ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
 }
 
 bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
@@ -338,51 +344,12 @@ MemoryConfig load_memory_config(const std::string& file_name) {
 
 }  // namespace tt
 
-namespace ttnn {
-
-namespace {
-int32_t normalized_index(int32_t index, size_t container_size) {
-    int32_t size = static_cast<int32_t>(container_size);
-
-    if (index < 0) {
-        index += size;
-    }
-
-    if (index < 0 || index >= size) {
-        throw std::out_of_range("SimpleShape index out of range.");
-    }
-
-    return index;
-}
-}
-
-bool SimpleShape::operator==(const SimpleShape &other) const {
-    return this->value == other.value;
-}
-
-bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
-    return this->value == other;
-}
-
-uint32_t SimpleShape::operator[](int32_t index) const {
-    auto norm_index = normalized_index(index, value.size());
-    return value[norm_index];
-}
-
-uint32_t& SimpleShape::operator[](int32_t index) {
-    auto norm_index = normalized_index(index, value.size());
-    return value[norm_index];
-}
-
-uint64_t SimpleShape::volume() const {
-    return std::accumulate(this->value.begin(), this->value.end(),
-                           uint64_t{1}, std::multiplies<uint64_t>());
-}
-
-} // namespace ttnn
-
 namespace ttnn::types {
 
-uint32_t Shape::operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+uint32_t Shape::operator[](std::int64_t index) const {
+    const auto dimension = value[index];
+    auto [front_pad, back_pad] = value.padding()[index];
+    return dimension - (front_pad + back_pad);
+}
 
 }  // namespace ttnn::types

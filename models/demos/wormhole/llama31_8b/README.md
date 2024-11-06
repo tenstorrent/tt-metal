@@ -51,38 +51,49 @@ Llama 3.1 8B runs fast prefill upto sequence lengths of 512.
 
 For decode-only, the largest context length supported is currently 1024 tokens.
 
-Llama 3.1 8B is running on a single chip. If you are running on a T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+Llama 3.1 8B is running on a single chip. If you are running on a N300 or T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
 
-Note that while running the demo you might see the warning: `Op | WARNING  | TILE layout does not have multicore implementation yet. Falling back to 1 core.` This is expected and can be ignored; the demo will run after the warning.
+Note that while running the demo you might see the warning: `Op | WARNING  | TILE layout does not have multicore implementation yet. Falling back to 1 core.` This is expected and can be ignored; the demo will run after the warnings.
 
+**Update**: The latest demo includes ttnn trace support, achieving a performance of 23 tokens/sec/user.
+
+```
+# Run the latest Llama3.1-8B trace demo with general weights
+pytest models/demos/wormhole/llama31_8b/demo/demo_trace.py -k "general and 1_batch"
+
+# Run the latest Llama3.1-8B trace demo with instruct weights
+pytest models/demos/wormhole/llama31_8b/demo/demo_trace.py -k "instruct and 1_batch"
+```
+
+### Older demo scripts
 ```
 # Run the demo with a pre-written batch of 8 user prompts:
 
-# Prefill & Decode demo
+# Old Prefill & Decode demo
 pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[general_weights-1_batch]
 
-# Decode-only demo
+# Old Decode-only demo
 pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[general_weights]
 
-# Prefill & Decode with continuous batching
+# Old Prefill & Decode with continuous batching
 pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching.py::test_LlamaModel_demo[batch_4-greedy-32L-text_completion-llama3]
 
-# Prefill & Decode with continuous batching & paged attention
+# Old Prefill & Decode with continuous batching & paged attention
 pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching_paged_attention.py::test_LlamaModel_demo[batch_4-greedy-32L-text_completion-llama3]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
 ```
-# Prefill & Decode demo
+# Old Prefill & Decode demo
 pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[instruct_weights-1_batch]
 
-# Decode-only demo
+# Old Decode-only demo
 pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[instruct_weights]
 
-# Prefill & Decode with continuous batching
+# Old Prefill & Decode with continuous batching
 pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching.py::test_LlamaModel_demo[batch_4-greedy-32L-chat_completion-llama3]
 
-# Prefill & Decode with continuous batching & paged attention
+# Old Prefill & Decode with continuous batching & paged attention
 pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching_paged_attention.py::test_LlamaModel_demo[batch_4-greedy-32L-chat_completion-llama3]
 ```
 

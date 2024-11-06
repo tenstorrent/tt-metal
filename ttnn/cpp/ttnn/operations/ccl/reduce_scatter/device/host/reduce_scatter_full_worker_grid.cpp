@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -210,7 +210,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
 
-    vector<uint32_t> compute_kernel_args = {};
+    std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
     std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
@@ -253,7 +253,7 @@ static void set_reduce_scatter_worker_rt(
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
     EdmInterfaceAddresses const& edm_interface_addresses,
-    WorkerAttributes &worker_attributes,
+    WorkerAttributes const& worker_attributes,
     std::size_t num_edm_channels,
     std::size_t edm_num_buffers_per_channel,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
@@ -336,8 +336,10 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
 
     TT_ASSERT(num_edm_channels % 2 == 0, "For line topologies, we expect a multiple of 2 number of channels for the algorithm and worker kernels to work.");
     const std::size_t workers_per_direction = num_edm_channels / num_directions_per_line;
-    auto const& lower_half_of_cores = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1))});
-    auto const& upper_half_of_cores = CoreRangeSet({CoreRange(CoreCoord(workers_per_direction, 0), CoreCoord(num_edm_channels - 1, num_links - 1))});
+    auto const& lower_half_of_cores =
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1)));
+    auto const& upper_half_of_cores = CoreRangeSet(
+        CoreRange(CoreCoord(0, num_links), CoreCoord(workers_per_direction - 1, (2 * num_links) - 1)));
     if (topology_config.ring_index == 0) {
         log_trace(tt::LogOp, "Start of line, putting CCL send cores in lower half");
         return {upper_half_of_cores, lower_half_of_cores};
@@ -348,7 +350,9 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
         return {lower_half_of_cores, upper_half_of_cores};
     } else {
         log_trace(tt::LogOp, "Middle of line - no CCL kernel");
-        return {CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))}), std::nullopt};
+        return {
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))),
+            std::nullopt};
     }
 }
 
@@ -376,9 +380,11 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores(
         }
 
         case ttnn::ccl::Topology::Ring:
-            return {CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))}), std::nullopt};
+            return {
+                CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))),
+                std::nullopt};
 
-        default: TT_ASSERT(false, "Unsupported topology"); return {CoreRangeSet({}), std::nullopt};
+        default: TT_ASSERT(false, "Unsupported topology"); return {CoreRangeSet(), std::nullopt};
     };
 }
 
@@ -414,7 +420,7 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
     std::size_t total_num_edm_channels = num_links * num_edm_channels;
     log_trace(tt::LogOp, "total_num_edm_channels: {}", total_num_edm_channels);
 
-    std::vector<uint32_t> num_pages_per_full_chunk(total_num_edm_channels * num_links, 0);
+    std::vector<uint32_t> num_pages_per_full_chunk(total_num_edm_channels, 0);
 
     for (std::size_t link = 0; link < num_links; link++) {
         const auto& an_edm_builder = cw_per_link_edm_builders.size() > 0 ? cw_per_link_edm_builders.at(link) : ccw_per_link_edm_builders.at(link);
@@ -611,7 +617,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     TT_ASSERT(input_tensor_num_units_per_tensor_slice > 0);
     constexpr bool enable_bidirectional = true;
-    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(topology == Topology::Linear ? 2 : 8), input_tensor_num_units_per_tensor_slice);
+    constexpr std::size_t default_num_workers = 8;
+    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(default_num_workers), input_tensor_num_units_per_tensor_slice);
     if (topology == ttnn::ccl::Topology::Linear) {
         max_num_workers = std::max<std::size_t>(max_num_workers, 2);
     }
@@ -643,7 +650,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [is_linear, enable_bidirectional, num_edm_channels_per_link](std::size_t x) {
                 static constexpr std::size_t bidirectional_directions = 2;
-                return is_linear ? (x < (num_edm_channels_per_link / bidirectional_directions)):
+                return is_linear ? ((x % num_edm_channels_per_link) < (num_edm_channels_per_link / bidirectional_directions)):
                     enable_bidirectional ? (x % bidirectional_directions == 0) : true;
             };
 
@@ -835,9 +842,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         receiver_device_id,
         sender_device_id);
 
-    std::size_t total_num_workers = worker_cores.size();
     auto override_runtime_arguments_callback =
-        [topology_config, worker_receiver_kernel_id, worker_sender_kernel_id, worker_cores, total_num_workers, ring_index](
+        [topology_config, worker_receiver_kernel_id, worker_sender_kernel_id, optional_line_start_ccl_send_kernel, worker_cores, second_worker_cores_list](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -851,9 +857,20 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 auto core = worker_cores.at(i);
                 auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
                 worker_receiver_runtime_args.at(0) = input.buffer()->address();
+                worker_receiver_runtime_args.at(1) = output.buffer()->address();
 
                 auto& worker_sender_runtime_args = worker_sender_runtime_args_by_core[core.x][core.y];
                 worker_sender_runtime_args.at(0) = output.buffer()->address();
+            }
+
+            if (second_worker_cores_list.has_value()) {
+                TT_FATAL(optional_line_start_ccl_send_kernel.has_value(), "Internal error: line start CCL send kernel was not found but we split the worker grid to place it onto some worker cores");
+                auto const &line_start_worker_cores = second_worker_cores_list.value();
+                auto &ccl_send_kernel_rt_args_by_core = GetRuntimeArgs(program, optional_line_start_ccl_send_kernel.value());
+                for (auto const& core : line_start_worker_cores) {
+                    auto& line_start_kernel_rt_args = ccl_send_kernel_rt_args_by_core[core.x][core.y];
+                    line_start_kernel_rt_args.at(0) = input.buffer()->address();
+                }
             }
         };
 

@@ -455,8 +455,17 @@ struct ExecuteUnaryBackwardClamp {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        std::optional<float> parameter_a,
-        std::optional<float> parameter_b,
+        std::optional<float> min = std::nullopt,
+        std::optional<float> max = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardClip {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        std::optional<float> min = std::nullopt,
+        std::optional<float> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
@@ -669,6 +678,7 @@ constexpr auto hardsigmoid_bw = ttnn::register_operation<"ttnn::hardsigmoid_bw",
 constexpr auto cos_bw = ttnn::register_operation<"ttnn::cos_bw", operations::unary_backward::ExecuteUnaryBackwardCos>();
 constexpr auto acosh_bw = ttnn::register_operation<"ttnn::acosh_bw", operations::unary_backward::ExecuteUnaryBackwardAcosh>();
 constexpr auto clamp_bw = ttnn::register_operation<"ttnn::clamp_bw", operations::unary_backward::ExecuteUnaryBackwardClamp>();
+constexpr auto clip_bw = ttnn::register_operation<"ttnn::clip_bw", operations::unary_backward::ExecuteUnaryBackwardClip>();
 constexpr auto rdiv_bw = ttnn::register_operation<"ttnn::rdiv_bw", operations::unary_backward::ExecuteUnaryBackwardRdiv>();
 constexpr auto gelu_bw = ttnn::register_operation<"ttnn::gelu_bw", operations::unary_backward::ExecuteUnaryBackwardGelu>();
 constexpr auto repeat_bw = ttnn::register_operation<"ttnn::repeat_bw", operations::unary_backward::ExecuteUnaryBackwardRepeat>();

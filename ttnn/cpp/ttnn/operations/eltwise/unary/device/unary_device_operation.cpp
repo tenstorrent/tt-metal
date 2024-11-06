@@ -27,6 +27,13 @@ void validate_supported_arch_dtype(
                 "UnaryOpType '{}' is not supported on Grayskull architecture.",
                 static_cast<int>(op_type));
             break;
+        case UnaryOpType::FILL:
+           if(arch == tt::ARCH::GRAYSKULL){
+                TT_FATAL(
+                    (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::BFLOAT8_B),
+                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported", input_datatype);
+                }
+            break;
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::BITWISE_AND:

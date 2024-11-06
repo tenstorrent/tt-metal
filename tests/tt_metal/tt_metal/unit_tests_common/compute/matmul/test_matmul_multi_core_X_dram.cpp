@@ -16,6 +16,7 @@
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+using std::vector;
 using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram {
@@ -229,7 +230,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
             auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
-            std::vector<uint32_t> mm_reader_args = {
+            const std::array mm_reader_args = {
                 (std::uint32_t) dram_buffer_src0_addr,
                 (std::uint32_t) dram_src0_noc_xy.x,
                 (std::uint32_t) dram_src0_noc_xy.y,
@@ -242,7 +243,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
                 (std::uint32_t) per_core_M * in0_block_w * single_tile_size, // input 0 block bytes
                 (std::uint32_t) per_core_N * in0_block_w * single_tile_size};
 
-            std::vector<uint32_t> writer_args = {
+            const std::array writer_args = {
                 (std::uint32_t) dram_buffer_dst_addr,
                 (std::uint32_t) dram_dst_noc_xy.x,
                 (std::uint32_t) dram_dst_noc_xy.y,
@@ -321,7 +322,7 @@ bool assign_runtime_args_to_program(
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
-            std::vector<uint32_t> mm_reader_args = {
+            const std::array mm_reader_args = {
                 (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                            // in0_tensor_stride_w
@@ -345,7 +346,7 @@ bool assign_runtime_args_to_program(
                 (std::uint32_t)K / in0_block_w               // num_blocks
             };
 
-            std::vector<uint32_t> writer_args = {
+            const std::array writer_args = {
                 (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                      // out_tensor_stride_w
@@ -430,17 +431,17 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
-    auto activation_buffer = std::make_shared<Buffer>(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    auto activation_buffer = Buffer::create(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, activations, M, K, activation_buffer);
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
-    auto weight_buffer = std::make_shared<Buffer>(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    auto weight_buffer = Buffer::create(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, weights, K, N, weight_buffer);
     log_debug(LogTest, "Copying inputs to dram complete");
 
-    auto out_buffer = std::make_shared<Buffer>(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
+    auto out_buffer = Buffer::create(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
     uint32_t out_dram_addr = out_buffer->address();
 
     log_debug(LogTest, "Writing kernel runtime args to device");

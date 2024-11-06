@@ -12,9 +12,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt {
+namespace ttnn {
 namespace operations {
-namespace primary {
 
 using namespace tt::tt_metal;
 
@@ -60,7 +59,7 @@ inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
 
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_wt_core_range(
     CoreRange core_range, uint32_t units_to_divide);
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
@@ -86,7 +85,7 @@ struct ComputeKernelArg {
 struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    vector<UnpackToDestMode> unpack_to_dest_mode;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool math_approx_mode = false;
     std::map<std::string, std::string> defines;
 };
@@ -99,7 +98,7 @@ struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    vector<UnpackToDestMode> unpack_to_dest_mode = {});
+    std::vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
@@ -109,7 +108,7 @@ struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    vector<UnpackToDestMode> unpack_to_dest_mode = {});
+    std::vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config);
@@ -293,21 +292,20 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
 uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shape);
+void expand_to_max_dim(ttnn::SmallVector<uint32_t> &dim, const ttnn::SimpleShape &shape);
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim);
 
 void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keepdim);
 
-void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank);
+void initialize_dims_with_range(ttnn::SmallVector<int64_t> &dims, uint32_t input_rank);
 
-std::vector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank);
+ttnn::SmallVector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> &dim, uint32_t input_rank);
 
 std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape);
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim);
 
-}  // namespace primary
 }  // namespace operations
 }  // namespace tt

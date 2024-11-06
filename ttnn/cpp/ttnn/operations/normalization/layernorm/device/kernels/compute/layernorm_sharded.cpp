@@ -173,6 +173,10 @@ void MAIN {
                 reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
             }
+            if (use_two_stage_reduce && !is_second_stage_reader) {
+                cb_wait_front(cb_ex_external, num_blocks_second_stage - 1);
+                cb_pop_front(cb_ex_external, num_blocks_second_stage - 1);
+            }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex);
@@ -287,6 +291,10 @@ void MAIN {
                 cb_wait_front(cb_ex_external2, 1);
                 reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external2, 1);
+            }
+            if (use_two_stage_reduce && !is_second_stage_reader) {
+                cb_wait_front(cb_ex_external2, num_blocks_second_stage - 1);
+                cb_pop_front(cb_ex_external2, num_blocks_second_stage - 1);
             }
             tile_regs_commit();
             tile_regs_wait();

@@ -24,8 +24,6 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
 
     auto num_groups = operation_attributes.num_groups;
 
-    using namespace tt::operations::primary;
-
     check_tensor(output_grad, "moreh_group_norm_backward_gamma_beta_grad", "output_grad");
     check_tensor(input, "moreh_group_norm_backward_gamma_beta_grad", "input");
     check_tensor(mean, "moreh_group_norm_backward_gamma_beta_grad", "mean");

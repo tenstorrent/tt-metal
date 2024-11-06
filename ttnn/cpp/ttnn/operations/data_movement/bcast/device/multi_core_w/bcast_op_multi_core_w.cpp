@@ -113,14 +113,18 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 	for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 		uint32_t Wt_per_core;
-		if (core_group_1.core_coord_in_core_ranges(core)) {
+		if (core_group_1.contains(core)) {
 			Wt_per_core = Wt_per_core_group_1;
-		} else if (core_group_2.core_coord_in_core_ranges(core)) {
+		} else if (core_group_2.contains(core)) {
 			Wt_per_core = Wt_per_core_group_2;
 		} else {
-			tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(16, 0));
-			tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
-			tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(9, 0));
+			constexpr std::array<uint32_t, 16> binary_reader_kernel_args{0};
+			constexpr std::array<uint32_t, 3> bcast_kernel_args{0};
+			constexpr std::array<uint32_t, 9> unary_writer_kernel_args{0};
+
+			tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, binary_reader_kernel_args);
+			tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, bcast_kernel_args);
+			tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, unary_writer_kernel_args);
 			continue;
 		}
         uint32_t num_tensor_tiles_per_core = NC*Ht*Wt_per_core;
@@ -235,9 +239,9 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 			auto& bcast_kernel_args = cached_eltwise_args.at(core.x).at(core.y);
 			auto& unary_writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 Wt_per_core = Wt_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 Wt_per_core = Wt_per_core_group_2;
             } else {
                 binary_reader_args[3] = 0;

@@ -27,7 +27,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     float scaler = 1.0f;
 
     const auto shape = input.get_padded_shape();
-    const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
+    const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
@@ -75,7 +75,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         {0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(all_core_range, num_cols);
+        split_work_to_cores_wt_core_range(all_core_range, num_cols);
 
     string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp";
@@ -154,13 +154,13 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         reduce_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
         1,                          // NC
         origin_H};
 
-    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
     }
@@ -177,7 +177,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             Ht,                         // Ht
             num_cols_per_core_group_2,  // Wt
             1,                          // NC
@@ -199,9 +199,9 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_cols_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");

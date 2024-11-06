@@ -33,6 +33,23 @@ namespace tt_metal {
 
 namespace {
 
+#if defined(TRACY_ENABLE)
+
+std::unordered_map<int, std::string> global_mempool_names;
+std::mutex global_mempool_names_mutex;
+
+static const char * get_buffer_location_name (BufferType buffer_type, int device_id) {
+    std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
+    int name_combo = (int)buffer_type * 1000 + device_id;
+    if (global_mempool_names.find(name_combo) == global_mempool_names.end())
+    {
+        std::string global_mempool_name = fmt::format("Device {} {}", device_id, magic_enum::enum_name(buffer_type));
+        global_mempool_names.emplace(name_combo, global_mempool_name);
+    }
+    return global_mempool_names[name_combo].c_str();
+}
+#endif
+
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
     ZoneScoped;
     return std::visit(
@@ -40,10 +57,10 @@ CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeS
         {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet({CoreRange(core_spec, core_spec)});
+                return CoreRangeSet(CoreRange(core_spec, core_spec));
             }
             else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet({core_spec});
+                return CoreRangeSet(core_spec);
             }
             else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 return core_spec;
@@ -60,44 +77,57 @@ struct DataMovementConfigStatus {
     bool noc1_in_use;
 };
 
-DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRangeSet &core_ranges) {
+DataMovementConfigStatus CheckDataMovementConfig(const HalProgrammableCoreType &programmable_core, Program &program, const CoreRangeSet &core_ranges) {
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
     auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
         const auto kernel = detail::GetKernel(program, kernel_id);
-        auto kernel_config = std::get<DataMovementConfig>(kernel->config());
-        auto noc_value = magic_enum::enum_integer(kernel_config.noc);
+        int noc_value;
+        switch (programmable_core) {
+            case HalProgrammableCoreType::TENSIX:
+                noc_value = magic_enum::enum_integer(std::get<DataMovementConfig>(kernel->config()).noc);
+            break;
+            case HalProgrammableCoreType::ACTIVE_ETH:
+            case HalProgrammableCoreType::IDLE_ETH:
+                noc_value = magic_enum::enum_integer(std::get<EthernetConfig>(kernel->config()).noc);
+            break;
+            default:
+                TT_THROW("Checking NoC and DataMovementProcessor is unsupported for programmable core {}", magic_enum::enum_name(programmable_core));
+        }
         local_noc0_usage = noc_value == 0;
         local_noc1_usage = noc_value == 1;
         data_movement_config_status.noc0_in_use = local_noc0_usage;
         data_movement_config_status.noc1_in_use = local_noc1_usage;
     };
 
+    // TODO (abhullar): Clean this up when brisc/ncrisc are moved to be one processor class with two data movement processor types
+    uint32_t dm0_idx = programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_ETH_DM0;
+    uint32_t dm1_idx = programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM1 : DISPATCH_CLASS_ETH_DM1;
     for (const auto &core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 const KernelGroup *kernel_group = program.kernels_on_core(
-                    CoreCoord(x, y), hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
-                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
+                    if (kernel_group->kernel_ids[dm0_idx].has_value()) {
                         data_movement_config_status.riscv0_in_use = true;
                         set_global_and_local_noc_usage(
-                            kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(),
+                            kernel_group->kernel_ids[dm0_idx].value(),
                             local_noc0_in_use,
                             local_noc1_in_use);
                     }
-                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                    if (kernel_group->kernel_ids[dm1_idx].has_value()) {
                         data_movement_config_status.riscv1_in_use = true;
                         set_global_and_local_noc_usage(
-                            kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(),
+                            kernel_group->kernel_ids[dm1_idx].value(),
                             local_noc0_in_use,
                             local_noc1_in_use);
                     }
-                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
-                        kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                    if (kernel_group->kernel_ids[dm0_idx].has_value() and
+                        kernel_group->kernel_ids[dm1_idx].has_value()) {
                         TT_FATAL(
                             local_noc0_in_use and local_noc1_in_use,
                             "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
@@ -113,11 +143,18 @@ DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRan
 }
 
 void ConfigureKernelGroup(
-    const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    Program &program,
+    uint32_t programmable_core_type_index,
+    const KernelGroup *kernel_group,
+    Device *device,
+    const CoreCoord &logical_core) {
 
+    uint32_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+            // Need the individual offsets of each bin
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core,
+                kernel_config_base, kernel_group->kernel_text_offsets);
         }
     }
 }
@@ -158,7 +195,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
 }
 
 inline void SetRuntimeArgsImpl(
-    const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args) {
+    const Program &program, KernelHandle kernel_id, const CoreCoord &c, stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
     }
@@ -168,7 +205,7 @@ inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRange &core_range,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -183,7 +220,7 @@ inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (const auto &core_range : core_range_set.ranges()) {
@@ -302,7 +339,7 @@ std::map<chip_id_t, Device *> CreateDevices(
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
-    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
     //on a Galaxy cluster.
@@ -319,61 +356,11 @@ std::map<chip_id_t, Device *> CreateDevices(
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
-    // Global Sync across all devices in the pool.
-    // We need to ensure that commands sent to each device have been completed
-    // before closing any device + modifying routing info.
-    // If this is not done, non-blocking CCLs followed by a close will hang, since
-    // the main thread will modify device state while the CCL is running on device.
-    for (const auto &[device_id, dev] : devices) {
-        dev->synchronize(); // Synchronize worker queue
-        Synchronize(dev); // Synchronize device
+    std::vector<Device *> devices_to_close;
+    for (auto& [id, device] : devices) {
+        devices_to_close.push_back(device);
     }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    std::map<chip_id_t, Device *> mmio_devices = {};
-    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-
-    if (is_galaxy) {
-        //On Galaxy, gateway wormhole devices (mmio devices) are not included in the set of devices
-        //created by CreateDevices(). So when closing devices, we need to find the corresponding
-        //gateway chips for all the tunneled devcies.
-        for (const auto &[device_id, dev] : devices) {
-            const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-            if (mmio_devices.find(mmio_device_id) == mmio_devices.end()) {
-                auto dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
-                mmio_devices.insert({mmio_device_id, dev_handle});
-            }
-        }
-    } else {
-        for (const auto &[device_id, dev] : devices) {
-            if(dev->is_mmio_capable()) {
-                mmio_devices.insert({device_id, dev});
-            }
-        }
-        for (const auto &[device_id, dev] : mmio_devices) {
-            devices.erase(device_id);
-        }
-    }
-
-    for (const auto &[device_id, dev] : mmio_devices) {
-        //For each mmio device, first close all the remote tunneled devices.
-        //Close the farthest tunneled device first.
-        auto tunnels_from_mmio = dev->tunnels_from_mmio_;
-        //iterate over all tunnels origination from this mmio device
-        for (auto t : tunnels_from_mmio) {
-            //iterate over all tunneled devices (tunnel stops) in this tunnel and close them.
-            for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
-                if (devices.find(t[ts]) != devices.end()) {
-                    devices[t[ts]]->close();
-                    // When a device is closed, its worker thread is joined. Stop tracking this
-                    // worker thread.
-                    tt::DevicePool::instance().unregister_worker_thread_for_device(devices[t[ts]]);
-                }
-            }
-        }
-        //finally close the mmio device
-        dev->close();
-        tt::DevicePool::instance().unregister_worker_thread_for_device(dev);
-    }
+    tt::DevicePool::instance().close_devices(devices_to_close);
 }
 
 bool InWorkerThread() {
@@ -421,7 +408,7 @@ void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_ASSERT(buffer.size() % page_size == 0);
+    TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_ASSERT(page_size % bytes_per_page_entry == 0);
@@ -455,12 +442,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_FATAL(page_size % bytes_per_page_entry == 0,
@@ -524,12 +506,7 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
@@ -669,21 +646,21 @@ void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
+void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done) {
+    LaunchProgram(device, *program, wait_until_cores_done);
 }
 
-void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
+void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done) {
     {  // Profiler scope start
         ZoneScoped;
-        detail::DispatchStateCheck(force_slow_dispatch);
+        detail::DispatchStateCheck(false);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program.finalize(device);
         }
 
-        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
-        detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
+        detail::WriteRuntimeArgsToDevice(device, program);
+        detail::ConfigureDeviceWithProgram(device, program);
 
         auto device_id = device->id();
 
@@ -756,7 +733,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            ConfigureKernelGroup(program, kernel_group, device, logical_core);
+            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
@@ -791,13 +768,14 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_dispatch) {
+void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(force_slow_dispatch);
+    detail::DispatchStateCheck(false);
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (auto& kg : program.get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
@@ -805,7 +783,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
-                        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
                                 const auto &kernel = detail::GetKernel(program, optional_id.value());
@@ -853,13 +831,36 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-void AllocateBuffer(Buffer *buffer, bool bottom_up) {
-    if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
-        GraphTracker::instance().track_allocate(buffer, bottom_up);
-        return;
+DeviceAddr AllocateBuffer(Buffer *buffer) {
+    if(GraphTracker::instance().hook_allocate(buffer)) {
+        GraphTracker::instance().track_allocate(buffer);
+        return 0;
     }
-    EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
-    GraphTracker::instance().track_allocate(buffer, bottom_up);
+
+    DeviceAddr allocated_addr;
+    if (is_sharded(buffer->buffer_layout())) {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->shard_spec().size() * buffer->num_cores().value() * buffer->page_size(),
+            buffer);
+    } else {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->size(),
+            buffer);
+    }
+    // Assertion here because buffer class returns a u32 when address is queried
+    // Requires updating all use cases of buffer address to accept a u64 to remove
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+
+    GraphTracker::instance().track_allocate(buffer);
+
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyAllocN(reinterpret_cast<void const *>(allocated_addr), buffer->size(), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
+    return allocated_addr;
 }
 
 void DeallocateBuffer(Buffer *buffer) {
@@ -867,12 +868,30 @@ void DeallocateBuffer(Buffer *buffer) {
     if(GraphTracker::instance().hook_deallocate(buffer)) {
         return;
     }
-    EnqueueDeallocateBuffer(
-        buffer->device()->command_queue(),
-        *(buffer->device()->allocator_),
-        buffer->address(),
-        buffer->buffer_type(),
-        false);
+
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyFreeN(reinterpret_cast<void const *>(buffer->address()), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
+    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
+}
+
+void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
+    if (tt::tt_metal::detail::InWorkerThread()) {
+        // Early exit if in a worker thread, since waiting for the worker
+        // queue to become empty inside a worker thread leads to a deadlock
+        // Synchronizing in a worker thread should be a nop by definition
+        return;
+    }
+    // Push empty work to threads and ensure its been picked up
+    for (auto target_device : workers) {
+        target_device->work_executor.push_work([](){});
+    }
+    // Block until work has been picked up, to flush the queue
+    for (auto target_device : workers) {
+        while(not target_device->work_executor.worker_queue.empty());
+    }
 }
 
 }  // namespace detail
@@ -930,7 +949,7 @@ KernelHandle CreateDataMovementKernel(
     const KernelSource &kernel_src,
     const CoreRangeSet &core_range_set,
     const DataMovementConfig &config) {
-    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(program, core_range_set);
+    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(HalProgrammableCoreType::TENSIX, program, core_range_set);
     const bool are_both_riscv_in_use =
         data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
@@ -970,13 +989,34 @@ KernelHandle CreateEthernetKernel(
     const CoreRangeSet &core_range_set,
     const EthernetConfig &config) {
     KernelHandle kernel_handle;
+    HalProgrammableCoreType eth_core_type = config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(eth_core_type, program, core_range_set);
+    const bool are_both_riscv_in_use = data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
+    const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
+
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
-    if (config.eth_mode == Eth::IDLE) {
-        kernel_handle = detail::AddKernel(program, kernel, HalProgrammableCoreType::IDLE_ETH);
-    } else {
-        kernel_handle = detail::AddKernel(program, kernel, HalProgrammableCoreType::ACTIVE_ETH);
-    }
-    return kernel_handle;
+
+    TT_FATAL(
+        utils::underlying_type<DataMovementProcessor>(config.processor)
+            < hal.get_processor_classes_count(eth_core_type),
+        "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} processors. "
+        "Update DataMovementProcessor in the config.",
+        kernel->name(),
+        magic_enum::enum_name(config.processor),
+        hal.get_processor_classes_count(eth_core_type));
+    TT_FATAL(
+        !(are_both_riscv_in_use),
+        "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
+        "cores because both data movement processors are in use!",
+        kernel->name());
+    TT_FATAL(
+        !(are_both_noc_in_use),
+        "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+        "cores because both NOCs are in use!",
+        kernel->name());
+
+
+    return detail::AddKernel(program, kernel, eth_core_type);
 }
 
 KernelHandle CreateKernel(
@@ -1059,9 +1099,9 @@ uint32_t CreateSemaphore(
     return std::visit(
         [&](auto &&c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs({});
+            CoreRangeSet crs;
             if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet({c});
+                crs = CoreRangeSet(c);
             } else {
                 crs = c;
             }
@@ -1087,20 +1127,36 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
-    return std::make_shared<Buffer>(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, config.allocate);
+    return Buffer::create(
+        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+}
+
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device, address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,
         config.buffer_type,
         config.buffer_layout,
         config.shard_parameters,
-        std::nullopt,
-        config.allocate);
+        std::nullopt);
+}
+
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device,
+        address,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
@@ -1115,7 +1171,7 @@ void SetRuntimeArgs(
     const Program &program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
@@ -1166,7 +1222,7 @@ void SetRuntimeArgs(
     SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),

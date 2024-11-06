@@ -9,7 +9,7 @@ import pytest
 from models.utility_functions import comp_allclose_and_pcc, is_blackhole, skip_for_blackhole
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import to_npu
+from tests.ttnn.unit_tests.operations.test_utils import to_ttnn
 
 
 def to_output_5d_shape(shape, index_dims, index_size):
@@ -270,11 +270,15 @@ def run_getitem_RAW_MAJOR(shape_index_dim, dtype, index_size, device):
 )
 def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device, use_program_cache):
     torch.manual_seed(2024)
-
-    for _ in range(2):
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_getitem_RAW_MAJOR(shape_index_dim, dtype, index_size, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_blackhole("Mismatching on Blackhole, see #12349")
@@ -816,7 +820,12 @@ def test_getitem_tilized_one_index_callback(
     shape_index_dim, dtype, index_size, row_major_index, device, use_program_cache
 ):
     torch.manual_seed(2024)
-    for _ in range(2):
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_moreh_geitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major_index, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

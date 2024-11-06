@@ -18,6 +18,8 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -40,6 +42,8 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+}
+}
 
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
@@ -53,6 +57,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -192,7 +197,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
             reader_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
         } else {
             reader_compile_time_args.push_back(gamma_stick_size);
@@ -202,7 +207,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
+            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
             reader_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
         } else {
             reader_compile_time_args.push_back(beta_stick_size);
@@ -252,7 +257,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
 
-    vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en };
+    std::vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en };
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -321,9 +326,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
         uint32_t num_tile_rows_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
@@ -407,12 +412,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
+    //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device *device = a.device();
 
@@ -422,8 +428,20 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (fp32_dest_acc_en) {
-        TT_ASSERT(subblock_wt <= 4, "subblock width must less than 4 in fp32 mode");
+    if (dst_full_sync_en == false) {
+        if (fp32_dest_acc_en) {
+            TT_FATAL(subblock_wt <= 4, "subblock_wt={}, but subblock width must less than 4 tiles in fp32 mode when dst_full_sync_en is false", subblock_wt);
+        }
+        else {
+            TT_FATAL(subblock_wt <= 8, "subblock_wt={}, but subblock width must less than 8 tiles when dst_full_sync_en is false", subblock_wt);
+        }
+    } else {
+        if (fp32_dest_acc_en) {
+            TT_FATAL(subblock_wt <= 8, "subblock_wt={}, but subblock width must less than 8 tiles in fp32 mode when dst_full_sync_en is true", subblock_wt);
+        }
+        else {
+            TT_FATAL(subblock_wt <= 16, "subblock_wt={}, but subblock width must less than 16 tiles when dst_full_sync_en is true", subblock_wt);
+        }
     }
 
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -604,9 +622,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     CoreCoord start_core = {0, 0};
     CoreRangeSet all_cores = shard_spec.grid;
     CoreRange sender_cores(start_core, start_core);
-    CoreRangeSet all_to_all_cores({});
-    CoreRangeSet all_to_all_workers_except_sender({});
-    CoreRangeSet not_all_to_all_workers({});
+    CoreRangeSet all_to_all_cores;
+    CoreRangeSet all_to_all_workers_except_sender;
+    CoreRangeSet not_all_to_all_workers;
     uint32_t num_cores_x_mcast, num_cores_y_mcast;
     if (mcast_1d) {
         sender_cores = {start_core, start_core};
@@ -624,7 +642,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             all_core_grid_size = grid_size;
             none_core_grid_size = grid_size;
         }
-        all_to_all_cores = num_cores_to_corerange_set(start_core, num_cores_all_to_all, all_core_grid_size, row_wise);
+        all_to_all_cores = num_cores_to_corerangeset(start_core, num_cores_all_to_all, all_core_grid_size, row_wise);
         if (row_wise) {
             if (use_mcast) {
                 CoreCoord all_start_core;
@@ -642,15 +660,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                         all_start_core = {end_core.x + 1, end_core.y};
                     }
                 }
-                all_to_all_workers_except_sender = num_cores_to_corerange_set(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
+                all_to_all_workers_except_sender = num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
             }
             if (num_none_all_to_all_workers > 0) {
                 if (use_two_stage_reduce) {
                     CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
                     CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
                     CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-                    std::set<CoreRange> none_core_set; none_core_set.insert(none_core_range);
-                    not_all_to_all_workers = CoreRangeSet(none_core_set);
+                    not_all_to_all_workers = CoreRangeSet(none_core_range);
                 } else {
                     CoreCoord none_start_core;
                     CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
@@ -659,7 +676,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     } else {
                         none_start_core = {end_core.x + 1, end_core.y};
                     }
-                    not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
+                    not_all_to_all_workers = num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
                 }
             }
         } else {
@@ -679,15 +696,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                         all_start_core = {end_core.x, end_core.y + 1};
                     }
                 }
-                all_to_all_workers_except_sender = num_cores_to_corerange_set(CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
+                all_to_all_workers_except_sender = num_cores_to_corerangeset(CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
             }
             if (num_none_all_to_all_workers > 0) {
                 if (use_two_stage_reduce) {
                     CoreCoord none_start_core = {sender_cores.end_coord.x, all_core_grid_size.y};
                     CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
                     CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-                    std::set<CoreRange> none_core_set; none_core_set.insert(none_core_range);
-                    not_all_to_all_workers = CoreRangeSet(none_core_set);
+                    not_all_to_all_workers = CoreRangeSet(none_core_range);
                 } else {
                     CoreCoord none_start_core;
                     CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
@@ -696,7 +712,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     } else {
                         none_start_core = {end_core.x, end_core.y + 1};
                     }
-                    not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
+                    not_all_to_all_workers = num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
                 }
             }
         }
@@ -707,18 +723,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             sender_cores = {
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
                 {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
-            all_to_all_cores = CoreRangeSet({CoreRange(
-                {(std::size_t) start_core.x, (std::size_t) start_core.y},
-                {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+            all_to_all_cores = CoreRangeSet(CoreRange(
+                {(std::size_t)start_core.x, (std::size_t)start_core.y},
+                {(std::size_t)start_core.x + num_cores_all_to_all - 1, (std::size_t)start_core.y + num_cores_y - 1}));
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
-                    {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+                all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x + 1, (std::size_t)start_core.y},
+                    {(std::size_t)start_core.x + num_cores_all_to_all - 1,
+                     (std::size_t)start_core.y + num_cores_y - 1}));
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+                not_all_to_all_workers = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x + num_cores_all_to_all, (std::size_t)start_core.y},
+                    {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
             }
             num_cores_x_mcast = num_cores_x;
             num_cores_y_mcast = 1;
@@ -726,18 +743,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             sender_cores = {
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
                 {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
-            all_to_all_cores = CoreRangeSet({CoreRange(
-                {(std::size_t) start_core.x, (std::size_t) start_core.y},
-                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
+            all_to_all_cores = CoreRangeSet(CoreRange(
+                {(std::size_t)start_core.x, (std::size_t)start_core.y},
+                {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_all_to_all - 1}));
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
+                all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x, (std::size_t)start_core.y + 1},
+                    {(std::size_t)start_core.x + num_cores_x - 1,
+                     (std::size_t)start_core.y + num_cores_all_to_all - 1}));
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+                not_all_to_all_workers = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x, (std::size_t)start_core.y + num_cores_all_to_all},
+                    {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
             }
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;
@@ -890,7 +908,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
             writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
             writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
         } else {
@@ -903,7 +921,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
+            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
             writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
             writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
         } else {

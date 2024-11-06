@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "common/bfloat16.hpp"
+#include "impl/buffers/buffer_constants.hpp"
 #include "tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -22,6 +23,7 @@
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::constants;
@@ -179,7 +181,7 @@ Tensor::Tensor(
             std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                 std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
             std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                std::vector<tt::tt_metal::LegacyShape>(num_buffers, this->tensor_attributes->shape.value);
+                std::vector<ttnn::Shape>(num_buffers, this->tensor_attributes->shape);
         }
         this->tensor_attributes->num_shards_to_be_populated = num_buffers;
     }
@@ -226,7 +228,7 @@ Tensor::~Tensor() {
     tensor_attributes.reset();
 }
 
-Tensor::Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.as_vector()), dtype, layout, tile) {}
+Tensor::Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.view()), dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
@@ -261,7 +263,7 @@ void Tensor::deallocate(bool force) {
                                 : this->tensor_attributes->main_thread_ref_count;
                         if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                             this->tensor_attributes->deallocated = true;
-                            this->workers.at(0)->push_work(std::make_shared<std::function<void()>>(
+                            this->workers.at(0)->push_work(
                                 [force, attr = this->tensor_attributes]() mutable {
                                     // Cross worker synchronization: If the tensor being deallocated is shared across
                                     // workers (ex: all_gather op), wait until all workers are done with this tensor
@@ -297,7 +299,7 @@ void Tensor::deallocate(bool force) {
                                             }
                                         },
                                         attr->storage);
-                                }));
+                                });
                         }
                     } else {
                         TT_FATAL(
@@ -339,8 +341,8 @@ void Tensor::deallocate(bool force) {
                                 });
 
                             for (auto worker : this->workers) {
-                                worker->push_work(std::make_shared<std::function<void()>>(
-                                    [worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); }));
+                                worker->push_work(
+                                    [worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); });
                             }
                         }
                     } else {
@@ -578,11 +580,11 @@ const bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
-Tensor Tensor::reshape(int N, int C, int H, int W) const {
-    return tensor_ops::tensor_reshape(*this, N, C, H, W);
+Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
+    return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
-Tensor Tensor::reshape(const tt::tt_metal::LegacyShape& new_shape) const {
+Tensor Tensor::reshape(const ttnn::Shape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
@@ -657,75 +659,26 @@ tt::tt_metal::Padding Tensor::get_padding() const {
 }
 
 Tensor create_device_tensor(
-    const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
+    const ttnn::SimpleShape& shape, const TensorLayout& tensor_layout, Device* device) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", padded_shape, data_type, layout, device, memory_config);
+    GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, tensor_layout.get_data_type(), tensor_layout.get_layout(), device, tensor_layout.get_memory_config());
 
-    if (memory_config.is_sharded()) {
-        TT_ASSERT(memory_config.shard_spec.has_value());
+    auto device_buffer = tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
+    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.view(), tensor_layout.compute_padded_shape(shape).view()), tensor_layout.get_data_type(), tensor_layout.get_layout(), tensor_layout.get_page_config().get_tile());
+    output = tt::tt_metal::set_tensor_id(output);
 
-        auto& shard_spec = memory_config.shard_spec.value();
-        auto& shard_shape = shard_spec.shape;
+    GraphTracker::instance().track_function_end(output);
 
-        auto width = padded_shape[-1];
-        auto other_dims = 1;
-        for (int i = 0; i < padded_shape.rank() - 1; i++) {
-            other_dims *= padded_shape[i];
-        }
-
-        auto element_size = tensor_impl::element_size_bytes(data_type);
-        auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape, tile);
-        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
-        ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        size_t packed_size_in_bytes =
-            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
-        auto device_buffer = tensor_impl::allocate_buffer_on_device(
-            packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, shard_spec_buffer, tile);
-
-        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    } else {
-        size_t packed_size_in_bytes =
-            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
-        auto device_buffer = tensor_impl::allocate_buffer_on_device(
-            packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, std::nullopt, tile);
-        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
+    return output;
 }
 
-Tensor create_device_tensor(
-    const ttnn::SimpleShape& logical_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    return create_device_tensor(logical_shape, get_physical_shape(logical_shape, data_type, layout, tile), data_type, layout, device, memory_config, tile);
+Tensor create_device_tensor(const ttnn::SimpleShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
+    return create_device_tensor(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config), device);
 }
 
 Tensor create_device_tensor(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-
-    if (layout == Layout::ROW_MAJOR) {
-        if (shape.has_tile_padding()) {
-            tt::log_debug("ttnn::Shape {} represents a row_major tensor with padding! Falling back to pass logical and padded shape to create_device_tensor.", shape);
-            return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
-        }
-    } else {
-        for (size_t dim = 0; dim < shape.rank(); dim++) {
-            if (dim < shape.rank() - 2) {
-                if (shape.has_tile_padding(dim)) {
-                    tt::log_debug("ttnn::Shape {} has padding along dims that are not height and width! Falling back to pass logical and padded shape to create_device_tensor.", shape);
-                    return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
-                }
-            } else if (shape.padded_shape()[dim] - shape.logical_shape()[dim] >= ttnn::TILE_SIZE) {
-                // NOTE: This also covers the case where logical dim 0 is padded up to 32
-                tt::log_debug("ttnn::Shape {} has padding along height or width that exceeds nearest tile! Falling back to pass logical and padded shape to create_device_tensor.", shape);
-                return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
-            }
-        }
-    }
-    return create_device_tensor(shape.logical_shape(), data_type, layout, device, memory_config, tile);
+    return create_device_tensor(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape), device);
 }
 
 namespace detail {

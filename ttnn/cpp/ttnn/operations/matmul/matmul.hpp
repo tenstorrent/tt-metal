@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -47,7 +47,7 @@ struct MatmulOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const Tile>& output_tile = std::nullopt);
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
 };
 
 struct LinearOperation {
@@ -63,7 +63,7 @@ struct LinearOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const Tile>& output_tile = std::nullopt);
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
 };
 
 }  // namespace matmul

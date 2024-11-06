@@ -15,6 +15,8 @@
 
 namespace ttnn::operations::binary {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
@@ -22,6 +24,8 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
         case BinaryOpType::MUL: return BcastOpMath::MUL;
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
+}
+}
 }
 
 BinaryDeviceOperation::BroadcastHeightMultiCore::cached_program_t
@@ -32,6 +36,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -39,7 +44,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
 
     const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto bshape = b->get_legacy_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -64,7 +69,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     tt_metal::Device* device = a.device();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -84,7 +89,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
     auto src0_buffer = a.buffer();
-    auto src1_buffer = b.buffer();
+    auto src1_buffer = b->buffer();
     auto dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -138,9 +143,9 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);
         uint32_t Ht_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             Ht_per_core = Ht_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             Ht_per_core = Ht_per_core_group_2;
         } else {
             tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(15, 0));
@@ -159,7 +164,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
                 0,                          // 1
                 0,                          // 2
                 num_tensor_tiles_per_core,  // 3
-                b.buffer()->address(),      // 4
+                b->buffer()->address(),     // 4
                 0,                          // 5
                 0,                          // 6
                 num_btensor_tiles,          // 7
@@ -231,12 +236,12 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     auto src_dram_buffer_a = input_tensor_a.buffer();
-    auto src_dram_buffer_b = input_tensor_b.buffer();
+    auto src_dram_buffer_b = input_tensor_b->buffer();
 
     auto dst_dram_buffer = output_tensor.buffer();
 
     const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto bshape = input_tensor_b->get_legacy_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -274,9 +279,9 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
         auto& bcast_kernel_args = cached_eltwise_args.at(core.x).at(core.y);
         auto& unary_writer_args = cached_writer_args.at(core.x).at(core.y);
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             Ht_per_core = Ht_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             Ht_per_core = Ht_per_core_group_2;
         } else {
             binary_reader_args[3] = 0;

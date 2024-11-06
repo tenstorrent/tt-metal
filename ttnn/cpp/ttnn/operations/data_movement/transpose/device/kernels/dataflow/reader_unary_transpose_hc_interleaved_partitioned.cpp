@@ -34,23 +34,11 @@ void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
     constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(2);
+    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(3);
+    constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
-
-    // DPRINT << "WT " << WT <<ENDL();
-    // DPRINT << "H " << H <<ENDL();
-    // DPRINT << "CT " << CT <<ENDL();
-    // DPRINT << "HW_bytes " << HW_bytes <<ENDL();
-    // DPRINT << "CHW_bytes " << CHW_bytes <<ENDL();
-    // DPRINT << "start_id " << start_id <<ENDL();
-    // DPRINT << "num_tiles " << num_tiles <<ENDL();
-    // DPRINT << "batch_addr " << batch_addr <<ENDL();
-    // DPRINT << "h " << h <<ENDL();
-    // DPRINT << "htWT " << htWT <<ENDL();
-    // DPRINT << "ct " << ct <<ENDL();
-    // DPRINT << "ctoffs " << ctoffs <<ENDL();
-    // DPRINT << "wt " << wt <<ENDL();
 
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
@@ -65,13 +53,10 @@ void kernel_main() {
         .page_size = tile_bytes,
         .data_format = data_format
     };
-
+    uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
+    volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
     for (uint32_t t = 0; t < num_tiles; t++){
         auto h32 = (h&31);
-        // what is the source address for the current tile?
-        // c32 = intra-C-tile loop
-        // every 32 C's acquire a new output tile address
-        //    DPRINT << "8B h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 << ENDL();
 
         cb_reserve_back(cb_id_in0, onetile);
 
@@ -120,22 +105,31 @@ void kernel_main() {
                     rem = (bsrc_offs & 2047);
                 }
 
-                // DPRINT << "rem " << rem <<ENDL();
-
-                //if (h == 0 && ct == 0 && wt == 0) {
-                //    DPRINT << "  Sub=" << sub << " c16=" << c16 << ENDL();
-                //    DPRINT << "    Reading from src_offs=" << src_offs << ENDL();
-                //    DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
-                //}
-
                 uint64_t banked_addr = get_noc_addr(batch_itile, s0);
                 banked_addr += rem;
 
-                // this starts async NOC dma from DRAM to TR0_L1 buffer
-                noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
-
-                //if (h == 0 && ct == 0 && wt == 0)
-                //    DPRINT << uint32_t( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
+                if constexpr(MISALIGNED) {
+                    // if banked addr and dest addr don't share alignment then we need to read to the intermediate buffer and then copy it to the correct location
+                    uint32_t banked_alignment = banked_addr % ALIGNMENT;
+                    if (dest_tr0_l1 % ALIGNMENT != banked_alignment) {
+                        // we write to the top of the intermediate buffer as that's aligned, and we write from the closest align source address
+                        // if source is not aligned to ALIGNMENT then we go to the nearest address that is aligned and copy from there
+                        noc_async_read(banked_addr - (banked_alignment), intermed_l1_scratch, ALIGNMENT);
+                        volatile tt_l1_ptr uint8_t* dest_tr0_l1_ptr = (volatile uint8_t*)dest_tr0_l1;
+                        // need the barrier to ensure that we can copy from the intermediate buffer
+                        noc_async_read_barrier();
+                        // if source is not aligned to ALIGNMENT then we need to skip forward by the amount needed to align to get to the correct data
+                        for (uint32_t i = 0; i < SUBTILE_LINE_BYTES; i++) {
+                            dest_tr0_l1_ptr[i] = intermed_l1_scratch_ptr[i + banked_alignment];
+                        }
+                    }
+                    else {
+                        // this starts async NOC dma from DRAM to TR0_L1 buffer
+                        noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                    }
+                } else {
+                    noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                }
 
                 // the output address is just linearly incremented
                 dest_tr0_l1 += SUBTILE_LINE_BYTES;

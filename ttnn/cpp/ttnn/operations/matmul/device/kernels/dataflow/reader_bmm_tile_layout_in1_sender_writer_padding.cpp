@@ -207,8 +207,8 @@ void kernel_main() {
             uint32_t next_bank_id_and_dram_stride_index = 0;
 
             for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<in1_single_tile_size_bytes, true>(
-                    in1_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index], vc);
+                uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
+                    in1_tensor_addr, in1_single_tile_size_bytes, current_dram_bank_id[next_bank_id_and_dram_stride_index], vc);
 
                 if (i == 0) {
                     in1_base_addr += dram_tensor_start_offset;
@@ -277,8 +277,13 @@ void kernel_main() {
             noc_async_write_multicast(
                 in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores, true, true);
 
-            // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
-            // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+            // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
+            // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+            // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency which means data could be changed before
+            //  write is issued.
+            noc_async_writes_flushed();
+#endif
 
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!
@@ -308,8 +313,8 @@ void kernel_main() {
             uint32_t next_bank_id_and_dram_stride_index = 0;
 
             for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<bias_single_tile_size_bytes, true>(
-                    in3_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index], vc);
+                uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
+                    in3_tensor_addr, bias_single_tile_size_bytes, current_dram_bank_id[next_bank_id_and_dram_stride_index], vc);
 
                 if (i == 0) {
                     in3_base_addr += dram_tensor_start_offset;
@@ -360,6 +365,11 @@ void kernel_main() {
                 in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in1_mcast_num_cores, true, true);
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
             // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+            // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
+            // latency which means data could be changed before write is issued.
+            noc_async_writes_flushed();
+#endif
 
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!

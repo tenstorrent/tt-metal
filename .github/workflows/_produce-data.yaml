@@ -12,6 +12,10 @@ on:
         description: "Run attempt of the workflow run"
         default: 1
         type: number
+      upload_data:
+        description: "Upload data to datastore cluster for our dashboard"
+        default: false
+        type: boolean
   workflow_run:
     workflows:
       - "All post-commit tests"
@@ -33,6 +37,8 @@ on:
       - "(TGG) TGG unit tests"
       - "(TGG) TGG demo tests"
       - "(TGG) TGG frequent tests"
+      - "ttnn - Run sweeps"
+      - "Blackhole post-commit tests"
     types:
       - completed
 
@@ -111,7 +117,7 @@ jobs:
         run: ls -hal
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
-        if: ${{ github.event_name == 'workflow_run' }}
+        if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt

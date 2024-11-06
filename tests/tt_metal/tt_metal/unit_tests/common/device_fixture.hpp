@@ -19,7 +19,7 @@ class DeviceFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
@@ -29,7 +29,7 @@ class DeviceFixture : public ::testing::Test {
             num_devices_ = 2;
         }
 
-        vector<chip_id_t> ids;
+        std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
@@ -47,7 +47,7 @@ class DeviceFixture : public ::testing::Test {
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
@@ -61,7 +61,7 @@ class DeviceSingleCardFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         const chip_id_t mmio_device_id = 0;
         reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
@@ -79,11 +79,32 @@ class DeviceSingleCardFixture : public ::testing::Test {
     size_t num_devices_;
 };
 
+class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
+   protected:
+    void SetUp() override {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (not slow_dispatch) {
+            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            GTEST_SKIP();
+        }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        if (arch_ != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP();
+        }
+
+        const chip_id_t mmio_device_id = 0;
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        device_ = reserved_devices_.at(mmio_device_id);
+
+        num_devices_ = reserved_devices_.size();
+    }
+};
+
 class GalaxyFixture : public ::testing::Test {
    protected:
     void SkipTestSuiteIfNotGalaxyMotherboard()
     {
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (!(arch == tt::ARCH::WORMHOLE_B0 && num_devices >= 32))
         {
@@ -94,7 +115,7 @@ class GalaxyFixture : public ::testing::Test {
     void InitializeDevices()
     {
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        vector<chip_id_t> ids;
+        std::vector<chip_id_t> ids;
         for (uint32_t id = 0; id < num_devices; id++)
         {
             ids.push_back(id);
@@ -116,7 +137,7 @@ class GalaxyFixture : public ::testing::Test {
         this->devices_.clear();
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
 
    private:
     std::map<chip_id_t, Device*> device_ids_to_devices_;

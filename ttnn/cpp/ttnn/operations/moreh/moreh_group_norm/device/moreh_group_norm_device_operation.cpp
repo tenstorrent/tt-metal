@@ -21,8 +21,6 @@ void MorehGroupNormOperation::validate_tensors(
 
     auto num_groups = operation_attributes.num_groups;
 
-    using namespace tt::operations::primary;
-
     check_tensor(input, "moreh_group_norm", "input");
 
     check_tensor(output, "moreh_group_norm", "output");
@@ -87,7 +85,7 @@ MorehGroupNormOperation::shape_return_value_t MorehGroupNormOperation::compute_o
     const auto output_shape = tensor_args.input.get_logical_shape();
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    std::vector<uint32_t> mean_rstd_origin_shape{
+    SmallVector<uint32_t> mean_rstd_origin_shape{
         1,
         1,
         N,

@@ -44,7 +44,7 @@ CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     return create_device_tensor(
-        tensor_args.input.get_legacy_shape(),
+        compute_output_shapes(operation_attributes, tensor_args),
         operation_attributes.dtype,
         input.get_layout(),
         input.device(),
@@ -52,11 +52,15 @@ CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
 }
 
 std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t> CloneOperation::invoke(
-    const Tensor& input, const std::optional<DataType>& dtype, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         operation_attributes_t{
             dtype.value_or(input.get_dtype()),
             memory_config.value_or(input.memory_config()),
+            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
         },
         tensor_args_t{input},
     };

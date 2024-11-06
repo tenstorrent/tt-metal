@@ -12,6 +12,7 @@
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 enum class DataMovementMode: uint8_t {
@@ -39,7 +40,7 @@ TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrde
 
         vector<std::shared_ptr<Buffer>> buffers;
         for (size_t i = 0; i < num_buffers; i++) {
-            buffers.push_back(std::make_shared<Buffer>(this->device_, page_size, page_size, BufferType::DRAM));
+            buffers.push_back(Buffer::create(this->device_, page_size, page_size, BufferType::DRAM));
 
             if (data_movement_mode == DataMovementMode::WRITE) {
                 EnqueueWriteBuffer(this->device_->command_queue(), buffers.back(), page, true);
@@ -281,7 +282,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
         EXPECT_EQ(event->cq_id, this->device_->command_queue().id());
         EXPECT_EQ(event->event_id, events_issued_per_cq + 1); // Event ids start at 1
 
-        std::shared_ptr<Buffer> buf = std::make_shared<Buffer>(this->device_, page_size, page_size, BufferType::DRAM);
+        std::shared_ptr<Buffer> buf = Buffer::create(this->device_, page_size, page_size, BufferType::DRAM);
         EnqueueWriteBuffer(this->device_->command_queue(), buf, page, true);
         EnqueueWaitForEvent(this->device_->command_queue(), event);
 

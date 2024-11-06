@@ -136,11 +136,7 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
 
-#if defined(COMPILE_FOR_ERISC)
-// ERISC needs to place this function in a specific section
-__attribute__((section("code_l1")))
-#endif  // defined(COMPILE_FOR_ERISC)
-void risc_init() {
+inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
@@ -192,6 +188,20 @@ inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
         .option pop
          )ASM" ::
             : "t1");
+#endif
+}
+
+// Flush i$ on ethernet riscs
+inline __attribute__((always_inline)) void flush_erisc_icache() {
+#ifdef ARCH_BLACKHOLE
+    // Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
+    //  between FW end and Kernel start.
+    // This works because risc tries to prefetch 1 cache line.
+    // The 32B still get cached but they are never executed
+    #pragma GCC unroll 2048
+    for (int i = 0; i < 2048; i++) {
+        asm("nop");
+    }
 #endif
 }
 

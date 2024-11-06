@@ -19,7 +19,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::operations::primary;
 
     auto input = tensor_args.input;
     auto compute_kernel_config =
@@ -52,7 +51,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(core_range, units_to_divide);
+        split_work_to_cores_wt_core_range(core_range, units_to_divide);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -145,9 +144,9 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t units_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             units_per_core = units_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");

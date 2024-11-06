@@ -20,8 +20,6 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
 
     auto num_groups = operation_attributes.num_groups;
 
-    using namespace tt::operations::primary;
-
     check_tensor(output_grad, "moreh_group_norm_backward_input_grad", "output_grad");
     check_tensor(input, "moreh_group_norm_backward_input_grad", "input");
     check_tensor(mean, "moreh_group_norm_backward_input_grad", "mean");

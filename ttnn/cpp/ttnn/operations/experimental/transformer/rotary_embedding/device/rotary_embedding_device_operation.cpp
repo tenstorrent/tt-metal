@@ -72,7 +72,7 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = this->compute_output_shapes(input_tensors)[0];
     if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
+        ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
         if (input_tensor.is_sharded()) {
             shard_spec = input_tensor.shard_spec().value();
         } else {
@@ -87,7 +87,7 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
                 }
             }
             uint32_t Ht = div_up(num_blocks, num_cores);
-            shard_spec.grid = num_cores_to_corerange_set(num_cores, core_grid, true);
+            shard_spec.grid = num_cores_to_corerangeset(num_cores, core_grid, true);
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.get_legacy_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }

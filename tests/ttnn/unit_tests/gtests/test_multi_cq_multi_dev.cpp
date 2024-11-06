@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -34,7 +35,7 @@ Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
     // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_env_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
 
@@ -59,7 +60,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+                ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -84,7 +87,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
     // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_env_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
 
@@ -99,6 +102,8 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
 
+    TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+    ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
     for (int outer_loop = 0; outer_loop < 5; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         for (int i = 0; i < 30; i++) {
@@ -110,7 +115,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -135,7 +140,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
     // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_env_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
 
@@ -161,7 +166,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+
+                TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 

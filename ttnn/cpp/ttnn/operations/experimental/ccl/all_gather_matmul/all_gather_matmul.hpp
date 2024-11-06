@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 #include "ttnn/cpp/ttnn/distributed/api.hpp"
 

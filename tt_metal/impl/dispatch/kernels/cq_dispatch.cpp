@@ -850,8 +850,14 @@ void process_set_unicast_only_cores() {
 
 FORCE_INLINE
 void process_notify_dispatch_s_go_signal_cmd() {
-    // Update free running counter on dispatch_s, signalling that it's safe to send a go signal to workers, since program
-    // config has been written and barriered upon
+    // Update free running counter on dispatch_s, signalling that it's safe to send a go signal to workers
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t wait = cmd->notify_dispatch_s_go_signal.wait;
+    // write barrier to wait before sending the go signal
+    if (wait) {
+        DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
+        noc_async_write_barrier();
+    }
     if constexpr (distributed_dispatcher) {
         uint64_t dispatch_s_notify_addr = get_noc_addr_helper(dispatch_s_noc_xy, get_semaphore<fd_core_type>(dispatch_s_sem_id));
         static uint32_t num_go_signals_safe_to_send = 1;

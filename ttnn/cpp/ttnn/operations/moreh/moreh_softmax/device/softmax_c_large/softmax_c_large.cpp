@@ -34,7 +34,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(core_range, num_tiles);
+        split_work_to_cores_wt_core_range(core_range, num_tiles);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -46,7 +46,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -67,13 +67,13 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_c_large.cpp",
         all_cores,
         {src_is_dram},
         reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_c_large.cpp",
         all_cores,
@@ -101,7 +101,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     }
 
     // create compute kernel
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_c_large.cpp",
         {
@@ -120,18 +120,18 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             output.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);

@@ -13,6 +13,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -67,7 +68,7 @@ inline ttnn::Tensor full_impl(
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
     Device* device = optional_output_tensor.has_value() ? optional_output_tensor.value().device() : device_arg.has_value() ? &(device_arg.value().get()) : nullptr;
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout() : layout.value_or(ttnn::ROW_MAJOR_LAYOUT);
-    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype() : dtype.value_or(ttnn::bfloat16);
+    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype() : dtype.value_or(DataType::BFLOAT16);
     tt::tt_metal::LegacyShape shape_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_legacy_shape() : shape.value;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     return numpy::full_impl(
@@ -138,23 +139,34 @@ inline ttnn::Tensor full_like_impl(
     const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+
+    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout() : layout.value_or(tensor.get_layout());
+    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype() : dtype.value_or(tensor.get_dtype());
+    auto arch = tensor.device()->arch();
+    bool is_TILE =  (tensor.get_layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (ttnn::is_tensor_on_device_or_multidevice(tensor)) {
-        return full_impl(
-            queue_id,
-            tensor.get_shape(),
-            fill_value,
-            dtype.value_or(tensor.get_dtype()),
-            layout.value_or(tensor.get_layout()),
-            device.value_or(*tensor.device()),
-            memory_config.value_or(tensor.memory_config()),
-            optional_output_tensor);
+        // requires reference tensor to be in TILE for device operation fill - this will be changed later
+        if (is_TILE &&  (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 || (arch != tt::ARCH::GRAYSKULL && dtype_value == DataType::FLOAT32)) && tensor.storage_type() == StorageType::DEVICE ) {
+            return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+        }
+        else {
+            return full_impl(
+                queue_id,
+                tensor.get_shape(),
+                fill_value,
+                dtype_value,
+                layout_value,
+                device.value_or(*tensor.device()),
+                memory_config.value_or(tensor.memory_config()),
+                optional_output_tensor);
+        }
     } else {
         return full_impl(
             queue_id,
             tensor.get_shape(),
             fill_value,
-            dtype.value_or(tensor.get_dtype()),
-            layout.value_or(tensor.get_layout()),
+            dtype_value,
+            layout_value,
             device,
             memory_config,
             optional_output_tensor);
@@ -330,7 +342,7 @@ struct FullLike {
 struct Arange {
     static ttnn::Tensor invoke(
         const int64_t stop,
-        const DataType dtype = ttnn::bfloat16,
+        const DataType dtype = DataType::BFLOAT16,
         const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
         const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
         return Arange::invoke(0, stop, 1, dtype, device, memory_config);
@@ -340,20 +352,20 @@ struct Arange {
         const int64_t start,
         const int64_t stop,
         const int64_t step = 1,
-        const DataType dtype = ttnn::bfloat16,
+        const DataType dtype = ttnn::DataType::BFLOAT16,
         const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
         const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
         Device* device = device_arg.has_value() ? &(device_arg.value().get()) : nullptr;
         switch (dtype) {
-            case ttnn::bfloat16:
+            case DataType::BFLOAT16:
                 return numpy::arange<::bfloat16>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case ttnn::float32:
+            case DataType::FLOAT32:
                 return numpy::arange<float>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case ttnn::uint16:
+            case DataType::UINT16:
                 return numpy::arange<uint16_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case ttnn::uint32:
+            case DataType::UINT32:
                 return numpy::arange<uint32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case ttnn::int32:
+            case DataType::INT32:
                 return numpy::arange<int32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
             default: TT_THROW("Unsupported dtype");
         }

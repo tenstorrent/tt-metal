@@ -2,18 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <ctype.h>
+#include <iostream>
 #include <vector>
+#include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/metal_soc_descriptor.h"
 
-#include "common/core_coord.h"
-#include "hw/inc/debug/ring_buffer.h"
+// FIXME: Avoid dependence on ARCH_NAME specific includes
+#include "dev_mem_map.h" // for MEM_BRISC_STAC...
+#include "eth_l1_address_map.h" // for address_map
+#include "hostdevcommon/common_runtime_address_map.h" // for NOC_0_X, NOC_0_Y
 #include "hw/inc/dev_msgs.h"
+
+#include "third_party/umd/device/tt_arch_types.h"
+#include "third_party/umd/device/xy_pair.h"
+#include <fmt/base.h>
+#include "llrt/llrt.hpp"
+#include "llrt/tt_cluster.hpp"
+
+#include "common/core_coord.hpp"
+#include "hw/inc/debug/ring_buffer.h"
 #include "impl/device/device.hpp"
 #include "llrt/rtoptions.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 
 #include "watcher_device_reader.hpp"
+
+#include "llrt/hal.hpp"
+
+using namespace tt::tt_metal;
 
 using std::string;
 namespace { // Helper functions
@@ -25,6 +48,7 @@ static const char *get_riscv_name(const CoreCoord &core, uint32_t type) {
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
         case DebugIErisc: return "ierisc";
+        case DebugSlaveIErisc: return "slave_ierisc";
         case DebugTrisc0: return "trisc0";
         case DebugTrisc1: return "trisc1";
         case DebugTrisc2: return "trisc2";
@@ -40,6 +64,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) 
         case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
         case DebugErisc: return 0; // Not managed/checked by us.
         case DebugIErisc: return MEM_BRISC_STACK_SIZE;
+        case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
         case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
         case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
         case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
@@ -114,11 +139,11 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t *mbox_data) {
 namespace tt::watcher {
 
 WatcherDeviceReader::WatcherDeviceReader(
-    FILE *f, Device *device, vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &)) :
+    FILE *f, Device *device, std::vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &)) :
     f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
-        vector<uint32_t> read_data;
+        std::vector<uint32_t> read_data;
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
@@ -131,7 +156,7 @@ WatcherDeviceReader::WatcherDeviceReader(
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
-        vector<uint32_t> read_data;
+        std::vector<uint32_t> read_data;
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
@@ -294,13 +319,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
     fprintf(f, "%s: ", core_str.c_str());
 
     // Ethernet cores have a different mailbox base addr
-    uint64_t mailbox_addr = MEM_MAILBOX_BASE;
+    uint64_t mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
     if (is_eth_core) {
         if (is_active_eth_core) {
-            mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
+            mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX);
         }
         else {
-            mailbox_addr = MEM_IERISC_MAILBOX_BASE;
+            mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX);
         }
     }
 
@@ -651,7 +676,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor &core, const mailboxe
     fprintf(f, " ");
 
     fprintf(f, "smsg:");
-    DumpRunState(core, launch_msg, slave_sync->ncrisc);
+    DumpRunState(core, launch_msg, slave_sync->dm1);
     DumpRunState(core, launch_msg, slave_sync->trisc0);
     DumpRunState(core, launch_msg, slave_sync->trisc1);
     DumpRunState(core, launch_msg, slave_sync->trisc2);
@@ -798,6 +823,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor &core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
+        case DebugSlaveIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:
         case DebugTrisc1:

@@ -17,7 +17,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -29,7 +29,7 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
 }
 
 tt::tt_metal::LegacyShape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const std::vector<int64_t>& dims, const bool& keepdim) {
+    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim)
         return output_grad.get_legacy_shape();
 
@@ -69,16 +69,16 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     const auto& input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const auto input_grad_rank = input_grad_shape.rank();
 
-    std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
     tt::tt_metal::LegacyShape output_grad_shape =
         get_output_grad_shape(output_grad, input_grad, operation_attributes.dims, operation_attributes.keepdim);
     const auto output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
-    std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
@@ -135,7 +135,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     const uint32_t im6_t{1};
     const uint32_t im7_t{1};
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -170,16 +170,16 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         "writer_moreh_norm_backward.cpp";
 
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(output)),
+        static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(input_grad_rank)};
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
     const auto reader_kernels_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -193,7 +193,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     }
 
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
-    const auto compute_kernels_id_1 = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernels_id_1 = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -206,7 +206,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
             num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
-        compute_kernels_id_2 = tt::operations::primary::CreateComputeKernel(
+        compute_kernels_id_2 = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -224,10 +224,10 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
 
         KernelHandle compute_kernel_id;
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
             compute_kernel_id = compute_kernels_id_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_2;
             compute_kernel_id = compute_kernels_id_2;
         } else {

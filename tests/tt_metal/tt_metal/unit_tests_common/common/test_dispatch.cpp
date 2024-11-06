@@ -6,10 +6,12 @@
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 
+using std::vector;
+
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(CommonFixture *fixture,
-                                        vector<tt::tt_metal::Device*>& devices,
+                                        vector<tt::tt_metal::v1::DeviceHandle>& devices,
                                         bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;

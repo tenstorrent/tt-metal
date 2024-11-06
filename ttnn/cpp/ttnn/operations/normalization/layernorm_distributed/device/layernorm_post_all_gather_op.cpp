@@ -81,9 +81,8 @@ void LayerNormPostAllGather::validate(const std::vector<Tensor> &input_tensors, 
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> LayerNormPostAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+std::vector<ttnn::SimpleShape> LayerNormPostAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    return {input_tensors.at(0).get_logical_shape()};
 }
 
 std::vector<Tensor> LayerNormPostAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

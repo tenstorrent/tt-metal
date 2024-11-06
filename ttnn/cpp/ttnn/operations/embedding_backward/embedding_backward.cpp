@@ -24,7 +24,7 @@ Tensor EmbeddingBackwardOperation::invoke(
     auto batch_size = input_tensor_arg.get_shape()[0];
     auto sentence_size = input_tensor_arg.get_shape()[-1];
     auto input_tensor =
-        ttnn::reshape(input_tensor_arg, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
+        ttnn::reshape(input_tensor_arg, ttnn::SimpleShape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
 
     auto input_gradient =
         operation::run(

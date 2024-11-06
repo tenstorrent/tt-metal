@@ -23,7 +23,6 @@ TEST_F(BasicFixture, TestDirectedSeriesOfAllocDealloc) {
         tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST
     );
 
-    bool allocate_bottom_up = true;
     std::optional<uint64_t> addr_0 = free_list_allocator.allocate(32, true);
     ASSERT_TRUE(addr_0.has_value());
     EXPECT_EQ(addr_0.value(), 0);
@@ -131,4 +130,105 @@ TEST_F(BasicFixture, TestDirectedSeriesOfAllocDealloc) {
     std::optional<uint64_t> addr_20 = free_list_allocator.allocate(max_size_bytes - 64, true);
     ASSERT_TRUE(addr_20.has_value());
     EXPECT_EQ(addr_20.value(), 64);
+}
+
+TEST_F(BasicFixture, TestResizeAllocator) {
+    constexpr uint32_t max_size_bytes = 1024;
+    constexpr uint32_t min_allocation_size_bytes = 32;
+    constexpr uint32_t alignment = 32;
+
+    tt::tt_metal::allocator::FreeList free_list_allocator = tt::tt_metal::allocator::FreeList(
+        max_size_bytes,
+        /*offset*/0,
+        min_allocation_size_bytes,
+        alignment,
+        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST
+    );
+
+    std::optional<uint64_t> addr_0 = free_list_allocator.allocate(32, false);
+    ASSERT_TRUE(addr_0.has_value());
+    EXPECT_EQ(addr_0.value(), 992);
+
+    free_list_allocator.shrink_size(64, true);
+
+    std::optional<uint64_t> addr_1 = free_list_allocator.allocate(32, false);
+    ASSERT_TRUE(addr_1.has_value());
+    EXPECT_EQ(addr_1.value(), 960);
+
+    std::optional<uint64_t> addr_2 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_2.has_value());
+    EXPECT_EQ(addr_2.value(), 64);
+
+    free_list_allocator.reset_size();
+
+    std::optional<uint64_t> addr_3 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_3.has_value());
+    EXPECT_EQ(addr_3.value(), 0);
+
+    std::optional<uint64_t> addr_4 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_4.has_value());
+    EXPECT_EQ(addr_4.value(), 32);
+
+    free_list_allocator.deallocate(0);
+
+    std::optional<uint64_t> addr_5 = free_list_allocator.allocate(64, true);
+    ASSERT_TRUE(addr_5.has_value());
+    EXPECT_EQ(addr_5.value(), 96);
+
+    free_list_allocator.shrink_size(32, true);
+
+    free_list_allocator.deallocate(32);
+
+    std::optional<uint64_t> addr_6 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_6.has_value());
+    EXPECT_EQ(addr_6.value(), 32);
+}
+
+TEST_F(BasicFixture, TestDirectedResizeAllocator) {
+    constexpr uint32_t max_size_bytes = 1024;
+    constexpr uint32_t min_allocation_size_bytes = 32;
+    constexpr uint32_t alignment = 32;
+
+    tt::tt_metal::allocator::FreeList free_list_allocator = tt::tt_metal::allocator::FreeList(
+        max_size_bytes,
+        /*offset*/0,
+        min_allocation_size_bytes,
+        alignment,
+        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST
+    );
+
+    std::optional<uint64_t> addr_0 = free_list_allocator.allocate_at_address(32, 992);
+    ASSERT_TRUE(addr_0.has_value());
+    EXPECT_EQ(addr_0.value(), 32);
+
+    free_list_allocator.shrink_size(32, true);
+
+    std::optional<uint64_t> addr_1 = free_list_allocator.allocate(32, false);
+    ASSERT_TRUE(!addr_1.has_value());
+
+    std::optional<uint64_t> addr_2 = free_list_allocator.allocate_at_address(0, 32);
+    ASSERT_TRUE(!addr_2.has_value());
+
+    free_list_allocator.deallocate(32);
+
+    std::optional<uint64_t> addr_3 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_3.has_value());
+    EXPECT_EQ(addr_3.value(), 32);
+
+    std::optional<uint64_t> addr_4 = free_list_allocator.allocate(32, false);
+    ASSERT_TRUE(addr_4.has_value());
+    EXPECT_EQ(addr_4.value(), 992);
+
+    free_list_allocator.reset_size();
+
+    std::optional<uint64_t> addr_5 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_5.has_value());
+    EXPECT_EQ(addr_5.value(), 0);
+
+    free_list_allocator.deallocate(32);
+
+    std::optional<uint64_t> addr_6 = free_list_allocator.allocate(32, true);
+    ASSERT_TRUE(addr_6.has_value());
+    EXPECT_EQ(addr_6.value(), 32);
+
 }

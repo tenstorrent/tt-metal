@@ -15,7 +15,7 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
@@ -42,7 +42,7 @@ class T3000TestDevice {
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
@@ -111,8 +111,8 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
         init_handshake_core_y,
         init_handshake_semaphore_id};
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
-        rt_args.push_back(erisc_semaphore_addresses.at(i));
         rt_args.push_back(erisc_buffer_addresses.at(i));
+        rt_args.push_back(erisc_semaphore_addresses.at(i));
     }
 
     return rt_args;
@@ -132,8 +132,8 @@ std::vector<uint32_t> get_eth_sender_rt_args(
     std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
-        erisc_semaphore_addresses.at(i) += i * semaphore_size;
         erisc_buffer_addresses.at(i) += i * sample_page_size;
+        erisc_semaphore_addresses.at(i) += i * semaphore_size;
     }
 
     std::vector<uint32_t> rt_args = {
@@ -146,8 +146,8 @@ std::vector<uint32_t> get_eth_sender_rt_args(
         receiver_y,
         receiver_start_semaphore_id};
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
-        rt_args.push_back(erisc_semaphore_addresses.at(i));
         rt_args.push_back(erisc_buffer_addresses.at(i));
+        rt_args.push_back(erisc_semaphore_addresses.at(i));
     }
 
     return rt_args;
@@ -368,7 +368,7 @@ int main (int argc, char** argv) {
     // concurrent samples
     // hop counts
     // Early exit if invalid test setup
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices != 8) {
         log_trace(tt::LogTest, "Need at least 2 devices to run this test");

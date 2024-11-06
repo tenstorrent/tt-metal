@@ -173,7 +173,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
-        CoreRangeSet core_range_set({first_core_range, second_core_range});
+        CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
         ASSERT_TRUE(program.num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
@@ -219,7 +219,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
-        CoreRangeSet core_range_set({first_core_range, second_core_range});
+        CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
         auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, initial_runtime_args.size(), common_runtime_args.size());
@@ -249,7 +249,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsSubsetOfCoresCompute) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
-        CoreRangeSet core_range_set({first_core_range, second_core_range});
+        CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
 
@@ -277,7 +277,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsUniqueValuesCompute) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
-        CoreRangeSet core_range_set({first_core_range, second_core_range});
+        CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
         auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, 2, common_runtime_args.size());
 
@@ -311,7 +311,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsVaryingLengthPerCore) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
-        CoreRangeSet core_range_set({first_core_range, second_core_range});
+        CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
 
         // Figure out max number of unique runtime args across all cores, so kernel
@@ -359,7 +359,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsVaryingLengthPerCore) {
 TEST_F(DeviceFixture, IllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
-        CoreRangeSet core_range_set({first_core_range});
+        CoreRangeSet core_range_set(first_core_range);
         auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, 0, 0); // Kernel isn't run here.
 
         // Set 100 unique args, then try to set 300 common args and fail.
@@ -381,7 +381,7 @@ TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
-        CoreRangeSet core_range_set({first_core_range, second_core_range});
+        CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
         ASSERT_TRUE(program.num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
