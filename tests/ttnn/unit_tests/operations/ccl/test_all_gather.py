@@ -241,6 +241,7 @@ def run_all_gather_on_t3000_impl(
     all_gather_topology,
     num_iters=1,
     enable_async=False,
+    trace_mode=False,
 ):
     if mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
@@ -265,6 +266,7 @@ def run_all_gather_on_t3000_impl(
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
         enable_async=enable_async,
+        trace_mode=trace_mode,
     )
 
 
@@ -282,6 +284,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     all_gather_topology,
     num_iters,
     enable_async=False,
+    trace_mode=False,
 ):
     run_all_gather_on_t3000_impl(
         mesh_device,
@@ -297,6 +300,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
         enable_async=enable_async,
+        trace_mode=trace_mode,
     )
 
 
