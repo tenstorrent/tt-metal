@@ -12,6 +12,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+import random
+
+random.seed(10)
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -33,6 +36,10 @@ def find_max_subblock(out_block_h, out_block_w):
 
 
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
+
+# x, y
+CORE_RANGE = [(x, y) for y in range(3) for x in range(8)]
+random.shuffle(CORE_RANGE)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -66,6 +73,10 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b
         # (8, 8)
     ],
 )
+@pytest.mark.parametrize(
+    "use_arbitrary_cores",
+    [True, False],
+)
 def test_multi_core_matmul_1d_wh(
     device,
     in0_dtype,
@@ -80,6 +91,7 @@ def test_multi_core_matmul_1d_wh(
     N,
     activation,
     grid_size,
+    use_arbitrary_cores,
     function_level_defaults,
 ):
     in0_shape = [1, 1, M, K]
@@ -102,17 +114,59 @@ def test_multi_core_matmul_1d_wh(
     logger.debug("out block h w " + str(out_block_h) + " " + str(out_block_w))
     logger.debug("out subblock h w " + str(out_subblock_h) + " " + str(out_subblock_w))
 
-    in0_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=in0_shape,
-        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    if use_arbitrary_cores:
+        assert len(CORE_RANGE) == num_cores
+
+        core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in CORE_RANGE
+            ]
+        )
+    else:
+        core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                ),
+            }
+        )
+
+    in0_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_range_set,
+            [M, K // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
-    in1_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=in1_shape,
-        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+
+    in1_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_range_set,
+            [K, N // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
+    output_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_range_set,
+            [M, N // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
     in0 = torch.randn(in0_shape)
@@ -133,8 +187,6 @@ def test_multi_core_matmul_1d_wh(
         dtype=in1_dtype,
         memory_config=in1_sharded_mem_config,
     )
-
-    output_mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -160,7 +212,7 @@ def test_multi_core_matmul_1d_wh(
         in0_t,
         in1_t,
         program_config=program_config,
-        memory_config=output_mem_config,
+        memory_config=output_sharded_mem_config,
         compute_kernel_config=compute_kernel_config,
     )
     tt_out = ttnn.to_torch(output_t)

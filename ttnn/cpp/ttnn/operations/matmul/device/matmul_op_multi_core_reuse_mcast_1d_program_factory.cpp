@@ -1681,7 +1681,10 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    const uint32_t num_cores = a.shard_spec().value().grid.num_cores();
+    /* Core setup */
+    constexpr bool row_major = true;
+    CoreRangeSet all_cores = a.shard_spec().value().grid;
+    const uint32_t num_cores = all_cores.num_cores();
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
@@ -1704,17 +1707,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
-    /* TODO: Update to work with sub core mesh */
-    /* Core setup */
-    CoreCoord start_core = {0, 0};
-    uint32_t start_core_x = start_core.x;
-    uint32_t start_core_y = start_core.y;
-    uint32_t num_cores_c = compute_with_storage_grid_size.x;
-
-    constexpr bool row_major = true;
-    CoreRangeSet all_cores =
-        num_cores_to_corerange_set(start_core, num_cores, compute_with_storage_grid_size, row_major);
-
+    /* semaphores */
     auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
