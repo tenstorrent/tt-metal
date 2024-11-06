@@ -78,6 +78,7 @@ runs:
           -v ${{ github.workspace }}:${{ github.workspace }}
           --net=host
           --log-driver none
+          --log-opt max-size=50m
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
           -e PYTHONPATH=${{ github.workspace }}
