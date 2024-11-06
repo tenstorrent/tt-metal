@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/bcast.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -13,6 +14,7 @@ void MAIN {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
+    DPRINT << "Test bcast string" << "\tINSIDE KERNEL: " << ENDL();
 
     init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CB::c_in0, tt::CB::c_in1);
 

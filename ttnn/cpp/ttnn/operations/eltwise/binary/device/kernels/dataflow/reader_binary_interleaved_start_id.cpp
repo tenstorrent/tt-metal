@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat
@@ -14,6 +15,8 @@ void kernel_main() {
     uint32_t block_height = get_arg_val<uint32_t>(4);
     uint32_t block_width = get_arg_val<uint32_t>(5);
     uint32_t num_cores_y = get_arg_val<uint32_t>(6);
+    DPRINT << "Test reader string" << "\tINSIDE KERNEL: " << ENDL();
+
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -85,12 +88,16 @@ void kernel_main() {
        for (uint32_t tile_id=start_id; tile_id<start_id + num_tiles; tile_id ++) {
             #ifndef IN0_SHARDED
             cb_reserve_back(cb_id_in0, onetile);
+            // DPRINT  << TileSlice<64>::TileSlice(tt::CB::c_in0, 0, SliceRange::h0_w0_32()) << ENDL();
+            // DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
             noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
             #endif
 
             #ifndef IN1_SHARDED
             cb_reserve_back(cb_id_in1, onetile);
+            // DPRINT  << TileSlice<64>::TileSlice(tt::CB::c_in1, 0, SliceRange::h0_w0_32()) << ENDL();
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
             noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
             #endif

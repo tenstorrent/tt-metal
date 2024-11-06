@@ -17,6 +17,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     const auto input_shape_a = tensor_args.input_tensor_a.get_logical_shape();
 
     if (operation_attributes.scalar.has_value()) {
+        std::cout<<"BroadcastHeightAndWidthMultiCore"<<std::endl;
         return BroadcastHeightAndWidthMultiCore{};
     }
 
@@ -29,10 +30,12 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
+        std::cout<<"ElementWiseMultiCore"<<std::endl;
         return ElementWiseMultiCore{};
     }
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
+            std::cout<<"BroadcastHeightAndWidthMultiCore"<<std::endl;
             return BroadcastHeightAndWidthMultiCore{};
         }
         if (height_b == 1) {
@@ -41,13 +44,17 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
                         tensor_args.input_tensor_b->get_padded_shape()[0] ||
                     tensor_args.input_tensor_a.get_padded_shape()[0] > 1 and
                         tensor_args.input_tensor_b->get_padded_shape()[0] == 1) {
+                    std::cout<<"BroadcastHeightMultiCoreShardedOptimized"<<std::endl;
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
+                std::cout<<"BroadcastHeightMultiCoreSharded"<<std::endl;
                 return BroadcastHeightMultiCoreSharded{};
             }
+            std::cout<<"BroadcastHeightMultiCore"<<std::endl;
             return BroadcastHeightMultiCore{};
         }
         if (width_b == 1) {
+            std::cout<<"BroadcastWidthMultiCore"<<std::endl;
             return BroadcastWidthMultiCore{};
         }
     }

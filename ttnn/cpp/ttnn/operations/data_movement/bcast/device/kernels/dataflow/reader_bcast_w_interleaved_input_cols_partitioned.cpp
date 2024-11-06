@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t src0_addr  = get_arg_val<uint32_t>(0);
@@ -18,7 +19,7 @@ void kernel_main() {
     uint32_t start_id   = get_arg_val<uint32_t>(13);
     uint32_t HtWt       = get_arg_val<uint32_t>(14); // HtWt of input tensor
     uint32_t Wt_skip    = get_arg_val<uint32_t>(15);
-
+    DPRINT << "Test reader bcast string" << "\tINSIDE KERNEL: " << ENDL();
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
 

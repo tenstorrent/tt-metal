@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
+#include "debug/dprint.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
@@ -14,6 +14,13 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    DPRINT << "Test string" << "\tINSIDE UNARY KERNEL: " << ENDL();
+    const uint32_t a = per_core_block_cnt;
+    const uint32_t b = per_core_block_size;
+    DPRINT << "per_core_block_cnt\t" << a << ENDL();
+    DPRINT << "per_core_block_size\t" << b << ENDL();
+    // DPRINT_MATH << "per_core_block_dim\t" << b << ENDL();
+
 
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_in1 = tt::CB::c_in1;
@@ -121,6 +128,8 @@ void MAIN {
         tile_regs_acquire();
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
+            DPRINT  << TSLICE(tt::CB::c_in0, 0, SliceRange::h0_w0_32()) << ENDL();
+            DPRINT  << TSLICE(tt::CB::c_in1, 0, SliceRange::h0_w0_32()) << ENDL();
             ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
 
             #ifdef SFPU_OP_INIT_0

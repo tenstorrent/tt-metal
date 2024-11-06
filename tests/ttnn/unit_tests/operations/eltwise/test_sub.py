@@ -11,6 +11,41 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        [[1, 10], [10, 1]],
+        [[1, 15], [15, 1]],
+        [[16, 1, 49], [16, 49, 1]],
+        [[1, 2], [2, 1]],
+        [[1, 17], [17, 1]],
+        [[16, 1, 64], [16, 64, 1]],
+        [[24, 1], [1, 24]],
+        [[4, 1, 49], [4, 49, 1]],
+        [[4, 1, 64], [4, 64, 1]],
+        [[64, 1, 49], [64, 49, 1]],
+        [[64, 1, 64], [64, 64, 1]],
+    ],
+)
+def test_sub_pcc_fails_bcast(device, shapes):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.ones(shapes[0], dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.ones(shapes[1], dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a - torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
 @pytest.mark.parametrize("s", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
