@@ -158,13 +158,12 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
         return tensor_args.preallocated_output.value();
     }
 
-    const auto output_shape = compute_output_shapes(args, tensor_args);
-
     auto output_layout = Layout::TILE;
     if (args.output_memory_config.is_sharded()) {
         output_layout = tensor_args.input.get_layout();
     }
 
+    const auto output_shape = tensor_args.input.shape();
     return create_device_tensor(
         output_shape, args.output_dtype, output_layout, tensor_args.input.device(), args.output_memory_config);
 }
