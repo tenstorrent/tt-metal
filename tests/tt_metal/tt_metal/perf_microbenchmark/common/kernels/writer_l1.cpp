@@ -270,6 +270,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(uint32_t local_cb_addr, ui
                 dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
                 if ((dest_addr + coalesced_page_size) > remote_cb_interface.fifo_limit_page_aligned) {
+
                     uint32_t first_len_bytes = remote_cb_interface.fifo_limit_page_aligned - dest_addr;
                     uint32_t second_len_bytes = coalesced_page_size - first_len_bytes;
 
@@ -341,7 +342,7 @@ void kernel_main() {
         uint32_t curr_receiver_block_num_tiles = curr_block_num_tiles / num_receivers;
 
         uint32_t curr_block_size = curr_receiver_block_num_tiles * curr_page_size;
-        setup_remote_cb_page_size_block_aligned(curr_page_size, curr_block_size, noc_x, noc_y);
+        setup_remote_cb_page_size_block_aligned(curr_page_size, curr_block_size, noc_x, noc_y, noc);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
 
@@ -349,7 +350,7 @@ void kernel_main() {
 
             uint32_t local_cb_addr = get_read_ptr(cb_id);
             remote_cb_reserve_back(curr_receiver_block_num_tiles);
-            remote_cb_push_back_and_write_pages(local_cb_addr, curr_receiver_block_num_tiles, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size, noc_x, noc_y);
+            remote_cb_push_back_and_write_pages(local_cb_addr, curr_receiver_block_num_tiles, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size, noc_x, noc_y, noc);
 
             cb_pop_front(cb_id, curr_block_num_tiles);
 
