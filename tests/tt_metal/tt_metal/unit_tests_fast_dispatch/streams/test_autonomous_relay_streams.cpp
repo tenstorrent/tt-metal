@@ -266,11 +266,6 @@ void build_and_run_autonomous_stream_test(
     uint32_t buffer_size_bytes = num_messages * page_size;
     auto inputs = test_utils::generate_uniform_random_vector<uint32_t>(0, 100, buffer_size_bytes / sizeof(uint32_t));
     std::iota(inputs.begin(), inputs.end(), 1);
-    // for (auto i = 0; i < inputs.size(); i += page_size) {
-    //     for (auto ii = 0; ii < std::min<std::size_t>(page_size, inputs.size() - i); ii++) {
-    //         inputs.at(i + ii) = i + 1;
-    //     }
-    // }
 
     auto zeroes_buffer = std::vector<uint32_t>(buffer_size_bytes / sizeof(uint32_t), 0);
     std::vector<uint32_t> outputs(buffer_size_bytes / sizeof(uint32_t), 0);
