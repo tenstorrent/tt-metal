@@ -503,7 +503,6 @@ void clear(Allocator &allocator) {
     allocator.l1_manager.clear();
     allocator.l1_small_manager.clear();
     allocator.trace_buffer_manager.clear();
-    allocator.allocated_buffers.clear();
 }
 
 }  // namespace allocator

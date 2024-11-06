@@ -149,7 +149,7 @@ class Program {
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
-    const std::vector<uint32_t> &determine_sub_device_ids(const Device *device);
+    const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
 
    private:
     std::unique_ptr<detail::Program_> pimpl_;

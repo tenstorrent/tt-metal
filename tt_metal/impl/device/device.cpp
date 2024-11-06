@@ -4,6 +4,7 @@
 
 #include <string>
 #include <chrono>
+#include <type_traits>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -23,6 +24,9 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
+#include "tt_metal/impl/sub_device/sub_device.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
@@ -57,9 +61,12 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
 }
 
-uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, uint32_t sub_device_id) const {
-    TT_FATAL(sub_device_id == 0, "Invalid sub_device index: {}", sub_device_id);
-    return this->num_worker_cores_[static_cast<uint32_t>(core_type)];
+CoreRangeSet Device::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->sub_device(sub_device_id).cores(core_type);
+}
+
+uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->sub_device(sub_device_id).num_cores(core_type);
 }
 
 std::vector<uint32_t> Device::get_noc_encoding_for_active_eth_cores(NOC noc_index) {
@@ -200,13 +207,22 @@ void Device::initialize_cluster() {
         this->clear_l1_state();
     }
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    this->num_worker_cores_[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = compute_grid_size.x * compute_grid_size.y;
-    this->num_worker_cores_[static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH)] = this->get_active_ethernet_cores(true).size();
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 }
 
-void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {
+void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {
+    // Create the default sub-device manager representing the entire chip
+    this->next_sub_device_manager_id_ = {0};
+    auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap)));
+    this->default_sub_device_manager_id_ = sub_device_manager->first;
+    this->default_sub_device_manager_ = sub_device_manager->second.get();
+    this->active_sub_device_manager_id_ = this->default_sub_device_manager_id_;
+    this->active_sub_device_manager_ = this->default_sub_device_manager_;
+    this->allocator_ = this->get_initialized_allocator().get();
+
+}
+
+std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
@@ -272,7 +288,7 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
     // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     TT_ASSERT(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
-    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
+    return std::make_unique<L1BankingAllocator>(config);
 }
 
 void Device::initialize_device_kernel_defines()
@@ -2887,17 +2903,6 @@ void Device::init_command_queue_device() {
             }
         }
     }
-    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
-    auto dispatch_go_signal_noc = this->dispatch_go_signal_noc();
-    const auto& [tensix_num_worker_cores, tensix_worker_physical_grid] = get_physical_worker_grid_config(this->id(), this->num_hw_cqs(), dispatch_core_type);
-    this->noc_mcast_data_ = {this->get_noc_multicast_encoding(dispatch_go_signal_noc, tensix_worker_physical_grid), tensix_num_worker_cores};
-    // TODO: avoid copying?
-    const auto& noc_unicast_data = this->get_noc_encoding_for_active_eth_cores(dispatch_go_signal_noc);
-    this->noc_unicast_data_ = vector_memcpy_aligned<uint32_t>(noc_unicast_data.begin(), noc_unicast_data.end());
-    this->noc_mcast_unicast_data_.clear();
-    this->noc_mcast_unicast_data_.reserve(this->noc_mcast_data_.size() + this->noc_unicast_data_.size());
-    this->noc_mcast_unicast_data_.insert(this->noc_mcast_unicast_data_.end(), this->noc_mcast_data_.begin(), this->noc_mcast_data_.end());
-    this->noc_mcast_unicast_data_.insert(this->noc_mcast_unicast_data_.end(), this->noc_unicast_data_.begin(), this->noc_unicast_data_.end());
     // TODO: Move this inside the command queue
     for (auto& hw_cq : this->hw_command_queues_) {
         hw_cq->set_num_worker_sems_on_dispatch(this->num_sub_devices());
@@ -2926,10 +2931,9 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     constexpr uint32_t harvesting_map_bits = 12;
     this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits) | tt::Cluster::instance().get_harvesting_mask(this->id());
     this->initialize_cluster();
-    this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap);
+    this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
-    // Reset the launch_message ring buffer state seen on host, since its reset on device, each time FW is initialized
-    std::for_each(this->worker_launch_message_buffer_state.begin(), this->worker_launch_message_buffer_state.end(), std::mem_fn(&LaunchMessageRingBufferState::reset));
+
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
         return true;
@@ -2953,13 +2957,15 @@ bool Device::close() {
         }
         hw_command_queue->terminate();
     }
+
     this->work_executor.reset();
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
-    this->trace_buffer_pool_.clear();
-    this->MarkAllocationsSafe();
-
-    this->deallocate_buffers();
+    this->active_sub_device_manager_ = nullptr;
+    for (auto sub_device_manager = this->sub_device_managers_.begin(); sub_device_manager != this->sub_device_managers_.end();) {
+        this->remove_sub_device_manager((sub_device_manager++)->first);
+    }
+    this->default_sub_device_manager_ = nullptr;
 
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
@@ -3003,13 +3009,6 @@ bool Device::close() {
     }
 
     tt::Cluster::instance().l1_barrier(id_);
-    if (this->allocator_) {
-        allocator::clear(*this->allocator_);
-    }
-    // After device close, no buffers on this device should be used
-    for (const auto &buf : this->get_allocated_buffers()) {
-        DeallocateBuffer(*buf);
-    }
 
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();
@@ -3019,7 +3018,6 @@ bool Device::close() {
     this->sw_command_queues_.clear();
     this->hw_command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->allocator_.reset();
     this->tunnel_device_dispatch_workers_.clear();
     this->initialized_ = false;
 
@@ -3154,37 +3152,19 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     }
 }
 
-void Device::check_allocator_is_initialized(std::optional<uint32_t> sub_device_id) const {
-    // TODO: This will query the active sub-device manager
-    if (sub_device_id.has_value()) {
-        TT_THROW("Sub-device allocator not implemented yet");
-    } else {
-        if (!this->allocator_) {
-            TT_THROW("No memory allocator! Allocator has not been initialized");
-        }
-    }
+const std::unique_ptr<Allocator> &Device::get_initialized_allocator() const {
+    return this->default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator(std::optional<uint32_t> sub_device_id) const {
-    // TODO: This will query the active sub-device manager
-    if (sub_device_id.has_value()) {
-        TT_THROW("Sub-device allocator not implemented yet");
-    } else {
-        if (!this->allocator_) {
-            TT_THROW("No memory allocator! Allocator has not been initialized");
-        }
-        return this->allocator_;
-    }
+const std::unique_ptr<Allocator> &Device::get_initialized_allocator(SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->get_initialized_allocator(sub_device_id);
 }
 
-std::unique_ptr<Allocator> &Device::get_initialized_allocator(std::optional<uint32_t> sub_device_id) {
-    return const_cast<std::unique_ptr<Allocator>&>(const_cast<const Device*>(this)->get_initialized_allocator(sub_device_id));
-}
-
-void Device::reset_num_sub_devices(uint32_t num_sub_devices) {
-    TT_FATAL((num_sub_devices >=1 && num_sub_devices <= Device::MAX_NUM_SUB_DEVICES), "Illegal number of sub devices specified");
+void Device::reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager> &sub_device_manager) {
     // Finish all running programs
     Synchronize(this);
+
+    auto num_sub_devices = sub_device_manager->num_sub_devices();
 
     // Set new number of worker sems on dispatch_s
     for (auto& hw_cq : this->hw_command_queues_) {
@@ -3196,25 +3176,39 @@ void Device::reset_num_sub_devices(uint32_t num_sub_devices) {
         hw_cq->reset_config_buffer_mgr(num_sub_devices);
     }
     // Reset the launch_message ring buffer state seen on host
-    std::for_each(this->worker_launch_message_buffer_state.begin(), this->worker_launch_message_buffer_state.begin() + num_sub_devices, std::mem_fn(&LaunchMessageRingBufferState::reset));
+    sub_device_manager->reset_worker_launch_message_buffer_state();
 }
 
 uint32_t Device::num_sub_devices() const {
-    // TODO: This will query the active sub-device manager
-    return Device::DEFAULT_NUM_SUB_DEVICES;
+    return this->active_sub_device_manager_->num_sub_devices();
 }
 
-uint32_t Device::num_banks(const BufferType &buffer_type, std::optional<uint32_t> sub_device_id) const {
+uint32_t Device::num_banks(const BufferType &buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::num_banks(*allocator, buffer_type);
+}
+
+uint32_t Device::num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::num_banks(*allocator, buffer_type);
 }
 
-uint32_t Device::bank_size(const BufferType &buffer_type, std::optional<uint32_t> sub_device_id) const {
+uint32_t Device::bank_size(const BufferType &buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_size(*allocator, buffer_type);
+}
+
+uint32_t Device::bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::bank_size(*allocator, buffer_type);
 }
 
-uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id, std::optional<uint32_t> sub_device_id) const {
+uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
+}
+
+uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::dram_channel_from_bank_id(*allocator, bank_id);
 }
@@ -3233,64 +3227,141 @@ uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) c
     return tt::Cluster::instance().get_soc_desc(id_).get_dram_channel_from_logical_core(logical_core);
 }
 
-int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id, std::optional<uint32_t> sub_device_id) const {
+int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_offset(*allocator, buffer_type, bank_id);
+}
+
+int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::bank_offset(*allocator, buffer_type, bank_id);
 }
 
-CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id, std::optional<uint32_t> sub_device_id) const {
+CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::logical_core_from_bank_id(*allocator, bank_id);
+}
+
+CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::logical_core_from_bank_id(*allocator, bank_id);
 }
 
-const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel, std::optional<uint32_t> sub_device_id) const {
+const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
+}
+
+const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
 }
 
 const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
-    BufferType buffer_type, const CoreCoord &logical_core, std::optional<uint32_t> sub_device_id) const {
+    BufferType buffer_type, const CoreCoord &logical_core) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
+}
+
+const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
+    BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
 }
 
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type, std::optional<uint32_t> sub_device_id) const {
+allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_statistics(*allocator, buffer_type);
+}
+
+allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::get_statistics(*allocator, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment(std::optional<uint32_t> sub_device_id) const {
+uint32_t Device::get_allocator_alignment() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator->config.alignment;
+}
+
+uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator->config.alignment;
 }
 
-size_t Device::get_l1_small_size(std::optional<uint32_t> sub_device_id) const {
+size_t Device::get_l1_small_size() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator->config.l1_small_size;
+}
+
+size_t Device::get_l1_small_size(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator->config.l1_small_size;
 }
 
-void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, std::optional<uint32_t> sub_device_id) const {
+void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::dump_memory_blocks(*allocator, buffer_type, out);
+}
+
+void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::dump_memory_blocks(*allocator, buffer_type, out);
 }
 
-const std::unordered_set<Buffer *> &Device::get_allocated_buffers(std::optional<uint32_t> sub_device_id) const {
+const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_allocated_buffers(*allocator);
+}
+
+const std::unordered_set<Buffer *> &Device::get_allocated_buffers(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::get_allocated_buffers(*allocator);
 }
 
-void Device::deallocate_buffers(std::optional<uint32_t> sub_device_id) {
-    auto& allocator = this->get_initialized_allocator(sub_device_id);
+void Device::deallocate_buffers() {
+    const auto& allocator = this->get_initialized_allocator();
     allocator::deallocate_buffers(*allocator);
 }
 
-std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const uint32_t> sub_device_ids) const {
-    this->check_allocator_is_initialized(std::nullopt);
-    TT_FATAL(sub_device_ids.size() == 0, "Invalid number of sub-devices {}", sub_device_ids.size());
+void Device::deallocate_buffers(SubDeviceId sub_device_id) {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    allocator::deallocate_buffers(*allocator);
+}
+
+std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
     // Global bank id needs to look up a bank from the compute grid (not the storage grid)
+    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
     auto global_bank_id =
         this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-    return allocator::lowest_occupied_l1_address(*this->allocator_, global_bank_id);
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+}
+
+std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    // Sub-device banks are currently all compute banks
+    // Since banks are lockstep in an allocator it doesn't matter which core is used
+    uint32_t sub_device_bank_id = 0;
+    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
+    for (const auto& sub_device_id : sub_device_ids) {
+        const auto& allocator = this->active_sub_device_manager_->sub_device_allocator(sub_device_id);
+        if (allocator) {
+            auto found_addr = allocator::lowest_occupied_l1_address(*allocator, sub_device_bank_id);
+            if (found_addr.has_value()) {
+                lowest_addr = std::min(lowest_addr, *found_addr);
+            }
+        }
+    }
+    // sub-device allocators sit below global allocator. If an address is found for a sub-device, no need to check the global allocator
+    if (lowest_addr != std::numeric_limits<DeviceAddr>::max()) {
+        return lowest_addr;
+    } else {
+        const auto &allocator = this->get_initialized_allocator();
+        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
+        auto global_bank_id =
+            this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
+        return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+    }
 }
 
 float Device::sfpu_eps() const {
@@ -3414,21 +3485,22 @@ bool Device::using_slow_dispatch() const {
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalBeginTrace(this->id(), tid);
-    TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
     this->MarkAllocationsSafe();
     // Create an empty trace buffer here. This will get initialized in end_trace
-    this->trace_buffer_pool_.insert({tid, Trace::create_empty_trace_buffer()});
-    this->hw_command_queues_[cq_id]->record_begin(tid, this->trace_buffer_pool_[tid]->desc);
+    TT_FATAL(this->active_sub_device_manager_->get_trace(tid) == nullptr, "Trace already exists for tid {} on device", tid);
+    auto &trace_buffer = this->active_sub_device_manager_->create_trace(tid);
+    this->hw_command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalEndTrace(this->id(), tid);
     TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
-    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {} must exist on device", tid);
+    auto trace_buffer = this->active_sub_device_manager_->get_trace(tid);
+    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", tid);
     this->hw_command_queues_[cq_id]->record_end();
-    Trace::initialize_buffer(this->command_queue(cq_id), this->trace_buffer_pool_[tid]);
+    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
     this->MarkAllocationsUnsafe();
 }
 
@@ -3436,41 +3508,36 @@ void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool bl
     ZoneScoped;
     TracyTTMetalReplayTrace(this->id(), tid);
     constexpr bool check = false;
-    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {}  must exist on device" , tid);
+    const auto &trace_buffer = this->active_sub_device_manager_->get_trace(tid);
+    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", tid);
     if constexpr (check) {
-        Trace::validate_instance(*this->trace_buffer_pool_[tid]);
+        Trace::validate_instance(*trace_buffer);
     }
-    this->command_queue(cq_id).run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_TRACE,
-        .blocking = blocking,
-        .trace_id = tid
-    });
+    EnqueueTrace(this->command_queue(cq_id), tid, blocking);
 }
 
 void Device::release_trace(const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalReleaseTrace(this->id(), tid);
-    uint32_t erased = this->trace_buffer_pool_.erase(tid);
+
+    this->active_sub_device_manager_->release_trace(tid);
+
     // Only enable allocations once all captured traces are released
-    if (this->trace_buffer_pool_.empty()) {
+    if (this->trace_buffers_size == 0) {
         this->MarkAllocationsSafe();
     }
 }
 
-std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
-    if (auto trace = this->trace_buffer_pool_.find(tid); trace != this->trace_buffer_pool_.end()) {
-        return trace->second;
-    } else {
-        return nullptr;
-    }
+std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
+    return this->active_sub_device_manager_->get_trace(tid);
 }
 
 void Device::MarkAllocationsUnsafe() {
-    tt::tt_metal::allocator::mark_allocations_unsafe(*(this->allocator_));
+    tt::tt_metal::allocator::mark_allocations_unsafe(*this->get_initialized_allocator());
 }
 
 void Device::MarkAllocationsSafe() {
-    tt::tt_metal::allocator::mark_allocations_safe(*(this->allocator_));
+    tt::tt_metal::allocator::mark_allocations_safe(*this->get_initialized_allocator());
 }
 
 void Device::generate_device_headers(const std::string &path) const
@@ -3502,7 +3569,7 @@ void Device::generate_device_headers(const std::string &path) const
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
         l1_offset_per_bank,
-        this->allocator_->config.alignment
+        this->get_allocator_alignment()
     );
 }
 
@@ -3510,46 +3577,99 @@ size_t Device::get_device_kernel_defines_hash() {
     return tt::utils::DefinesHash{}(this->device_kernel_defines_);
 }
 
-const vector_memcpy_aligned<uint32_t>& Device::noc_mcast_data(uint32_t sub_device_id) const {
-    // TODO: This will query the active sub-device manager
-    TT_FATAL(sub_device_id < Device::DEFAULT_NUM_SUB_DEVICES, "sub_device_id {} is out of range", sub_device_id);
-    return this->noc_mcast_data_;
-}
-const vector_memcpy_aligned<uint32_t>& Device::noc_unicast_data(uint32_t sub_device_id) const {
-    // TODO: This will query the active sub-device manager
-    TT_FATAL(sub_device_id < Device::DEFAULT_NUM_SUB_DEVICES, "sub_device_id {} is out of range", sub_device_id);
-    return this->noc_unicast_data_;
+const vector_memcpy_aligned<uint32_t>& Device::noc_mcast_data(SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->noc_mcast_data(sub_device_id);
 }
 
-const vector_memcpy_aligned<uint32_t>& Device::noc_mcast_unicast_data(uint32_t sub_device_id, bool mcast_data, bool unicast_data) const {
-    // TODO: This will query the active sub-device manager
-    TT_FATAL(sub_device_id < Device::DEFAULT_NUM_SUB_DEVICES, "sub_device_id {} is out of range", sub_device_id);
+const vector_memcpy_aligned<uint32_t>& Device::noc_unicast_data(SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->noc_unicast_data(sub_device_id);
+}
+
+const vector_memcpy_aligned<uint32_t>& Device::noc_mcast_unicast_data(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
+    // Needed for compatibility with tests that create programs with no kernels
+    static const vector_memcpy_aligned<uint32_t> empty = {};
     if (mcast_data && unicast_data) {
-        return this->noc_mcast_unicast_data_;
+        return this->active_sub_device_manager_->noc_mcast_unicast_data(sub_device_id);
     } else if (mcast_data) {
-        return this->noc_mcast_data_;
+        return this->active_sub_device_manager_->noc_mcast_data(sub_device_id);
     } else if (unicast_data) {
-        return this->noc_unicast_data_;
+        return this->active_sub_device_manager_->noc_unicast_data(sub_device_id);
     } else {
-        // Needed for compatibility with tests that create programs with no kernels
-        static const vector_memcpy_aligned<uint32_t> empty = {};
         return empty;
     }
 }
 
-uint32_t Device::num_noc_mcast_txns(uint32_t sub_device_id) const {
+uint32_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return this->noc_mcast_data(sub_device_id).size() / 2;
 }
-uint32_t Device::num_noc_unicast_txns(uint32_t sub_device_id) const {
+uint32_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return this->noc_unicast_data(sub_device_id).size();
 }
 
-uint32_t Device::num_noc_mcast_unicast_txns(uint32_t sub_device_id, bool mcast_data, bool unicast_data) const {
+uint32_t Device::num_noc_mcast_unicast_txns(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
     return (mcast_data ? this->num_noc_mcast_txns(sub_device_id) : 0) + (unicast_data ? this->num_noc_unicast_txns(sub_device_id) : 0);
+}
+
+LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
+    return this->active_sub_device_manager_->get_worker_launch_message_buffer_state(sub_device_id);
 }
 
 NOC Device::dispatch_go_signal_noc() const {
     return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
+}
+
+SubDeviceManagerId Device::get_next_sub_device_manager_id() {
+    return this->next_sub_device_manager_id_++;
+}
+
+SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
+    return this->active_sub_device_manager_id_;
+}
+
+SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
+    return this->default_sub_device_manager_id_;
+}
+
+SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    TT_FATAL(!this->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
+    auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(sub_devices, local_l1_size, this));
+    return sub_device_manager->first;
+}
+
+void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    if (this->active_sub_device_manager_id_ == sub_device_manager_id) {
+        return;
+    }
+    auto sub_device_manager = this->sub_device_managers_.find(sub_device_manager_id);
+    TT_FATAL(sub_device_manager != this->sub_device_managers_.end(), "Sub device manager does not exist");
+    this->reset_sub_devices_state(sub_device_manager->second);
+    // Shrink the global allocator size to make room for sub-device allocators
+    auto local_l1_size = sub_device_manager->second->local_l1_size();
+    allocator::shrink_allocator_size(*this->get_initialized_allocator(), BufferType::L1, local_l1_size, true);
+    this->active_sub_device_manager_id_ = sub_device_manager_id;
+    this->active_sub_device_manager_ = sub_device_manager->second.get();
+}
+
+void Device::clear_loaded_sub_device_manager() {
+    if (this->active_sub_device_manager_id_ == this->default_sub_device_manager_id_) {
+        return;
+    }
+    TT_FATAL(!this->active_sub_device_manager_->has_allocations(), "Cannot clear active sub device manager {} since it has allocations", this->active_sub_device_manager_id_);
+    auto &default_manager = this->sub_device_managers_.at(this->default_sub_device_manager_id_);
+    this->reset_sub_devices_state(default_manager);
+    allocator::reset_allocator_size(*this->get_initialized_allocator(), BufferType::L1);
+    this->active_sub_device_manager_id_ = this->default_sub_device_manager_id_;
+    this->active_sub_device_manager_ = default_manager.get();
+}
+
+void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    if (this->active_sub_device_manager_ != nullptr) {
+        TT_FATAL(sub_device_manager_id != this->active_sub_device_manager_id_, "Cannot remove active sub device manager {}", sub_device_manager_id);
+        TT_FATAL(sub_device_manager_id != this->default_sub_device_manager_id_, "Cannot remove default sub device manager {}", sub_device_manager_id);
+    }
+    auto sub_device_manager = this->sub_device_managers_.find(sub_device_manager_id);
+    TT_FATAL(sub_device_manager != this->sub_device_managers_.end(), "Sub device manager does not exist");
+    this->sub_device_managers_.erase(sub_device_manager);
 }
 
 }  // namespace tt_metal
