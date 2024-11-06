@@ -29,9 +29,6 @@ CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBu
     core_ranges_(core_ranges),
     config_(config),
     locally_allocated_address_(std::nullopt) {
-    if (this->config_.total_size() == 0) {
-        return;
-    }
 
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
         std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
