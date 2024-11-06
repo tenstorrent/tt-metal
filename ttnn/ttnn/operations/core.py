@@ -232,10 +232,10 @@ def _golden_function(tensor, *, torch_rank=None, **kwargs):
     if torch_rank is None:
         return tensor
 
-    while len(tensor.shape) != torch_rank:
+    while len(tensor.shape) > torch_rank:
         if tensor.shape[0] != 1:
             raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-        tensor = tensor.squeeze()
+        tensor = tensor.squeeze(0)
     return tensor
 
 
@@ -304,10 +304,10 @@ def to_torch(
     tensor = tensor[slices]
 
     if torch_rank is not None:
-        while len(tensor.shape) != torch_rank:
+        while len(tensor.shape) > torch_rank:
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-            tensor = tensor.squeeze()
+            tensor = tensor.squeeze(0)
 
     return TorchTensor(tensor)
 
