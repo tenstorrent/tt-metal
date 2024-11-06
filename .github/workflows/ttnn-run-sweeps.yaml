@@ -168,6 +168,8 @@ on:
           - eltwise.unary_complex.is_imag
           - eltwise.unary_complex.reciprocal
           - eltwise.unary_complex.reciprocal_bw
+          - eltwise.binary_complex.div_bw.div_bw
+          - eltwise.binary_complex.add_bw.add_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
