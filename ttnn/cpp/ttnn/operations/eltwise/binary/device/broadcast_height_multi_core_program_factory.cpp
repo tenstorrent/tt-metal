@@ -143,9 +143,9 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);
         uint32_t Ht_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             Ht_per_core = Ht_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             Ht_per_core = Ht_per_core_group_2;
         } else {
             tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(15, 0));
@@ -279,9 +279,9 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
         auto& bcast_kernel_args = cached_eltwise_args.at(core.x).at(core.y);
         auto& unary_writer_args = cached_writer_args.at(core.x).at(core.y);
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             Ht_per_core = Ht_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             Ht_per_core = Ht_per_core_group_2;
         } else {
             binary_reader_args[3] = 0;

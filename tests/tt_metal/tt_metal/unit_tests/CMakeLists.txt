@@ -32,6 +32,8 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_iterator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_merge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_construct.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_contains.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_intersects.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/direct.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_apis/test_tilize_untilize.cpp
@@ -40,6 +42,7 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/device_cluster_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/erisc_app_direct_send.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/ring_gather_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/global_semaphore/test_global_semaphores.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/test_any_range.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/slotmap.cpp
 )

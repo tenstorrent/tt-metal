@@ -98,7 +98,7 @@ ParallelConfig determine_parallel_config(
         if (num_cores_nhw < compute_grid_size.x && out_nhw_ntiles > compute_grid_size.x) {
             num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, compute_grid_size.x);
         }
-        grid = num_cores_to_corerange_set(num_cores_nhw, compute_grid_size, true);
+        grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
@@ -111,7 +111,7 @@ ParallelConfig determine_parallel_config(
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         num_cores_nhw = 1;
         uint32_t num_cores_c = find_closest_common_largest_divisor(out_c_ntiles, std::ceil((float)input_channels / effective_tile_width), max_num_cores);
-        grid = num_cores_to_corerange_set(num_cores_c, compute_grid_size, true);
+        grid = num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
     }
@@ -293,7 +293,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         .out_subblock_w_ntiles = out_subblock_w_ntiles};
 }
 
-static bool use_matmul_for_1x1_conv(
+bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& padding,
@@ -315,8 +315,6 @@ static TensorMemoryLayout select_shard_spec(
     uint32_t weights_width,
     uint32_t input_width,
     ShardOrientation shard_orientation,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size) {
     auto get_core_count_for_sharding = [&](TensorMemoryLayout shard_layout) {
         return determine_parallel_config(
@@ -331,11 +329,6 @@ static TensorMemoryLayout select_shard_spec(
             .grid.num_cores();
     };
 
-    // Block sharding supports very few kernel dims.
-    const bool is_block_sharding_valid =
-        (kernel_size[0] == 3 && kernel_size[1] == 3 && (stride[0] == 1 || stride[0] == 2)) ||
-        (kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 2);
-
     // 1d convs support only height sharding
     const bool is_conv1d = weights_width == 1 && input_width == 1;
 
@@ -343,8 +336,7 @@ static TensorMemoryLayout select_shard_spec(
     // matmul doesn't support width sharding
     const uint32_t cc_width =
         !is_mm_conv && !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::WIDTH_SHARDED) : 0;
-    const uint32_t cc_block =
-        (is_block_sharding_valid || is_mm_conv) && !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::BLOCK_SHARDED) : 0;
+    const uint32_t cc_block = !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::BLOCK_SHARDED) : 0;
 
     uint32_t max_cc = cc_block;
     TensorMemoryLayout shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
@@ -763,8 +755,6 @@ static void adjust_conv_op_config_for_auto_shard(
     uint32_t output_width,
     uint32_t weights_width,
     uint32_t input_width,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size,
     Conv2dConfig& conv_config) {
     ShardOrientation shard_orientation =
@@ -779,8 +769,6 @@ static void adjust_conv_op_config_for_auto_shard(
         weights_width,
         input_width,
         shard_orientation,
-        kernel_size,
-        stride,
         compute_grid_size);
 
     if (conv_config.act_block_h_override == 0 && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED) {
@@ -799,7 +787,7 @@ static void adjust_conv_op_config_for_auto_shard(
 }
 
 template <typename T>
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
+Result conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
@@ -833,8 +821,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             output_width,
             weight_tensor.get_shape()[3],
             input_width,
-            kernel_size,
-            stride,
             device->compute_with_storage_grid_size(),
             conv_config);
     }
@@ -995,7 +981,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding,
             use_non_tile_height);
-        ttnn::operations::core::deallocate(halo_output);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -1107,7 +1092,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     MeshDevice * device,
     uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<Device>(
+Result Conv2dOperation::invoke(
+    uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     Device * device,
@@ -1123,9 +1109,12 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config);
+    const std::optional<const MemoryConfig> memory_config){
+    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
+}
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<MeshDevice>(
+Result Conv2dOperation::invoke(
+    uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice * device,
@@ -1141,7 +1130,9 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config);
+    const std::optional<const MemoryConfig> memory_config){
+    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
+}
 
 }  // namespace conv2d
 }  // namespace operations
