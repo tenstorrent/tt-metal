@@ -605,7 +605,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
             uint16_t noc_x = NOC_0_X(noc, grid_size.x, dram_bank_map[bank_id].x);
             uint16_t noc_y = NOC_0_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
-            ss << "        (((" << noc_y << "NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
+            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
                << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -626,7 +626,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
             uint16_t noc_x = NOC_0_X(noc, grid_size.x, l1_bank_map[bank_id].x);
             uint16_t noc_y = NOC_0_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
-            ss << "        (((" << noc_y << "NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
+            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
                << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
