@@ -1685,13 +1685,18 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-    uint32_t in0_CB_tiles = per_core_M * (num_cores * in0_shard_width_in_tiles);
+    uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     /* in1 */
     uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
     uint32_t in1_CB_tiles = in1_shard_height_in_tiles * per_core_N;
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+
+    /* in2 */
+    uint32_t in2_single_tile_size = in0_single_tile_size;
+    uint32_t in2_CB_tiles = (num_cores - 1) * in0_CB_tiles;  // All shards except local
+    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -1829,6 +1834,13 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_tile_dims(src1_cb_index, in1_tile)
             .set_globally_allocated_address(*in1_buffer);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+
+    uint32_t src2_cb_index = 2;
+    tt_metal::CircularBufferConfig src2_cb_config =
+        tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
+            .set_page_size(src2_cb_index, in2_single_tile_size)
+            .set_tile_dims(src2_cb_index, in0_tile);
+    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
     uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t interm0_cb_index = 24;

@@ -64,6 +64,7 @@ void MAIN {
 
     constexpr uint32_t in0_cb_id = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
+    constexpr uint32_t in2_cb_id = tt::CB::c_in2;
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
     constexpr uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
 
@@ -97,6 +98,7 @@ void MAIN {
         cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
 
         for (uint32_t block = 0; block < num_blocks; block++) {
+            const uint32_t input_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -106,7 +108,7 @@ void MAIN {
             }
 #endif
 
-            cb_wait_front(in0_cb_id, in0_block_num_tiles);
+            cb_wait_front(input_cb_id, in0_block_num_tiles);
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -115,7 +117,7 @@ void MAIN {
                     tile_regs_acquire();
                     if (enable_reload) {
                         reload_from_cb_to_dst(
-                            in0_cb_id,
+                            input_cb_id,
                             in1_cb_id,
                             mm_partials_cb_id,
                             out_subblock_num_tiles,
@@ -135,7 +137,7 @@ void MAIN {
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
                         matmul_block(
-                            in0_cb_id,
+                            input_cb_id,
                             in1_cb_id,
                             in0_index,
                             in1_index,
@@ -224,7 +226,7 @@ void MAIN {
             }
 #endif
 
-            cb_pop_front(in0_cb_id, in0_block_num_tiles);
+            cb_pop_front(input_cb_id, in0_block_num_tiles);
         }
         cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
 

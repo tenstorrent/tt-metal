@@ -38,7 +38,7 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "out_sharded, M, K, N, activation, dtype, fidelity, packer_l1_acc, fp32_acc_mode",
+    "out_sharded, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode",
     [
         # 32, 2304, 3840
         (
@@ -48,7 +48,8 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b
             3840,
             None,
             ttnn.bfloat16,
-            ttnn.MathFidelity.HiFi2,
+            ttnn.bfloat4_b,
+            ttnn.MathFidelity.LoFi,
             True,
             True,
         ),
@@ -67,7 +68,8 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b
 )
 def test_multi_core_matmul_1d_wh(
     device,
-    dtype,
+    in0_dtype,
+    in1_dtype,
     fidelity,
     out_sharded,
     has_bias,
@@ -117,35 +119,18 @@ def test_multi_core_matmul_1d_wh(
     in1 = torch.randn(in1_shape)
     bias = torch.randn(bias_shape)
 
-    # FIXME: Because .set_globally_allocated address is broken, need to add padding to input tensor
-    padded_K = K * (num_cores - 1)
-    input_tensor_padding = torch.randn([1, 1, M, padded_K]).float()
-    in0_padded_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=input_tensor_padding.shape,
-        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    _ = ttnn.from_torch(
-        input_tensor_padding,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=in0_padded_sharded_mem_config,
-    )
-
     in0_t = ttnn.from_torch(
         in0,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
+        dtype=in0_dtype,
         memory_config=in0_sharded_mem_config,
     )
     in1_t = ttnn.from_torch(
         in1,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
+        dtype=in1_dtype,
         memory_config=in1_sharded_mem_config,
     )
 
@@ -176,7 +161,6 @@ def test_multi_core_matmul_1d_wh(
         in1_t,
         program_config=program_config,
         memory_config=output_mem_config,
-        dtype=dtype,
         compute_kernel_config=compute_kernel_config,
     )
     tt_out = ttnn.to_torch(output_t)
