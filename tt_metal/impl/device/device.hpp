@@ -18,6 +18,8 @@
 #include "llrt/tt_cluster.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "program_cache.hpp"
 
@@ -32,18 +34,13 @@ inline namespace v0 {
 class Buffer;
 class Program;
 class CommandQueue;
+class SubDevice;
 
 }  // namespace v0
 
 class JitBuildEnv;
 class HWCommandQueue;
 class TraceBuffer;
-
-namespace detail {
-
-class TraceDescriptor;
-
-}
 
 using on_close_device_callback = std::function<void ()>;
 
@@ -65,7 +62,7 @@ inline namespace v0 {
 // A physical PCIexpress Tenstorrent device
 class Device {
    private:
-    static constexpr uint32_t MAX_NUM_SUB_DEVICES = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+    static_assert(detail::SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES, "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
    public:
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
@@ -141,7 +138,8 @@ class Device {
 
     bool is_inactive_ethernet_core(CoreCoord logical_core) const;
 
-    uint32_t num_worker_cores(HalProgrammableCoreType core_type, uint32_t sub_device_id) const;
+    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
+    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
 
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
         return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
@@ -161,34 +159,46 @@ class Device {
 
     uint32_t num_sub_devices() const;
 
-    uint32_t num_banks(const BufferType &buffer_type, std::optional<uint32_t> sub_device_id = std::nullopt) const;
-    uint32_t bank_size(const BufferType &buffer_type, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    uint32_t num_banks(const BufferType &buffer_type) const;
+    uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
+    uint32_t bank_size(const BufferType &buffer_type) const;
+    uint32_t bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
 
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const;
 
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const;
 
-    const std::unique_ptr<Allocator> &get_initialized_allocator(std::optional<uint32_t> sub_device_id = std::nullopt) const;
-    std::unique_ptr<Allocator> &get_initialized_allocator(std::optional<uint32_t> sub_device_id = std::nullopt);
+    const std::unique_ptr<Allocator> &get_initialized_allocator() const;
+    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const;
 
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const;
+    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const;
 
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const;
 
-    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const;
+    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const;
 
     const std::vector<uint32_t> &bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord &logical_core, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+        BufferType buffer_type, const CoreCoord &logical_core) const;
+    const std::vector<uint32_t> &bank_ids_from_logical_core(
+        BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const;
 
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
+    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
 
-    uint32_t get_allocator_alignment(std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    uint32_t get_allocator_alignment() const;
+    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const;
 
-    size_t get_l1_small_size(std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    size_t get_l1_small_size() const;
+    size_t get_l1_small_size(SubDeviceId sub_device_id) const;
 
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
+    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const;
 
     // Set of logical storage only core coordinates
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
@@ -203,11 +213,14 @@ class Device {
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const;
 
-    const std::unordered_set<Buffer *> &get_allocated_buffers(std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    const std::unordered_set<Buffer *> &get_allocated_buffers() const;
+    const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const;
 
-    void deallocate_buffers(std::optional<uint32_t> sub_device_id = std::nullopt);
+    void deallocate_buffers();
+    void deallocate_buffers(SubDeviceId sub_device_id);
 
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const uint32_t> sub_device_ids) const;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const;
 
     // machine epsilon
     float sfpu_eps() const;
@@ -234,16 +247,15 @@ class Device {
     void end_trace(const uint8_t cq_id, const uint32_t tid);
     void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking);
     void release_trace(const uint32_t tid);
-    std::shared_ptr<TraceBuffer> get_trace(const uint32_t tid);
+    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
 
     bool using_slow_dispatch() const;
-    void check_allocator_is_initialized(std::optional<uint32_t> sub_device_id) const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
     void initialize_cluster();
-    void initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
+    std::unique_ptr<Allocator> initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
     void initialize_device_kernel_defines();
     void build_firmware();
@@ -287,7 +299,9 @@ class Device {
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     chip_id_t id_;
     uint32_t build_key_;
-    std::unique_ptr<Allocator> allocator_ = nullptr;
+    // Leaving here for compatibility with current reacharounds
+    // TODO: Replace with get_initialized_allocator()
+    Allocator * allocator_ = nullptr;
     bool initialized_ = false;
     std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
@@ -310,7 +324,6 @@ class Device {
     uint32_t worker_thread_core;
     uint32_t completion_queue_reader_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
-    std::array<LaunchMessageRingBufferState, Device::MAX_NUM_SUB_DEVICES> worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs;
@@ -345,7 +358,9 @@ class Device {
     T get_dev_addr(CoreCoord phys_core, HalL1MemAddrType addr_type) const;
     // Returns address where allocator starts allocating buffer
     template <typename T = DeviceAddr>
-    T get_base_allocator_addr(const HalMemType &mem_type, std::optional<uint32_t> sub_device_id = std::nullopt) const;
+    T get_base_allocator_addr(const HalMemType &mem_type) const;
+    template <typename T = DeviceAddr>
+    T get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
 
     template <typename CoreRangeContainer>
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
@@ -354,28 +369,35 @@ class Device {
     NOC dispatch_go_signal_noc() const;
     size_t get_device_kernel_defines_hash();
 
-    const vector_memcpy_aligned<uint32_t>& noc_mcast_data(uint32_t sub_device_id) const;
-    const vector_memcpy_aligned<uint32_t>& noc_unicast_data(uint32_t sub_device_id) const;
-    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data(uint32_t sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
-    uint32_t num_noc_mcast_txns(uint32_t sub_device_id) const;
-    uint32_t num_noc_unicast_txns(uint32_t sub_device_id) const;
-    uint32_t num_noc_mcast_unicast_txns(uint32_t sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
+    const vector_memcpy_aligned<uint32_t>& noc_mcast_data(SubDeviceId sub_device_id) const;
+    const vector_memcpy_aligned<uint32_t>& noc_unicast_data(SubDeviceId sub_device_id) const;
+    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
+    uint32_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
+    uint32_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
+    uint32_t num_noc_mcast_unicast_txns(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
 
+    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
+
+    SubDeviceManagerId get_active_sub_device_manager_id() const;
+    SubDeviceManagerId get_default_sub_device_manager_id() const;
+    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr mesh_l1_size);
+    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
+    void clear_loaded_sub_device_manager();
+    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
    private:
-    void reset_num_sub_devices(uint32_t num_sub_devices);
-
+    void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap);
+    SubDeviceManagerId get_next_sub_device_manager_id();
+    void reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager>& sub_device_manager);
     void MarkAllocationsUnsafe();
     void MarkAllocationsSafe();
-    std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
     std::map<std::string, std::string> device_kernel_defines_;
 
-    // Data structures queried when no SubDeviceManager is active
-    // Otherwise this data comes from the SubDeviceManager
-    // TODO: Encapsulate the default case in a SubDeviceManager as well?
-    std::array<uint32_t, NumHalProgrammableCoreTypes> num_worker_cores_{};
-    vector_memcpy_aligned<uint32_t> noc_mcast_data_;
-    vector_memcpy_aligned<uint32_t> noc_unicast_data_;
-    vector_memcpy_aligned<uint32_t> noc_mcast_unicast_data_;
+    std::unordered_map<SubDeviceManagerId, std::unique_ptr<detail::SubDeviceManager>> sub_device_managers_;
+    SubDeviceManagerId active_sub_device_manager_id_ = {0};
+    detail::SubDeviceManager *active_sub_device_manager_ = nullptr;
+    SubDeviceManagerId next_sub_device_manager_id_ = {0};
+    SubDeviceManagerId default_sub_device_manager_id_ = {0};
+    detail::SubDeviceManager *default_sub_device_manager_ = nullptr;
 };
 
 }  // namespace v0
@@ -402,7 +424,13 @@ inline T Device::get_dev_addr(CoreCoord phys_core, HalL1MemAddrType addr_type) c
 }
 
 template <typename T>
-inline T Device::get_base_allocator_addr(const HalMemType &mem_type, std::optional<uint32_t> sub_device_id) const {
+inline T Device::get_base_allocator_addr(const HalMemType &mem_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_unreserved_base_address(*allocator, mem_type);
+}
+
+template <typename T>
+inline T Device::get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::get_unreserved_base_address(*allocator, mem_type);
 }

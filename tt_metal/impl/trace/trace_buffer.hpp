@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -23,10 +24,10 @@ struct TraceDescriptor {
         uint32_t num_traced_programs_needing_go_signal_unicast = 0;
     };
     // Mapping of sub_device_id to descriptor
-    std::unordered_map<uint32_t, Descriptor> descriptors;
+    std::unordered_map<SubDeviceId, Descriptor> descriptors;
     // Store the keys of the map in a vector after descriptor has finished being populated
     // This is an optimization since we sometimes need to only pass the keys in a container
-    std::vector<uint32_t> sub_device_ids;
+    std::vector<SubDeviceId> sub_device_ids;
     std::vector<uint32_t> data;
 };
 }  // namespace detail
