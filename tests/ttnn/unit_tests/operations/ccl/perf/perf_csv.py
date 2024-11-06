@@ -7,94 +7,99 @@ import os
 import re
 
 
-def perf_report(original_file_path):
-    df = pd.read_csv(original_file_path)
-    df.dropna(subset=["DEVICE ERISC KERNEL DURATION [ns]"], inplace=True)
-    filtered_df = df[
-        [
-            "ATTRIBUTES",
-            "INPUT_0_W",
-            "INPUT_0_Z",
-            "INPUT_0_Y",
-            "INPUT_0_X",
-            "OUTPUT_0_W",
-            "OUTPUT_0_Z",
-            "OUTPUT_0_Y",
-            "OUTPUT_0_X",
-            "INPUT_0_LAYOUT",
-            "INPUT_0_DATATYPE",
-            "OP CODE",
-            "HOST DURATION [ns]",
-            "DEVICE FW START CYCLE",
-            "DEVICE FW END CYCLE",
-            "OP TO OP LATENCY [ns]",
-            "DEVICE FW DURATION [ns]",
-            "DEVICE KERNEL DURATION [ns]",
-            "DEVICE ERISC KERNEL DURATION [ns]",
-        ]
-    ].copy()
+def perf_report(file_path):
+    df = pd.read_csv(file_path)
 
-    fields_to_remove = [
-        "receiver_device_id",
-        "ring_index",
-        "sender_device_id",
-        "user_defined_num_buffers_per_channel",
-        "user_defined_num_workers",
-        "output_mem_config",
-        "buffer_type",
-        "shard_spec",
+    df = df.dropna(subset=["DEVICE ERISC KERNEL DURATION [ns]"])
+    df = df[df["OP TO OP LATENCY [ns]"] != 0]
+    df = df[df["TRACE ID"].notna() & (df["TRACE ID"] != "")]
+
+    def remove_keys_from_attributes(attributes):
+        attributes = attributes.replace(";", ",").replace("'", '"')
+
+        keys_to_remove = ["receiver_device_id", "ring_index", "sender_device_id"]
+
+        try:
+            attributes_dict = eval(attributes)
+
+            attributes_dict["topology"] = attributes_dict.get("topology", "").split("::")[-1]
+
+            if "ring_size" not in attributes_dict:
+                raise KeyError("Missing 'ring_size' attribute")
+
+            attributes_dict["n_chips"] = int(attributes_dict["ring_size"])
+
+            for key in keys_to_remove:
+                if key in attributes_dict:
+                    del attributes_dict[key]
+
+            modified_attributes = str(attributes_dict).replace(",", ";").replace('"', "'")
+            return modified_attributes
+        except Exception as e:
+            print(f"Error processing attributes: {e}")
+            return attributes
+
+    df["ATTRIBUTES"] = df["ATTRIBUTES"].apply(remove_keys_from_attributes)
+
+    def safe_parse_attributes(attributes):
+        attributes = attributes.replace(";", ",")
+
+        try:
+            attr_dict = eval(attributes)
+            return attr_dict
+        except Exception as e:
+            print(f"Error processing attributes: {e}")
+            return {}
+
+    df["topology"] = df["ATTRIBUTES"].apply(
+        lambda x: safe_parse_attributes(x).get("topology", "") if isinstance(safe_parse_attributes(x), dict) else ""
+    )
+
+    df["dim"] = df["ATTRIBUTES"].apply(
+        lambda x: safe_parse_attributes(x).get("dim", "") if isinstance(safe_parse_attributes(x), dict) else ""
+    )
+
+    df["num_links"] = df["ATTRIBUTES"].apply(
+        lambda x: safe_parse_attributes(x).get("num_links", "") if isinstance(safe_parse_attributes(x), dict) else ""
+    )
+
+    df["output_mem_config"] = df["ATTRIBUTES"].apply(
+        lambda x: ", ".join(
+            [
+                match.split("::")[1]
+                for match in re.findall(
+                    r"(BufferType::\w+|TensorMemoryLayout::\w+)",
+                    str(safe_parse_attributes(x).get("output_mem_config", "")),
+                )
+            ]
+        )
+        if isinstance(safe_parse_attributes(x), dict)
+        else ""
+    )
+
+    df["n_chips"] = df["ATTRIBUTES"].apply(
+        lambda x: int(safe_parse_attributes(x).get("ring_size", ""))
+        if isinstance(safe_parse_attributes(x), dict)
+        else 0
+    )
+
+    group_columns = [
+        "ATTRIBUTES",
+        "INPUT_0_W",
+        "INPUT_0_Z",
+        "INPUT_0_Y",
+        "INPUT_0_X",
+        "INPUT_0_LAYOUT",
+        "INPUT_0_DATATYPE",
+        "OUTPUT_0_W",
+        "OUTPUT_0_Z",
+        "OUTPUT_0_Y",
+        "OUTPUT_0_X",
+        "OUTPUT_0_LAYOUT",
+        "OUTPUT_0_DATATYPE",
     ]
 
-    def clean_attributes(attributes):
-        attributes_list = attributes.split(";")
-        filtered_attributes = [
-            attr.strip() for attr in attributes_list if not any(field in attr for field in fields_to_remove)
-        ]
-        return "; ".join(filtered_attributes).strip("; ")
-
-    filtered_df["ATTRIBUTES"] = filtered_df["ATTRIBUTES"].apply(clean_attributes)
-    filtered_df["ATTRIBUTES_BACKUP"] = filtered_df["ATTRIBUTES"]
-
-    filtered_df["Input Shape"] = filtered_df.apply(
-        lambda row: f"[{row['INPUT_0_W']}, {row['INPUT_0_Z']}, {row['INPUT_0_Y']}, {row['INPUT_0_X']}]", axis=1
-    )
-    filtered_df["Output Shape"] = filtered_df.apply(
-        lambda row: f"[{row['OUTPUT_0_W']}, {row['OUTPUT_0_Z']}, {row['OUTPUT_0_Y']}, {row['OUTPUT_0_X']}]", axis=1
-    )
-    filtered_df["Cycles Count"] = filtered_df["DEVICE FW END CYCLE"] - filtered_df["DEVICE FW START CYCLE"]
-
-    def split_attributes(attributes):
-        attr_dict = {key: value for key, value in re.findall(r"'([^']+)':\s*'([^']+)'", attributes)}
-        attr_dict["topology"] = attr_dict.get("topology", "").split("::")[-1]
-        if "ring_size" not in attr_dict:
-            raise KeyError("Missing 'ring_size' attribute")
-        attr_dict["n_chips"] = int(attr_dict["ring_size"])
-        return pd.Series(
-            {
-                "dim": attr_dict.get("dim"),
-                "num_links": attr_dict.get("num_links"),
-                "topology": attr_dict["topology"],
-                "n_chips": attr_dict["n_chips"],
-            }
-        )
-
-    split_attrs_df = filtered_df["ATTRIBUTES"].apply(split_attributes)
-    filtered_df = pd.concat([filtered_df, split_attrs_df], axis=1)
-    filtered_df.drop(
-        columns=[
-            "ATTRIBUTES",
-            "INPUT_0_W",
-            "INPUT_0_Z",
-            "INPUT_0_Y",
-            "INPUT_0_X",
-            "OUTPUT_0_W",
-            "OUTPUT_0_Z",
-            "OUTPUT_0_Y",
-            "OUTPUT_0_X",
-        ],
-        inplace=True,
-    )
-    filtered_df.rename(columns={"INPUT_0_LAYOUT": "Layout", "INPUT_0_DATATYPE": "Data Type"}, inplace=True)
+    grouped = df.groupby(group_columns)
 
     numeric_columns = [
         "HOST DURATION [ns]",
@@ -103,59 +108,11 @@ def perf_report(original_file_path):
         "DEVICE FW DURATION [ns]",
         "DEVICE KERNEL DURATION [ns]",
         "DEVICE ERISC KERNEL DURATION [ns]",
+        "Op BW [GB/s]",
+        "Link BW [GB/s]",
     ]
-    filtered_df[numeric_columns] = filtered_df[numeric_columns].apply(pd.to_numeric, errors="coerce")
 
-    def calculate_min_avg_max_by_common_runs(df):
-        group_columns = [
-            "ATTRIBUTES_BACKUP",
-            "Input Shape",
-            "Output Shape",
-            "dim",
-            "num_links",
-            "topology",
-            "Layout",
-            "Data Type",
-            "OP CODE",
-        ]
-        results = []
-
-        for name, group in df.groupby(group_columns):
-            n_chips = group["n_chips"].iloc[0]
-            group_excluded = group.iloc[2 * n_chips :]
-            if not group_excluded.empty:
-                min_values = group_excluded[numeric_columns].min().round(2)
-                avg_values = group_excluded[numeric_columns].mean().round(2)
-                max_values = group_excluded[numeric_columns].max().round(2)
-
-                op_bw_values, link_bw_values = [], []
-
-                for _, row in group_excluded.iterrows():
-                    op_bw, link_bw = calculate_bandwidth(row)
-                    op_bw_values.append(op_bw)
-                    link_bw_values.append(link_bw)
-
-                op_bw_min, op_bw_avg, op_bw_max = (
-                    round(min(op_bw_values), 2),
-                    round(sum(op_bw_values) / len(op_bw_values), 2),
-                    round(max(op_bw_values), 2),
-                )
-                link_bw_min, link_bw_avg, link_bw_max = (
-                    round(min(link_bw_values), 2),
-                    round(sum(link_bw_values) / len(link_bw_values), 2),
-                    round(max(link_bw_values), 2),
-                )
-
-                result_row = {
-                    **{col: f"{min_values[col]} - {avg_values[col]} - {max_values[col]}" for col in numeric_columns},
-                    "Op BW [GB/s]": f"{op_bw_min} - {op_bw_avg} - {op_bw_max}",
-                    "Link BW [GB/s]": f"{link_bw_min} - {link_bw_avg} - {link_bw_max}",
-                    **{key: value for key, value in zip(group_columns, name)},
-                    "n_chips": n_chips,
-                }
-                results.append(result_row)
-
-        return pd.DataFrame(results)
+    averages_data = []
 
     def calculate_bandwidth(row):
         dtype = row["Data Type"]
@@ -208,33 +165,53 @@ def perf_report(original_file_path):
                 link_bw = input_tensor_volume * (n_chips - 1) / n_chips / longest_erisc_fw_time
         return round(op_bw, 2), round(link_bw, 2)
 
-    average_values_by_common_run = calculate_min_avg_max_by_common_runs(filtered_df)
+    for i, (group, group_df) in enumerate(grouped, start=1):
+        group_df = group_df.iloc[2 * group_df["n_chips"].iloc[0] :]
 
-    final_order = [
-        "Input Shape",
-        "OP CODE",
-        "dim",
-        "num_links",
-        "topology",
-        "Layout",
-        "Data Type",
-        "HOST DURATION [ns]",
-        "Cycles Count",
-        "OP TO OP LATENCY [ns]",
-        "DEVICE FW DURATION [ns]",
-        "DEVICE KERNEL DURATION [ns]",
-        "Op BW [GB/s]",
-        "Link BW [GB/s]",
-    ]
-    average_values_by_common_run = average_values_by_common_run[final_order]
+        group_df = group_df.sort_values(by=["DEVICE ID", "OP TO OP LATENCY [ns]"]).reset_index(drop=True)
+        group_df = group_df.groupby("DEVICE ID").apply(lambda x: x.iloc[4:-4]).reset_index(drop=True)
 
-    base, ext = os.path.splitext(original_file_path)
-    modified_file_path = f"{base}_modified{ext}"
-    filtered_df.to_csv(modified_file_path, index=False)
-    print(f"Filtered CSV created successfully at: {modified_file_path}")
+        group_df.rename(columns={"INPUT_0_LAYOUT": "Layout", "INPUT_0_DATATYPE": "Data Type"}, inplace=True)
 
-    averages_file_path = f"{base}_averages.csv"
-    average_values_by_common_run.to_csv(averages_file_path, index=False)
-    print(f"Averages CSV created successfully at: {averages_file_path}")
+        group_df["Input Shape"] = group_df.apply(
+            lambda row: f"[{row['INPUT_0_W']}, {row['INPUT_0_Z']}, {row['INPUT_0_Y']}, {row['INPUT_0_X']}]", axis=1
+        )
+        group_df["Output Shape"] = group_df.apply(
+            lambda row: f"[{row['OUTPUT_0_W']}, {row['OUTPUT_0_Z']}, {row['OUTPUT_0_Y']}, {row['OUTPUT_0_X']}]", axis=1
+        )
+        group_df["Cycles Count"] = group_df["DEVICE FW END CYCLE"] - group_df["DEVICE FW START CYCLE"]
+        group_df[["Op BW [GB/s]", "Link BW [GB/s]"]] = group_df.apply(calculate_bandwidth, axis=1, result_type="expand")
 
-    return average_values_by_common_run
+        group_file_path = file_path.replace(".csv", f"_group_{i}.csv")
+
+        group_df.to_csv(group_file_path, index=False)
+
+        group_data = {
+            "Input Shape": group_df["Input Shape"].iloc[0],
+            "OP CODE": group_df["OP CODE"].iloc[0],
+            "dim": group_df["dim"].iloc[0] if "dim" in group_df else "",
+            "num_links": group_df["num_links"].iloc[0] if "num_links" in group_df else "",
+            "output_mem_config": group_df["output_mem_config"].iloc[0] if "output_mem_config" in group_df else "",
+            "topology": group_df["topology"].iloc[0],
+            "Layout": group_df["Layout"].iloc[0] if "Layout" in group_df else "",
+        }
+
+        for column in numeric_columns:
+            min_val = round(group_df[column].min(), 2)
+            largest_vals = group_df[column].nlargest(3)
+            max_val = round(largest_vals.iloc[-1], 2)
+            avg_val = round(group_df[column][~group_df[column].isin(largest_vals.head(2))].mean(), 2)
+
+            group_data[column] = f"{min_val} - {avg_val} - {max_val}"
+
+        averages_data.append(group_data)
+
+    averages_df = pd.DataFrame(averages_data)
+
+    averages_file_path = file_path.replace(".csv", "_averages.csv")
+
+    averages_df.to_csv(averages_file_path, index=False)
+
+    print(f"Averages CSV saved to: {averages_file_path}")
+
+    return averages_df
