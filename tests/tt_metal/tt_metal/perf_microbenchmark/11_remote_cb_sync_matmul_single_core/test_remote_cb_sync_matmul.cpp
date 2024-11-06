@@ -204,7 +204,7 @@ tt_metal::Program create_program(
 
     auto in1_reader_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/kernels/in1_reader_dram.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernels/reader_dram.cpp",
         dram_reader_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -223,7 +223,7 @@ tt_metal::Program create_program(
 
     auto in1_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/kernels/in1_writer.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernels/writer_l1.cpp",
         dram_reader_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -254,7 +254,7 @@ tt_metal::Program create_program(
 
     auto in1_receiver_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/kernels/in1_receiver.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/kernels/receiver_l1.cpp",
         l1_receiver_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,

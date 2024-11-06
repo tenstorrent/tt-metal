@@ -178,7 +178,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/kernels/reader_dram.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernels/reader_dram.cpp",
         dram_reader_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -196,7 +196,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/kernels/writer_l1.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernels/writer_l1.cpp",
         dram_reader_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
