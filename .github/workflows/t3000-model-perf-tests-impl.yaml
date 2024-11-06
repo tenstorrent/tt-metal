@@ -22,6 +22,7 @@ jobs:
           { name: "t3k LLM llama3 model perf tests", model: "llama3", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
           { name: "t3k CNN resnet50 model perf tests", model: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U013121KDH9}, # Austin Ho
+          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_perf_tests, timeout: 75, tracy: true, owner_id: ULMEPM2MA}, # Sean Nijjar
           #{ name: "t3k CNN model perf tests ", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_cnn_tests, timeout: 120, owner_id: }, #No tests are being run?
         ]
     name: ${{ matrix.test-group.name }}
@@ -45,7 +46,14 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: Download profiler build artifact
+        if: ${{ matrix.test-group.tracy }}
+        uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+      - name: Download regular build artifact
+        if: ${{ !matrix.test-group.tracy }}
+        uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
