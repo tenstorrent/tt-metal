@@ -264,9 +264,9 @@ on:
           - reduction.argmax.argmax
           - reduction.prod
           - reduction.sum
-          - reduction.var
-          - reduction.std
-          - reduction.mean
+          - reduction.var.var
+          - reduction.std.std
+          - reduction.mean.mean
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
