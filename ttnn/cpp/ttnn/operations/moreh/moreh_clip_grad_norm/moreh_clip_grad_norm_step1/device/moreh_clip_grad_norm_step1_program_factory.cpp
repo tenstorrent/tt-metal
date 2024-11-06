@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "moreh_clip_grad_norm_step1_device_operation.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -45,9 +46,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     origin_hw_vec.reserve(num_inputs);
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
-        // TODO: Duong
         const auto& input_shape_without_padding = inputs.at(j).get_logical_shape();
-        // const auto& input_shape_without_padding = inputs.at(j).get_legacy_shape().without_padding();
         origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
     }
 
@@ -66,9 +65,9 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
          core_group_2,
          num_inputs_per_core_group_1,
          num_inputs_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_inputs);
-    TT_ASSERT(core_group_2.ranges().empty());
-    TT_ASSERT(num_inputs_per_core_group_1 == 1);
-    TT_ASSERT(num_inputs_per_core_group_2 == 0);
+    TT_FATAL(core_group_2.ranges().empty(), "core_group_2 must be empty");
+    TT_FATAL(num_inputs_per_core_group_1 == 1, "num_inputs_per_core_group_1 must be 1");
+    TT_FATAL(num_inputs_per_core_group_2 == 0, "num_inputs_per_core_group_2 must be 0");
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -89,7 +88,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
 
-    ttnn::operations::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         core_group_1,
         cb_data_format,
@@ -117,8 +116,8 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "writer_moreh_clip_grad_norm_step1.cpp";
 
-    const auto reader_kernel_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, core_group_1);
-    const auto writer_kernel_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, core_group_1);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core_group_1);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core_group_1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -131,8 +130,8 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "moreh_clip_grad_norm_step1_kernel.cpp";
 
-    const auto compute_kernel_id = ttnn::operations::CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1}, compute_defines);
+    const auto compute_kernel_id =
+        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1}, compute_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp

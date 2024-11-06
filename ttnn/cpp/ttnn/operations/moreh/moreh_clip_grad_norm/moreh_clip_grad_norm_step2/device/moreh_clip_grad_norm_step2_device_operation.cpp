@@ -13,10 +13,10 @@ namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2 {
 
 void MorehClipGradNormStep2Operation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    ttnn::operations::check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
+    check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
 
     if (tensor_args.total_norm.has_value())
-        ttnn::operations::check_tensor(tensor_args.total_norm, "moreh_clip_grad_norm_step2", "total_norm");
+        check_tensor(tensor_args.total_norm, "moreh_clip_grad_norm_step2", "total_norm");
 };
 
 MorehClipGradNormStep2Operation::program_factory_t MorehClipGradNormStep2Operation::select_program_factory(

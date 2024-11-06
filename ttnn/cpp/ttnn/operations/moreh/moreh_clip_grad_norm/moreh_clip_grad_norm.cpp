@@ -80,7 +80,7 @@ Tensor MorehClipGradNorm::invoke(
     if (error_if_nonfinite) {
         const auto fp32_total_norm =
             tensor_impl::cast_vec<float>(owned_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
-        TT_ASSERT(
+        TT_FATAL(
             std::isfinite(fp32_total_norm),
             "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
             "clipped. To disable this error and scale the gradients by the non-finite norm anyway, set "
@@ -91,7 +91,7 @@ Tensor MorehClipGradNorm::invoke(
     // max_norm / (total_norm + 1e-6)
     const auto &clip_coef = ttnn::multiply(ttnn::add(output_total_norm, 1e-6f), (1 / max_norm));
     // min(clip_coef, 1.0f)
-    Tensor scalar = ttnn::operations::creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
+    Tensor scalar = creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
     const auto &clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
 
