@@ -1654,7 +1654,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::atan, R"doc(\mathrm{{output\_tensor}}_i = atan(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_operation(module, ttnn::cos, R"doc(\mathrm{{output\_tensor}}_i = cos(\mathrm{{input\_tensor}}_i))doc");
-    detail::bind_unary_operation(module, ttnn::erfinv, R"doc(\mathrm{{output\_tensor}}_i = erfinv(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::erfinv, R"doc(\mathrm{{output\_tensor}}_i = erfinv(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16)doc");
 
     detail::bind_unary_operation(module, ttnn::exp2, R"doc(\mathrm{{output\_tensor}}_i = exp2(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
 
@@ -1674,8 +1674,8 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::isposinf, R"doc(\mathrm{{output\_tensor}}_i = isposinf(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::log, R"doc(\mathrm{{output\_tensor}}_i = log(\mathrm{{input\_tensor}}_i))doc");
-    detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = log10(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BF8 only supported in WHB0)doc");
-    detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = log2(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc",  R"doc(BF8 only supported in WHB0)doc");
+    detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = log10(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B only supported in WHB0)doc");
+    detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = log2(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc",  R"doc(BFLOAT8_B only supported in WHB0)doc");
     detail::bind_unary_operation(module, ttnn::logical_not, R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc");
     detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = neg(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1714,7 +1714,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "negative_slope", "The slope parameter for the Leaky ReLU function", "",R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor",
-        "This will create a tensor of same shape as input reference tensor with fill_value.", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Support provided for float32 dtypes in Wormhole_B0.)doc");
+        "This will create a tensor of same shape as input reference tensor with fill_value.", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function",
         "This function caps off the input to a max value and a min value of 0", R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(System memory is not supported.)doc");
