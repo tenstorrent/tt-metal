@@ -94,7 +94,7 @@ class DeviceCommand {
             relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
             relay_wait->relay_inline.dispatcher_type = dispatcher_type;
             relay_wait->relay_inline.length = sizeof(CQDispatchCmd);
-            relay_wait->relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+            relay_wait->relay_inline.stride = this->pcie_alignment;
 
             wait_cmd->base.cmd_id = CQ_DISPATCH_CMD_WAIT;
             wait_cmd->wait.barrier = barrier;

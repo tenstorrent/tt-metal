@@ -33,6 +33,10 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
+#include "llrt/hal.hpp"
+
+#define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
+
 using namespace tt::tt_metal;
 
 using std::map;
@@ -338,7 +342,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 }
 
 void EnqueueProgramCommand::assemble_preamble_commands(ProgramCommandSequence& program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs) {
-    constexpr uint32_t uncached_cmd_sequence_sizeB =
+    uint32_t uncached_cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
 
     program_command_sequence.preamble_command_sequence =
@@ -361,7 +365,7 @@ void EnqueueProgramCommand::assemble_stall_commands(ProgramCommandSequence& prog
         // Wait command so previous program finishes
         // Wait command with barrier for binaries to commit to DRAM
         // Prefetch stall to prevent prefetcher picking up incomplete binaries from DRAM
-        constexpr uint32_t uncached_cmd_sequence_sizeB =
+        uint32_t uncached_cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
@@ -377,7 +381,7 @@ void EnqueueProgramCommand::assemble_stall_commands(ProgramCommandSequence& prog
             true, this->dispatch_message_addr, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
-        constexpr uint32_t cached_cmd_sequence_sizeB =
+        uint32_t cached_cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
         program_command_sequence.stall_command_sequence =
