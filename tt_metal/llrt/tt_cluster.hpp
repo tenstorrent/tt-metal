@@ -11,7 +11,6 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "host_mem_address_map.h"
 #include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
@@ -296,9 +295,6 @@ class Cluster {
         (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
         (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
     };
-
-    tt_driver_host_address_params host_address_params = {
-        host_mem::address_map::ETH_ROUTING_BLOCK_SIZE, host_mem::address_map::ETH_ROUTING_BUFFERS_START};
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };

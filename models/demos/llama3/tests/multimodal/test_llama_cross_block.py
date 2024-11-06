@@ -10,10 +10,6 @@ import ttnn
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn_prefill,
-    prepare_inputs_ttnn,
-)
 from models.utility_functions import comp_pcc, comp_allclose, nearest_32
 from models.utility_functions import skip_for_grayskull
 
@@ -75,9 +71,9 @@ def test_llama_cross_attention_transformer_block_inference(
 
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
-    tt_xattn_tokens = prepare_inputs_ttnn_prefill(
+    tt_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
         tt_xattn_tokens,
-        mesh_device,
+        force_replicated=True,
     )
 
     """
@@ -120,15 +116,13 @@ def test_llama_cross_attention_transformer_block_inference(
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
         if mode == "prefill":
-            tt_x = prepare_inputs_ttnn_prefill(
+            tt_x = model_args.prepare_inputs_ttnn_prefill(
                 tt_x,
-                mesh_device,
             )
         else:
-            tt_x = prepare_inputs_ttnn(
+            tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
-                model_args.dim,
-                mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,  # TODO for the current configuration the decode input needs to be on DRAM
             )
 
         xattn_mask = torch.bernoulli(
@@ -197,7 +191,7 @@ def test_llama_cross_attention_transformer_block_inference(
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
         if mode == "decode":
             tt_full_text_mask_expand_11SD = ttnn.reshape(
@@ -221,7 +215,7 @@ def test_llama_cross_attention_transformer_block_inference(
             mode=mode,
         )
 
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
         if mode == "prefill":
             tt_output_torch = tt_output_torch[0, ..., :seq_len, :].view(batch, seq_len, dim)

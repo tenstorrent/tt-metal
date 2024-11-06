@@ -70,13 +70,10 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
 
     tt_q = ttnn.sharded_to_interleaved(q, out_mem_config)
     tt_q = tt_q.cpu().to_torch().float()
-    tt_q = untilize(tt_q)
     tt_k = ttnn.sharded_to_interleaved(k, out_mem_config)
     tt_k = tt_k.cpu().to_torch().float()
-    tt_k = untilize(tt_k)
     tt_v = ttnn.sharded_to_interleaved(v, out_mem_config)
     tt_v = tt_v.cpu().to_torch().float()
-    tt_v = untilize(tt_v)
 
     fused_qkv_heads = torch.split(in0, input_shape[-1] // grid_size[1], dim=-1)
     ref_q_list = []

@@ -8,7 +8,7 @@ import warnings
 import math
 import ttnn
 
-Conv1dConfig = ttnn._ttnn.operations.conv2d.Conv2dConfig
+Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 
 @ttnn.register_python_operation(name="ttnn.Conv1d")
@@ -44,7 +44,7 @@ def Conv1d(
         _,
         weight_tensor_on_dev_new,
         bias_tensor_on_dev_new,
-    ) = ttnn._ttnn.operations.conv2d.conv2d(
+    ) = ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
