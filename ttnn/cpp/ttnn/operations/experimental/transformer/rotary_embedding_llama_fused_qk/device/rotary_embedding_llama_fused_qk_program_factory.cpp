@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             .set_globally_allocated_address(*q_src_buffer);
     auto cb_q_input = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_input_config);
 
-    uint32_t k_input_cb_index = CB::c_in4;
+    uint32_t k_input_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig cb_k_input_config =
         tt_metal::CircularBufferConfig(
             num_input_tiles * input_single_tile_size, {{k_input_cb_index, input_cb_data_format}})
@@ -104,21 +104,21 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             .set_globally_allocated_address(*k_src_buffer);
     auto cb_k_input = tt_metal::CreateCircularBuffer(program, k_cores, cb_k_input_config);
 
-    uint32_t cos_cb_index = CB::c_in1;
+    uint32_t cos_cb_index = CB::c_in2;
     tt_metal::CircularBufferConfig cb_cos_config =
         tt_metal::CircularBufferConfig(num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
             .set_page_size(cos_cb_index, cos_single_tile_size)
             .set_globally_allocated_address(*cos_buffer);
     auto cb_cos = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
 
-    uint32_t sin_cb_index = CB::c_in2;
+    uint32_t sin_cb_index = CB::c_in3;
     tt_metal::CircularBufferConfig cb_sin_config =
         tt_metal::CircularBufferConfig(num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
             .set_page_size(sin_cb_index, sin_single_tile_size)
             .set_globally_allocated_address(*sin_buffer);
     auto cb_sin = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
 
-    uint32_t trans_mat_cb_index = CB::c_in3;
+    uint32_t trans_mat_cb_index = CB::c_in4;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
     tt_metal::CircularBufferConfig cb_trans_mat_config =
@@ -149,6 +149,27 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
     auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
+    // uint32_t k_rotated_input_interm_cb_index = CB::c_intermed3;
+    // tt_metal::CircularBufferConfig cb_k_rotated_input_interm_config =
+    //     tt_metal::CircularBufferConfig(
+    //         num_interm_tiles * input_single_tile_size, {{k_rotated_input_interm_cb_index, input_cb_data_format}})
+    //         .set_page_size(k_rotated_input_interm_cb_index, input_single_tile_size);
+    // auto cb_k_rotated_input_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_k_rotated_input_interm_config);
+
+    // uint32_t k_cos_interm_cb_index = CB::c_intermed4;
+    // tt_metal::CircularBufferConfig cb_k_cos_interm_config =
+    //     tt_metal::CircularBufferConfig(
+    //         num_interm_tiles * input_single_tile_size, {{k_cos_interm_cb_index, cos_cb_data_format}})
+    //         .set_page_size(k_cos_interm_cb_index, cos_single_tile_size);
+    // auto cb_k_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_k_cos_interm_config);
+
+    // uint32_t k_sin_interm_cb_index = CB::c_intermed5;
+    // tt_metal::CircularBufferConfig cb_k_sin_interm_config =
+    //     tt_metal::CircularBufferConfig(
+    //         num_interm_tiles * input_single_tile_size, {{k_sin_interm_cb_index, sin_cb_data_format}})
+    //         .set_page_size(k_sin_interm_cb_index, sin_single_tile_size);
+    // auto cb_k_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_k_sin_interm_config);
+
     uint32_t q_output_cb_index = CB::c_out0;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
@@ -166,6 +187,26 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
 
 
     // Set up the kernel
+
+    std::vector<uint32_t> k_compute_kernel_args = {
+        (std::uint32_t)k_input_cb_index,
+        (std::uint32_t)cos_cb_index,
+        (std::uint32_t)sin_cb_index,
+        (std::uint32_t)trans_mat_cb_index,
+        (std::uint32_t)rotated_input_interm_cb_index,
+        (std::uint32_t)cos_interm_cb_index,
+        (std::uint32_t)sin_interm_cb_index,
+        (std::uint32_t)k_output_cb_index,
+        (std::uint32_t)head_dim_t,
+        (std::uint32_t)n_heads_t,
+        };
+
+    auto k_rotary_embedding_kernel_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp",
+        k_cores,
+        tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = k_compute_kernel_args});
+
     std::vector<uint32_t> q_compute_kernel_args = {
         (std::uint32_t)q_input_cb_index,
         (std::uint32_t)cos_cb_index,
@@ -184,25 +225,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp",
         q_cores,
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = q_compute_kernel_args});
-
-    std::vector<uint32_t> k_compute_kernel_args = {
-        (std::uint32_t)k_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)k_output_cb_index,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)n_heads_t,
-        };
-
-    auto k_rotary_embedding_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp",
-        q_cores,
-        tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = k_compute_kernel_args});
 
     auto override_runtime_arguments_callback = [
         cb_q_input,

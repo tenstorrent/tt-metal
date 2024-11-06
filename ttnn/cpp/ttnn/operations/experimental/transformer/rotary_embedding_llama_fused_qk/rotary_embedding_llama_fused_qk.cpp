@@ -18,7 +18,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
     const std::optional<MemoryConfig>& k_memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({q_input_tensor, k_input_tensor, cos_cache, sin_cache, trans_mat}))};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({q_input_tensor, k_input_tensor, cos_cache, sin_cache, trans_mat})),
+    Tensor(operation::get_workers_for_op_output({q_input_tensor, k_input_tensor, cos_cache, sin_cache, trans_mat}))};
     operation::launch_op(
         [q_memory_config, k_memory_config, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& q_input_tensor = input_tensors.at(0);
