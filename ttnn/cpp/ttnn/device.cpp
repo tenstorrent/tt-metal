@@ -26,6 +26,58 @@ void disable_and_clear_program_cache(Device &device) {
     device.disable_and_clear_program_cache();
 }
 
+float sfpu_positive_nan(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: {
+            return float(0x7FFF) ;
+        }
+        case DataType::FLOAT32: {
+            return float(0x7FFFFFFFF) ;
+        }
+        default:
+            return std::numeric_limits<float>::quiet_NaN();
+    }
+}
+
+float sfpu_negative_nan(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: {
+            return float(0xFFFF) ;
+        }
+        case DataType::FLOAT32: {
+            return float(0xFFFFFFFF) ;
+        }
+        default:
+            return -std::numeric_limits<float>::quiet_NaN();
+    }
+}
+
+float sfpu_positive_inf(DataType dtype) {
+
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            return 0x7F80;
+        case DataType::FLOAT32:
+            return 0x7F800000;
+        default:
+            return std::numeric_limits<float>::infinity();
+    }
+    return std::numeric_limits<float>::infinity();
+}
+
+float sfpu_negative_inf(DataType dtype) {
+
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            return 0xFF80;
+        case DataType::FLOAT32:
+            return 0xFF800000;
+        default:
+            return -std::numeric_limits<float>::infinity();
+    }
+    return -std::numeric_limits<float>::infinity();
+}
+
 void close_device(Device &device) {
     tt::DevicePool::instance().close_device(device.id());
 

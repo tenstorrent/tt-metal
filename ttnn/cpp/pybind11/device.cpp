@@ -60,6 +60,19 @@ void ttnn_device(py::module& module) {
 
     module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"));
 
+    module.def("sfpu_negative_nan", &ttnn::sfpu_negative_nan, py::arg("dtype"), R"doc(
+        Returns Negative NaN value for given datatype.
+    )doc");
+    module.def("sfpu_positive_nan", &ttnn::sfpu_positive_nan, py::arg("dtype"), R"doc(
+        Returns Positive NaN value for given datatype.
+    )doc");
+    module.def("sfpu_negative_inf", &ttnn::sfpu_negative_inf, py::arg("dtype"), R"doc(
+        Returns Negative Infinity value for given datatype.
+    )doc");
+    module.def("sfpu_positive_inf", &ttnn::sfpu_positive_inf, py::arg("dtype"), R"doc(
+        Returns Positive Infinity value for given datatype.
+    )doc");
+
     module.def("disable_and_clear_program_cache", &ttnn::disable_and_clear_program_cache, py::arg("device"));
 
     module.def("deallocate_buffers", &ttnn::deallocate_buffers, py::arg("device"), R"doc(
