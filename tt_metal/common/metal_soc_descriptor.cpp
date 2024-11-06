@@ -9,7 +9,6 @@
 #include <string>
 
 #include "tt_metal/common/assert.hpp"
-#include "dev_mem_map.h"
 #include "tt_metal/third_party/umd/device/tt_device.h"
 #include "yaml-cpp/yaml.h"
 
