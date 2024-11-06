@@ -116,53 +116,6 @@ def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
     return rot_emb
 
 
-def prepare_inputs_ttnn(x, hidden_size, mesh_device):
-    """
-    Prepare inputs for decode mode.
-    x: (batch, seq, hidden_dim)
-    """
-
-    if len(x.shape) == 3:
-        batch = x.shape[0]
-        seq_len = x.shape[1]
-        assert x.shape[2] == hidden_size
-    elif len(x.shape) == 4:
-        seq_len = x.shape[0]
-        assert x.shape[1] == 1
-        batch = x.shape[2]
-        assert x.shape[3] == hidden_size
-
-    assert seq_len == 1, "Only supporting decode mode"
-
-    # Support input on device
-    if torch.is_tensor(x):  # Input on host -> Use torch
-        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
-        # Pad small batches to 32
-        if batch < 32:
-            zeros = torch.zeros(1, seq_len, 32, hidden_size)
-            zeros[:, :, :batch, :] = x
-            x = zeros
-    elif len(x.shape) == 3:  # Input on device -> Use ttnn
-        x = ttnn.reshape(
-            x, (batch, seq_len, 1, hidden_size)
-        )  # [batch, seqlen, hidden_dim] -> [batch, seqlen, 1, hidden_dim]
-        x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
-    elif len(x.shape) == 4:
-        pass  # already in [seq_len, 1, batch, hidden_dim]
-
-    if torch.is_tensor(x):
-        x = ttnn.from_torch(
-            x,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-    else:  # Convert the row major layout from embedding back to tile layout
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-    return x
-
-
 # Sample logits from a distribution
 def sample_top_p(probs: torch.Tensor, p: float):
     assert 0 <= p <= 1
@@ -231,31 +184,6 @@ def get_rot_transformation_mat(dhead):
     return rot_emb_matrix
 
 
-def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
-    """
-    Prepare inputs for prefill mode.
-    x: (batch, seq, hidden_dim)
-    B: batch (32)
-    S: sequence len (1)
-    H: dim (4096)
-    """
-    batch = x_bsh.size(0)
-    seq_len = x_bsh.size(1)
-
-    x_1BSH = x_bsh.unsqueeze(0)
-
-    # input goes to L1
-    xs_1BSH = ttnn.from_torch(
-        x_1BSH,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    return xs_1BSH
-
-
 def get_single_rot_mat(
     dhead, mesh_device, num_devices, start_pos=0, theta: float = 500000.0, use_scaled=True, on_host=False
 ):
@@ -294,3 +222,48 @@ def get_single_rot_mat(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
     )
+
+
+def num_to_core_range_set(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
+    num_y = x // num_x
+    assert num_x * num_y == x
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_x - 1, num_y - 1),
+            ),
+        }
+    )
+
+
+def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
+    """Helper function based on logic used in reference model:
+    https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
+    """
+    hidden_dim = int(2 * (4 * dim) / 3)
+    if ffn_dim_multiplier is not None:
+        hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+    hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+    return hidden_dim
+
+
+def get_out_subblock_w(per_core_N, out_subblock_h):
+    """
+    Helper function to calculate the out_subblock_w based on the per_core_N and out_subblock_h
+    """
+    out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_N % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w
+
+
+def first_five(tensor, mesh_device):
+    """
+    Helper function to return the first 5 elements of a tensor via torch
+    """
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, :5]

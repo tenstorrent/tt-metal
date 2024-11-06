@@ -48,6 +48,8 @@ bool page_size_as_runtime_arg_g; // useful particularly on GS multi-dram tests (
 bool hammer_write_reg_g = false;
 bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
+bool test_write = false;
+bool linked = false;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -67,10 +69,12 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -sy: when reading from L1, Y of core to read from. when issuing a multicast write, Y of start core to write to. (default {})", 0);
         log_info(LogTest, "  -tx: when issuing a multicast write, X of end core to write to (default {})", 0);
         log_info(LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
+        log_info(LogTest, "  -wr: issue unicast write instead of read (default false)");
         log_info(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
+        log_info(LogTest, "-link: link mcast transactions");
         log_info(LogTest, " -hr: hammer write_reg while executing (for PCIe test)");
         log_info(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
@@ -103,6 +107,14 @@ void init(int argc, char **argv) {
         exit(-1);
     }
     page_count_g = size_bytes / page_size_g;
+
+    test_write = test_args::has_command_option(input_args, "-wr");
+    if (test_write && (source_mem_g != 2 && source_mem_g != 6)) {
+        log_info(LogTest, "Writing only tested w/ L1 destination\n");
+        exit(-1);
+    }
+
+    linked = test_args::has_command_option(input_args, "-link");
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
@@ -200,7 +212,7 @@ int main(int argc, char **argv) {
             break;
         case 2:
             {
-                src_mem = "FROM_L1";
+                src_mem = test_write ? "TO_L1" : "FROM_L1";
                 CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -245,6 +257,7 @@ int main(int argc, char **argv) {
                 noc_addr_y = start.y;
                 mcast_noc_addr_end_x = end.x;
                 mcast_noc_addr_end_y = end.y;
+                test_write = true;
             }
             break;
         }
@@ -259,6 +272,8 @@ int main(int argc, char **argv) {
             {"READ_ONE_PACKET", std::to_string(read_one_packet_g)},
             {"DRAM_BANKED", std::to_string(dram_banked)},
             {"ISSUE_MCAST", std::to_string(issue_mcast)},
+            {"WRITE", std::to_string(test_write)},
+            {"LINKED", std::to_string(linked)},
             {"NUM_MCAST_DESTS", std::to_string(num_mcast_dests)},
             {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)}
@@ -284,27 +299,29 @@ int main(int argc, char **argv) {
 
         CoreCoord w = device->physical_core_from_logical_core(worker_g.start_coord, CoreType::WORKER);
         log_info(LogTest, "Master core: {}", w.str());
+        string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {
-            log_info(LogTest, "Reading: {}", src_mem);
+            log_info(LogTest, "{}: {}", direction, src_mem);
         } else if (source_mem_g == 4) {
-            log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, w.x, w.y);
+            log_info(LogTest, "{}: {} - core ({}, {})", direction, src_mem, w.x, w.y);
         } else if (source_mem_g == 5) {
-            log_info(LogTest, "Writing: {} - core ({}, {})", src_mem, w.x, w.y);
+            log_info(LogTest, "{}: {} - core ({}, {})", test_write, src_mem, w.x, w.y);
         } else if (source_mem_g == 6) {
-            log_info(LogTest, "Writing: {} - core grid [({}, {}) - ({}, {})]", src_mem, noc_addr_x, noc_addr_y, mcast_noc_addr_end_x, mcast_noc_addr_end_y);
+            log_info(LogTest, "direction: {} - core grid [({}, {}) - ({}, {})]", direction, src_mem, noc_addr_x, noc_addr_y, mcast_noc_addr_end_x, mcast_noc_addr_end_y);
         } else {
-            log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
+            log_info(LogTest, "{}: {} - core ({}, {})", direction, src_mem, noc_addr_x, noc_addr_y);
         }
         if (source_mem_g < 4 || source_mem_g == 6) {
             std::string api;
+            string read_write = test_write ? "write" : "read";
             if (issue_mcast) {
-                api = "noc_async_write_multicast";
+                api = "noc_async_" + read_write + "_multicast";
             }
             else if (read_one_packet_g) {
-                api = "noc_async_read_one_packet";
+                api = "noc_async_" + read_write + "_one_packet";
             }
             else {
-                api = "noc_async_read";
+                api = "noc_async_" + read_write;
             }
             log_info(LogTest, "Using API: {}", api);
             log_info(LogTest, "Lazy: {}", lazy_g);
