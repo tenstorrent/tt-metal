@@ -119,6 +119,7 @@ class Hal {
   private:
     std::mutex lock;
     bool initialized_;
+    tt::ARCH arch_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
