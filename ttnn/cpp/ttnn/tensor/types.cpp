@@ -37,11 +37,6 @@ const Shape Shape::to_rank(size_t new_rank) const {
 
 namespace tt::tt_metal {
 
-std::ostream& operator<<(std::ostream& os, DataType value) {
-    os << magic_enum::enum_name(value);
-    return os;
-}
-
 static DistributedTensorConfig create_shard_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
     return ShardTensor(std::stoi(metadata.at("shard_dim")));
 }
