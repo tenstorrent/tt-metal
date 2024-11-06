@@ -161,7 +161,7 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
         # Prepare input for TT model
         decode_input = model_args.prepare_inputs_ttnn_decode(
             pt_decode_input,
-            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
         # Run TT model
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)

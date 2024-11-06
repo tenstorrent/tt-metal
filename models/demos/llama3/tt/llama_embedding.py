@@ -35,8 +35,6 @@ class TtLlamaEmbedding(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
-        # x = ttnn.pad(x, padding=((0, 0), (0, 0), (0, 32-x.shape[2]), (0, 0)), value=0)
-        # x = ttnn.tilize(x, use_multicore=True)
         return x

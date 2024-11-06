@@ -111,7 +111,9 @@ class TtTransformerBlock(LightweightModule):
 
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
-        ttnn.deallocate(attn_out)
+
+        # TODO: This deallocate may cause ND output. The reason seems to be related to either the input being on DRAM/L1 and the sharded spec in MLP using 32 cores instead of 16.
+        # ttnn.deallocate(attn_out)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode)
