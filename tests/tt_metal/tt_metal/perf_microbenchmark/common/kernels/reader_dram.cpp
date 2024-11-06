@@ -73,6 +73,23 @@ void kernel_main() {
         uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
         src_read_addr = src_read_addr_offset_bytes;
 
+        // For debug purpose, use trivial DRAM read method
+        // for (uint32_t block = 0; block < curr_num_blocks; ++block) {
+        //     // Operand 1
+        //     cb_reserve_back(cb_id, curr_block_num_tiles);
+        //     auto l1_write_addr = get_write_ptr(cb_id);
+
+        //     for (uint32_t h = 0; h < curr_num_pages; ++h) {
+        //         noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
+        //         src_read_addr += curr_page_size;
+        //         l1_write_addr += curr_page_size;
+        //     }
+
+        //     noc_async_read_barrier();
+
+        //     cb_push_back(cb_id, curr_block_num_tiles);
+        // }
+
         uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
         uint32_t curr_block_trid = 1;
         uint32_t block_trid_to_wait = 1;
