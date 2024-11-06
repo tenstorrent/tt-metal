@@ -213,7 +213,7 @@ RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
-    uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
+    uint32_t max_rt_args = is_idle_eth() ? hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG)/sizeof(uint32_t) : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
         log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
