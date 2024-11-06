@@ -149,7 +149,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
 shape_return_value_t UnaryDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return {tensor_args.input.get_shape()};
+    return {tensor_args.input.get_logical_shape()};
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
