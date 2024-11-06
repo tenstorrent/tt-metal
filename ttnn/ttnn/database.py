@@ -502,6 +502,8 @@ def save_tensor_as_ttnn(tensor, tensor_file_name, detach_saved_tensors):
 
 def save_tensor_as_torch(tensor, tensor_file_name, detach_saved_tensors):
     """Save a torch tensor to file, detaching if necessary."""
+    import torch
+
     if detach_saved_tensors:
         tensor = tensor.detach().cpu()
     torch.save(tensor, tensor_file_name)
