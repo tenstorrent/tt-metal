@@ -52,7 +52,17 @@ class LlamaVision:
 
         return images, mask, tokens
 
-    def forward_prefill(self, vision_images, vision_mask, tokens, total_len, prefill_len, text_only_inference=False):
+    def forward_prefill(
+        self,
+        vision_images,
+        vision_mask,
+        tokens,
+        xattn_caches,
+        user_id,
+        total_len,
+        prefill_len,
+        text_only_inference=False,
+    ):
         """
         Performs vision encode step then text prefill.
         Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
@@ -61,6 +71,8 @@ class LlamaVision:
             batch_images=[vision_images],
             batch_masks=[vision_mask],
             total_len=total_len,
+            xattn_caches=xattn_caches,
+            user_id=user_id,
         )
 
         position_ids = torch.arange(prefill_len, dtype=torch.long)
@@ -72,6 +84,7 @@ class LlamaVision:
             full_text_row_masked_out_mask,
             xattn_caches,
             text_only_inference,
+            user_id=user_id,
         )
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
@@ -103,7 +116,6 @@ class LlamaVision:
 
 def get_sampler(temperature, top_p, tokenizer):
     def sample(logits):
-        logger.info(f"Sampling {logits.shape=}")
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
             next_token = llama_reference_generation.sample_top_p(probs, top_p)
@@ -118,11 +130,15 @@ def get_sampler(temperature, top_p, tokenizer):
     return sample
 
 
-def create_multimodal_model(mesh_device, dtype=ttnn.bfloat16):
+def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16):
     from models.demos.llama3.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.demos.llama3.tt.model_config import TtModelArgs
 
-    tt_model_args = TtModelArgs(mesh_device)
+    tt_model_args = TtModelArgs(mesh_device, max_batch_size=max_batch_size)
+    # limit length or we'll run out of space
+    tt_model_args.max_seq_len = max_seq_len
+    tt_model_args.kv_seq_len = max_seq_len
+    tt_model_args.sliding_window = max_seq_len
     checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
     model = CrossAttentionTransformer(
         mesh_device,
@@ -131,7 +147,6 @@ def create_multimodal_model(mesh_device, dtype=ttnn.bfloat16):
         dtype=dtype,
         configuration=tt_model_args,
     )
-    model.setup_cache(tt_model_args.max_batch_size, torch.float32)  # TODO: is a no-op
     return tt_model_args, model
 
 
@@ -151,6 +166,7 @@ def create_multimodal_model(mesh_device, dtype=ttnn.bfloat16):
 @pytest.mark.parametrize(
     "warmup_iters",
     (0, 1),
+    ids=["cold", "warm"],
 )
 @pytest.mark.parametrize(
     "test_case",
@@ -166,8 +182,8 @@ def test_llama_multimodal_demo_text(
     temperature: float = 0,
     top_p: float = 0.9,
     max_seq_len: int = 512,
-    max_batch_size: int = 4,
-    max_gen_len: Optional[int] = 100,
+    max_batch_size: int = 1,
+    max_gen_len: Optional[int] = 200,
     model_parallel_size: Optional[int] = None,
 ):
     """
@@ -191,28 +207,42 @@ def test_llama_multimodal_demo_text(
     else:
         mesh_device.enable_program_cache()
         mesh_device.enable_async(True)
-        model_args, model = create_multimodal_model(mesh_device)
+        model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
         model = LlamaVision(model, model_args, mesh_device)
         tokenizer = Tokenizer(model_path=tokenizer_path)
         formatter = ChatFormat(tokenizer)
 
+    xattn_caches = model.model.setup_cache(model_args.max_batch_size)
+
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-    dialogs = []
-    with open(IMG_PATH / "dog.jpg", "rb") as f:
-        img = PIL_Image.open(f).convert("RGB")
+    with open(IMG_PATH / "pasta.jpeg", "rb") as f:
+        img2 = PIL_Image.open(f).convert("RGB")
+
+    with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
+        ocr_image = PIL_Image.open(f).convert("RGB")
+
+    with open(IMG_PATH / "clutter.jpeg", "rb") as f:
+        clutter = PIL_Image.open(f).convert("RGB")
 
     dialogs = [
-        [
-            UserMessage(
-                content=[
-                    ImageMedia(image=img),
-                    "Describe this image in two sentences",
-                ],
-            )
-        ],
+        # image understanding
+        [UserMessage(content=[ImageMedia(image=img), "Describe this image in two sentences"])],
+        [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
+        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+        [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
     ]
+    # dialogs = [
+    #     [
+    #         UserMessage(
+    #             content=[
+    #                 ImageMedia(image=img),
+    #                 "Describe this image in two sentences",
+    #             ],
+    #         )
+    #     ],
+    # ]
 
     sampler = get_sampler(temperature, top_p, tokenizer)
 
@@ -238,12 +268,18 @@ def test_llama_multimodal_demo_text(
             tokens[0, : len(prompt_tokens)] = torch.tensor(prompt_tokens, dtype=torch.long)
             prefill_start = time.perf_counter()
             xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits = model.forward_prefill(
-                vision_images, vision_mask, tokens, total_len, prefill_len
+                vision_images,
+                vision_mask,
+                tokens,
+                xattn_caches,
+                user_id=0,
+                total_len=total_len,
+                prefill_len=prefill_len,
             )
             prefill_end = time.perf_counter()
 
             next_token, text = sampler(logits)
-            logger.info(f"Prefill output: {next_token}:{text}")
+            # logger.info(f"Prefill output: {next_token}:{text}")
             tokens[0, prefill_len] = next_token
 
             decode_times = []
@@ -262,7 +298,7 @@ def test_llama_multimodal_demo_text(
                 next_token, text = sampler(logits)
                 # Update next token
                 tokens[0, position_id + 1] = next_token
-                logger.info(f"Decode output {position_id}: {next_token}:{text}")
+                # logger.info(f"Decode output {position_id}: {next_token}:{text}")
                 decode_end = time.perf_counter()
                 decode_times.append(decode_end - decode_start)
 

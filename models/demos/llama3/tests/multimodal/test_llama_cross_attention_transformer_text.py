@@ -59,8 +59,7 @@ def test_llama_cross_attention_transformer_text_inference(
     model_args.max_seq_len = 4096
     model_args.kv_seq_len = model_args.max_seq_len
     model_args.sliding_window = model_args.max_seq_len
-    model_args.n_layers = 1
-    model_args.vision_num_cross_attention_layers = 1
+
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -74,7 +73,7 @@ def test_llama_cross_attention_transformer_text_inference(
     n_heads = model_args.n_heads
     reference_model = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
     reference_model.setup_cache(model_args.max_batch_size, torch.float32)
-    reference_model.load_state_dict(partial_state_dict, strict=False)
+    reference_model.load_state_dict(partial_state_dict)
 
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
