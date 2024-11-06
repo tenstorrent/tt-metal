@@ -88,4 +88,3 @@ def run(
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]
-
