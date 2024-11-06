@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, is_wormhole_b0, is_wormhole_b0
+from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
@@ -17,9 +17,6 @@ from models.utility_functions import torch_random, is_wormhole_b0, is_wormhole_b
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_mean(device, batch_size, h, w, dim):
     torch.manual_seed(0)
-
-    if is_wormhole_b0() and dim == -2:
-        pytest.skip("Issue #6991: Wormhole B0: mean operation fails for dim=-2")
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True, dtype=torch.bfloat16)
