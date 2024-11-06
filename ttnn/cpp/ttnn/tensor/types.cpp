@@ -35,23 +35,10 @@ const Shape Shape::to_rank(size_t new_rank) const {
 
 }
 
-namespace tt {
+namespace tt::tt_metal {
 
-namespace tt_metal {
-
-std::ostream& operator<<(std::ostream& os, DataType data_type) {
-    switch (data_type) {
-        case DataType::BFLOAT16: os << "BFLOAT16"; break;
-        case DataType::FLOAT32: os << "FLOAT32"; break;
-        case DataType::UINT32: os << "UINT32"; break;
-        case DataType::BFLOAT8_B: os << "BFLOAT8_B"; break;
-        case DataType::BFLOAT4_B: os << "BFLOAT4_B"; break;
-        case DataType::UINT8: os << "UINT8"; break;
-        case DataType::UINT16: os << "UINT16"; break;
-        case DataType::INT32: os << "INT32"; break;
-        case DataType::INVALID: os << "INVALID"; break;
-        default: os << "UNKNOWN";
-    }
+std::ostream& operator<<(std::ostream& os, DataType value) {
+    os << magic_enum::enum_name(value);
     return os;
 }
 
@@ -285,15 +272,7 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
-    os << "MemoryConfig(memory_layout=" << config.memory_layout
-       << ", buffer_type=" << config.buffer_type
-       << ", shard_spec=";
-    if (config.shard_spec) {
-        os << *config.shard_spec;
-    } else {
-        os << "nullopt";
-    }
-    os << ")";
+    tt::stl::reflection::operator<<(os, config);
     return os;
 }
 
@@ -369,9 +348,7 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     return load_memory_config(input_stream);
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace ttnn::types {
 

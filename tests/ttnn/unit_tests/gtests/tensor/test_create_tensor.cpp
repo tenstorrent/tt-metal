@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <ostream>
 #include "gtest/gtest.h"
 
 #include "tt_metal/common/bfloat16.hpp"
@@ -79,6 +80,11 @@ INSTANTIATE_TEST_SUITE_P(
         CreateTensorParams{.shape=ttnn::SimpleShape({0})}
     )
 );
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
+    os << magic_enum::enum_name(value);
+    return os;
+}
 
 using CombinationInputParams = std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
 class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CombinationInputParams> {};

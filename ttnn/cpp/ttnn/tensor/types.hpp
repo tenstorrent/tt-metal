@@ -41,7 +41,7 @@ enum class DataType {
     INVALID = 8,
 };
 
-std::ostream& operator<<(std::ostream& os, DataType data_type);
+std::ostream &operator<<(std::ostream &os, DataType value);
 
 inline bool is_floating_point(DataType dtype) {
     switch (dtype) {

@@ -25,8 +25,7 @@ namespace tt {
 namespace tt_metal {
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
-    os << "ShardSpec(grid=?"
-       << ", shape={" << spec.shape[0] << ", " << spec.shape[1] << "})";
+    tt::stl::reflection::operator<<(os, spec);
     return os;
 }
 

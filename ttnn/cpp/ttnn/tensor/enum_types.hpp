@@ -10,14 +10,6 @@ namespace tt::tt_metal {
 
 enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
-inline std::ostream& operator<<(std::ostream& os, Layout layout) {
-    switch (layout) {
-        case Layout::ROW_MAJOR: os << "ROW_MAJOR"; break;
-        case Layout::TILE: os << "TILE"; break;
-        case Layout::INVALID: os << "INVALID"; break;
-        default: os << "UNKNOWN";
-    }
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& value);
 
 } // namespace tt::tt_metal

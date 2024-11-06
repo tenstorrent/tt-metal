@@ -31,9 +31,5 @@ enum class BufferType {
     TRACE,
 };
 
-std::ostream& operator<<(std::ostream& os, TensorMemoryLayout layout);
-std::ostream& operator<<(std::ostream& os, ShardOrientation orientation);
-std::ostream& operator<<(std::ostream& os, BufferType buffer);
-
 } // namespace tt_metal
 } // namespace tt
