@@ -130,14 +130,14 @@ class TtLlamaModelForGeneration:
             cache_idxs_tt,
             tt_page_table,
             tt_inp,
-            rot_mat_rm,
+            rot_idxs_tt,
         ) = self.tt_model.prepare_device_inputs(
             tokens,
             start_pos,
             mode="decode",
             page_table=page_table,
             return_tokens=True,
-            return_rot_mat_rm=True,
+            return_rot_idxs=True,
         )
 
         # Compile model
@@ -150,6 +150,7 @@ class TtLlamaModelForGeneration:
             kv_cache=kv_cache,
             mode="decode",
         )
+        logger.info("Done Compiling Model")
 
         # Capture trace
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -157,8 +158,7 @@ class TtLlamaModelForGeneration:
         # Run TT model
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
-        rot_mat = ttnn.interleaved_to_sharded(rot_mat, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+        rot_mat = self.tt_model.rope_setup_decode.get_rot_mats(rot_idxs_tt)
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
@@ -172,7 +172,7 @@ class TtLlamaModelForGeneration:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        return trace_id, tt_inp, rot_mat_rm, cache_idxs_tt, tt_logits, tt_page_table
+        return trace_id, tt_inp, rot_idxs_tt, cache_idxs_tt, tt_logits, tt_page_table
 
     def delete_trace(self, trace_id):
         ttnn.release_trace(self.mesh_device, trace_id)
@@ -183,7 +183,7 @@ class TtLlamaModelForGeneration:
         start_pos: int,
         trace_id,
         tt_inp,
-        rot_mat,
+        rot_idxs_tt,
         cache_idxs_tt,
         tt_logits,
         page_table=None,
@@ -196,12 +196,13 @@ class TtLlamaModelForGeneration:
         (
             updated_tt_inp,
             start_pos,
-            updated_rot_mat,
+            _,
+            updated_rot_idxs_tt,
             updated_cache_idxs_tt,
             updated_tt_page_table,
         ) = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode", page_table=page_table)
         ttnn.copy_host_to_device_tensor(updated_tt_inp, tt_inp)
-        ttnn.copy_host_to_device_tensor(updated_rot_mat, rot_mat)
+        ttnn.copy_host_to_device_tensor(updated_rot_idxs_tt, rot_idxs_tt)
         ttnn.copy_host_to_device_tensor(updated_cache_idxs_tt, cache_idxs_tt)
         if page_table is not None:
             ttnn.copy_host_to_device_tensor(updated_tt_page_table, tt_page_table)
