@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <ostream>
 
 namespace tt {
 namespace tt_metal {
