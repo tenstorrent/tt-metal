@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <string>
 #include <tuple>
 #include <fmt/core.h>
@@ -40,7 +41,8 @@ struct SlidingWindowConfig {
     // windowing parameters
     uint32_pair_t window_hw  = {1, 1};
     uint32_pair_t stride_hw  = {1, 1};
-    uint32_pair_t pad_hw = {0, 0} ;
+    uint32_pair_t pad_hw = {0, 0};
+    uint32_pair_t output_pad_hw = {0, 0};
     uint32_pair_t dilation_hw = {1, 1};
 
     // parallel configuration
@@ -50,6 +52,7 @@ struct SlidingWindowConfig {
 
     bool snap_to_tile = false;
     bool is_bilinear = false;
+    bool is_transpose = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;
@@ -68,6 +71,9 @@ struct SlidingWindowConfig {
         */
     Shape get_output_shape() const;
 
+    Shape get_transposed_full_input_shape() const;
+
+    std::array<uint32_pair_t, 2> get_transposed_real_padding() const;
     /**
         * Calculate output tensor shard height
         */

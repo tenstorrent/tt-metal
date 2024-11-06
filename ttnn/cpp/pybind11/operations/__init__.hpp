@@ -14,7 +14,7 @@
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -117,8 +117,8 @@ void py_module(py::module& module) {
     auto m_sliding_window = module.def_submodule("sliding_window", "sliding_window operations");
     sliding_window::py_bind_sliding_window(m_sliding_window);
 
-    auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
-    conv::conv2d::py_bind_conv2d(m_conv2d);
+    auto m_conv2d = module.def_submodule("conv", "Convolution operations");
+    conv::py_module(m_conv2d);
 
     auto m_pool = module.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);

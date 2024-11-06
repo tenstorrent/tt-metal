@@ -125,7 +125,7 @@ def run(
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
     ttact_device = ttnn.to_device(ttact, device)
-    parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
+    parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
         is_1d_systolic=True,
         batch_size=in_n,
         input_channels=in_c,
@@ -135,7 +135,7 @@ def run(
         compute_grid_size=device.compute_with_storage_grid_size(),
         is_out_tiled=False,
     )
-    sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
+    sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
         tensor_shape=act_shape,
         parallel_config=parallel_config,
         tile_size=32 if dtype == ttnn.bfloat8_b else 1,
