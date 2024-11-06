@@ -61,7 +61,6 @@ class LlamaVision:
         user_id,
         total_len,
         prefill_len,
-        text_only_inference=False,
     ):
         """
         Performs vision encode step then text prefill.
@@ -75,17 +74,32 @@ class LlamaVision:
             user_id=user_id,
         )
 
-        position_ids = torch.arange(prefill_len, dtype=torch.long)
-
-        logits = self.model.forward(
-            position_ids,
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            xattn_caches,
-            text_only_inference,
-            user_id=user_id,
+        (
+            tt_h,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
+            tt_position_id,
+            rot_mats,
+            transformation_mats,
+        ) = self.model.prepare_inputs_prefill(
+            tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len=prefill_len
         )
+
+        tt_logits = self.model.ttnn_prefill_forward(
+            tt_h,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
+            xattn_caches,
+            tt_position_id,
+            rot_mats,
+            transformation_mats,
+            user_id,
+        )
+
+        B = 1
+        logits = self.model.process_output_prefill(tt_logits, B, prefill_len)
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
 
@@ -96,21 +110,40 @@ class LlamaVision:
         cross_attention_masks,
         full_text_row_masked_out_mask,
         xattn_caches,
-        text_only_inference=False,
     ):
         """
         Performs text decode step.
         Returns logits
         """
-        position_ids = torch.tensor([position_id], dtype=torch.long)
-        logits = self.model.forward(
-            position_ids,
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            xattn_caches,
-            text_only_inference,
+
+        # forward_decode should be traced callable
+        # decorator does compilation, capture, execute
+
+        (
+            tt_h,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            _,
+            tt_position_id,
+            rot_mats,
+            transformation_mats,
+        ) = self.model.prepare_inputs_decode(
+            tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
+
+        tt_logits = self.model.ttnn_decode_forward(
+            tt_h,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            xattn_caches,
+            tt_position_id,
+            rot_mats,
+            transformation_mats,
+        )
+
+        B = tokens.shape[0]
+        S = 1
+        logits = self.model.process_output_decode(tt_logits, B, S)
         return logits
 
 
@@ -160,10 +193,6 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "target",
-    ("tt", "cpu"),
-)
-@pytest.mark.parametrize(
     "warmup_iters",
     (0, 1),
     ids=["cold", "warm"],
@@ -176,7 +205,6 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
 )
 def test_llama_multimodal_demo_text(
     mesh_device,
-    target,
     warmup_iters,
     test_case,
     temperature: float = 0,
@@ -192,25 +220,12 @@ def test_llama_multimodal_demo_text(
     ckpt_dir = os.environ["LLAMA_DIR"]
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
-    if target == "cpu":
-        generator = llama_reference_generation.Llama.build(
-            ckpt_dir,
-            tokenizer_path=tokenizer_path,
-            max_seq_len=max_seq_len,
-            max_batch_size=max_batch_size,
-            model_parallel_size=model_parallel_size,
-        )
-        model_args = generator.args
-        model = LlamaVision(generator.model, model_args, None)
-        tokenizer = generator.tokenizer
-        formatter = generator.formatter
-    else:
-        mesh_device.enable_program_cache()
-        mesh_device.enable_async(True)
-        model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
-        model = LlamaVision(model, model_args, mesh_device)
-        tokenizer = Tokenizer(model_path=tokenizer_path)
-        formatter = ChatFormat(tokenizer)
+    mesh_device.enable_program_cache()
+    mesh_device.enable_async(True)
+    model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    model = LlamaVision(model, model_args, mesh_device)
+    tokenizer = Tokenizer(model_path=tokenizer_path)
+    formatter = ChatFormat(tokenizer)
 
     xattn_caches = model.model.setup_cache(model_args.max_batch_size)
 
@@ -228,25 +243,14 @@ def test_llama_multimodal_demo_text(
 
     dialogs = [
         # image understanding
-        [UserMessage(content=[ImageMedia(image=img), "Describe this image in two sentences"])],
+        [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
         [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
         [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
         [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
     ]
-    # dialogs = [
-    #     [
-    #         UserMessage(
-    #             content=[
-    #                 ImageMedia(image=img),
-    #                 "Describe this image in two sentences",
-    #             ],
-    #         )
-    #     ],
-    # ]
 
     sampler = get_sampler(temperature, top_p, tokenizer)
 
-    print(f"Running text completion on {target}")
     for iter_num in range(warmup_iters + 1):
         for dialog in dialogs:
             for msg in dialog:
@@ -283,7 +287,6 @@ def test_llama_multimodal_demo_text(
             tokens[0, prefill_len] = next_token
 
             decode_times = []
-            # Iterate over decode
 
             for gen_idx in range(max_gen_len - 1):
                 decode_start = time.perf_counter()
