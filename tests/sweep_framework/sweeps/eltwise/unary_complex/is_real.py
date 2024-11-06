@@ -84,6 +84,7 @@ def run(
     start_time = start_measuring_time()
     result = ttnn.is_real(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
+
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
