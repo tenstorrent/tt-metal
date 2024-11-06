@@ -12,6 +12,10 @@ import math
 import itertools
 from typing import Optional, List
 import copy
+from functools import partial
+
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from models.utility_functions import torch_random
 
 
 def sanitize_shape_rm(input_shape):
@@ -214,3 +218,32 @@ def gen_split_qkv_heads_spec(
             "kv_input_tensor": kv_input_tensor,
             "transpose_key": transpose_key,
         }
+
+
+def gen_complex_tensor(input_shape, low, high, dtype=ttnn.bfloat16):
+    torch_real = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(
+        input_shape
+    ).to(torch.float32)
+    torch_imag = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(
+        input_shape
+    ).to(torch.float32)
+
+    return torch.complex(torch_real, torch_imag)
+
+
+def complex_from_torch(torch_tensor, dtype, layout, memory_config, device):
+    tt_real = ttnn.from_torch(
+        torch_tensor.real,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    tt_imag = ttnn.from_torch(
+        torch_tensor.imag,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    return ttnn.complex_tensor(tt_real, tt_imag)
