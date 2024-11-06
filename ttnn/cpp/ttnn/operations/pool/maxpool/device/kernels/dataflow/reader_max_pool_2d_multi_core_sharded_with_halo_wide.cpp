@@ -67,7 +67,7 @@ void kernel_main() {
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512; // TILE_WIDTH * 8 * numbytes
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
     constexpr uint32_t in_shard_cb_id = tt::CB::c_in2;    // local input shard

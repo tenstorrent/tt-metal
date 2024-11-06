@@ -64,7 +64,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
 
     uint32_t max_rows_for_reduction = 16;
-    // TODO temporarily disable 32 row reductions due to issues in large kernels
+    // TODO #14588: temporarily disabling 32 row reductions due to issues in large kernels
     /* uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
     // For GRAYSKULL, make reduction for 16 rows at a time.
     if (device->arch() == tt::ARCH::GRAYSKULL)
@@ -213,7 +213,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
     if (is_large_kernel) {
         uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
-        uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
+        uint32_t max_pool_partials_cb_pagesize = std::min(out_cb_pagesize, TILE_SIZE * 8 * out_nbytes);
         uint32_t max_pool_partials_cb_npages = nblocks;
         CircularBufferConfig max_pool_partials_cb_config =
             CircularBufferConfig(

@@ -83,7 +83,7 @@ namespace NAMESPACE {
 
 void MAIN {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet.
-    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
+    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0); // note ntiles_hw will always be 1 in this kernel, when ntiles_hw > 1 the large kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(3);
     constexpr uint32_t out_h = get_compile_time_arg_val(4);
@@ -121,7 +121,6 @@ void MAIN {
 
     uint32_t interm_reduction_chunks = window_size_hw / max_rows_for_reduction;
     cb_wait_front(in_scalar_cb_id, 1);
-    //cb_wait_front(interm_reduction_cb_id, 1);
     cb_reserve_back(out_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
         for (uint32_t b_i = 0; b_i < in_nblocks_c; b_i++) {
@@ -184,7 +183,6 @@ void MAIN {
     }
     cb_push_back(out_cb_id, 1);
     cb_pop_front(in_scalar_cb_id, 1);
-    //cb_pop_front(interm_reduction_cb_id, 1);
 }
 
 }  // namespace NAMESPACE
