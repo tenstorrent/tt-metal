@@ -23,6 +23,7 @@
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
@@ -1124,6 +1125,16 @@ uint32_t CreateSemaphore(
             return semaphore_id.value();
         },
         core_spec);
+}
+
+std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore::create(device, cores, initial_value, buffer_type);
+}
+
+std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
