@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
-
 using uint32_t = std::uint32_t;
 
 // tile index to address
@@ -23,6 +21,7 @@ void kernel_main() {
     uint32_t output_Wt    = get_arg_val<uint32_t>(5);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(1);
 
     uint32_t num_sticks_per_input_tile_row = input_Wt << 5; // Tile height is 32
     uint32_t num_sticks_per_output_tile_row = output_Wt << 5;
@@ -31,6 +30,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
 
+    constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
+    uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
+    volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat data_format = get_dataformat(cb_id_in0);
@@ -68,11 +70,33 @@ void kernel_main() {
                         dest_tr0_l1 += (((tile_h >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
                         dest_tr0_l1 += ((tile_h & 15) << 5); // 16 * 2 bytes per face row
 
-                        noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
-                        // Read the 16 elements for the row of the face directly adjacent since this comes from the same input tile
-                        dest_tr0_l1 += 512; // 16 subtile rows of 16 elements of 2 bytes for bfloat16 (16 * 16 * 2)
-                        banked_addr += 512;
-                        noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                        for (uint8_t i = 0; i < 2; ++i) {
+                            if (MISALIGNED) {
+                                // if banked addr and dest addr don't share alignment then we need to read to the intermediate buffer and then copy it to the correct location
+                                uint32_t banked_alignment = banked_addr % ALIGNMENT;
+                                if (dest_tr0_l1 % ALIGNMENT != banked_alignment) {
+                                    // we write to the top of the intermediate buffer as that's aligned, and we write from the closest align source address
+                                    // if source is not aligned to ALIGNMENT then we go to the nearest address that is aligned and copy from there
+                                    noc_async_read(banked_addr - (banked_alignment), intermed_l1_scratch, ALIGNMENT);
+                                    volatile tt_l1_ptr uint8_t* dest_tr0_l1_ptr = (volatile uint8_t*)dest_tr0_l1;
+                                    // need the barrier to ensure that we can copy from the intermediate buffer
+                                    noc_async_read_barrier();
+                                    // if source is not aligned to ALIGNMENT then we need to skip forward by the amount needed to align to get to the correct data
+                                    for (uint32_t i = 0; i < SUBTILE_LINE_BYTES; i++) {
+                                        dest_tr0_l1_ptr[i] = intermed_l1_scratch_ptr[i + banked_alignment];
+                                    }
+                                } else {
+                                    // if source and destination alignment are equivalent then we can read directly to the destination
+                                    noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                                }
+                            }
+                            else {
+                                noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                            }
+                            // Read the 16 elements for the row of the face directly adjacent since this comes from the same input tile
+                            dest_tr0_l1 += 512; // 16 subtile rows of 16 elements of 2 bytes for bfloat16 (16 * 16 * 2)
+                            banked_addr += 512;
+                        }
 
                         output_stick_id += output_Wt;
 

@@ -39,13 +39,25 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
+    uint32_t alignment = src0_is_dram ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+
+    std::vector<uint32_t> reader_compile_time_args = {(
+        std::uint32_t) src0_is_dram,
+        alignment
+    };
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram
     };
+
+    if (alignment > (tt::constants::FACE_WIDTH * a.element_size())) {
+        uint32_t src1_cb_index = 1;
+        tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}})
+        .set_page_size(src1_cb_index, alignment);
+        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
