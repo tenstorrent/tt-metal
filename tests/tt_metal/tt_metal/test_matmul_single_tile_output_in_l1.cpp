@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         SHAPE shape = {1, 1, 32, 32};
-        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tile_layout = convert_to_tile_layout(tensor.get_values());
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
