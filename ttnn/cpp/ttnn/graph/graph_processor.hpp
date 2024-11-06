@@ -19,6 +19,7 @@ namespace ttnn::graph {
     class ProcessorHooks : public tt::tt_metal::IGraphHooks {
     private:
         bool do_block = false;
+        bool track_memory_alloc = false;
 
     public:
         ProcessorHooks() = default;
@@ -32,7 +33,11 @@ namespace ttnn::graph {
 
         void set_block(bool block);
 
+        void set_track_memory_alloc(bool track_memory_alloc);
+
         bool get_block() const;
+
+        bool get_track_memory_alloc() const;
     };
     class GraphProcessor : public tt::tt_metal::IGraphProcessor{
 
