@@ -9,6 +9,7 @@
 
 namespace tt::tt_metal {
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 int32_t normalized_index(int32_t index, size_t original_size, size_t container_size) {
@@ -29,6 +30,7 @@ int32_t normalized_index(int32_t index, size_t original_size, size_t container_s
     return fixed_index;
 }
 } // namespace CMAKE_UNIQUE_NAMESPACE
+}
 
 void ShapeBase::init() {
     original_size_ = value_.size();

@@ -66,6 +66,8 @@ struct ShardSpec {
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const ShardSpec& spec);
+
 struct ShardSpecBuffer {
     ShardSpec tensor_shard_spec;
     std::array<uint32_t, 2> page_shape;

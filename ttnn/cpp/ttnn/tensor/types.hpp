@@ -280,6 +280,8 @@ struct MemoryConfig {
     bool is_dram() const;
 };
 
+std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
+
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
 
