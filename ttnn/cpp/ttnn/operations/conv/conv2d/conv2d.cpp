@@ -855,7 +855,7 @@ Result conv2d(
         uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
 
         output_parallel_config = {
-            .grid = num_cores_to_corerange_set( find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH),max_num_cores), compute_grid_size, true),
+            .grid = num_cores_to_corerangeset( find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH),max_num_cores), compute_grid_size, true),
             .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
             .shard_orientation = parallel_config.shard_orientation
         };
