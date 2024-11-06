@@ -1845,8 +1845,8 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::hardtanh,
-        "min", "min value", -1.0f,
-        "max", "max value", 1.0f);
+        "min_val", "min value", -1.0f,
+        "max_val", "max value", 1.0f);
 
     detail::bind_unary_composite_optional_floats_with_default(
         module,
