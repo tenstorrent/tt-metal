@@ -11,12 +11,12 @@ import math
 import requests
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters, ParameterDict, ParameterList
-from models.experimental.functional_segformer.tt.ttnn_segformer_for_semantic_segmentation import (
+from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import (
     TtSegformerForSemanticSegmentation,
 )
 from datasets import load_dataset
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
-from models.experimental.functional_segformer.reference.segformer_for_semantic_segmentation import (
+from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
 from tests.ttnn.integration_tests.segformer.test_segformer_model import (

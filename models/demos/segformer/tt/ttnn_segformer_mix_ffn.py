@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
+from models.demos.segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
 
 
 class TtSegformerMixFFN:

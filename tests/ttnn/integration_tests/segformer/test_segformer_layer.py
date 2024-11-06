@@ -14,11 +14,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from transformers import SegformerModel
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_layer import (
+from models.demos.segformer.tt.ttnn_segformer_layer import (
     TtSegformerLayer,
 )
 
-from models.experimental.functional_segformer.reference.segformer_layer import SegformerLayer
+from models.demos.segformer.reference.segformer_layer import SegformerLayer
 from tests.ttnn.integration_tests.segformer.test_segformer_mix_ffn import (
     create_custom_preprocessor as create_custom_preprocessor_mix_ffn,
 )

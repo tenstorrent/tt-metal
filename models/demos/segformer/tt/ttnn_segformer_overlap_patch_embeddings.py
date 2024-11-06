@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_segformer.tt.common import Conv
+from models.demos.segformer.tt.common import Conv
 
 
 class TtSegformerOverlapPatchEmbeddings:

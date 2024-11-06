@@ -11,11 +11,11 @@ from ttnn.model_preprocessing import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers import SegformerModel
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_overlap_patch_embeddings import (
+from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import (
     TtSegformerOverlapPatchEmbeddings,
 )
 
-from models.experimental.functional_segformer.reference.segformer_overlap_patch_embeddings import (
+from models.demos.segformer.reference.segformer_overlap_patch_embeddings import (
     SegformerOverlapPatchEmbeddings,
 )
 from models.utility_functions import skip_for_grayskull

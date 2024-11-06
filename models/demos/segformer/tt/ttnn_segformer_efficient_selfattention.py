@@ -4,7 +4,7 @@
 
 import ttnn
 import math
-from models.experimental.functional_segformer.tt.common import Conv
+from models.demos.segformer.tt.common import Conv
 
 
 class TtSegformerEfficientSelfAttention:

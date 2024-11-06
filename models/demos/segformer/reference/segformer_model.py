@@ -2,45 +2,37 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from models.experimental.functional_segformer.tt.ttnn_segformer_encoder import TtSegformerEncoder
-from typing import Optional, Tuple, Union
-from dataclasses import dataclass
+import torch.nn as nn
+import torch
+from typing import Union, Tuple, Optional
+from transformers.modeling_outputs import BaseModelOutput
+from transformers.models.segformer.modeling_segformer import SegformerPreTrainedModel
+from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
 
 
-@dataclass
-class TtBaseModelOutput:
-    last_hidden_state: ttnn.bfloat16 = None
-    hidden_states: ttnn.bfloat16 = None
-    attentions: ttnn.bfloat16 = None
-
-    def __getitem__(self, idx):
-        if idx == 0:
-            return self.last_hidden_state
-        elif idx == 1:
-            return self.hidden_states
-        elif idx == 2:
-            return self.attentions
-        else:
-            raise IndexError("Index out of range")
-
-
-class TtSegformerModel:
-    def __init__(self, config, parameters):
-        super().__init__()
+class SegformerModelReference(SegformerPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
         self.config = config
 
         # hierarchical Transformer encoder
-        self.encoder = TtSegformerEncoder(config, parameters.encoder)
+        self.encoder = SegformerEncoder(config)
 
-    def __call__(
+    def _prune_heads(self, heads_to_prune):
+        """
+        Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
+        class PreTrainedModel
+        """
+        for layer, heads in heads_to_prune.items():
+            self.encoder.layer[layer].attention.prune_heads(heads)
+
+    def forward(
         self,
-        pixel_values: ttnn.Tensor,
+        pixel_values: torch.FloatTensor,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        parameters=None,
-    ) -> Union[Tuple, TtBaseModelOutput]:
+    ) -> Union[Tuple, BaseModelOutput]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -52,14 +44,13 @@ class TtSegformerModel:
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            parameters=parameters.encoder,
         )
         sequence_output = encoder_outputs[0]
 
         if not return_dict:
             return (sequence_output,) + encoder_outputs[1:]
 
-        return TtBaseModelOutput(
+        return BaseModelOutput(
             last_hidden_state=sequence_output,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,

@@ -9,8 +9,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers import SegformerForSemanticSegmentation
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
-from models.experimental.functional_segformer.reference.segformer_decode_head import SegformerDecodeHead
-from models.experimental.functional_segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
+from models.demos.segformer.reference.segformer_decode_head import SegformerDecodeHead
+from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from tests.ttnn.integration_tests.segformer.test_segformer_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )

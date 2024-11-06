@@ -5,7 +5,7 @@
 import torch
 from torch import nn
 import math
-from models.experimental.functional_segformer.reference.segformer_mlp import SegformerMLP
+from models.demos.segformer.reference.segformer_mlp import SegformerMLP
 from transformers.models.segformer.modeling_segformer import SegformerPreTrainedModel
 
 

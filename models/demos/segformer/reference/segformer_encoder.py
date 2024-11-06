@@ -5,10 +5,10 @@
 import torch
 import torch.nn as nn
 from transformers.modeling_outputs import BaseModelOutput
-from models.experimental.functional_segformer.reference.segformer_overlap_patch_embeddings import (
+from models.demos.segformer.reference.segformer_overlap_patch_embeddings import (
     SegformerOverlapPatchEmbeddings,
 )
-from models.experimental.functional_segformer.reference.segformer_layer import SegformerLayer
+from models.demos.segformer.reference.segformer_layer import SegformerLayer
 from typing import Optional, Tuple, Union
 
 

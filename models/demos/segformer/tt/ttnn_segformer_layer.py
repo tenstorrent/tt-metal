@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_segformer.tt.ttnn_segformer_attention import TtSegformerAttention
-from models.experimental.functional_segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
+from models.demos.segformer.tt.ttnn_segformer_attention import TtSegformerAttention
+from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
 
 
 class TtSegformerLayer:

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
-from models.experimental.functional_segformer.tt.ttnn_segformer_model import TtSegformerModel
+from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
+from models.demos.segformer.tt.ttnn_segformer_model import TtSegformerModel
 from typing import Tuple, Union, Optional
 from dataclasses import dataclass
 

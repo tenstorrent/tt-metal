@@ -13,11 +13,11 @@ from ttnn.model_preprocessing import (
 from transformers import SegformerModel
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_segformer.tt.ttnn_segformer_efficient_selfattention import (
+from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import (
     TtSegformerEfficientSelfAttention,
 )
 from models.utility_functions import skip_for_grayskull
-from models.experimental.functional_segformer.reference.segformer_efficient_selfattention import (
+from models.demos.segformer.reference.segformer_efficient_selfattention import (
     SegformerEfficientSelfAttention,
 )
 

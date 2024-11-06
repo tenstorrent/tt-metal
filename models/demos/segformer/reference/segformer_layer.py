@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-from models.experimental.functional_segformer.reference.segformer_attention import SegformerAttention
-from models.experimental.functional_segformer.reference.segformer_mixffn import SegformerMixFFN
+from models.demos.segformer.reference.segformer_attention import SegformerAttention
+from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
 
 
 class SegformerLayer(nn.Module):

@@ -21,10 +21,10 @@ from models.utility_functions import skip_for_grayskull
 
 from transformers import SegformerModel, SegformerConfig
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_encoder import (
+from models.demos.segformer.tt.ttnn_segformer_encoder import (
     TtSegformerEncoder,
 )
-from models.experimental.functional_segformer.reference.segformer_encoder import SegformerEncoder
+from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
 
 
 def create_custom_preprocessor(device):
@@ -120,8 +120,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
 
     ttnn_model = TtSegformerEncoder(config, parameters)
 
-    # Abhinav to help in debugging the sharded input option
-    sharded_input_enabled = 1
+    sharded_input_enabled = 0
 
     if not sharded_input_enabled:
         torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
@@ -158,12 +157,12 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             device=device,
             memory_config=input_mem_config,
         )
-        print(shard_spec)
-        print()
+        # print(shard_spec)
+        # print()
 
     #####
 
-    print(ttnn_input_tensor)
+    # print(ttnn_input_tensor)
     ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
 
     ttnn_final_output = ttnn.to_torch(ttnn_output.last_hidden_state)

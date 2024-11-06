@@ -13,8 +13,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers import SegformerModel
 
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
-from models.experimental.functional_segformer.reference.segformer_mixffn import SegformerMixFFN
+from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
+from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
 from tests.ttnn.integration_tests.segformer.test_segformer_dwconv import (
     create_custom_preprocessor as create_custom_preprocessor_dwconv,
 )

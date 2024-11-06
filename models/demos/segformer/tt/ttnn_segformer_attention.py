@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.functional_segformer.tt.ttnn_segformer_efficient_selfattention import (
+from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import (
     TtSegformerEfficientSelfAttention,
 )
-from models.experimental.functional_segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
+from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
 import ttnn
 
 
