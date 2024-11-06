@@ -37,7 +37,7 @@ def run_test_update_cache_decode(
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -147,7 +147,7 @@ def test_update_cache_decode(
         # Input is sharded
         compute_grid_size = device.compute_with_storage_grid_size()
         num_cores = num_users
-        shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
@@ -230,7 +230,7 @@ def test_update_cache_decode_program_cache(
         # Input is sharded
         compute_grid_size = device.compute_with_storage_grid_size()
         num_cores = num_users
-        shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
@@ -272,7 +272,7 @@ def run_test_tensor_index_update_cache_decode(
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -410,7 +410,7 @@ def run_test_paged_update_cache_decode(
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -539,7 +539,7 @@ def test_paged_update_cache_decode_program_caching(
         # Input is sharded
         compute_grid_size = device.compute_with_storage_grid_size()
         num_cores = num_users
-        shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
