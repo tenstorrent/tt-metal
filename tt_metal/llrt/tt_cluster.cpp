@@ -33,6 +33,7 @@
 #include "third_party/umd/device/tt_soc_descriptor.h"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "third_party/umd/device/xy_pair.h"
+#include "third_party/umd/device/hugepage.h"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -180,7 +181,7 @@ void Cluster::generate_cluster_descriptor() {
         }
     }
 
-    uint32_t total_num_hugepages = get_num_hugepages();
+    uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
     if (this->is_tg_cluster_) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(
