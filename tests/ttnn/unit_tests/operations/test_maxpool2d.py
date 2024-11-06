@@ -149,7 +149,7 @@ def run_max_pool(
 
     ttact_device = ttnn.to_device(ttact, device)
     if pre_shard:
-        parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
+        parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             batch_size=in_n,
             input_channels=in_c,
@@ -160,7 +160,7 @@ def run_max_pool(
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=False,
         )
-        sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
+        sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             tensor_shape=ttact_device.shape,
             parallel_config=parallel_config,
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
@@ -730,7 +730,7 @@ def test_pool_core_nondivis(
 
     ttact_device = ttnn.to_device(ttact, device)
     if pre_shard:
-        parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
+        parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             batch_size=in_n,
             input_channels=in_c,
@@ -741,7 +741,7 @@ def test_pool_core_nondivis(
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=True,
         )
-        sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
+        sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             tensor_shape=ttact_device.shape,
             parallel_config=parallel_config,
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
