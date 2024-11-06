@@ -7,6 +7,9 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
+// FIXME: ARCH_NAME specific include
+#include "tensix_types.h" // L1_SIZE
+
 using namespace tt::constants;
 using namespace tt;
 

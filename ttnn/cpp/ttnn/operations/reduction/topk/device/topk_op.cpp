@@ -5,6 +5,9 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 
+// FIXME: ARCH_NAME specific include
+#include "tensix_types.h" // L1_SIZE
+
 namespace topk_utils {
 
 static inline bool verify_available_cores(uint16_t width, uint16_t min_dim, uint16_t max_dim, CoreCoord grid, uint16_t k, const uint32_t value_tile_size, const uint32_t index_tile_size) {

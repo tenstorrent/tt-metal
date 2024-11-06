@@ -7,6 +7,9 @@
 
 #include "tt_metal/host_api.hpp"
 
+// FIXME: ARCH_NAME specific include
+#include "tensix_types.h" // L1_SIZE
+
 namespace ttnn::operations::experimental::transformer {
 
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {

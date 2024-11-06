@@ -8,6 +8,9 @@
 
 #define DATUMS_PER_ROW 16
 
+// FIXME: ARCH_NAME specific include
+#include "tensix_types.h" // DEST_REGISTER_FULL_SIZE
+
 namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
