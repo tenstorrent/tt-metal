@@ -88,6 +88,48 @@ jobs:
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
+  cmake-version:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Check for changed CMake files
+      id: changed-cmake-files
+      uses: tj-actions/changed-files@c3a1bb2c992d77180ae65be6ae6c166cf40f857c
+      with:
+        files: |
+          **/*.cmake
+          **/CMakeLists.txt
+    - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      with:
+        cmakeVersion: "~3.16.0"
+    - name: Check CMake version
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      run: cmake --version
+    - name: Install LLVM and Clang
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod u+x llvm.sh
+        sudo ./llvm.sh 17
+    - name: Install deps
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt update
+        sudo xargs -a scripts/docker/requirements-22.04.txt apt install -y --no-install-recommends
+    - name: Check CMake compatibility
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      env:
+        ARCH_NAME: wormhole_b0
+        CMAKE_GENERATOR: Ninja
+      # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
+      run: |
+        echo "Checking compatibility with $(cmake --version)"
+        cmake -B build .
   clang-tidy:
     runs-on: ubuntu-latest
     container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
@@ -115,7 +157,7 @@ jobs:
         sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
     - name: Prepare compile_commands.json
       run: |
-        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UMD_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF
     - name: Create results directory
       run: |
         mkdir clang-tidy-result

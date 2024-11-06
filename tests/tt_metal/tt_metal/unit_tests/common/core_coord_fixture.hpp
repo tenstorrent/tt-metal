@@ -33,4 +33,6 @@ class CoreCoordHarness : public ::testing::Test {
     CoreRange sc2 = CoreRange({0, 1}, {0, 1});
     CoreRange sc3 = CoreRange({0, 2}, {0, 2});
     CoreRange sc4 = CoreRange({1, 2}, {1, 2});
+    CoreRange sc5 = CoreRange({1, 0}, {1, 0});
+    CoreRange sc6 = CoreRange({0, 0}, {0, 0});
 };

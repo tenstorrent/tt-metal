@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, santize_topk_shape
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
@@ -89,7 +89,7 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    input_shape = santize_topk_shape(input_shape)
+    input_shape = sanitize_shape(input_shape, "topk")
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

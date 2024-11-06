@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t offset = 0;
     for (auto core : cores) {
         reader_runtime_args[4] = offset;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             reader_runtime_args[5] = num_tiles_per_core_group_1;
         } else {
             reader_runtime_args[5] = num_tiles_per_core_group_2;

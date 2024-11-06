@@ -1373,7 +1373,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     CoreRangeSet all_cores =
-                        num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, true);
+                        num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
@@ -1460,7 +1460,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    CoreRangeSet all_cores = num_cores_to_corerange_set(
+                    CoreRangeSet all_cores = num_cores_to_corerangeset(
                         num_cores,
                         program_config.compute_with_storage_grid_size,
                         shard_orientation == ShardOrientation::ROW_MAJOR);
