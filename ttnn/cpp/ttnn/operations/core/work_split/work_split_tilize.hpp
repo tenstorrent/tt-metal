@@ -25,11 +25,12 @@ struct BlockSplit {
 };
 
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
-    const uint32_t nblocks_per_core = std::ceil(static_cast<float>(nblocks) / (grid_size.x * grid_size.y));
-    const uint32_t ncores = std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
-    const uint32_t nblocks_per_core_cliff = nblocks % nblocks_per_core;
+    size_t grid_area = grid_size.x * grid_size.y;
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
-    const uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
+    const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
     const uint32_t ncores_x_cliff = ncores - (ncores_y - 1) * ncores_x;
 
     std::set<CoreRange> core_range, cliff_core_range;

@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     Device* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = a.volume() / input_shape[-1] / TILE_HEIGHT;
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.get_legacy_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =

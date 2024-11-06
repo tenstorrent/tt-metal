@@ -47,7 +47,6 @@ std::vector<T> convert_to_tile_layout(
     auto face_HW = face_H * face_W;
     bool transpose_face = transpose_within_face.has_value() ? transpose_within_face.value() : false;
     bool transpose_face_order = transpose_of_faces.has_value() ? transpose_of_faces.value() : false;
-    TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
@@ -137,7 +136,6 @@ std::vector<T> convert_to_flat_layout(
     auto num_faces_row = tile_H / face_H;
     bool transpose_face = transpose_within_face.has_value() ? transpose_within_face.value() : false;
     bool transpose_face_order = transpose_of_faces.has_value() ? transpose_of_faces.value() : false;
-    TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {

@@ -47,7 +47,7 @@ struct BinaryDeviceOperation {
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
     };
-    using shape_return_value_t = ttnn::Shape;
+    using shape_return_value_t = ttnn::SimpleShape;
     using tensor_return_value_t = Tensor;
 
     struct ElementWiseMultiCore {
