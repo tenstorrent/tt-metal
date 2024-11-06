@@ -167,14 +167,16 @@ class CrossAttentionTransformer(torch.nn.Module):
             max_num_chunks=configuration.vision_max_num_chunks,
         )
 
-    def setup_cache(self, max_batch_size: int, dtype: torch.dtype):
-        self.text_model.setup_cache(max_batch_size, dtype)
+    def setup_cache(self, max_batch_size):
+        return self.text_model.setup_cache(max_batch_size)
 
     def compute_vision_tokens_masks(
         self,
         batch_images: List[List[PIL_Image.Image]],
         batch_masks: List[List[List[int]]],
         total_len: int,
+        xattn_caches,
+        user_id,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         skip_vision_encoder = False
 
@@ -243,7 +245,8 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
 
         xattn_caches = [
-            layer.compute_xattn_kv_cache(vision_tokens_tt) for layer in self.text_model.cross_attention_layers
+            layer.compute_xattn_kv_cache(vision_tokens_tt, xattn_caches[layer_num], user_id=user_id)
+            for layer_num, layer in enumerate(self.text_model.cross_attention_layers)
         ]
         padded_masks = _pad_masks(  # torch.Size([1, 512, 1, 4])
             batch_masks,
@@ -269,12 +272,16 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
         return (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask)
 
-    def validate_inputs(self, tokens):
+    def validate_inputs(self, tokens, position_ids):
         batch, seq_len = tokens.shape[:2]
         assert batch == 1, f"Only batch 1 is supported, got {batch}"
         assert (
             seq_len <= self.configuration.max_seq_len
         ), f"Sequence length {seq_len} exceeds max sequence length {self.configuration.max_seq_len}"
+        assert len(position_ids.shape) == 1, f"Position ids must be 1D, got {len(position_ids.shape)}"
+        assert (
+            batch == self.configuration.max_batch_size
+        ), f"Batch size must match max batch size. Got {batch}, expected {self.configuration.max_batch_size}"
 
     def forward(
         self,
@@ -284,8 +291,10 @@ class CrossAttentionTransformer(torch.nn.Module):
         full_text_row_masked_out_mask: torch.Tensor,
         xattn_caches: torch.Tensor,
         text_only_inference: bool = False,
+        user_id=0,
     ) -> torch.Tensor:
-        self.validate_inputs(tokens)
+        B = tokens.shape[0]
+        self.validate_inputs(tokens, position_ids)
         h = self.text_model.get_partially_trainable_embedding(tokens[:, position_ids])
         batch, seq_len = h.shape[:2]
         padded_seq_len = _get_padded_prefill_seqlen(seq_len)
@@ -295,7 +304,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             mode = "prefill"
         # Prepare TT inputs for text_model
         tt_position_id = ttnn.from_torch(
-            position_ids.reshape(batch, seq_len),
+            position_ids,
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -346,15 +355,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
         tt_full_text_mask_expand_1NSH = ttnn.to_layout(tt_full_text_mask_expand_1NSH, ttnn.TILE_LAYOUT)
 
-        full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, self.configuration.dim)
-        tt_full_text_mask_expand_11SD = ttnn.from_torch(
-            full_text_mask_expand_11SD,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-        )
         # Check mask shapes, pad if in prefill?
         if mode == "prefill":
             h = torch.nn.functional.pad(h, (0, 0, 0, padded_seq_len - h.shape[1]), "constant", 0)
@@ -373,16 +373,28 @@ class CrossAttentionTransformer(torch.nn.Module):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+
+            full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, self.configuration.dim)
+            tt_full_text_mask_expand_11SD = ttnn.from_torch(
+                full_text_mask_expand_11SD,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         else:
             tt_h = self.configuration.prepare_inputs_ttnn_decode(
                 h,
                 ttnn.DRAM_MEMORY_CONFIG,
             )
-            rot_mats, rot_matrix = get_single_rot_mat(
+            rot_mats, _ = get_single_rot_mat(
                 self.configuration.head_dim,
                 self.mesh_device,
                 self.configuration.num_devices,
                 start_pos=position_ids.item() - 1,  # TODO: Change function to support decode batch > 1
+                # TODO: B must match max_batch_size, be careful
+                batch=B,
             )
             transformation_mats = None
 
@@ -416,13 +428,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ),
             )
 
-            tt_full_text_mask_expand_11SD = ttnn.reshape(
-                tt_full_text_mask_expand_11SD,
-                shape=ttnn.Shape(
-                    [batch, 1, seq_len, self.configuration.head_dim],
-                    [batch, 1, 32, self.configuration.head_dim],
-                ),
-            )
+            tt_full_text_mask_expand_11SD = None
 
         logits = self.text_model.forward(
             tt_h,
@@ -433,7 +439,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             current_pos=tt_position_id,
             rot_mat=rot_mats,
             transformation_mats=transformation_mats,
-            user_id=0,
+            user_id=user_id,
             mode=mode,
             text_only_inference=text_only_inference,
         )
@@ -443,7 +449,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         if mode == "prefill":
             tt_out = tt_out[0].reshape(batch, padded_seq_len, -1)[:, :seq_len, :]  # DEBUG: undo padding
         else:
-            tt_out = tt_out[0, ..., :batch, :].transpose(0, 1).reshape(batch, seq_len, -1)
+            tt_out = tt_out[0, :, :batch, :].reshape(batch, seq_len, -1)
 
         return tt_out
 
