@@ -28,8 +28,8 @@ namespace ttnn {
 
 namespace core {
 
-inline std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value) {
-    return (value + (ttnn::TILE_SIZE - 1)) / ttnn::TILE_SIZE * ttnn::TILE_SIZE;
+inline std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value, std::uint32_t tile_size) {
+    return (value + (tile_size - 1)) / tile_size * tile_size;
 }
 
 inline bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {

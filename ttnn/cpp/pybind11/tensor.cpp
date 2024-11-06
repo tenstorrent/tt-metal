@@ -134,17 +134,22 @@ void tensor_mem_config_module(py::module& m_tensor) {
     py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
 
     auto py_tile = static_cast<py::class_<Tile>>(m_tensor.attr("Tile"));
-    py_tile.def(py::init<const std::array<uint32_t, 2>&>())
-        .def(py::init<>([](const std::array<uint32_t, 2>& tile) {
-            return Tile{tile};
+    py_tile
+        .def(py::init<const std::array<uint32_t, 2>&, bool>(),
+            py::arg("tile_shape"), py::arg("transpose_tile") = false)
+        .def(py::init<>([](const std::array<uint32_t, 2>& tile_shape, bool transpose_tile = false) {
+            return Tile{tile_shape, transpose_tile};
         }))
         .def("__repr__", [](const Tile& self) {
             return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
         })
         .def_readonly("tile_shape", &Tile::tile_shape)
         .def_readonly("face_shape", &Tile::face_shape)
-        .def_readonly("num_faces", &Tile::num_faces);
-    py::implicitly_convertible<std::array<uint32_t, 2>, Tile>();
+        .def_readonly("num_faces", &Tile::num_faces)
+        .def_readonly("partial_face", &Tile::partial_face)
+        .def_readonly("narrow_tile", &Tile::narrow_tile)
+        .def_readonly("transpose_within_face", &Tile::transpose_within_face)
+        .def_readonly("transpose_of_faces", &Tile::transpose_of_faces);
 
     auto py_shape = static_cast<py::class_<tt::tt_metal::LegacyShape>>(m_tensor.attr("Shape"));
     py_shape.def(py::init<std::array<uint32_t, 4>>())

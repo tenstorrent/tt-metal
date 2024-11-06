@@ -56,6 +56,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+
+    // currently only support transpose of the full tile
+    bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+
     bool fuse_op = fused_op_signaler.has_value();
 
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
@@ -474,6 +478,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (in1_transpose_tile) {
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);

@@ -93,6 +93,7 @@ Tensor to_layout_impl(
     const auto intended_shape = tensor_arg.get_shape();
 
     auto tensor = tensor_arg;
+    const auto& tile = tensor.tile();
 
     SmallVector<uint32_t> output_shape;
     if (layout == ttnn::TILE_LAYOUT and intended_shape.rank() < 2) {
@@ -109,7 +110,10 @@ Tensor to_layout_impl(
 
     auto padded_output_shape = output_shape;
     for (auto index = output_shape.size() - 2; index < output_shape.size(); ++index) {
-        padded_output_shape[index] = ttnn::pad_to_multiple_of_tile_size(padded_output_shape[index]);
+        padded_output_shape[index] =
+            ttnn::pad_to_multiple_of_tile_size(
+                padded_output_shape[index],
+                (index == output_shape.size() - 2) ? tile.get_tile_shape()[0] : tile.get_tile_shape()[1]);
     }
 
     auto output_memory_config =
@@ -157,11 +161,11 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> padded_output_shape;
 
             for (int index = 0; index < tensor.get_shape().rank(); ++index) {
-                if (index >= tensor.get_shape().rank() - 2) {
-                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
-                } else {
-                    padded_output_shape.push_back(tensor.get_shape()[index]);
-                }
+                uint32_t second_last_rank = tensor.get_shape().rank() - 2; // h dim
+                uint32_t padded_value = index < second_last_rank ?
+                                            tensor.get_shape()[index] : ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index],
+                                            index == second_last_rank ? tile.get_tile_shape()[0] : tile.get_tile_shape()[1]);
+                padded_output_shape.push_back(padded_value);
             }
             if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
@@ -208,11 +212,11 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> padded_output_shape;
             SmallVector<uint32_t> padded_input_start;
             for (int index = 0; index < tensor.get_shape().rank(); ++index) {
-                if (index >= tensor.get_shape().rank() - 2) {
-                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
-                } else {
-                    padded_output_shape.push_back(tensor.get_shape()[index]);
-                }
+                uint32_t second_last_rank = tensor.get_shape().rank() - 2; // h dim
+                uint32_t padded_value = index < second_last_rank ?
+                        tensor.get_shape()[index] : ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index],
+                        index == second_last_rank ? tile.get_tile_shape()[0] : tile.get_tile_shape()[1]);
+                padded_output_shape.push_back(padded_value);
                 padded_input_start.push_back(0);
             }
             tensor = tensor.pad(padded_output_shape, ttnn::SimpleShape(std::move(padded_input_start)), 0);

@@ -456,6 +456,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     log_debug("M: {}, K: {}, N: {}", M, K, N);
     log_debug("per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
 
+    // currently only support transpose of the full tile
+    bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+
     tt_metal::Program program{};
 
     // get the dram readers
@@ -737,6 +740,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         mm_kernel_in1_sender_writer_defines["SKIP_WRITE_BACK"] = "1";
     }
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
+    if (in1_transpose_tile) {
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
