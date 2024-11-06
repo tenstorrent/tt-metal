@@ -9,6 +9,7 @@ import re
 
 def perf_report(original_file_path):
     df = pd.read_csv(original_file_path)
+    df.dropna(subset=["DEVICE ERISC KERNEL DURATION [ns]"], inplace=True)
     filtered_df = df[
         [
             "ATTRIBUTES",
@@ -160,8 +161,8 @@ def perf_report(original_file_path):
         dtype = row["Data Type"]
         dtype_sizes = {
             "BFLOAT16": 2,
-            "BFLOAT8_B": 1,
-            "BFLOAT4_B": 1,
+            "BFLOAT8_B": 1.0625,  # ((1024 + 64) / 1024)
+            "BFLOAT4_B": 0.5625,  # ((1024/2 + 64) / 1024)
             "FLOAT32": 4,
             "UINT8": 1,
             "UINT16": 2,
