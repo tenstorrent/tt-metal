@@ -132,7 +132,7 @@ run_t3000_llama3.2-11b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.2-11b_tests"
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  # Llama3.2-11B
+  # Llama3.2-11B weights
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
@@ -147,6 +147,34 @@ run_t3000_llama3.2-11b_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3.2-11b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3.1-70b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3.1-70b_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.1-70B weights
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_decoder_prefill.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3.1-70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -296,6 +324,21 @@ run_t3000_tests() {
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests
+
+  # Run llama3-small (1B, 3B, 8B) tests
+  run_t3000_llama3-small_tests
+
+  # Run llama3.2-11B tests
+  run_t3000_llama3.2-11b_tests
+
+  # Run llama3.1-70B tests
+  run_t3000_llama3.1-70b_tests
+
+  # Run llama3.2-11B-vision tests
+  run_t3000_llama3.2-11b-vision_unit_tests
+
+  # Run llama3.2-11B-vision tests on spoofed N300 mesh
+  run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests

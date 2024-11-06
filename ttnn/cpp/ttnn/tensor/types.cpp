@@ -35,9 +35,7 @@ const Shape Shape::to_rank(size_t new_rank) const {
 
 }
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 static DistributedTensorConfig create_shard_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
     return ShardTensor(std::stoi(metadata.at("shard_dim")));
@@ -268,6 +266,11 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
+std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
+    tt::stl::reflection::operator<<(os, config);
+    return os;
+}
+
 void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_config) {
     output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
     output_stream.write(reinterpret_cast<const char*>(&memory_config.memory_layout), sizeof(TensorMemoryLayout));
@@ -340,9 +343,7 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     return load_memory_config(input_stream);
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace ttnn::types {
 

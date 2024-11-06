@@ -14,7 +14,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     tensor_return_value_t &outputs) {
     using namespace tt;
     using namespace tt::constants;
-    using namespace tt::operations::primary;
 
     const auto &output_grad = tensor_args.output_grad;
     const auto &input = tensor_args.input;
@@ -203,9 +202,9 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_channels_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_channels_per_core = num_channels_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_channels_per_core = num_channels_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");

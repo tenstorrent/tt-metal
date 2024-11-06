@@ -938,7 +938,9 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             } else {
                 uint32_t base_address = kernels_buffer->address();
                 uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+
+                // TODO: pack all these writes into 1 linear write
+                uint32_t kernel_config_buffer_offset = kg_transfer_info.dst_base_addrs[kernel_idx];
                 uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                 while (aligned_length != 0) {
@@ -959,13 +961,13 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                     }
                     kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                         .noc_xy_addr = noc_encoding,
-                        .addr = dst_addr,
+                        .addr = kernel_config_buffer_offset,
                         .length = (uint16_t)write_length,
                         .num_mcast_dests = (uint8_t)num_mcast_dests,
                         .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                     RecordDispatchData(
                         program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
-                    dst_addr += write_length;
+                    kernel_config_buffer_offset += write_length;
 
                     kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
                         .start_page = (uint16_t)page_offset,
@@ -1180,7 +1182,11 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
-            dram_alignment, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
+            dram_alignment,
+            kernel_bins_dispatch_subcmds[i].size(),
+            kernel_bins_dispatch_subcmds[i],
+            0,
+            DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
         device_command_sequence.add_prefetch_relay_paged_packed(
             kernel_bins_write_packed_large_data_aligned_sizeB[i],
             kernel_bins_prefetch_subcmds[i],
@@ -1461,11 +1467,6 @@ void EnqueueProgramCommand::write_program_command_sequence(const ProgramCommandS
 
 void EnqueueProgramCommand::process() {
 
-    bool is_finalized = program.is_finalized();
-    if (not is_finalized) {
-        program.finalize(device);
-    }
-
     const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
         this->manager.get_config_buffer_mgr().reserve(program.get_program_config_sizes());
     bool stall_first = reservation.first.need_sync;
@@ -1491,7 +1492,7 @@ void EnqueueProgramCommand::process() {
     auto &cached_program_command_sequences = program.get_cached_program_command_sequences();
     uint64_t command_hash = this->device->id();
     auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-    bool is_cached = is_finalized && cached_cmd_iter != cached_program_command_sequences.end();
+    bool is_cached = program.is_cached() && cached_cmd_iter != cached_program_command_sequences.end();
 
     // Calculate all commands size and determine how many fetch q entries to use
     // Preamble, some waits and stalls
@@ -1512,6 +1513,7 @@ void EnqueueProgramCommand::process() {
         this->write_program_command_sequence(program_command_sequence, stall_first);
         this->assemble_stall_commands(program_command_sequence, false);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
+        program.set_cached();
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
@@ -2234,12 +2236,14 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     if (not program.is_finalized()) {
+        program.finalize(device);
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
         if (const auto &kernels_buffer = program.get_kernels_buffer()) {
             this->enqueue_write_buffer(
                 *kernels_buffer, program.get_program_transfer_info().binary_data.data(), false);
         }
     }
+
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
@@ -2373,6 +2377,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     // Update the wptr on host to match state
     this->device->worker_launch_message_buffer_state.set_mcast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_multicast);
     this->device->worker_launch_message_buffer_state.set_unicast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_unicast);
+    // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so that
+    // it will force a stall and avoid stomping on in-use state.
+    // TODO(jbauman): Reuse old state from the trace.
+    this->manager.get_config_buffer_mgr().mark_completely_full(this->expected_num_workers_completed);
 
     if (blocking) {
         this->finish();

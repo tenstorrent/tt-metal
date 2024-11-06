@@ -26,7 +26,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     Program program = Program();
 
     // Create circular buffer
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         tt::tt_metal::datatype_to_dataformat_converter(dtype),
@@ -44,7 +44,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     }
 
     uint32_t dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    auto kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto kernel_id = CreateWriteKernel(
         program,
         operation_attributes.untilize_out
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp"
@@ -58,9 +58,9 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core))
+        if (core_group_1.contains(core))
             num_tiles_per_core = num_tiles_per_core_group_1;
-        else if (core_group_2.core_coord_in_core_ranges(core))
+        else if (core_group_2.contains(core))
             num_tiles_per_core = num_tiles_per_core_group_2;
         else
             TT_FATAL(false, "Core not in specified core ranges");

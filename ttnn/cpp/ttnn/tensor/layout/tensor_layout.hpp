@@ -26,7 +26,7 @@ public:
 
     // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a constructor
     [[deprecated("Use of Legacy Padded Shape is deprecated")]]
-    static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape);
+    static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape);
 
     Layout get_layout() const { return page_config_.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
     PageConfig get_page_config() const { return page_config_; }

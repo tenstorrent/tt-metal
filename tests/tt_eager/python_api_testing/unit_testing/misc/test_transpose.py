@@ -55,13 +55,12 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
     ids=["bfloat16", "float"],
 )
-def test_transpose_hc(dtype, device):
+def test_transpose_hc_unit(dtype, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
@@ -95,7 +94,6 @@ def test_transpose_wh_bfp4(device):
     transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttnn.bfloat4_b)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -208,7 +206,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -240,7 +238,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -273,7 +271,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -487,7 +485,6 @@ def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_progr
     assert device.num_program_cache_entries() == 3
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -527,7 +524,6 @@ def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [20])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
@@ -610,7 +606,6 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
     assert device.num_program_cache_entries() == 3
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape, swap_dims",
     [
@@ -631,7 +626,6 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -650,7 +644,6 @@ def test_transpose_hc(dtype, shape, device):
     transpose(shape, device, dim0=1, dim1=-2, input_dtype=dtype)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -679,7 +672,6 @@ def test_transpose_2D(dtype, shape, layout, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -763,7 +755,6 @@ def test_transpose_failures(config, memory_config, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "config",
     [

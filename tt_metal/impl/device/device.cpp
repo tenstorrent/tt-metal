@@ -21,6 +21,7 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt {
@@ -279,8 +280,7 @@ void Device::initialize_build() {
     uint32_t dispatch_message_addr =
         dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
-    // TODO now: total number of processor types should be pulled from the HAL
-    uint32_t num_build_states = this->arch() == tt::ARCH::GRAYSKULL ? 5 : 7;
+    uint32_t num_build_states = hal.get_num_risc_processors();
 
     auto init_helper = [this, dispatch_message_addr, num_build_states] (bool is_fw) -> JitBuildStateSet {
         std::vector<std::shared_ptr<JitBuildState>> build_states;
@@ -320,12 +320,12 @@ void Device::initialize_build() {
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
                             build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
                             build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
                             break;
                         }
                         default:
@@ -2755,12 +2755,14 @@ void Device::configure_command_queue_programs() {
         }
     }
 
+    command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
     if (device_id != mmio_device_id) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            mmio_command_queue_program.finalize(mmio_device);
             detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
             tt::Cluster::instance().l1_barrier(mmio_device_id);
         }
@@ -2808,7 +2810,6 @@ void Device::init_command_queue_device() {
     }
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
-    command_queue_program.finalize(this);
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -2828,7 +2829,6 @@ void Device::init_command_queue_device() {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
-            mmio_command_queue_program.finalize(mmio_device);
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
                 const auto& logical_dispatch_cores = logical_cores[index];
@@ -3300,6 +3300,8 @@ bool Device::using_slow_dispatch() const {
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
+    ZoneScoped;
+    TracyTTMetalBeginTrace(this->id(), tid);
     TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
     this->MarkAllocationsSafe();
@@ -3309,6 +3311,8 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
+    ZoneScoped;
+    TracyTTMetalEndTrace(this->id(), tid);
     TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
     TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {} must exist on device", tid);
     this->hw_command_queues_[cq_id]->record_end();
@@ -3325,6 +3329,8 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
 }
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+    ZoneScoped;
+    TracyTTMetalReplayTrace(this->id(), tid);
     constexpr bool check = false;
     TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {}  must exist on device" , tid);
     if constexpr (check) {
@@ -3338,6 +3344,8 @@ void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool bl
 }
 
 void Device::release_trace(const uint32_t tid) {
+    ZoneScoped;
+    TracyTTMetalReleaseTrace(this->id(), tid);
     uint32_t erased = this->trace_buffer_pool_.erase(tid);
     // Only enable allocations once all captured traces are released
     if (this->trace_buffer_pool_.empty()) {

@@ -1,36 +1,32 @@
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hw)
+add_library(tt_metal)
+add_library(Metalium::Metal ALIAS tt_metal)
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/common)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/jit_build)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llrt)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tools)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/impl)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/detail)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
-
-set(TT_METAL_OBJECTS
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/graph/graph_tracking.cpp
-    $<TARGET_OBJECTS:profiler>
-    $<TARGET_OBJECTS:common>
-    $<TARGET_OBJECTS:jit_build>
-    $<TARGET_OBJECTS:llrt>
-    $<TARGET_OBJECTS:impl>
-    $<TARGET_OBJECTS:detail>
-    $<TARGET_OBJECTS:distributed>
+target_sources(
+    tt_metal
+    PRIVATE
+        tt_metal.cpp
+        graph/graph_tracking.cpp
 )
-
-add_library(tt_metal ${TT_METAL_OBJECTS})
 
 target_link_libraries(
     tt_metal
     PUBLIC
         metal_header_directories
-        umd_device
+        Metalium::Metal::Impl
+        Metalium::Metal::STL
+        umd::device
         metal_common_libs
         magic_enum
-        fmt
+        fmt::fmt-header-only
         span
+        $<$<BOOL:${ENABLE_TRACY}>:TracyClient>
+    PRIVATE
+        profiler
+        common
+        jit_build
+        llrt
+        detail
+        distributed
 )
 
 target_precompile_headers(
@@ -45,12 +41,6 @@ target_precompile_headers(
         <vector>
 )
 
-target_link_libraries(
-    tt_metal
-    PUBLIC
-        compiler_flags
-        $<$<BOOL:${ENABLE_TRACY}>:TracyClient>
-)
 target_include_directories(
     tt_metal
     PUBLIC
@@ -70,6 +60,16 @@ set_target_properties(
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
 
+add_subdirectory(hw)
+add_subdirectory(common)
+add_subdirectory(jit_build)
+add_subdirectory(llrt)
+add_subdirectory(tools)
+add_subdirectory(impl)
+add_subdirectory(detail)
+add_subdirectory(distributed)
+add_subdirectory(tt_stl)
+
 if(BUILD_PROGRAMMING_EXAMPLES)
     add_subdirectory(programming_examples)
-endif(BUILD_PROGRAMMING_EXAMPLES)
+endif()

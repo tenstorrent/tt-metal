@@ -24,7 +24,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     auto grid = tensor_args.any.device()->compute_with_storage_grid_size();
     auto num_tiles = output.volume() / TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid, num_tiles);
+        tt::tt_metal::split_work_to_cores(grid, num_tiles);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(data_format);
@@ -40,7 +40,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
     // Create circular buffer
     auto cb_index = tt::CB::c_intermed0;
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -57,7 +57,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         default: break;
     }
 
-    auto writer_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
@@ -71,9 +71,9 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core))
+        if (core_group_1.contains(core))
             num_tiles_per_core = num_tiles_per_core_group_1;
-        else if (core_group_2.core_coord_in_core_ranges(core))
+        else if (core_group_2.contains(core))
             num_tiles_per_core = num_tiles_per_core_group_2;
         else
             TT_THROW("Core not in specified core ranges");

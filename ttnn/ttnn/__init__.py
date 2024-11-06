@@ -191,7 +191,7 @@ from ttnn.core import (
     dump_memory_config,
     load_memory_config,
     dump_stack_trace_on_segfault,
-    num_cores_to_corerange_set,
+    num_cores_to_corerangeset,
 )
 
 import ttnn.reflection

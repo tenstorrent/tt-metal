@@ -16,6 +16,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_shape_base.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_sharding_with_alignment.cpp
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
@@ -32,7 +33,7 @@ function(setup_ttnn_test_target target_name)
         PUBLIC
             test_common_libs
             ttnn
-            tt_metal
+            Metalium::Metal
     )
     target_include_directories(
         ${target_name}

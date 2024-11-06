@@ -74,6 +74,7 @@ tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
+tt_metal/tt_stl/ @patrickroberts @yan-zaretskiy @eyonland @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 sfpi/ @pgkeller
 
@@ -142,7 +143,6 @@ models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
-models/demos/wormhole/llama31_8b @yieldthought @mtairum @uaydonat
 models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @mywoodstock
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
