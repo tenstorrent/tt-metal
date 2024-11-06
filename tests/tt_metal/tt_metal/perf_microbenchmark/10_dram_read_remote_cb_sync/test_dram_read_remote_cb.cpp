@@ -461,6 +461,10 @@ bool validation_mixed_df(
     // compare with the result tilized with tilized
     auto values_fp16 = tt::test_utils::tilize(input_tensor_fp16.get_values(), kt*32, nt*32);
 
+    uint32_t block_h = kt / num_blocks;
+    uint32_t block_w = nt;
+    uint32_t block_num_tiles = block_h * block_w;
+
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
     int start_index = 0;
     int fifo_size = kt*32 / num_blocks * cb_num_blocks * nt*32 * 2 / num_receivers;
@@ -472,17 +476,19 @@ bool validation_mixed_df(
             page_size = 1088;
         }
         layer_transfer_size = page_size * kt * nt / num_receivers;
-        num_pages = fifo_size / page_size;
-        fifo_size_page_aligned = page_size * num_pages;
 
-        bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > fifo_size_page_aligned;
-        uint32_t num_pages_till_fifo_limit = (fifo_size_page_aligned - fifo_wr_ptr) / page_size;
+        uint32_t block_size = block_num_tiles * tt::constants::TILE_HW * datum_size(tt::DataFormat::Float16_b); // fp16
+        uint32_t num_blocks = fifo_size / block_size;
+        uint32_t cb_size_block_aligned = num_blocks * block_size;
+
+        bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > cb_size_block_aligned;
+        uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
-        fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : fifo_size_page_aligned - num_pages_till_fifo_limit * page_size;
+        fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
         // start index to read, fifo_wr_ptr / 2 because fp16 format
-        start_index = fifo_wr_ptr == fifo_size_page_aligned ? 0 : fifo_wr_ptr / 2;
+        start_index = fifo_wr_ptr == cb_size_block_aligned ? 0 : fifo_wr_ptr / 2;
         // end pointer addr of current layer
-        fifo_wr_ptr = (fifo_wr_ptr + layer_transfer_size) % fifo_size_page_aligned;
+        fifo_wr_ptr = (fifo_wr_ptr + layer_transfer_size) % cb_size_block_aligned;
     }
 
     std::vector<std::vector<float> > values_fp16_split(num_receivers, std::vector<float>(values_fp16.size() / num_receivers));
