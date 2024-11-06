@@ -150,11 +150,12 @@ FORCE_INLINE void advance_start_page_idx(
     uint32_t& start_page_idx,
     uint32_t& curr_ring_index,
     const uint32_t ring_size,
-    const uint32_t is_clockwise_direction,
+    const uint32_t direction,
     const uint32_t output_page_offset,
     const uint32_t last_output_page_offset) {
 
-    if (is_clockwise_direction) {
+    if (direction == 0) {
+        // clockwise direction
         bool is_wraparound_ring_index = curr_ring_index == 0;
         if (is_wraparound_ring_index) {
             start_page_idx += last_output_page_offset;
@@ -179,24 +180,22 @@ FORCE_INLINE void advance_start_page_idx(
 
 
 struct MatmulOpReceiver {
-    static constexpr uint32_t num_directions = 2; // ASSUMPTION: Always 2 directions
-    uint32_t num_tensor_slices = 0;
+    static constexpr uint32_t max_num_directions = 2;
+    uint32_t num_directions = 0;
 
     bool wait_for_op_signal = 0;
-    uint32_t num_transfers = 0;
     uint32_t ring_size = 0;
     uint32_t tensor_slice_shape_width = 0; // In tiles
     uint32_t output_page_offset = 0;
     uint32_t last_output_page_offset = 0;
 
-    uint32_t num_blocks = 0;
     uint32_t num_blocks_per_slice = 0;
 
     // Used to track internal state
-    std::array<uint32_t, num_directions> ring_idxs = {};
-    std::array<uint32_t, num_directions> start_page_idxs = {};
-    std::array<bool, num_directions> is_clockwise_dirs = {};
-    std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs = {};
+    std::array<uint32_t, max_num_directions> ring_idxs = {};
+    std::array<uint32_t, max_num_directions> start_page_idxs = {};
+    std::array<bool, max_num_directions> is_clockwise_dirs = {};
+    std::array<volatile tt_l1_ptr uint32_t*, max_num_directions> signal_op_semaphore_addr_ptrs = {};
     uint32_t curr_dir = 0;
     uint32_t curr_transfer_idx = 0;
 
@@ -208,20 +207,18 @@ struct MatmulOpReceiver {
     MatmulOpReceiver(
         bool wait_for_op_signal,
         uint32_t& rt_args_idx,
-        uint32_t num_blocks,
         uint32_t tiles_per_block // Across the same dimension as tensor_slice_shape_width
-    ) : wait_for_op_signal(wait_for_op_signal),
-        num_blocks(num_blocks)
+    ) : wait_for_op_signal(wait_for_op_signal)
     {
 
         // Runtime args
-        this->num_transfers = get_arg_val<uint32_t>(rt_args_idx++);
+        this->num_directions = get_arg_val<uint32_t>(rt_args_idx++);
         this->ring_size = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t start_ring_index = get_arg_val<uint32_t>(rt_args_idx++);
         this->tensor_slice_shape_width = get_arg_val<uint32_t>(rt_args_idx++);
         this->output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
         this->last_output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t is_clockwise_direction = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t start_dir = get_arg_val<uint32_t>(rt_args_idx++);
 
         if (this->wait_for_op_signal) {
             this->signal_op_semaphore_addr_ptrs[0] =
@@ -230,22 +227,15 @@ struct MatmulOpReceiver {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
         }
 
-        this->num_tensor_slices = this->num_transfers * this->num_directions;
+        // Setup internal states
+        for (uint32_t i = 0; i < this->num_directions; i++) {
+            this->ring_idxs[i] = start_ring_index;
+            this->start_page_idxs[i] = this->ring_idxs[0] * this->output_page_offset;
+        }
 
-        // Setup internal states for bi-direction
-        this->ring_idxs[0] = start_ring_index;
-        this->ring_idxs[1] = start_ring_index;
+        this->num_blocks_per_slice = this->tensor_slice_shape_width / tiles_per_block; // num_tensor_slices * this->num_blocks_per_slice == this->num_blocks
 
-        this->start_page_idxs[0] = this->ring_idxs[0] * this->output_page_offset;
-        this->start_page_idxs[1] = this->ring_idxs[1] * this->output_page_offset;
-
-        this->is_clockwise_dirs[0] = is_clockwise_direction;
-        this->is_clockwise_dirs[1] = !is_clockwise_direction;
-
-        this->num_blocks_per_slice = this->tensor_slice_shape_width / tiles_per_block;
-        ASSERT(this->num_tensor_slices * this->num_blocks_per_slice == this->num_blocks);
-
-        this->curr_dir = is_clockwise_direction ? 1 : 0; // Anti-clockwise direction is the first since it has local slice
+        this->curr_dir = start_dir;
         this->curr_transfer_idx = 0;
 
         this->initialized = true;
@@ -268,7 +258,7 @@ struct MatmulOpReceiver {
                     this->start_page_idxs[this->curr_dir],
                     this->ring_idxs[this->curr_dir],
                     this->ring_size,
-                    this->is_clockwise_dirs[this->curr_dir],
+                    this->curr_dir,
                     this->output_page_offset,
                     this->last_output_page_offset
                 );
@@ -287,7 +277,9 @@ struct MatmulOpReceiver {
 
             // Update the relevant internal states
             this->curr_transfer_idx++;
-            this->curr_dir = !this->curr_dir; // Change direction
+            if (this->num_directions > 1) {
+                this->curr_dir = !this->curr_dir; // Change direction
+            }
         }
     }
 
@@ -301,7 +293,9 @@ struct MatmulOpReceiver {
 
             if (this->curr_transfer_idx != 0) { // Skip update for local slice
                 // Change direction
-                this->curr_dir = !this->curr_dir;
+                if (this->num_directions > 1) {
+                    this->curr_dir = !this->curr_dir;
+                }
 
                 // Update the start page idx of the tensor slice in curr_direction
                 // We only want to know the update for the ring index
@@ -309,7 +303,7 @@ struct MatmulOpReceiver {
                     this->start_page_idxs[this->curr_dir],
                     this->ring_idxs[this->curr_dir],
                     this->ring_size,
-                    this->is_clockwise_dirs[this->curr_dir],
+                    this->curr_dir,
                     this->output_page_offset,
                     this->last_output_page_offset
                 );

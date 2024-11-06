@@ -108,8 +108,7 @@ void kernel_main() {
         fused_op_receiver = MatmulOpReceiver(
             false, /* wait_for_op_signal */
             rt_args_idx,
-            num_blocks,
-            in1_block_h /* tiles_per_block (in the same dimension */
+            in1_block_h /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
 

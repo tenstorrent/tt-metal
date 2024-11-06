@@ -28,6 +28,11 @@ enum class FusedOpSignalerMode {
     MULTI
 };
 
+enum Direction {
+    CW,
+    CCW
+};
+
 struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
@@ -75,7 +80,6 @@ struct MatmulFusedOpSignaler {
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specs */
-    uint32_t num_transfers = 0;
     uint32_t ring_size = 0;
     uint32_t start_ring_index = 0;
     uint32_t tensor_slice_shape_width = 0;
@@ -89,7 +93,6 @@ struct MatmulFusedOpSignaler {
     bool initialized_fused_op = false;
 
     void init_all_gather(
-        uint32_t num_transfers,
         uint32_t ring_size,
         uint32_t start_ring_index,
         uint32_t tensor_slice_shape_width,
