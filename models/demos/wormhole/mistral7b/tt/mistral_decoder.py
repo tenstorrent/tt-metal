@@ -58,7 +58,6 @@ class TtTransformerBlock(torch.nn.Module):
             state_dict=state_dict,
             layer_num=layer_num,
             weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
             weight_key="attention_norm",
         )
         self.ffn_norm = RMSNorm(
@@ -67,7 +66,6 @@ class TtTransformerBlock(torch.nn.Module):
             state_dict=state_dict,
             layer_num=layer_num,
             weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
             weight_key="ffn_norm",
         )
 
@@ -85,7 +83,7 @@ class TtTransformerBlock(torch.nn.Module):
             skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         else:
             skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
-        attn_norm = self.attention_norm(x)
+        attn_norm = self.attention_norm(x, mode=mode)
         # Attention module expects a list of inputs, attn masks (multi-device support)
         r = self.attention.forward(
             [attn_norm],
@@ -101,6 +99,6 @@ class TtTransformerBlock(torch.nn.Module):
         r = r[0]
         # r = ttnn.reshape(r, (1, 1, 32, 4096))
         h = ttnn.add(x, r, memory_config=skip_mem_cfg)
-        r = self.feed_forward.forward(self.ffn_norm(h))
+        r = self.feed_forward.forward(self.ffn_norm(h, mode=mode))
         out = ttnn.add(h, r, memory_config=skip_mem_cfg)
         return out

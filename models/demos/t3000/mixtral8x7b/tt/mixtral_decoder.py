@@ -80,7 +80,7 @@ class TtTransformerBlock(LightweightModule):
         1: unary dim
         H: hidden dim (4096)
         """
-        attn_norm_1SBH = self.attention_norm(xs_1SBH)
+        attn_norm_1SBH = self.attention_norm(xs_1SBH, mode)
         attn_1SBH = self.attention(
             attn_norm_1SBH,
             start_pos_ids,
@@ -93,7 +93,7 @@ class TtTransformerBlock(LightweightModule):
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
         xs_1SBH.deallocate(True)
         attn_1SBH.deallocate(True)
-        ffn_norm_1SBH = self.ffn_norm(hs_1SBH)
+        ffn_norm_1SBH = self.ffn_norm(hs_1SBH, mode)
         ffn_1SBH = self.feed_forward(ffn_norm_1SBH, mode=mode)
         out_1SBH = ttnn.add(hs_1SBH, ffn_1SBH)
         hs_1SBH.deallocate(True)
