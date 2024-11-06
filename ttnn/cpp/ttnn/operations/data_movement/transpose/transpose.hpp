@@ -26,7 +26,6 @@ struct ExecuteTranspose {
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2);
 };
 
-
 }  // namespace operations::data_movement
 
 constexpr auto transpose = ttnn::register_operation<"ttnn::transpose", ttnn::operations::data_movement::ExecuteTranspose>();

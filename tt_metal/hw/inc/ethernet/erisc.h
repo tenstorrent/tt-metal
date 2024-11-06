@@ -11,7 +11,7 @@ volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_E
 
 namespace internal_ {
 inline __attribute__((always_inline))
-void __attribute__((section("code_l1"))) risc_context_switch() {
+void risc_context_switch() {
     ncrisc_noc_full_sync();
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();

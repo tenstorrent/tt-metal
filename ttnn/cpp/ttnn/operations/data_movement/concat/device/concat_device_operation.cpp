@@ -39,8 +39,12 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         tt::tt_metal::LegacyShape curr_shape = in_ref.get_legacy_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
-            // last tensor can support without any kernel changes
-        TT_FATAL(!in_ref.get_shape().has_tile_padding(this->dim), "Tile padding along concatenated dim ({}) not supported for concat yet (tensor: {}).",this->dim, i);
+        // last tensor can support without any kernel changes
+        TT_FATAL(
+            !in_ref.get_shape().has_tile_padding(this->dim),
+            "Tile padding along concatenated dim ({}) not supported for concat yet (tensor: {}).",
+            this->dim,
+            i);
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         if (in_ref.get_layout() == Layout::ROW_MAJOR && this->dim == shape_first.rank() - 1) {
             TT_FATAL(
@@ -49,15 +53,46 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         }
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
-            TT_FATAL((in_ref.get_layout() == Layout::ROW_MAJOR), "Only row major supported for sharded concat.");
+            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
+            TT_FATAL(
+                input_tensors.size() > 2 || in_ref.get_layout() == Layout::ROW_MAJOR,
+                "Only row major supported for sharded two tensors concat.");
             TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
-            TT_FATAL(in_ref.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED, "Block sharded inputs are not supported");
-            TT_FATAL(in_ref.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Width sharded inputs are not supported");
+            TT_FATAL(
+                in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
+                "Sharded tensors must have the same grid.");
+            TT_FATAL(
+                in_ref.memory_config().memory_layout == first_input.memory_config().memory_layout,
+                "Sharded tensors must have the same memory layout.");
+            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
+            TT_FATAL(
+                input_tensors.size() > 2 || in_ref.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                "Width sharded inputs are not supported for two tensors concat yet");
+            TT_FATAL(
+                in_ref.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
+                "Block sharded inputs are not supported");
         }
     }
     if (shard_first) {
-        TT_FATAL(this->dim == shape_first.rank() - 1, "Only width concat on sharded tensors");
-        TT_FATAL(this->output_mem_config.is_sharded(), "Output must be sharded if input is sharded");
+        const auto memory_layout = first_input.memory_config().memory_layout;
+        TT_FATAL(
+            this->output_mem_config.memory_layout == memory_layout,
+            "Sharded output and inputs must have the same memory layout.");
+        TT_FATAL(this->output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
+        TT_FATAL(
+            this->output_mem_config.shard_spec.value().grid == first_input.shard_spec().value().grid,
+            "Sharded output and inputs must have the same grid.");
+        if (this->dim == shape_first.rank() - 1) {
+            TT_FATAL(
+                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Only support width concat on height-sharded tensors.");
+        } else if (this->dim == shape_first.rank() - 2) {
+            TT_FATAL(
+                memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                "Only support height concat on width-sharded tensors.");
+        } else {
+            TT_FATAL(false, "Only width or height concat on sharded tensors");
+        }
     }
 }
 
@@ -123,7 +158,9 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                             "Current concat implementation requires aligned last dim when concatting on last dim");
                     }
                 }
-                Layout target_layout = Layout::TILE;
+                // row major should default to row major and tilized to tilized implementations, but the below loop turned RM to tilized when possible
+                Layout target_layout = input_tensors[0].get_layout();
+                // this should be dead code when instantiating layout to match the input
                 for (const auto &input_tensor : input_tensors) {
                     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                         const auto &input_shape = input_tensor.get_legacy_shape();

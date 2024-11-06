@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const Shape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -29,7 +29,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
 }
 
 Shape get_output_grad_shape(
-    const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
+    const Tensor &output_grad, const Tensor &input_grad, const ttnn::SmallVector<int64_t> &dims, const bool &keepdim) {
     if (keepdim) {
         return output_grad.get_shape();
     }
@@ -79,17 +79,17 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     const auto &input_grad_shape_wo_padding = input_grad_shape.value.without_padding();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
-    std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
     const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
     const auto &output_grad_shape_wo_padding = output_grad_shape.value.without_padding();
 
-    std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "output_grad");
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
@@ -129,7 +129,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -143,17 +143,17 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)), input_grad_rank};
+        static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/reader_moreh_sum_backward.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/writer_moreh_sum_backward.cpp";
     const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -165,7 +165,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -178,7 +178,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
             num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -195,9 +195,9 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");

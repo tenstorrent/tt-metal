@@ -9,7 +9,7 @@
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
@@ -79,8 +79,8 @@ inline namespace v0 {
 
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
-        void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
-        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+        void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true);
+        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true);
         void WaitProgramDone(Device *device, Program &program);
 
         /**
@@ -113,9 +113,8 @@ inline namespace v0 {
          * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
          * | device              | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
          * | program             | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
-         * | force_slow_dispatch | Force allowing slow dispatch                                           | bool                          |                                    | No       |
          */
-        void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_dispatch = false);
+        void WriteRuntimeArgsToDevice(Device *device, Program &program);
 
         // Configures a given device with a given program.
         // - Loads all kernel binaries into L1s of assigned Tensix cores
@@ -277,8 +276,10 @@ inline namespace v0 {
 
         void SetLazyCommandQueueMode(bool lazy);
 
-        void AllocateBuffer(Buffer* buffer, bool bottom_up);
+        DeviceAddr AllocateBuffer(Buffer* buffer);
 
         void DeallocateBuffer(Buffer *buffer);
+
+        void SynchronizeWorkerThreads(const std::vector<Device*>& workers);
     }  // namespace detail
 }  // namespace tt::tt_metal

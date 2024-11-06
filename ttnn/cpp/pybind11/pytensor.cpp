@@ -64,7 +64,7 @@ void log_external_operation(
 #endif
 
 template <typename T>
-Tensor create_owned_tensor(T* data_ptr, size_t num_elements, std::vector<uint32_t>& shape, DataType data_type, Layout layout, const std::optional<Tile>& optional_tile = std::nullopt)
+Tensor create_owned_tensor(T* data_ptr, size_t num_elements, tt::stl::Span<const uint32_t> shape, DataType data_type, Layout layout, const std::optional<Tile>& optional_tile = std::nullopt)
 {
     auto data = std::vector(data_ptr, data_ptr + num_elements);
     auto buffer = owned_buffer::create(std::move(data));
@@ -80,7 +80,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
     }
 
     auto torch_dtype = torch_tensor.attr("dtype");
-    auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
+    auto shape = py::cast<ttnn::SmallVector<uint32_t>>(torch_tensor.attr("shape"));
 
     auto contiguous_torch_tensor = torch_tensor.attr("contiguous")();
 
@@ -251,7 +251,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
     }
 
     auto np_dtype = np_tensor.attr("dtype");
-    auto shape = py::cast<std::vector<uint32_t>>(np_tensor.attr("shape"));
+    auto shape = py::cast<ttnn::SmallVector<uint32_t>>(np_tensor.attr("shape"));
 
     auto contiguous_np_tensor = np.attr("ascontiguousarray")(np_tensor);
 
@@ -419,11 +419,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, tile, false));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<tt::tt_metal::LegacyShape> host_owned_shapes;
+    std::vector<ttnn::Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
         TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(shard.get_storage()));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-        host_owned_shapes.push_back(shard.get_legacy_shape());
+        host_owned_shapes.push_back(shard.shape());
     }
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
@@ -517,7 +517,16 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         auto shape = tt_tensor.get_legacy_shape();
         auto torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
-        auto tensor = frombuffer(buffer, "dtype"_a=torch_dtype);
+        auto tensor = [&](){
+            if(tt_tensor.volume() == 0) {
+                auto pytorch_empty = torch.attr("empty");
+                auto logical_shape = tt_tensor.get_logical_shape();
+                auto view = logical_shape.view();
+                std::vector<uint32_t> shape_vector(view.begin(), view.end());
+                return pytorch_empty(shape_vector, "dtype"_a=torch_dtype);
+            }
+            return frombuffer(buffer, "dtype"_a=torch_dtype);
+        }();
         tensor = tensor.attr("reshape")(torch_shape);
         tensor = tensor.attr("contiguous")();
         if (tt_tensor.storage_type() == StorageType::BORROWED) {
@@ -1325,7 +1334,7 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "unpad_from_tile",
-            [](const Tensor &self, const std::vector<uint32_t> &output_tensor_shape) {
+            [](const Tensor &self, const ttnn::SmallVector<uint32_t> &output_tensor_shape) {
                 return self.unpad_from_tile(ttnn::SimpleShape(output_tensor_shape));
             },
             R"doc(
@@ -1593,7 +1602,7 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "reshape",
-            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
+            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W})); },
             R"doc(
                 Reshapes TT tensor
 
@@ -1603,13 +1612,23 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(shape); },
+            [](Tensor &self, const ttnn::Shape &shape) -> Tensor { return self.reshape(shape); },
             R"doc(
                 Reshapes TT tensor
 
                 .. code-block:: python
 
                     reshaped_tensor = tt_tensor.reshape((4, 3, 32))
+            )doc")
+        .def(
+            "reshape",
+            [](Tensor &self, const ttnn::SmallVector<int32_t> &shape) -> Tensor { return self.reshape(infer_dims_for_reshape(self, shape)); },
+            R"doc(
+                Reshapes TT tensor
+
+                .. code-block:: python
+
+                    reshaped_tensor = tt_tensor.reshape((4, -1, 32))
             )doc")
         .def_property(
             "tensor_id",

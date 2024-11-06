@@ -54,15 +54,26 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
     }
 }
 
+uint32_t Hal::get_num_risc_processors() const {
+    uint32_t num_riscs = 0;
+    for (uint32_t core_idx = 0; core_idx < core_info_.size(); core_idx++) {
+        uint32_t num_processor_classes = core_info_[core_idx].get_processor_classes_count();
+        for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
+            num_riscs += core_info_[core_idx].get_processor_types_count(processor_class_idx);
+        }
+    }
+    return num_riscs;
+}
+
 HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
                                  CoreType core_type,
-                                 uint32_t core_proc_count,
+                                 const std::vector<std::vector<uint8_t>> &processor_classes,
                                  const std::vector<DeviceAddr>& mem_map_bases,
                                  const std::vector<uint32_t>& mem_map_sizes,
                                  bool supports_cbs) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
-    proc_count_(core_proc_count),
+    processor_classes_(processor_classes),
     mem_map_bases_(mem_map_bases),
     mem_map_sizes_(mem_map_sizes),
     supports_cbs_(supports_cbs) {

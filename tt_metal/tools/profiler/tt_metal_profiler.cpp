@@ -11,7 +11,6 @@
 
 #include "tools/profiler/profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
-#include "dev_msgs.h"
 
 #include "tt_metal/detail/tt_metal.hpp"
 
@@ -120,9 +119,8 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
                 .defines = kernel_defines}
             );
     }
-    constexpr bool wait_for_all_cores_done = false;
-    constexpr bool force_slow_dispatch = true;
-    LaunchProgram(device, sync_program, wait_for_all_cores_done, force_slow_dispatch);
+
+    EnqueueProgram(device->command_queue(), *sync_program, false);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -150,8 +148,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
-    std::unordered_set<CoreCoord> not_done_cores({core});
-    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+    Finish(device->command_queue());
 
     log_info ("SYNC PROGRAM FINISH IS DONE ON {}",device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime))
@@ -168,7 +165,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     constexpr uint32_t briscIndex = 0;
     uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
-    vector<std::uint32_t> sync_times = tt::llrt::read_hex_vec_from_core(
+    std::vector<std::uint32_t> sync_times = tt::llrt::read_hex_vec_from_core(
             device_id,
             core,
             addr,
@@ -418,7 +415,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                          tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
                         const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
                         profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalL1MemAddrType::PROFILER);
-                        vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+                        std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 curr_core,
                                 reinterpret_cast<uint64_t>(profiler_msg->control_vector),
@@ -438,7 +435,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                     {
                         const auto curr_core = device->physical_core_from_logical_core(core, CoreType::ETH);
                         profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalL1MemAddrType::PROFILER);
-                        vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+                        std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 core,
                                 reinterpret_cast<uint64_t>(profiler_msg->control_vector),

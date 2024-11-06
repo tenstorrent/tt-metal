@@ -226,7 +226,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init();
-    exp_tile_init<true>();
+    exp_tile_init<EXP_APPROX_MODE>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -237,7 +237,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<true>(0);
+        exp_tile<EXP_APPROX_MODE>(0);
 
         pack_tile(0, out_cb);
 
@@ -342,6 +342,9 @@ void MAIN {
 
     constexpr uint32_t num_cores = get_compile_time_arg_val(21);
 
+    constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
+
     const uint32_t core_id    = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(2);
@@ -398,7 +401,12 @@ void MAIN {
 
                 // Get Q chunk
                 const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
-                const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+                uint32_t q_high_idx;
+                if constexpr (is_causal) {
+                    q_high_idx = q_low_idx + Sq_chunk_t;
+                } else {
+                    q_high_idx = St;
+                }
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
                 // loop while k_low < q_high
@@ -418,10 +426,18 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    if (!(q_low_idx >= k_high_idx)) {
-                        /* QK += MASK */
-                        reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                    if constexpr (is_causal) {
+                        if (!(q_low_idx >= k_high_idx)) {
+                            /* QK += MASK */
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                        }
+                    } else {
+                        if constexpr (use_provided_mask) {
+                            /* QK += MASK */
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                        }
                     }
 
                     reconfig_data_format(cb_qk_im, cb_identity_scale_in);

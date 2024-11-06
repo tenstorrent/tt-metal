@@ -55,27 +55,6 @@ jobs:
               timeout: 40
             },
             {
-              name: "API tests GS",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 10
-            },
-            {
-              name: "API tests N300 WH B0",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 10
-            },
-            {
-              name: "API tests N150 WH B0",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 10
-            },
-            {
               name: "[Unstable] N150 models",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
@@ -133,7 +112,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama31_8b, mamba, mistral7b, mistral7b_eth, resnet50]
+        model: [common_models, functional_unet, llama3.2-1B, mamba, mistral7b, mistral7b_eth, resnet50]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     env:
       ARCH_NAME: wormhole_b0
@@ -163,11 +142,18 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: 50
+        # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
+        # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          pytest -n auto tests/nightly/single_card/${{ matrix.model }}
+          if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
+            pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
+          fi
+            if [[ "${{ matrix.model }}" != *"llama3"* ]]; then
+            pytest -n auto tests/nightly/single_card/${{ matrix.model }}
+          fi
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         with:

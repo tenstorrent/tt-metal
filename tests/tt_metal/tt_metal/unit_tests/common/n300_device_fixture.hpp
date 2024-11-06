@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
@@ -19,12 +18,12 @@ class N300DeviceFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
             tt::tt_metal::GetNumPCIeDevices() == 1) {
-            vector<chip_id_t> ids;
+            std::vector<chip_id_t> ids;
             for (unsigned int id = 0; id < num_devices_; id++) {
                 ids.push_back(id);
             }
@@ -45,7 +44,7 @@ class N300DeviceFixture : public ::testing::Test {
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };

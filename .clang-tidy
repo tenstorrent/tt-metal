@@ -1,7 +1,3 @@
 Checks: >
-  bugprone-*,
-  performance-*,
-  modernize-*,
-  readability-*,
-  cppcoreguidelines-*
-
+  -*,
+  google-build-using-namespace

@@ -165,7 +165,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             }
         }
 
-        std::vector<uint32_t> reader_rt_args = {
+        const std::array reader_rt_args = {
             (std::uint32_t) bank_id,
             (std::uint32_t) vc
         };
@@ -177,7 +177,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         auto writer_core = all_l1_writer_cores_ordered[i];
         auto writer_core_phy = device->worker_core_from_logical_core(writer_core);
 
-        std::vector<uint32_t> writer_rt_args = {
+        const std::array writer_rt_args = {
             (std::uint32_t) (vc + 2) & 0x3,
             (std::uint32_t) writer_core_phy.x,
             (std::uint32_t) writer_core_phy.y
@@ -258,7 +258,7 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
@@ -761,7 +761,7 @@ int main(int argc, char **argv) {
             log_error(
                 LogTest,
                 "Metal library and test code should be build with "
-                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+                "profiler option using ./build_metal.sh --enable-profiler");
 #endif
             auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
             TT_FATAL(
@@ -815,9 +815,9 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks; // number of DRAM banks
 
-        CoreRangeSet all_dram_reader_cores = CoreRangeSet{{}};
+        CoreRangeSet all_dram_reader_cores;
         std::vector<CoreCoord> all_dram_reader_cores_ordered;
-         CoreRangeSet all_l1_receiver_cores = CoreRangeSet{{}};
+        CoreRangeSet all_l1_receiver_cores;
         std::vector<CoreCoord> all_l1_writer_cores_ordered;
         if (device->arch() == tt::ARCH::BLACKHOLE) {
             get_dram_reader_core_coords_blackhole(device, all_dram_reader_cores, all_dram_reader_cores_ordered);
@@ -869,18 +869,18 @@ int main(int argc, char **argv) {
                 input_size, 100, 1234);
         }
 
-        tt_metal::Buffer input_buffer(
+        auto input_buffer = tt_metal::Buffer::create(
             device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, kernel, output_cb_addr] = create_program(device, all_dram_reader_cores, all_l1_receiver_cores, single_tile_size, tile_format, num_tiles_cb, num_tiles_per_core, k, n, num_blocks, num_banks, all_dram_reader_cores_ordered, all_l1_writer_cores_ordered, bank_start_id, input_buffer.address());
+        auto [program, kernel, output_cb_addr] = create_program(device, all_dram_reader_cores, all_l1_receiver_cores, single_tile_size, tile_format, num_tiles_cb, num_tiles_per_core, k, n, num_blocks, num_banks, all_dram_reader_cores_ordered, all_l1_writer_cores_ordered, bank_start_id, input_buffer->address());
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
+        tt_metal::detail::WriteToBuffer(*input_buffer, input_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
@@ -909,7 +909,7 @@ int main(int argc, char **argv) {
 
         pass = validation(
             device,
-            input_buffer,
+            *input_buffer,
             input_vec,
             num_cores,
             all_l1_writer_cores_ordered,

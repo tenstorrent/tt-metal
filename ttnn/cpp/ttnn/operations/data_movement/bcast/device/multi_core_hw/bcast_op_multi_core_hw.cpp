@@ -81,7 +81,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
         num_tiles_per_core_group_2 = 0;
         all_cores = shard_spec.value().grid;
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
     }
 
     uint32_t num_input_tiles_cb0 = src0_sharded ? num_tiles_per_shard : num_input_tiles;
@@ -152,14 +152,18 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_y * num_cores_x; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tensor_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tensor_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tensor_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(7, 0));
-            tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, {1, 1, 0});
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(3, 0));
+            constexpr std::array<uint32_t, 7> binary_reader_kernel_args{0};
+			constexpr std::array<uint32_t, 3> bcast_kernel_args{1, 1, 0};
+			constexpr std::array<uint32_t, 3> unary_writer_kernel_args{0};
+
+            tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, binary_reader_kernel_args);
+            tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, bcast_kernel_args);
+            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, unary_writer_kernel_args);
             continue;
         }
 
@@ -266,7 +270,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
             num_tiles_per_core_group_2 = 0;
             all_cores = shard_spec.value().grid;
             core_group_1 = all_cores;
-            core_group_2 = CoreRangeSet({});
+            core_group_2 = CoreRangeSet();
         }
 
         auto& cached_reader_args = GetRuntimeArgs(program, binary_reader_kernel_id);
@@ -281,9 +285,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			auto& bcast_kernel_args = cached_eltwise_args.at(core.x).at(core.y);
 			auto& unary_writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_tensor_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_tensor_tiles_per_core = num_tiles_per_core_group_2;
             } else {
                 binary_reader_args[2] = 0;

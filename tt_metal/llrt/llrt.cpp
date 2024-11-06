@@ -2,20 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
 
 #include "llrt.hpp"
+#include "llrt/rtoptions.hpp"
 #include "hal.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "hostdevcommon/common_values.hpp"
 
 #include "jit_build/settings.hpp"
 
-#include "fmt/ranges.h"
+#include <fmt/base.h>
+#include <fmt/ranges.h>
 
-#include <unordered_set>
-#include <mutex>
-#include "dev_msgs.h"
+// FIXME: ARCH_NAME specific
+#include "dev_msgs.h" // RUN_MSG_DONE
+#include "eth_l1_address_map.h" // address_map
+
 
 namespace tt {
 
@@ -26,10 +44,8 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-// TODO: remove after using tt_memory elf loader info to calculate this
-static uint32_t get_binary_code_size(const ll_api::memory &mem, int riscv_id);
-
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans pack_spans) {
+ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
+    ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
 
     static const uint32_t processor_to_fw_base_addr[] = {
         MEM_BRISC_FIRMWARE_BASE,
@@ -39,6 +55,9 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
         MEM_TRISC2_FIRMWARE_BASE,
         eth_l1_mem::address_map::FIRMWARE_BASE,
         MEM_IERISC_FIRMWARE_BASE,
+#ifdef ARCH_BLACKHOLE
+        MEM_SLAVE_IERISC_FIRMWARE_BASE,
+#endif
     };
 
     static struct {
@@ -52,17 +71,16 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path);
+      auto *ptr = new ll_api::memory(path, relo_type);
 
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
-      ptr->set_text_size(get_binary_code_size(*ptr, riscv_id));
-
-      if (pack_spans == PackSpans::PACK) {
+      if (span_type == ll_api::memory::PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
-          uint64_t text_start = processor_to_fw_base_addr[riscv_id];
+          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
+              0 :
+              processor_to_fw_base_addr[riscv_id];
           ptr->pack_data_into_text(text_start, data_start);
-          ptr->set_packed_size(get_binary_code_size(*ptr, riscv_id));
       }
 
       lock.lock();
@@ -77,62 +95,6 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     }
 
     return *slot->second.get();
-}
-
-// Return the code size
-static uint32_t get_binary_code_size(const ll_api::memory& mem, int riscv_id) {
-
-    uint64_t range_min, range_max;
-    switch (riscv_id) {
-        case 0:
-            range_min = MEM_BRISC_FIRMWARE_BASE;
-            range_max = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE;
-            break;
-        case 1:
-            range_min = MEM_NCRISC_FIRMWARE_BASE;
-            range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
-            break;
-        case 2:
-            range_min = MEM_TRISC0_FIRMWARE_BASE;
-            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
-            break;
-        case 3:
-            range_min = MEM_TRISC1_FIRMWARE_BASE;
-            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
-            break;
-        case 4:
-            range_min = MEM_TRISC2_FIRMWARE_BASE;
-            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
-            break;
-        case 5:
-            range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::FIRMWARE_BASE + eth_l1_mem::address_map::FIRMWARE_SIZE;
-            break;
-        case 6:
-            range_min = MEM_IERISC_FIRMWARE_BASE;
-            range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
-            break;
-        default: TT_THROW("Bad riscv_id: {}", riscv_id);
-    }
-
-    uint64_t min = std::numeric_limits<decltype(min)>::max();
-    uint64_t max = 0;
-    bool found_one = false;
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint32_t len_bytes = len_words * sizeof(uint32_t);
-        // Only use the addresses within the firmware code range
-        if (addr >= range_min && addr + len_bytes <= range_max) {
-            found_one = true;
-            if (addr < min) {
-                min = addr;
-            }
-            if (addr + len_bytes > max) {
-                max = addr + len_bytes;
-            }
-        }
-    });
-
-    return found_one ? (max - min) : 0;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
@@ -221,7 +183,7 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
 }
 
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
-    vector<uint32_t> jump_to_fw;
+    std::vector<uint32_t> jump_to_fw;
     jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
@@ -238,6 +200,9 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
         case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH; break;
         case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
         case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
+#ifdef ARCH_BLACKHOLE
+        case 7: local_init_addr = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
+#endif
     }
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
@@ -263,6 +228,14 @@ bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, c
 
     assert(triscv_id >= 0 and triscv_id <= 2);
     return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
+}
+
+void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
+
+    log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+        tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
+    });
 }
 
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {

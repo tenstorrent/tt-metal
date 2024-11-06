@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
         (std::uint32_t) out_is_dram_1,
     };
 
-    std::vector<uint32_t> run_time_args = {
+    const std::array run_time_args = {
         (std::uint32_t) input.buffer()->address(),
         (std::uint32_t) out_num_indices.buffer()->address(),
         (std::uint32_t) out_indices.buffer()->address(),

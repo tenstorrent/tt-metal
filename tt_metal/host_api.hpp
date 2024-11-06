@@ -7,10 +7,10 @@
 #include <variant>
 #include <vector>
 
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 
 /** @file */
 
@@ -231,9 +231,9 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer);
 
 /**
- * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
- * Return value: Semaphore address (uint32_t)
+ * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -255,9 +255,21 @@ uint32_t CreateSemaphore(
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | InterleavedBufferConfig  |             | Yes      |
+*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
+*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Allocates a sharded DRAM or L1 buffer on device
@@ -266,9 +278,21 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
+*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated sharded DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
+*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
@@ -308,13 +332,13 @@ using RuntimeArgs = std::vector<std::variant<Buffer *, uint32_t>>;
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 void SetRuntimeArgs(
     const Program &program,
     KernelHandle kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &runtime_args);
+    stl::Span<const uint32_t> runtime_args);
 
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
@@ -382,9 +406,9 @@ void SetRuntimeArgs(
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args);
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
 
 /**
  * Get the runtime args for a kernel.

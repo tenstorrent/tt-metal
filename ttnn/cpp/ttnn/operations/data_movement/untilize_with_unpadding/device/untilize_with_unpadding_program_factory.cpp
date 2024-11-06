@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
                                 .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         output_w,
         padded_W_diff_blocks,
@@ -140,7 +140,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         (std::uint32_t)out_is_dram,
         (std::uint32_t)stick_size_is_power_of_two,
         (std::uint32_t)log2_stick_size,
-        (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
+        (std::uint32_t)((input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32)
+        )};
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -157,7 +158,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
+    std::vector<uint32_t> compute_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -262,7 +263,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             {out_is_dram,
              stick_size_is_power_of_two,
              log2_stick_size,
-             input_cb_data_format == tt::DataFormat::Float32}));
+             (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32)
+             }));
 
     /** compute
      */
@@ -314,7 +316,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args = {
+        std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
             unpadded_row_size_bytes,
             padded_row_size_bytes,
@@ -336,7 +338,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
         // reader runtime args
-        vector<uint32_t> reader_rt_args = {src0_buffer->address(), num_tiles_per_core, tile_start_id};
+        const std::array reader_rt_args = {src0_buffer->address(), num_tiles_per_core, tile_start_id};
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
@@ -475,7 +477,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
+        std::vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16 ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
@@ -486,8 +488,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             WriterDataMovementConfig(writer_ct_args));
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-        vector<uint32_t> writer_ct_args = {
-            (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
+        std::vector<uint32_t> writer_ct_args = {
+            (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32)};
         unary_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
@@ -497,7 +499,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -522,14 +524,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
 
     // reader runtime args
-    vector<uint32_t> reader_rt_args = {
+    const std::array reader_rt_args = {
         ntiles_per_block * nblocks_per_core  // ntiles
     };
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
     std::vector<CoreCoord> cores;
 
     if (out_sharded) {
-        vector<uint32_t> writer_rt_args;
+        std::vector<uint32_t> writer_rt_args;
         if (unpad_tensor_w_16) {
             writer_rt_args = {num_output_rows_unpadded, num_input_tiles};
         } else {
@@ -550,7 +552,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             CoreCoord& core = cores[i];
 
             // writer runtime args
-            vector<uint32_t> writer_rt_args;
             uint32_t block_start_row_offset;
             uint32_t block_start_row_id_offset;
             uint32_t row_size_unpadded = block_row_size;
@@ -605,13 +606,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                 }
             }
 
-            writer_rt_args = {
+            const std::array writer_rt_args = {
                 dst_buffer->address(),  // dst_addr
                 num_rows_block,
                 block_row_size,
-                1,
-                1,
-                1,
+                std::uint32_t{1},
+                std::uint32_t{1},
+                std::uint32_t{1},
                 output_row_size,
                 row_size_unpadded,
                 num_rows_unpadded,

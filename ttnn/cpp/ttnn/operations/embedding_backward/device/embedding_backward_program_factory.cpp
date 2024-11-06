@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     // reader
 
     bool index_stick_size_is_power_of_two = is_power_of_two_at_least_32(index_page_size);
-    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? log2(index_page_size) : 0;
+    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? std::log2(index_page_size) : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         grad_is_dram,
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t offset = 0;
     for (auto core : cores) {
         reader_runtime_args[4] = offset;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             reader_runtime_args[5] = num_tiles_per_core_group_1;
         } else {
             reader_runtime_args[5] = num_tiles_per_core_group_2;
@@ -165,8 +165,9 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
-        auto grad_dram_buffer = input_buffers.at(0);
-        auto index_dram_buffer = input_buffers.at(1);
+
+        auto index_dram_buffer = input_buffers.at(0);
+        auto grad_dram_buffer = input_buffers.at(1);
         auto output_dram_buffer = output_buffers.at(0);
 
         auto &runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);

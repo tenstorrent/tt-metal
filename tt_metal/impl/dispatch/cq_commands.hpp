@@ -266,9 +266,8 @@ struct CQDispatchGoSignalMcastCmd {
 } __attribute__((packed));
 
 struct CQDispatchNotifySlaveGoSignalCmd {
-    // Currently doesn't need any metadata, since dispatcher
-    // just sends a counter update to dispatch_s when it sees this cmd
-    uint8_t pad1;
+    // sends a counter update to dispatch_s when it sees this cmd
+    uint8_t wait; // if true, issue a write barrier before sending signal to dispatch_s
     uint16_t pad2;
     uint32_t pad3;
 } __attribute__((packed));

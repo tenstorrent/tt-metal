@@ -6,8 +6,8 @@
 
 #include "moreh_adam_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_adam {
 MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::ProgramFactory::create(
@@ -61,7 +61,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -94,17 +94,17 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
 
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(max_exp_avg_sq_in))};
+        static_cast<uint32_t>(is_dram(param_in)),
+        static_cast<uint32_t>(is_dram(grad)),
+        static_cast<uint32_t>(is_dram(exp_avg_in)),
+        static_cast<uint32_t>(is_dram(exp_avg_sq_in)),
+        static_cast<uint32_t>(is_dram(max_exp_avg_sq_in))};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(max_exp_avg_sq_out.value()))};
+        static_cast<uint32_t>(is_dram(param_out)),
+        static_cast<uint32_t>(is_dram(exp_avg_out)),
+        static_cast<uint32_t>(is_dram(exp_avg_sq_out)),
+        static_cast<uint32_t>(is_dram(max_exp_avg_sq_out.value()))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
@@ -120,9 +120,9 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (fp32_dest_acc_en) {
         data_movement_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    const auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -143,7 +143,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
         "moreh_adam.cpp";
 
-    auto compute_kernel_1_id = tt ::operations::primary::CreateComputeKernel(
+    auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_tiles_per_core_group_1, compute_args_group_1},
@@ -155,7 +155,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_tiles_per_core_group_2};
 
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_tiles_per_core_group_2, compute_args_group_2},
@@ -194,12 +194,12 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         const std::vector<uint32_t> reader_runtime_args{
@@ -228,18 +228,27 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
             tile_offset};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {step});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {step});
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {
+        std::move(program),
+        {reader_kernel_id,
+         writer_kernel_id,
+         compute_kernel_1_id,
+         compute_kernel_2_id,
+         core_group_1,
+         core_group_2,
+         num_cores,
+         num_cores_y}};
 }
 
 void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
@@ -250,6 +259,8 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& compute_kernel_1_id = cached_program.shared_variables.compute_kernel_group1_id;
+    auto& compute_kernel_2_id = cached_program.shared_variables.compute_kernel_group2_id;
 
     auto param_in_buffer = tensor_args.param_in.buffer();
     auto grad_buffer = tensor_args.grad.buffer();
@@ -263,8 +274,18 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
     auto max_exp_avg_sq_out_buffer = tensor_return_value.at(3)->buffer();
 
+    auto& core_group_1 = cached_program.shared_variables.core_group_1;
+    auto& core_group_2 = cached_program.shared_variables.core_group_2;
+
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
+
+    union {
+        float f;
+        uint32_t u;
+    } f2u_lr;
+
+    f2u_lr.f = operation_attributes.lr;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -277,6 +298,8 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
             if (max_exp_avg_sq_in_buffer != nullptr) {
                 runtime_args[4] = max_exp_avg_sq_in_buffer->address();
             }
+            runtime_args[5] = f2u_lr.u;
+            runtime_args[10] = operation_attributes.step;
         }
 
         {
@@ -286,6 +309,15 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
             runtime_args[2] = exp_avg_sq_out_buffer->address();
             if (max_exp_avg_sq_out_buffer != nullptr) {
                 runtime_args[3] = max_exp_avg_sq_out_buffer->address();
+            }
+        }
+        {
+            if (core_group_1.contains(core)) {
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {operation_attributes.step});
+            } else if (core_group_2.contains(core)) {
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {operation_attributes.step});
+            } else {
+                TT_THROW("Core not in specified core ranges.");
             }
         }
     }

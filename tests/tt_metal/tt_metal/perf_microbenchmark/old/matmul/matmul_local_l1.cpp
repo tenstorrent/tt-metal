@@ -18,6 +18,7 @@
 
 #define LAUNCH
 
+using std::vector;
 using namespace tt;
 
 // Given a tensor that is row-major datums, make it tilized

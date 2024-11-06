@@ -56,7 +56,7 @@ Build with the profiler option (i.e. ``ENABLE_TRACY=ON`` cmake option) is requir
 
 ..  code-block:: sh
 
-    scripts/build_scripts/build_with_profiler_opt.sh
+    build_metal.sh --enable-profiler
 
 With this build variant, all C++ marked zones will be profiled.
 

@@ -244,6 +244,7 @@ void kernel_main() {
     constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(16);
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(17);
     constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(18);
+    constexpr bool is_causal = get_compile_time_arg_val(19) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr  = get_arg_val<uint32_t>(arg_idx++);
@@ -262,22 +263,25 @@ void kernel_main() {
         return;
     }
     // Get cur_pos
-    uint32_t cur_pos = 0;
+    constexpr uint32_t cur_pos_base = St*32-1;
+    uint32_t cur_pos = cur_pos_base; // default to non-causal, which we do attention on the entire kv cache. In this case we set cur_pos to the last position
     // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg != UINT32_MAX){
-        cur_pos = cur_pos_arg;
-    }
-    else {
-        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
-        cb_wait_front(cb_index_id, 1);
-        uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-        cur_pos = index_ptr[cur_batch];
-    }
+    if constexpr(is_causal) {
+        if (cur_pos_arg != UINT32_MAX){
+            cur_pos = cur_pos_arg;
+        }
+        else {
+            constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+            cb_wait_front(cb_index_id, 1);
+            uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
+            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
+            cur_pos = index_ptr[cur_batch];
+        }
 
-    if (cur_pos == UINT32_MAX) {
-        // cur_pos of -1 indicates that the user should be skipped
-        return;
+        if (cur_pos == UINT32_MAX) {
+            // cur_pos of -1 indicates that the user should be skipped
+            return;
+        }
     }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
@@ -347,8 +351,8 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    // generate and send mask to compute
-    generate_mask<cb_mask_in, PNHt>(k_num_chunks, PSt, cur_pos);
+    // generate and send mask to compute if causal
+    if constexpr(is_causal) generate_mask<cb_mask_in, PNHt>(k_num_chunks, PSt, cur_pos);
 
     for (uint32_t cur_head = cur_head_group*num_heads_per_core; cur_head < cur_head_group*num_heads_per_core + num_heads_per_core; ++cur_head) {
         if (k_chunk_end - k_chunk_start < k_num_chunks){
@@ -401,26 +405,26 @@ void kernel_main() {
             // we are assuming here that num_heads_to_write = nh/nkv is a power of 2 here, so that we don't write partial across phase
             uint32_t num_heads_to_write = num_q_heads/num_kv_heads; // each head is one row in a tile
             uint32_t SUBTILE_LINE_BYTES = 16*ELEMENT_SIZE; //size of 16 elements (in a row)
-            uint32_t starting_row = cur_head * num_heads_to_write;
-            uint32_t in_tile_offset_by_starting_head = starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES : (starting_row - 16) * SUBTILE_LINE_BYTES + 512*ELEMENT_SIZE;
 
             if (! is_out_sharded){
                 for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
 
-                    uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer) + in_tile_offset_by_starting_head;
-                    uint32_t l1_read_addr = get_read_ptr(cb_out) + tile*tile_bytes + in_tile_offset_by_starting_head;
+                    uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer);
+                    uint32_t l1_read_addr = get_read_ptr(cb_out) + tile*tile_bytes;
 
                     // write partial output for each head
                     for (uint32_t head = 0; head < num_heads_to_write; ++head) {
+                        uint32_t starting_row = cur_head * num_heads_to_write + head;
+                        uint32_t in_tile_offset_by_starting_head = starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES : (starting_row - 16) * SUBTILE_LINE_BYTES + 512*ELEMENT_SIZE;
+                        uint64_t out_writer_noc_addr_head = out_writer_noc_addr + in_tile_offset_by_starting_head;
+                        uint32_t l1_read_addr_head = l1_read_addr + in_tile_offset_by_starting_head;
 
                         // Write first phase
-                        noc_async_write(l1_read_addr, out_writer_noc_addr, SUBTILE_LINE_BYTES);
+                        noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, SUBTILE_LINE_BYTES);
 
                         // Write second phase
-                        noc_async_write(l1_read_addr+256*ELEMENT_SIZE, out_writer_noc_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                        noc_async_write(l1_read_addr_head+256*ELEMENT_SIZE, out_writer_noc_addr_head+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
 
-                        l1_read_addr += SUBTILE_LINE_BYTES;
-                        out_writer_noc_addr += SUBTILE_LINE_BYTES;
 
                         if (++barrier_count == barrier_threshold) {
                             noc_async_writes_flushed();
@@ -445,23 +449,24 @@ void kernel_main() {
                     uint32_t reduce_core_read_noc_x = all_reducer_noc_x[reduce_core_read_index];
                     uint32_t reduce_core_read_noc_y = all_reducer_noc_y[reduce_core_read_index];
 
-                    uint64_t out_reader_base_noc_addr = get_noc_addr(reduce_core_read_noc_x, reduce_core_read_noc_y, get_read_ptr(cb_out)) + in_tile_offset_by_starting_head;
+                    uint64_t out_reader_base_noc_addr = get_noc_addr(reduce_core_read_noc_x, reduce_core_read_noc_y, get_read_ptr(cb_out));
 
                     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-                        uint32_t l1_write_addr = get_write_ptr(cb_out) + tile*tile_bytes + in_tile_offset_by_starting_head;
+                        uint32_t l1_write_addr = get_write_ptr(cb_out) + tile*tile_bytes;
                         uint32_t out_reader_noc_addr = out_reader_base_noc_addr;
-
                         // write partial output for each head
                         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
+                            uint32_t starting_row = cur_head * num_heads_to_write + head;
+                            uint32_t in_tile_offset_by_starting_head = starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES : (starting_row - 16) * SUBTILE_LINE_BYTES + 512*ELEMENT_SIZE;
+                            uint32_t out_reader_noc_addr_head = out_reader_noc_addr + in_tile_offset_by_starting_head;
+                            uint32_t l1_write_addr_head = l1_write_addr + in_tile_offset_by_starting_head;
 
                             // Write first phase
-                            noc_async_read(out_reader_noc_addr, l1_write_addr, SUBTILE_LINE_BYTES);
+                            noc_async_read(out_reader_noc_addr_head, l1_write_addr_head, SUBTILE_LINE_BYTES);
 
                             // Write second phase
-                            noc_async_read(out_reader_noc_addr+256*ELEMENT_SIZE, l1_write_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                            noc_async_read(out_reader_noc_addr_head+256*ELEMENT_SIZE, l1_write_addr_head+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
 
-                            l1_write_addr += SUBTILE_LINE_BYTES;
-                            out_reader_noc_addr += SUBTILE_LINE_BYTES;
 
                             if (++barrier_count == barrier_threshold) {
                                 noc_async_read_barrier();

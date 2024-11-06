@@ -144,6 +144,8 @@ void kernel_main() {
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
     constexpr uint32_t scale_val = get_compile_time_arg_val(10);
     constexpr uint32_t num_cores = get_compile_time_arg_val(11);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(13) == 1;
 
     const uint32_t out_addr  = get_arg_val<uint32_t>(0);
     const uint32_t core_id    = get_arg_val<uint32_t>(1);
@@ -204,20 +206,22 @@ void kernel_main() {
                 uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
                 out_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
-                const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
-                const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+                if constexpr (is_causal) {
+                    const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
+                    const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
-                for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
-                    const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
-                    const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                    // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                    // Q-range = [q_low, q_high)
-                    // K-range = [k_low, k_high)
-                    // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                    // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    // Read mask chunk
-                    if (!(q_low_idx >= k_high_idx)) {
-                        generate_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, q_chunk, k_chunk);
+                    for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                        const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+                        const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+                        // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
+                        // Q-range = [q_low, q_high)
+                        // K-range = [k_low, k_high)
+                        // does_overlap = not (q_low >= k_high or k_low >= q_high)
+                        // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
+                        // Read mask chunk
+                        if (!(q_low_idx >= k_high_idx)) {
+                            generate_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, q_chunk, k_chunk);
+                        }
                     }
                 }
 

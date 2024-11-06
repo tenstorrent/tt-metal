@@ -8,10 +8,9 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "ttnn/graph/graph_consts.hpp"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 #include <cxxabi.h>
 #include <memory>
+#include <string>
 #include <typeindex>
 #include <unordered_map>
 #include "ttnn/core.hpp"
@@ -92,7 +91,7 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
     end_function_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->end_function_process_tensor(val);};
 
 }
-void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
+void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
     auto buf_id = add_buffer(buffer);
 
@@ -137,12 +136,13 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 
 }
 
-void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {
+void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
     const std::lock_guard<std::mutex> lock(mutex);
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
-        {"core_range_set", core_range_set.str()}
+        {"core_range_set", core_range_set.str()},
+        {"globally_allocated", std::to_string(is_globally_allocated)}
     };
     auto counter = graph.size();
     {
@@ -181,7 +181,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program) {
     }
 
     for (auto& cb : program->circular_buffers()) {
-        track_allocate_cb(cb->core_ranges(), 0, cb->size());
+        track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated());
     }
 }
 
@@ -301,7 +301,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     return tensor_counter;
 }
 
-int GraphProcessor::add_buffer(tt::tt_metal::Buffer* buffer) {
+int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     auto buffer_alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
     auto counter = id_to_counter.count(buffer_alloc_id) > 0 ? id_to_counter[buffer_alloc_id] : graph.size();
     if (id_to_counter.count(buffer_alloc_id) == 0) {
@@ -480,7 +480,7 @@ nlohmann::json GraphProcessor::end_graph_capture() {
         return res;
 }
 
-bool ProcessorHooks::hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) {
     return do_block;
 }
 

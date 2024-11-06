@@ -14,6 +14,7 @@
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/profiler_common.h"
+#include "hostdevcommon/dprint_common.h"
 
 // TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)
@@ -56,6 +57,7 @@ enum dispatch_core_processor_classes {
 
     // Ethernet processor classes
     DISPATCH_CLASS_ETH_DM0 = 0,
+    DISPATCH_CLASS_ETH_DM1 = 1,
 
     DISPATCH_CLASS_MAX = 3,
 };
@@ -66,6 +68,7 @@ enum dispatch_core_processor_masks {
     DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
 
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
+    DISPATCH_CLASS_MASK_ETH_DM1 = 1 << DISPATCH_CLASS_ETH_DM1,
 };
 
 enum noc_index {
@@ -90,14 +93,14 @@ struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
-    volatile uint16_t host_assigned_id;
-
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
+
+    volatile uint16_t host_assigned_id;
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -123,7 +126,7 @@ struct slave_sync_msg_t {
     union {
         volatile uint32_t all;
         struct {
-            volatile uint8_t ncrisc;  // ncrisc must come first, see ncrisc-halt.S
+            volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
             volatile uint8_t trisc0;
             volatile uint8_t trisc1;
             volatile uint8_t trisc2;
@@ -189,6 +192,7 @@ typedef enum debug_sanitize_which_riscv {
     DebugTrisc2 = 4,
     DebugErisc = 5,
     DebugIErisc = 6,
+    DebugSlaveIErisc = 7,
     DebugNumUniqueRiscs
 } riscv_id_t;
 
@@ -218,15 +222,6 @@ struct debug_stack_usage_t {
     volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
 };
 
-constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
-// TODO: when device specific headers specify number of processors
-// (and hal abstracts them on host), get these from there
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
-constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
-#else
-constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
-#endif
-
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -247,7 +242,7 @@ struct watcher_msg_t {
 };
 
 struct dprint_buf_msg_t {
-    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
+    DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
     uint32_t pad; // to 1024 bytes
 };
 
@@ -258,7 +253,11 @@ static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#ifdef ARCH_BLACKHOLE
 static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#endif
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
@@ -318,7 +317,7 @@ static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 // Constexpr definitions allow for printing of breaking values at compile time
 #ifdef NCRISC_HAS_IRAM
 // These are only used in ncrisc-halt.S
-static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.ncrisc) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
+static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.dm1) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
 static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 #endif

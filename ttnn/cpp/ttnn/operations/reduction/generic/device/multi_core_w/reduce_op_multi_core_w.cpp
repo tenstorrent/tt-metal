@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_rows_per_core_group_1,  // Ht
         Wt,                         // Wt
         1,                          // NC
@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             num_rows_per_core_group_2,  // Ht
             Wt,                         // Wt
             1,                          // NC
@@ -134,9 +134,9 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         const CoreCoord &core = cores[i];
         uint32_t num_rows_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");

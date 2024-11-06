@@ -5,6 +5,9 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 
+// FIXME: ARCH_NAME specific include
+#include "tensix_types.h" // L1_SIZE
+
 namespace topk_utils {
 
 static inline bool verify_available_cores(uint16_t width, uint16_t min_dim, uint16_t max_dim, CoreCoord grid, uint16_t k, const uint32_t value_tile_size, const uint32_t index_tile_size) {
@@ -51,10 +54,10 @@ void TopK::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    return {{input_shape[0], input_shape[1], input_shape[2], this->k}, {input_shape[0], input_shape[1], input_shape[2], this->k}};
+std::vector<ttnn::SimpleShape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    auto output_shape = input_tensors.at(0).get_logical_shape();
+    output_shape[-1] = this->k;
+    return {output_shape, output_shape};
 }
 
 std::vector<Tensor> TopK::create_output_tensors(

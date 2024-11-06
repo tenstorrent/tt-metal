@@ -89,8 +89,8 @@ MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_o
     auto input_rank = input_shape.rank();
     auto output_rank = input_rank - normalized_dims;
 
-    std::vector<uint32_t> output_size_vec;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    ttnn::SmallVector<uint32_t> output_size_vec;
+    ttnn::SmallVector<Padding::PadDimension> dimensions_pads;
 
     if (output_rank == 1) {
         output_size_vec.push_back(32);
@@ -99,7 +99,7 @@ MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_o
 
     for (uint32_t dim = 0; dim < output_rank; dim++) {
         auto input_shape_without_padding_size = input_shape_without_padding[dim];
-        if (tt::operations::primary::is_hw_dim(dim, output_rank)) {
+        if (is_hw_dim(dim, output_rank)) {
             output_size_vec.push_back(round_up_to_mul32(input_shape_without_padding_size));
             auto padding_back = output_size_vec[dim] - input_shape_without_padding_size;
             dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});

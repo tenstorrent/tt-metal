@@ -12,13 +12,46 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
+
 
 using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::detail {
 
+
+uint32_t get_packed_value (const Tensor tensor, const ttnn::PadValue pad_value) {
+    return std::visit(
+        [&tensor](auto &&pad_value) {
+            using T = std::decay_t<decltype(pad_value)>;
+            if constexpr (std::is_same_v<T, float>) {
+                if(tensor.get_dtype() == DataType::BFLOAT16) {
+                    bfloat16 bfloat_pad_value = bfloat16((pad_value));
+                    return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+                }
+                else {
+                    TT_FATAL(tensor.get_dtype() == DataType::FLOAT32 or tensor.get_dtype() == DataType::UINT32, "only supporting bfloat16, float32, and uint32");
+                    return (uint32_t)((pad_value));
+                }
+            } else if constexpr (std::is_same_v<T, uint32_t>) {
+                if(tensor.get_dtype() == DataType::BFLOAT16) {
+                    bfloat16 bfloat_pad_value = bfloat16((float)(pad_value));
+                    return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+                }
+                else {
+                    TT_FATAL(tensor.get_dtype() == DataType::FLOAT32 or tensor.get_dtype() == DataType::UINT32, "only supporting bfloat16, float32, and uint32");
+                    return ((pad_value));
+                }
+            } else {
+                TT_THROW("type not supported");
+            }
+        },
+        pad_value);
+
+}
+
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
-    const Tensor& a, Tensor& output, const float pad_value) {
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     auto output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -113,10 +146,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value = get_packed_value(a, pad_value);
+    uint32_t tile_row_size_bytes = (a.get_dtype() == DataType::BFLOAT16) ? 64 :  128;
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
         input_w,
         padded_W_diff_blocks,
@@ -140,7 +173,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     uint32_t stick_size = unpadded_row_size_bytes;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size, tile_row_size_bytes};
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -157,7 +190,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig({output_cb_index, out_is_dram}));
 
-    vector<uint32_t> compute_kernel_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
+    std::vector<uint32_t> compute_kernel_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
     auto tilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -196,7 +229,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, const float pad_value) {
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -235,11 +268,15 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
+    uint32_t packed_pad_value = get_packed_value(a, pad_value);
+    //log2(TILE_WIDTH * data_format_size_in_bytes)
+    uint32_t shift_bits = (a.get_dtype() == DataType::BFLOAT16) ? 6 :  7;
+
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, stick_size_is_power_of_two, log2_stick_size}));
+        ReaderDataMovementConfig({src0_is_dram, stick_size_is_power_of_two, log2_stick_size, shift_bits}));
 
     /** writer
      */
@@ -269,10 +306,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     }
 
     /* RUNTIME ARGS */
-
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
-
     // 1D distribution of blocks across cores
     auto core_assignments = ttnn::distribute_work(
         output.get_logical_shape(),
@@ -292,7 +325,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // reader runtime args
-        vector<uint32_t> reader_rt_args = {
+        std::vector<uint32_t> reader_rt_args = {
             src0_buffer->address(),
             unpadded_row_size_bytes,
             padded_row_size_bytes,
@@ -315,7 +348,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args = {dst_buffer->address(), num_tiles_per_core, tile_start_id};
+        const std::array writer_rt_args = {dst_buffer->address(), num_tiles_per_core, tile_start_id};
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
@@ -350,7 +383,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
 // This purely supports input width shard -> output width shard for now
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
-    const Tensor& a, Tensor& output, const float pad_value) {
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
@@ -425,7 +458,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    vector<uint32_t> writer_ct_args = {
+    std::vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };
     unary_writer_kernel_id = CreateKernel(
@@ -436,7 +469,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -444,10 +477,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     auto tilize_kernel_id = CreateKernel(
         program, "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp", all_cores, ComputeConfig{.compile_args = compute_args});
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value = get_packed_value(a, pad_value);
 
-    vector<uint32_t> reader_rt_args = {
+    const std::array reader_rt_args = {
         num_input_rows,
         input_shard_width_bytes,
         (num_input_rows / num_batches) * input_shard_width_bytes,
@@ -457,7 +489,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         packed_pad_value};
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
 
-    vector<uint32_t> writer_rt_args = {ntiles_per_core};
+    const std::array writer_rt_args = {ntiles_per_core};
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
 
     auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,
@@ -480,12 +512,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
-    const Tensor& a, Tensor& output, const float pad_value) {
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     if (a.memory_config().is_sharded()) {
         return tilize_with_val_padding_multi_core_sharded(a, output, pad_value);
     } else {
         return tilize_with_val_padding_multi_core_interleaved(a, output, pad_value);
     }
 }
+
 
 }  // namespace ttnn::operations::data_movement::detail

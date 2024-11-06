@@ -737,7 +737,7 @@ class TestUpdateCache:
 
             compute_grid_size = mesh_device.compute_with_storage_grid_size()
             num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-            mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            mesh_shape = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
             input_shard_spec = ttnn.ShardSpec(
                 mesh_shape,
                 [
@@ -811,7 +811,7 @@ class TestUpdateCache:
         xt = x_new.permute(2, 1, 0, 3)
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-        mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        mesh_shape = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
         input_shard_spec = ttnn.ShardSpec(
             mesh_shape,
             [
@@ -977,7 +977,7 @@ def run_test_sdpa_decode_single_iter(
         tt_Q,
         tt_K,
         tt_V,
-        [start_idx for _ in range(b)],
+        cur_pos=[start_idx for _ in range(b)],
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,

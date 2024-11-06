@@ -11,7 +11,6 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/dprint_common.h"
-#include "debug/dprint_buffer.h"
 #include "llrt/hal.hpp"
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, const tt::tt_metal::Program &program) {
@@ -28,16 +27,16 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
         hal.get_dev_addr<dprint_buf_msg_t *>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DPRINT);
 
     // This works for tensix only, will need to be updated for eth
-    vector<uint64_t> print_buffer_addrs = {
-        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_NC]),
-        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_BR]),
-        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_TR0]),
-        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_TR1]),
-        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_TR2]),
+    std::vector<uint64_t> print_buffer_addrs = {
+        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_NC]),
+        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_BR]),
+        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR0]),
+        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR1]),
+        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR2]),
     };
     for (const auto &worker_core : worker_cores_used_in_program) {
         for (const auto &buffer_addr : print_buffer_addrs) {
-            vector<std::uint32_t> profile_buffer;
+            std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
             uint32_t dropped_marker_counter;
             profile_buffer = tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);

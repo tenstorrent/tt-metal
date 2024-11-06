@@ -46,13 +46,14 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to reduce must be tilized");
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Illegal input memory config {} for sharded reduction along H!", input_tensor.memory_config().memory_layout);
         } else {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal input memory config {} for reduction along H!", input_tensor.memory_config().memory_layout);
         }
-        TT_FATAL(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
+        TT_FATAL(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout, "Illegal input memory config {} and output memory config {} for reduction along H!", input_tensor.memory_config().memory_layout, this->output_mem_config.memory_layout);
     } else {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal input memory config {} for reduction along {}!", input_tensor.memory_config().memory_layout, this->dim);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal output memory config {} for reduction along {}!", this->output_mem_config.memory_layout, this->dim);
     }
 }
 
@@ -84,7 +85,9 @@ std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor>& inp
     const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        auto shard_spec = input_tensor.shard_spec().value();
+        auto shard_spec = input_tensor.shard_spec().value(); // TODO: This will segfault if input is not sharded...
+        // TODO: For reduction along H, the shard height is always 1 padded up to 32 (tile height)
+        // Need to clean this up to have new layout account for sharding with padding
         shard_spec.shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;

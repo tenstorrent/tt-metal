@@ -81,13 +81,13 @@ namespace data_movement {
                 return output;
             });
         // Convert dim after unsqueeze
-        dim = dim + 4 - rank;
+        dim = rank < 4 ? dim + 4 - rank : dim;
         auto output_tensor = concat_impl(itensor, dim, mem_config);
         while (output_tensor.get_shape().rank() > rank) {
             const auto shape = output_tensor.get_shape();
             const auto full_shape = output_tensor.get_shape().with_tile_padding();
-            std::vector<uint32_t> shape_vec{};
-            std::vector<uint32_t> full_shape_vec{};
+            SmallVector<uint32_t> shape_vec{};
+            SmallVector<uint32_t> full_shape_vec{};
             // int i = 0;
             // while(i < 3 and shape[i] == 1) i++;
             for (int i = 1; i < shape.rank(); i++) {

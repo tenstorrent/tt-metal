@@ -10,6 +10,29 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.parametrize(
+    "shapes", [[[63, 1, 4], [1, 9, 4]], [[13600, 1, 4], [1, 9, 4]], [[1, 16, 6, 64, 64], [1, 16, 1, 64, 64]]]
+)
+def test_non_4D_channel_bcast(device, shapes):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+
+
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
 def test_add_1D_tensor_and_scalar(device, scalar, size):
@@ -317,3 +340,150 @@ def test_add_with_different_batch(device, shape_a, shape_b):
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape_a
+
+
+@pytest.mark.parametrize("input_a_sharded", [True, False])
+@pytest.mark.parametrize("input_b_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_add_with_height_sharding(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    shape = (1, 1, 1024, 1024)
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = (1024 // 8, 1024)
+    else:
+        shard_shape = (1024, 1024 // 8)
+
+    height_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(y=2, x=4),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if input_a_sharded:
+        input_tensor_a = ttnn.to_memory_config(input_tensor_a, height_sharded_mem_config)
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if input_b_sharded:
+        input_tensor_b = ttnn.to_memory_config(input_tensor_b, height_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = height_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize("input_a_sharded", [True, False])
+@pytest.mark.parametrize("input_b_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_add_with_width_sharding(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    shape = (1, 1, 1024, 1024)
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = (1024, 1024 // 8)
+    else:
+        shard_shape = (1024 // 8, 1024)
+
+    width_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(y=2, x=4),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if input_a_sharded:
+        input_tensor_a = ttnn.to_memory_config(input_tensor_a, width_sharded_mem_config)
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if input_b_sharded:
+        input_tensor_b = ttnn.to_memory_config(input_tensor_b, width_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = width_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize("input_a_sharded", [True, False])
+@pytest.mark.parametrize("input_b_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    shape = (1, 1, 1024, 1024)
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+
+    shard_shape = (1024 // 2, 1024 // 4)
+
+    block_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(y=2, x=4),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if input_a_sharded:
+        input_tensor_a = ttnn.to_memory_config(input_tensor_a, block_sharded_mem_config)
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if input_b_sharded:
+        input_tensor_b = ttnn.to_memory_config(input_tensor_b, block_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = block_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert output_tensor.shape == shape

@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args_group_1 = {
+    std::vector<uint32_t> compute_args_group_1 = {
         1,                                 // B
         1,                                 // Mt
         Kt,                                // Kt
@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             .compile_args = compute_args_group_1});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_args_group_2 = {
+        std::vector<uint32_t> compute_args_group_2 = {
             1,                                 // B
             1,                                 // Mt
             Kt,                                // Kt
@@ -149,9 +149,9 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_output_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");

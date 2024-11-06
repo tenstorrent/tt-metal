@@ -21,7 +21,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
-    tt_all_gather,
+    tt_composite_sharded_all_reduce,
     tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
 )
@@ -182,9 +182,12 @@ class TtLlamaModel_galaxy:
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.cluster_shape[0])
 
+            ACT_CORE_GRID_Y = self.model_config["DECODE_ACT_CORE_GRID"][0]
+            ACT_CORE_GRID_X = self.model_config["DECODE_ACT_CORE_GRID"][1]
+            ACT_CORE_GRID_SIZE = ACT_CORE_GRID_Y * ACT_CORE_GRID_X
             ACT_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(xs.shape[2], xs.shape[3] // 8),
-                core_grid=ttnn.CoreGrid(y=1, x=8),
+                shape=(xs.shape[2], xs.shape[3] // ACT_CORE_GRID_SIZE),
+                core_grid=ttnn.CoreGrid(y=ACT_CORE_GRID_Y, x=ACT_CORE_GRID_X),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -331,13 +334,12 @@ class TtLlamaModel_galaxy:
         )
         norm_out.deallocate(True)
 
-        lm_head_out = tt_all_reduce(
+        lm_head_out = tt_composite_sharded_all_reduce(
             lm_head_out,
             mesh_device=self.mesh_device,
             cluster_axis=1,
-            dim=0,
             num_links=2,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            reduce_scatter_mem_cfg=self.core_model_config["LM_HEAD_OUT_REDUCE_SCATTER_MEMCFG"],
         )
 
         return lm_head_out

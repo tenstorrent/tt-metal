@@ -2,18 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include "command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"
+#include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
+#include "tt_soc_descriptor.h"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 struct CBConfig {
@@ -481,14 +486,14 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     This just ensures we don't hang on the subsequent EnqueueWriteBuffer
     */
     size_t buf_size = config.num_pages * config.page_size;
-    Buffer buffer(device, buf_size, config.page_size, config.buftype);
+    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
 
     vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
     for (uint32_t i = 0; i < src.size(); i++) {
         src.at(i) = i;
     }
-    EnqueueWriteBuffer(cq, buffer, src, false);
+    EnqueueWriteBuffer(cq, *buffer, src, false);
     Finish(cq);
 
     return true;
@@ -639,41 +644,6 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
 
     return pass;
 }
-
-// Create randomly sized pair of unique and common runtime args vectors, with careful not to exceed max between the two.
-// Optionally force the max size for one of the vectors.
-std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool force_max_size = false, uint32_t unique_base = 0, uint32_t common_base = 100){
-
-    constexpr uint32_t MAX_RUNTIME_ARGS = 256;
-
-    // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via padding
-    uint32_t num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
-    uint32_t num_rt_args_common = num_rt_args_unique < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique + 1) : 0;
-
-    if (force_max_size) {
-        if (rand() % 2) {
-            num_rt_args_unique = MAX_RUNTIME_ARGS;
-            num_rt_args_common = 0;
-        } else {
-            num_rt_args_common = MAX_RUNTIME_ARGS;
-            num_rt_args_unique = 0;
-        }
-    }
-
-    vector<uint32_t> rt_args_common;
-    for (uint32_t i = 0; i < num_rt_args_common; i++) {
-        rt_args_common.push_back(common_base + i);
-    }
-
-    vector<uint32_t> rt_args_unique;
-    for (uint32_t i = 0; i < num_rt_args_unique; i++) {
-        rt_args_unique.push_back(unique_base + i);
-    }
-
-    log_trace(tt::LogTest, "{} - num_rt_args_unique: {} num_rt_args_common: {} force_max_size: {}", __FUNCTION__, num_rt_args_unique, num_rt_args_common, force_max_size);
-    return std::make_pair(rt_args_unique, rt_args_common);
-}
-
 
 }  // namespace local_test_functions
 
@@ -980,7 +950,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultipleCoreR
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet core_ranges({cr0, cr1});
+        CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
@@ -1001,7 +971,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMul
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet core_ranges({cr0, cr1});
+        CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
@@ -1023,7 +993,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeM
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet core_ranges({cr0, cr1});
+        CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
@@ -1036,7 +1006,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
@@ -1052,7 +1022,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultip
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange second_cr({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet cr_set({first_cr, second_cr});
+        CoreRangeSet cr_set(std::vector{first_cr, second_cr});
 
         Program program;
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
@@ -1089,7 +1059,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 13, 17, 19, 1));
@@ -1101,7 +1071,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore_2
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 255, 255, 255, 1));
@@ -1114,7 +1084,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
         CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr0, cr1});
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
@@ -1129,7 +1099,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiNonOverlappingCore
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
         CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr0, cr1});
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
@@ -1143,7 +1113,7 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
         CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr0, cr1});
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
@@ -1155,7 +1125,7 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
@@ -1166,7 +1136,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
@@ -1177,7 +1147,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
@@ -1188,7 +1158,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
@@ -1199,7 +1169,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMov
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
@@ -1219,7 +1189,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
@@ -1234,13 +1204,13 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     // Make random
     auto random_seed = 0; // (unsigned int)time(NULL);
-    uint32_t seed = tt::parse_env("SEED", random_seed);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-    CoreRangeSet cr_set({cr});
+    CoreRangeSet cr_set(cr);
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
@@ -1290,7 +1260,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             CreateSemaphore(program, cr_set, j + 1);
         }
 
-        auto [brisc_unique_rtargs, brisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
         vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_brisc_unique_rtargs, num_brisc_common_rtargs, page_size};
@@ -1307,7 +1277,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
         vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_ncrisc_unique_rtargs, num_ncrisc_common_rtargs, page_size};
@@ -1324,7 +1294,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        auto [trisc_unique_rtargs, trisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
         vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_trisc_unique_rtargs, num_trisc_common_rtargs, page_size};
@@ -1414,6 +1384,194 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Calling Finish.");
     Finish(this->device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensix) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        this->create_kernel(program, CoreType::WORKER, true);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        this->create_kernel(program, CoreType::ETH, true);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            this->create_kernel(program, CoreType::ETH, true);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            this->create_kernel(program, CoreType::WORKER, true);
+        }
+
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestProgramsOnTensix) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        this->create_kernel(program, CoreType::WORKER);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestProgramsOnEth) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
+        // and the max kernel size to ensure that the kernel can fit in the ring buffer
+        KernelProperties kernel_properties;
+        kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
+        kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+        this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
+            // and the max kernel size to ensure that the kernel can fit in the ring buffer
+            KernelProperties kernel_properties;
+            kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
+            kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            KernelProperties kernel_properties;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        }
+
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+
+        KernelProperties kernel_properties;
+        if (i % 2 == 0) {
+            kernel_properties = this->get_large_kernel_properties();
+        } else {
+            kernel_properties = this->get_small_kernel_properties();
+        }
+
+        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+
+        KernelProperties kernel_properties;
+        if (i == 0) {
+            kernel_properties = this->get_large_kernel_properties();
+        } else {
+            kernel_properties = this->get_small_kernel_properties();
+        }
+
+        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestLargeProgramInBetweenFiveSmallProgramsOnTensix) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+
+        KernelProperties kernel_properties;
+        if (i % 6 == 0) {
+            kernel_properties = this->get_large_kernel_properties();
+        } else {
+            kernel_properties = this->get_small_kernel_properties();
+        }
+
+        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
 }
 
 }  // namespace stress_tests

@@ -10,7 +10,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/executor.hpp"
 #include "common/utils.hpp"
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "jit_build/data_format.hpp"
 #include "jit_build/settings.hpp"
 #include "hostdevcommon/common_values.hpp"
@@ -28,12 +28,6 @@ using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_
 
 class JitBuildSettings;
 
-enum class JitBuildProcessorType {
-    DATA_MOVEMENT,
-    COMPUTE,
-    ETHERNET
-};
-
 struct JitBuiltStateConfig {
     int processor_id = 0;
     bool is_fw = false;
@@ -47,7 +41,8 @@ class JitBuildEnv {
     friend class JitBuildState;
     friend class JitBuildDataMovement;
     friend class JitBuildCompute;
-    friend class JitBuildEthernet;
+    friend class JitBuildActiveEthernet;
+    friend class JitBuildIdleEthernet;
 
   public:
     JitBuildEnv();
@@ -72,7 +67,6 @@ class JitBuildEnv {
 
     // Tools
     string gpp_;
-    string objcopy_;
 
     // Compilation options
     string cflags_;
@@ -127,7 +121,7 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 
 // Set of build states
 // Used for parallel builds, builds all members in one call
-typedef vector<std::shared_ptr<JitBuildState>> JitBuildStateSet;
+typedef std::vector<std::shared_ptr<JitBuildState>> JitBuildStateSet;
 
 // Exracts a slice of builds from a JitBuildState
 // Used for parallel building a subset of the builds in a JitBuildStateSet
@@ -151,10 +145,16 @@ class JitBuildCompute : public JitBuildState {
     JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
-class JitBuildEthernet : public JitBuildState {
+class JitBuildActiveEthernet : public JitBuildState {
   private:
   public:
-    JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
+    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
+};
+
+class JitBuildIdleEthernet : public JitBuildState {
+  private:
+  public:
+    JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 // Abstract base class for kernel specialization

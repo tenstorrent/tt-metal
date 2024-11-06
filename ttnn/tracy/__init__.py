@@ -113,7 +113,7 @@ def run_report_setup(verbose, outputFolder, port):
             )
     else:
         logger.error(
-            f"Tracy tools were not found. Please make sure you are on the correct build. Use scripts/build_scripts/build_with_profiler_opt.sh to build if you are not sure."
+            f"Tracy tools were not found. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
         )
         sys.exit(1)
 
@@ -144,7 +144,7 @@ def generate_report(outputFolder, nameAppend, childCalls):
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_DNN {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,

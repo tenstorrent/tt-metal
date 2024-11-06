@@ -16,8 +16,8 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
-    tt_all_gather,
     tt_sharded_all_reduce,
+    tt_composite_sharded_all_reduce,
     tt_sharded_all_gather,
 )
 from models.demos.t3000.falcon40b.tt.model_utils import (
@@ -253,18 +253,17 @@ class TtLlamaAttention_galaxy:
             self.qkv,
             program_config=self.attention_config["FUSED_QKV_MM_PROGCFG"],
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.attention_config["COMPUTE_KERNEL_QKV"],
         )
         xs.deallocate(True)
 
-        # TODO: Use sharded all_reduce when PCC issue is fixed in this particular configuration
-        # fused_query_key_value = tt_sharded_all_reduce(
-        #     fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0])
-        # )
-
-        fused_query_key_value = tt_all_reduce(
-            fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        fused_query_key_value = tt_sharded_all_reduce(
+            fused_query_key_value,
+            self.mesh_device,
+            cluster_axis=1,
+            num_links=2,
+            memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0]),
         )
 
         # TODO: Slice the fused_query_key_value tensor get batch=8
@@ -361,7 +360,7 @@ class TtLlamaAttention_galaxy:
             query_layer,
             keys,
             values,
-            [start_pos for _ in range(self.max_batch_size)],
+            cur_pos=[start_pos for _ in range(self.max_batch_size)],
             scale=self.scale,
             program_config=program_config,
             compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SDPA"],
@@ -404,16 +403,16 @@ class TtLlamaAttention_galaxy:
             self.wo,
             core_grid=ttnn.CoreGrid(y=4, x=8),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SELFOUT"],
         )
 
-        attn_output = tt_sharded_all_reduce(
+        attn_output = tt_composite_sharded_all_reduce(
             attn_output,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            memory_config=self.attention_config["SELF_OUT_GATHERED_MEMCFG"](self.cluster_shape[1]),
+            reduce_scatter_mem_cfg=self.attention_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"](self.cluster_shape[1]),
         )
 
         return attn_output

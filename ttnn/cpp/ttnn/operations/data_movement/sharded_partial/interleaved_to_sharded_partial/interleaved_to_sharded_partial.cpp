@@ -29,7 +29,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
 
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
-    CoreRangeSet grid_set({});
+    CoreRangeSet grid_set;
     std::visit(
         [&](const auto &grid) {
             using GridType = std::decay_t<decltype(grid)>;
@@ -48,7 +48,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
                         break;
                     default: TT_ASSERT(false, "Unsupported sharding scheme");
                 }
-                grid_set = tt::tt_metal::num_cores_to_corerange_set(num_cores, grid_size, row_wise);
+                grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
                 TT_THROW("Unsupported type for grid. CoreRangeSet not supported. Switch to a different type.");
             }

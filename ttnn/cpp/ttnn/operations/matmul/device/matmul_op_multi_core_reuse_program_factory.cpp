@@ -62,7 +62,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
@@ -84,7 +84,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(num_cores_to_corerange_set(
+    CoreRangeSet all_cores(num_cores_to_corerangeset(
         num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers

@@ -42,19 +42,18 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
+    Buffer *src0_buffer = a.buffer();
+    Buffer *dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
     CoreRange cores({0, 0}, {0, 0});
     uint32_t cb_id = tt::CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering
-    uint32_t cb_pagesize = tt::round_up(padded_row_size_nbytes, tt::constants::TILE_WIDTH);
+    uint32_t cb_pagesize = tt::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
     auto cb = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
-
-
-    Buffer *src0_buffer = a.buffer();
-    Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -107,7 +106,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
 
     uint32_t start_src_stick_id = 0;
     uint32_t start_dst_stick_id = 0;
-    vector<uint32_t> reader_rt_args = {src0_buffer->address(),
+    const std::array reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
                                        a.get_legacy_shape()[0],
                                        output_shape[0],
@@ -125,17 +124,17 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                        packed_pad_value,
                                        start_src_stick_id,
                                        start_dst_stick_id,
-                                       0,
-                                       0,
-                                       0,
+                                       std::uint32_t{0},
+                                       std::uint32_t{0},
+                                       std::uint32_t{0},
                                        output_shape[2],
                                        a.get_legacy_shape()[2],
                                        unpadded_row_size_nbytes,
                                        padded_row_size_nbytes,
-                                       0,
+                                       std::uint32_t{0},
                                        output.get_legacy_shape()[0]
                                        };
-    vector<uint32_t> writer_rt_args = reader_rt_args;
+    const auto &writer_rt_args = reader_rt_args;
     tt::tt_metal::SetRuntimeArgs(program,
                    reader_kernel_id,
                    cores,
@@ -182,7 +181,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     Device *device = a.device();
-    auto dst_buffer_l1 = Buffer(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferType::L1);
+    auto dst_buffer_l1 = Buffer::create(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferType::L1);
 
     // construct const buffer with the pad_value
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -199,7 +198,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
     Buffer *src0_buffer = a.buffer();
     Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -243,11 +242,11 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
         tt::log_debug("pad_value_const_tensor_addr: {}", pad_value_const_tensor_addr);
         tt::log_debug("pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
         tt::log_debug("packed_pad_value: {}", packed_pad_value);
-        tt::log_debug("dst_buffer_l1_addr: {}", dst_buffer_l1.address());
+        tt::log_debug("dst_buffer_l1_addr: {}", dst_buffer_l1->address());
     }
     #endif
 
-    vector<uint32_t> reader_rt_args = {src0_buffer->address(),
+    const std::array reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
                                        a.get_legacy_shape()[0],
                                        output_shape[0],
@@ -263,7 +262,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
                                        pad_value_const_tensor_addr,
                                        pad_value_const_buffer_nbytes,
                                        packed_pad_value,
-                                       dst_buffer_l1.address()};
+                                       dst_buffer_l1->address()};
     tt::tt_metal::SetRuntimeArgs(program,
                    reader_kernel_id,
                    core,
@@ -321,7 +320,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
         dst_buffer->address(),
         a.get_legacy_shape()[0],
@@ -445,11 +444,12 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     uint32_t num_unpadded_tiles = a.volume() / TILE_HW;
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
-        num_unpadded_tiles, 0
+        num_unpadded_tiles,
+        std::uint32_t{0},
     };
-    vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         num_unpadded_W,
         num_padded_Wt,
@@ -530,7 +530,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 }
 
 
-inline void log_rt_args(const CoreCoord& core,  vector<uint32_t>& args) {
+inline void log_rt_args(const CoreCoord& core,  std::vector<uint32_t>& args) {
     for (auto v : args) {
         tt::log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
     }
@@ -679,18 +679,19 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     int32_t src_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * a.element_size();
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
 
+    Buffer *src0_buffer = a.buffer();
+    Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
     uint32_t cb_id = tt::CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering for perf
     // uint32_t cb_npages = 1; // multibuffering for perf
-    uint32_t cb_pagesize = (uint32_t) ceil((float) dst_nbytes_per_core_w / tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
+    uint32_t cb_page_alignment = std::max(tt::constants::TILE_WIDTH, src0_buffer->alignment());
+    uint32_t cb_pagesize = static_cast<uint32_t>(ceil((float) dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-
-    Buffer *src0_buffer = a.buffer();
-    Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -785,7 +786,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                     curr_stick_diff_nbytes = dst_nbytes_per_core_w - curr_stick_size_nbytes;
                     rem_src_stick_size_nbytes = 0;
                 }
-                vector<uint32_t> reader_rt_args = {src0_buffer->address(),
+                const std::array reader_rt_args = {src0_buffer->address(),
                                                     dst_buffer->address(),
                                                     a.get_legacy_shape()[0],
                                                     output_shape[0],
@@ -822,7 +823,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                 //     log_debug("{} :: nbatch_per_core_h: {}", core.y, nbatch_per_core_h);
                 //     log_debug("{} :: ncores_per_batch_h: {}", core.y, ncores_per_batch_h);
                 // }
-                vector<uint32_t> writer_rt_args = reader_rt_args;
+                const auto &writer_rt_args = reader_rt_args;
                 tt::tt_metal::SetRuntimeArgs(program,
                                 reader_kernel_id,
                                 core,
@@ -908,9 +909,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 
 
         uint32_t num_sticks_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_sticks_per_core = num_w_sticks_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_sticks_per_core = num_w_sticks_per_core_group_2;
         } else {
             //no-op
@@ -1275,7 +1276,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         // reader rt args
-        vector<uint32_t> reader_kernel_args;
+        std::vector<uint32_t> reader_kernel_args;
         reader_kernel_args.push_back(core_stick_map.size()); // num_cores
 
         tt::log_debug("num_cores: {}", core_stick_map.size());
@@ -1295,7 +1296,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         // coalesce the sticks into chunks
-        vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
+        std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_and_repeated_values(core_stick_pair.second);
             stick_chunks_per_core.push_back(stick_chunks);
