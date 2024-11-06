@@ -4,16 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "device_fixture.hpp"
-
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -408,7 +401,6 @@ TEST_F(DeviceFixture, TensixIllegallyModifyRTArgs) {
         SetCommonRuntimeArgs(program, 0, common_runtime_args);
         std::vector<uint32_t> illegal_common_runtime_args = {0, 1, 2, 3, 4, 5};
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, illegal_common_runtime_args));
-
     }
 }
 

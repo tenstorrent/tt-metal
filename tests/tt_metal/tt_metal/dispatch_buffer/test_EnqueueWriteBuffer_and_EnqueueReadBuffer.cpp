@@ -9,8 +9,6 @@
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
 using std::vector;
@@ -323,10 +321,89 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     return pass;
 }
 
+bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(Device* device, vector<std::reference_wrapper<CommandQueue>>& cqs, const TestBufferConfig& config) {
+    bool pass = true;
+    for (const bool use_void_star_api: {true, false}) {
+
+        size_t buf_size = config.num_pages * config.page_size;
+        std::vector<std::shared_ptr<Buffer>> buffers;
+        std::vector<std::vector<uint32_t>> srcs;
+        for (uint i = 0; i < cqs.size(); i++) {
+            buffers.push_back(Buffer::create(device, buf_size, config.page_size, config.buftype));
+            srcs.push_back(generate_arange_vector(buffers[i]->size()));
+            if (use_void_star_api) {
+                EnqueueWriteBuffer(cqs[i], *buffers[i], srcs[i].data(), false);
+            } else {
+                EnqueueWriteBuffer(cqs[i], *buffers[i], srcs[i], false);
+            }
+        }
+
+        for (uint i = 0; i < cqs.size(); i++) {
+            std::vector<uint32_t> result;
+            if (use_void_star_api) {
+                result.resize(buf_size / sizeof(uint32_t));
+                EnqueueReadBuffer(cqs[i], *buffers[i], result.data(), true);
+            } else {
+                EnqueueReadBuffer(cqs[i], *buffers[i], result, true);
+            }
+            bool local_pass = (srcs[i] == result);
+            pass &= local_pass;
+        }
+    }
+
+    return pass;
+}
+
 }  // end namespace local_test_functions
 
 namespace basic_tests {
 namespace dram_tests {
+
+TEST_F(CommandQueueBufferFixture, DISABLED_TestAsyncBufferRW) {
+    // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
+    auto &command_queue = this->device_->command_queue();
+    auto current_mode = CommandQueue::default_mode();
+    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
+    Program program;
+    for (int j = 0; j < 10; j++) {
+        // Asynchronously initialize a buffer on device
+        uint32_t first_buf_value = j + 1;
+        uint32_t second_buf_value = j + 2;
+        uint32_t first_buf_size = 4096;
+        uint32_t second_buf_size = 2048;
+        // Asynchronously allocate buffer on device
+        std::shared_ptr<Buffer> buffer =
+            Buffer::create(this->device_, first_buf_size, first_buf_size, BufferType::DRAM);
+        std::shared_ptr<uint32_t> allocated_buffer_address = std::make_shared<uint32_t>();
+        EnqueueGetBufferAddr(this->device_->command_queue(), allocated_buffer_address.get(), buffer.get(), true);
+        // Ensure returned addr is correct
+        EXPECT_EQ((*allocated_buffer_address), buffer->address());
+
+        std::shared_ptr<std::vector<uint32_t>> vec =
+            std::make_shared<std::vector<uint32_t>>(first_buf_size / 4, first_buf_value);
+        std::vector<uint32_t> readback_vec = {};
+        // Write first vector to existing on device buffer.
+        EnqueueWriteBuffer(this->device_->command_queue(), buffer, vec, false);
+        // Reallocate the vector in the main thread after asynchronously pushing it (ensure that worker still has access
+        // to this data)
+        vec = std::make_shared<std::vector<uint32_t>>(second_buf_size / 4, second_buf_value);
+        // Simulate what tt-eager does: Share buffer ownership with program
+        AssignGlobalBufferToProgram(buffer, program);
+        // Reallocate buffer (this is safe, since the program also owns the existing buffer, which will not be
+        // deallocated)
+        buffer = Buffer::create(this->device_, second_buf_size, second_buf_size, BufferType::DRAM);
+        // Write second vector to second buffer
+        EnqueueWriteBuffer(this->device_->command_queue(), buffer, vec, false);
+        // Have main thread give up ownership immediately after writing
+        vec.reset();
+        // Read both buffer and ensure data is correct
+        EnqueueReadBuffer(this->device_->command_queue(), buffer, readback_vec, true);
+        for (int i = 0; i < readback_vec.size(); i++) {
+            EXPECT_EQ(readback_vec[i], second_buf_value);
+        }
+    }
+    command_queue.set_mode(current_mode);
+}
 
 TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
@@ -538,6 +615,199 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpa
 
 // TODO: add test for wrapping with non aligned page sizes
 
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileToDramBank0) {
+    TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileToAllDramBanks) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        TestBufferConfig config = {
+            .num_pages = uint32_t(device->num_banks(BufferType::DRAM)),
+            .page_size = 2048,
+            .buftype = BufferType::DRAM};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
+    constexpr uint32_t num_round_robins = 2;
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        TestBufferConfig config = {
+            .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
+            .page_size = 2048,
+            .buftype = BufferType::DRAM};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, Sending131072Pages) {
+    // Was a failing case where we used to accidentally program cb num pages to be total
+    // pages instead of cb num pages.
+    TestBufferConfig config = {
+        .num_pages = 131072,
+        .page_size = 128,
+        .buftype = BufferType::DRAM};
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram2) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        // From stable diffusion read buffer
+        TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        uint32_t page_size = 2048;
+        uint32_t command_queue_size = device->sysmem_manager().get_cq_size();
+        uint32_t num_pages = command_queue_size / page_size;
+
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
+    TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
+    TestBufferConfig config = {
+        .num_pages = uint32_t(this->device_->num_banks(BufferType::DRAM)),
+        .page_size = 2048,
+        .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
+    constexpr uint32_t num_round_robins = 2;
+    TestBufferConfig config = {
+        .num_pages = num_round_robins * (this->device_->num_banks(BufferType::DRAM)),
+        .page_size = 2048,
+        .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, Sending131072Pages) {
+    // Was a failing case where we used to accidentally program cb num pages to be total
+    // pages instead of cb num pages.
+    TestBufferConfig config = {
+        .num_pages = 131072,
+        .page_size = 128,
+        .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDram) {
+    TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDram2) {
+    // From stable diffusion read buffer
+    TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestPageSizeTooLarge) {
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP(); // This test hanging on wormhole b0
+    }
+    // Should throw a host error due to the page size not fitting in the consumer CB
+    TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+    uint32_t page_size = 2048;
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
+    uint32_t num_pages = command_queue_size / page_size;
+
+    TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
 }  // end namespace dram_tests
 
 namespace l1_tests {
@@ -615,6 +885,104 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestLargeBuffer4096BPageSize) {
         TestBufferConfig config = {.num_pages = 512, .page_size = 4096, .buftype = BufferType::L1};
 
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
+    }
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToL1Bank0) {
+    TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllL1Banks) {
+    auto compute_with_storage_grid = this->device_->compute_with_storage_grid_size();
+    TestBufferConfig config = {
+        .num_pages = uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
+        .page_size = 2048,
+        .buftype = BufferType::L1};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
+    auto compute_with_storage_grid = this->device_->compute_with_storage_grid_size();
+    TestBufferConfig config = {
+        .num_pages = 2 * uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
+        .page_size = 2048,
+        .buftype = BufferType::L1};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForL1) {
+    TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileToL1Bank0) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileToAllL1Banks) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto compute_with_storage_grid = device->compute_with_storage_grid_size();
+        TestBufferConfig config = {
+            .num_pages = uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
+            .page_size = 2048,
+            .buftype = BufferType::L1};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto compute_with_storage_grid = device->compute_with_storage_grid_size();
+        TestBufferConfig config = {
+            .num_pages = 2 * uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
+            .page_size = 2048,
+            .buftype = BufferType::L1};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
+TEST_F(MultiCommandQueueMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForL1) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
+
+        CommandQueue& a = device->command_queue(0);
+        CommandQueue& b = device->command_queue(1);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
     }
 }
 

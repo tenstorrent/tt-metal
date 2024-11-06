@@ -10,10 +10,6 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
-
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 

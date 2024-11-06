@@ -26,7 +26,6 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-// #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
@@ -838,10 +837,6 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingLong) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    // if (num_devices != 8) {
-    //     log_info(tt::LogTest, "Need at least 2 devices to run this test");
-    //     return;
-    // }
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;

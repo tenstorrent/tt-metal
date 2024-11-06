@@ -4,17 +4,11 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "basic_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -70,7 +64,44 @@ void read_translation_table (Device* device, CoreCoord logical_node, std::vector
 
 }  // namespace unit_tests::basic::device
 
+TEST_F(BasicFixture, TensixSingleDeviceHarvestingPrints) {
+    auto arch = tt::get_arch_from_string(get_umd_arch_name());
+    tt::tt_metal::Device* device;
+    const unsigned int device_id = 0;
+    device = tt::tt_metal::CreateDevice(device_id);
+    CoreCoord unharvested_logical_grid_size;
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10);  break;
+        case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
+        case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        default:
+            TT_THROW("Unsupported arch {}", get_umd_arch_name());
+    }
+    auto logical_grid_size = device->logical_grid_size();
+    if (logical_grid_size == unharvested_logical_grid_size) {
+        tt::log_info("Harvesting Disabled in SW");
+    } else {
+        tt::log_info("Harvesting Enabled in SW");
+        tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
+    }
 
+    tt::log_info("Logical -- Noc Coordinates Mapping");
+    tt::log_info("[Logical <-> NOC0] Coordinates");
+    for (int r = 0; r < logical_grid_size.y; r++) {
+        string output_row = "";
+        for (int c = 0; c < logical_grid_size.x; c++) {
+            const CoreCoord logical_coord(c, r);
+            const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
+            output_row += "{L[x" + std::to_string(c);
+            output_row += "-y" + std::to_string(r);
+            output_row += "]:N[x" + std::to_string(noc_coord.x);
+            output_row += "-y" + std::to_string(noc_coord.y);
+            output_row += "]}, ";
+        }
+        tt::log_info("{}", output_row);
+    }
+    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+}
 
 TEST_F(BasicFixture, TensixVerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
@@ -139,8 +170,6 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
     const uint32_t stream_reg = 4;
 
     for (tt_metal::Device *device : this->devices_) {
-        std::set<CoreCoord> storage_only_cores = device->storage_only_cores();
-
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreCoord logical_grid_size = device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};

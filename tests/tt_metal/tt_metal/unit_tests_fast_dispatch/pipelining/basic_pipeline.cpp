@@ -17,9 +17,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
 using std::map;
@@ -44,10 +41,6 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    // uint32_t num_tiles = 32;
-    // uint32_t block_size_tiles = 16;
-    // uint32_t num_blocks_in_CB = 2;
-    // uint32_t num_repetitions = 1;
     uint32_t num_cores = (uint32_t)test_config.num_cores;
     uint32_t num_tiles = (uint32_t)test_config.num_tiles;
     uint32_t block_size_tiles = (uint32_t)test_config.block_size_tiles;

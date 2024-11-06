@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include <gtest/gtest.h>
 #include "dispatch_fixture.hpp"
+#include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 
-class DebugToolsFixture : virtual public DispatchFixture {
-
-};
+class DebugToolsFixture : virtual public ::testing::Test {};
 
 // A version of DispatchFixture with DPrint enabled on all cores.
-class DPrintFixture: public DebugToolsFixture {
+class DPrintFixture : virtual public DispatchFixture, virtual public DebugToolsFixture {
 public:
     inline static const string dprint_file_name = "gtest_dprint_log.txt";
 
@@ -19,7 +19,7 @@ public:
     void RunProgram(Device* device, Program& program) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DebugToolsFixture::RunProgram(device, program);
+        DispatchFixture::RunProgram(device, program);
         tt::DprintServerAwait();
     }
 
@@ -46,12 +46,12 @@ protected:
         ExtraSetUp();
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        DispatchFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
+        DispatchFixture::TearDown();
 
         // Remove the DPrint output file after the test is finished.
         std::remove(dprint_file_name.c_str());
@@ -76,7 +76,7 @@ protected:
         auto run_function_no_args = [=]() {
             run_function(this, device);
         };
-        DebugToolsFixture::RunTestOnDevice(run_function_no_args, device);
+        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
         tt::DPrintServerClearLogFile();
         tt::DPrintServerClearSignals();
     }
@@ -87,7 +87,7 @@ protected:
 };
 
 // For usage by tests that need the dprint server devices disabled.
-class DPrintDisableDevicesFixture: public DPrintFixture {
+class DPrintDisableDevicesFixture : public DPrintFixture {
 protected:
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable
@@ -97,7 +97,7 @@ protected:
 };
 
 // A version of DispatchFixture with watcher enabled
-class WatcherFixture: public DebugToolsFixture {
+class WatcherFixture : virtual public DispatchFixture, virtual public DebugToolsFixture {
 public:
     inline static const string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
@@ -106,7 +106,7 @@ public:
     void RunProgram(Device* device, Program& program, bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DebugToolsFixture::RunProgram(device, program);
+        DispatchFixture::RunProgram(device, program);
 
         // Wait for watcher to run a full dump before finishing, need to wait for dump count to
         // increase because we'll likely check in the middle of a dump.
@@ -143,12 +143,12 @@ protected:
         tt::watcher_clear_log();
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        DispatchFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
+        DispatchFixture::TearDown();
 
         // Reset watcher settings to their previous values
         tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
@@ -168,7 +168,7 @@ protected:
         auto run_function_no_args = [=]() {
             run_function(this, device);
         };
-        DebugToolsFixture::RunTestOnDevice(run_function_no_args, device);
+        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
         // Wait for a final watcher poll and then clear the log.
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
         tt::watcher_clear_log();

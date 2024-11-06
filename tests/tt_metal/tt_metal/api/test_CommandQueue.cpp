@@ -5,13 +5,10 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
-#include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 
 using namespace tt::tt_metal;
 
@@ -28,6 +25,33 @@ TEST_F(CommandQueueFixture, TestCannotAccessCommandQueueForClosedDevice) {
     EXPECT_NO_THROW(device_->command_queue());
     CloseDevice(device_);
     EXPECT_ANY_THROW(device_->command_queue());
+}
+
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
+    auto &command_queue = this->device_->command_queue();
+    auto current_mode = CommandQueue::default_mode();
+    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
+    Program program;
+    CoreCoord core = {0, 0};
+    uint32_t buf_size = 4096;
+    uint32_t page_size = 4096;
+    auto dummy_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    auto src0 = Buffer::create(this->device_, buf_size, page_size, BufferType::DRAM);
+    std::vector<uint32_t> runtime_args = {src0->address()};
+    try {
+        SetRuntimeArgs(program, dummy_kernel, core, runtime_args);
+    } catch (std::runtime_error &e) {
+        std::string expected =
+            "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for "
+            "Fast Dispatch.";
+        const string error = string(e.what());
+        EXPECT_TRUE(error.find(expected) != std::string::npos);
+    }
+    command_queue.set_mode(current_mode);
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, DISABLED_TestDirectedLoopbackToUniqueHugepage) {

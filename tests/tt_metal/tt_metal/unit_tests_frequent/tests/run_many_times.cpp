@@ -16,7 +16,6 @@ void RunTest(Device *device) {
     Program program = Program();
 
     std::set<CoreRange> core_ranges;
-    //CoreCoord grid_size = device->logical_grid_size();
     CoreCoord grid_size = {5, 5};
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {

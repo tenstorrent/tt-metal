@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <memory>
 
 #include "gtest/gtest.h"
 #include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
@@ -10,9 +8,9 @@
 using std::vector;
 using namespace tt::tt_metal;
 
-namespace working_config_buffer_tests {
+namespace worker_config_buffer_tests {
 
-TEST(WorkingConfigBuffer, MarkCompletelyFull) {
+TEST(WorkerConfigBuffer, MarkCompletelyFull) {
     WorkerConfigBufferMgr mgr;
     mgr.init_add_buffer(1024, 1024);
     mgr.init_add_buffer(2, 1024);

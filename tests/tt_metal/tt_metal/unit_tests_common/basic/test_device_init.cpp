@@ -8,8 +8,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
@@ -57,7 +55,6 @@ bool load_all_blank_kernels(tt_metal::Device *device) {
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
 
     unit_tests_common::basic::test_device_init::launch_program(device, program);
-    // tt_metal::detail::LaunchProgram(device, program);
     return pass;
 }
 }  // namespace unit_tests_common::basic::test_device_init
