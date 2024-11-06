@@ -10,17 +10,18 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/dispatch/memcpy.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 
 using namespace tt::tt_metal;
 
+namespace tt::tt_metal {
+
 // todo consider moving these to dispatch_addr_map
 static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
 static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28; // 256 MB;
 static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE; // 256 MB;
-
-static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
 
 enum class CommandQueueDeviceAddrType : uint8_t {
     PREFETCH_Q_RD = 0,
@@ -306,64 +307,6 @@ inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
         return recv << 4;
     }
     return recv;
-}
-
-// Ideally would work by cachelines, but the min size is less than that
-// TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
-// TODO: ditto alignment isues
-template <bool debug_sync = false>
-static inline void memcpy_to_device(void *__restrict dst, const void *__restrict src, size_t n) {
-    TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
-    TT_ASSERT(n % sizeof(uint32_t) == 0);
-
-    static constexpr uint32_t inner_loop = 8;
-    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);
-
-    uint8_t *src8 = (uint8_t *)src;
-    uint8_t *dst8 = (uint8_t *)dst;
-
-    if (size_t num_lines = n / inner_blk_size) {
-        for (size_t i = 0; i < num_lines; ++i) {
-            for (size_t j = 0; j < inner_loop; ++j) {
-                __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
-                _mm256_stream_si256((__m256i *)dst8, blk);
-                src8 += sizeof(__m256i);
-                dst8 += sizeof(__m256i);
-            }
-            n -= inner_blk_size;
-        }
-    }
-
-    if (n > 0) {
-        if (size_t num_lines = n / sizeof(__m256i)) {
-            for (size_t i = 0; i < num_lines; ++i) {
-                __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
-                _mm256_stream_si256((__m256i *)dst8, blk);
-                src8 += sizeof(__m256i);
-                dst8 += sizeof(__m256i);
-            }
-            n -= num_lines * sizeof(__m256i);
-        }
-        if (size_t num_lines = n / sizeof(__m128i)) {
-            for (size_t i = 0; i < num_lines; ++i) {
-                __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-                _mm_stream_si128((__m128i *)dst8, blk);
-                src8 += sizeof(__m128i);
-                dst8 += sizeof(__m128i);
-            }
-            n -= n / sizeof(__m128i) * sizeof(__m128i);
-        }
-        if (n > 0) {
-            for (size_t i = 0; i < n / sizeof(int32_t); ++i) {
-                _mm_stream_si32((int32_t *)dst8, *(int32_t *)src8);
-                src8 += sizeof(int32_t);
-                dst8 += sizeof(int32_t);
-            }
-        }
-    }
-    if constexpr (debug_sync) {
-        tt_driver_atomics::sfence();
-    }
 }
 
 struct SystemMemoryCQInterface {
@@ -869,3 +812,5 @@ struct LaunchMessageRingBufferState {
     uint32_t multicast_cores_launch_message_wptr = 0;
     uint32_t unicast_cores_launch_message_wptr = 0;
 };
+
+}  // namespace tt::tt_metal

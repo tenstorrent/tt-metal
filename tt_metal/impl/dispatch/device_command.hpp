@@ -11,12 +11,11 @@
 #include "common/env_lib.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/memcpy.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
-template <typename T>
-using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
-
+namespace tt::tt_metal {
 template <bool hugepage_write = false>
 class DeviceCommand {
    public:
@@ -762,3 +761,5 @@ bool DeviceCommand<hugepage_write>::zero_init_enable = tt::parse_env<bool>("TT_M
 
 using HugepageDeviceCommand = DeviceCommand<true>;
 using HostMemDeviceCommand = DeviceCommand<false>;
+
+}  // namespace tt::tt_metal
