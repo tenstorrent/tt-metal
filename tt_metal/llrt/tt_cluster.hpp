@@ -18,7 +18,6 @@
 
 // clang-format off
 #include "noc/noc_parameters.h"
-#include "eth_interface.h"
 #include "eth_l1_address_map.h"
 #include "dev_msgs.h"
 // clang-format on
@@ -300,28 +299,6 @@ class Cluster {
 
     tt_driver_host_address_params host_address_params = {
         host_mem::address_map::ETH_ROUTING_BLOCK_SIZE, host_mem::address_map::ETH_ROUTING_BUFFERS_START};
-
-    tt_driver_eth_interface_params eth_interface_params = {
-        NOC_ADDR_LOCAL_BITS,
-        NOC_ADDR_NODE_ID_BITS,
-        ETH_RACK_COORD_WIDTH,
-        CMD_BUF_SIZE_MASK,
-        MAX_BLOCK_SIZE,
-        REQUEST_CMD_QUEUE_BASE,
-        RESPONSE_CMD_QUEUE_BASE,
-        CMD_COUNTERS_SIZE_BYTES,
-        REMOTE_UPDATE_PTR_SIZE_BYTES,
-        CMD_DATA_BLOCK,
-        CMD_WR_REQ,
-        CMD_WR_ACK,
-        CMD_RD_REQ,
-        CMD_RD_DATA,
-        CMD_BUF_SIZE,
-        CMD_DATA_BLOCK_DRAM,
-        ETH_ROUTING_DATA_BUFFER_ADDR,
-        REQUEST_ROUTING_CMD_QUEUE_BASE,
-        RESPONSE_ROUTING_CMD_QUEUE_BASE,
-        CMD_BUF_PTR_MASK};
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };
