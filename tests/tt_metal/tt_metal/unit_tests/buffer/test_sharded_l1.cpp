@@ -132,4 +132,55 @@ TEST_F(DeviceFixture, TestWidthShardReadWrite)
 
 }
 
+TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite)
+{
+    std::vector<CoreCoord> cores = {
+        CoreCoord(1, 0), CoreCoord(1, 3), CoreCoord(1, 4),
+        CoreCoord(6, 6), CoreCoord(6, 5), CoreCoord(6, 4), CoreCoord(6, 3), CoreCoord(6, 2), CoreCoord(6, 1), CoreCoord(6, 0),
+        CoreCoord(5, 0), CoreCoord(5, 1), CoreCoord(5, 2), CoreCoord(5, 3), CoreCoord(5, 4), CoreCoord(5, 5), CoreCoord(5, 6),
+        CoreCoord(2, 4), CoreCoord(2, 3), CoreCoord(2, 0)};
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(cores.size());
+    for (const auto& core : cores) {
+        core_ranges.emplace_back(core, core);
+    }
+    ShardSpecBuffer shard_spec = ShardSpecBuffer(
+        CoreRangeSet(core_ranges),
+        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        ShardOrientation::ROW_MAJOR,
+        false,
+        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        {(uint32_t)cores.size(), 1});
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto device = this->devices_.at(id);
+        std::vector<CoreCoord> physical_cores;
+        physical_cores.reserve(cores.size());
+        for (const auto& core : cores) {
+            physical_cores.push_back(device->worker_core_from_logical_core(core));
+        }
+        uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
+        uint32_t total_size = cores.size() * page_size;
+        auto buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                                            .device = device,
+                                            .size = total_size,
+                                            .page_size = page_size,
+                                            .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                                            .shard_parameters = shard_spec});
+        auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
+
+        tt::tt_metal::detail::WriteToBuffer(buffer, input);
+        tt::Cluster::instance().l1_barrier(device->id());
+        auto input_it = input.begin();
+        for (const auto& physical_core : physical_cores) {
+            auto readback = tt::llrt::read_hex_vec_from_core(
+                device->id(), physical_core, buffer->address(), page_size);
+            EXPECT_TRUE(std::equal(input_it, input_it + tt::constants::TILE_HW, readback.begin()));
+            input_it += tt::constants::TILE_HW;
+        }
+        std::vector<uint32_t> output;
+        tt::tt_metal::detail::ReadFromBuffer(buffer, output);
+        EXPECT_EQ(input, output);
+    }
+}
+
 }   // end namespace basic_tests::l1::sharded
