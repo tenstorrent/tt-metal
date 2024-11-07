@@ -61,7 +61,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
 
     // Checks for transformation matrix
     uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.bounding_box().grid_size().x * trans_mat.shard_spec()->grid.bounding_box().grid_size().y;
-    TT_FATAL(trans_mat_num_cores == (q_num_cores + k_num_cores), "Transformation matrix is repeated for Q and K must be sharded over core grid of Q and K");
+    TT_FATAL(trans_mat_num_cores >= (q_num_cores + k_num_cores), "Transformation matrix is repeated for Q and K must be sharded over core grid of Q and K");
     TT_FATAL(trans_mat.shard_spec()->shape[0] == TILE_HEIGHT, "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
     TT_FATAL(trans_mat.shard_spec()->shape[1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
 
