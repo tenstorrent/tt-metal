@@ -282,50 +282,31 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 /**
-*  Allocates an interleaved DRAM or L1 buffer on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
-*/
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
-
-/**
 *  Creates a pre-allocated interleaved DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
-*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
-*/
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | address         | Device address of the buffer. Default will calculate address      | std::optional<DeviceAddr> |             | No       |
+*  | sub_device_id   | The sub-device id to allocate on. Default is the global allocator | std::optional<uint32_t>   |             | No       |
 
-/**
-*  Allocates a sharded DRAM or L1 buffer on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
 */
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, std::optional<DeviceAddr> address = std::nullopt, std::optional<uint32_t> sub_device_id = std::nullopt);
 
 /**
 *  Creates a pre-allocated sharded DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
-*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
+*  | address         | Device address of the buffer. Default will calculate address      | std::optional<DeviceAddr> |             | No       |
+*  | sub_device_id   | The sub-device id to allocate on. Default is the global allocator | std::optional<uint32_t>   |             | No       |
 */
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, std::optional<DeviceAddr> address = std::nullopt, std::optional<uint32_t> sub_device_id = std::nullopt);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.

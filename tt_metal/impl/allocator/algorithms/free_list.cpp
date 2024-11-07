@@ -21,6 +21,7 @@ FreeList::FreeList(DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAdd
 }
 
 void FreeList::init() {
+    this->shrink_size_ = 0;
     auto block = boost::make_local_shared<Block>(0, this->max_size_bytes_);
     this->block_head_ = block;
     this->block_tail_ = block;

@@ -69,8 +69,8 @@ num_banks_t compute_total_and_storage_only_num_l1_banks(const AllocatorConfig &a
 }
 
 void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config) {
+    TT_FATAL(alloc_config.worker_grid.contains(alloc_config.compute_grid), "Compute grid must be a subset of worker grid");
     num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(alloc_config);
-
     auto logical_to_noc_coord = [&alloc_config](CoreCoord logical_core) {
         TT_ASSERT(
             alloc_config.worker_log_to_physical_routing_x.find(logical_core.x) !=
@@ -118,35 +118,33 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     // If l1_small_size exists, then it gets the top of L1 (offset 0)
     // and the regular L1 region is offset just below it
     uint32_t bank_id = 0;
-    for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
-        for (uint32_t x = 0; x < alloc_config.worker_grid_size.x; x++) {
-            CoreCoord logical_core = CoreCoord(x, y);
-            CoreCoord noc_core = logical_to_noc_coord(logical_core);
+    const auto &cores = corerange_to_cores(alloc_config.worker_grid, std::nullopt, true);
+    for (const auto &logical_core : cores) {
+        CoreCoord noc_core = logical_to_noc_coord(logical_core);
 
-            if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::ComputeAndStore) {
+        if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::ComputeAndStore) {
+            uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
+            allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, {remapped_bank_id}});
+            allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
+            bank_id_to_bank_offset.insert({remapped_bank_id, 0});
+            bank_id++;
+        } else if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
+            std::vector<uint32_t> bank_ids;
+            for (int storage_bank_index = 0; storage_bank_index < num_banks.per_storage_core; storage_bank_index++) {
                 uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
-                allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, {remapped_bank_id}});
+                bank_ids.push_back(remapped_bank_id);
                 allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
-                bank_id_to_bank_offset.insert({remapped_bank_id, 0});
-                bank_id++;
-            } else if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
-                std::vector<uint32_t> bank_ids;
-                for (int storage_bank_index = 0; storage_bank_index < num_banks.per_storage_core; storage_bank_index++) {
-                    uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
-                    bank_ids.push_back(remapped_bank_id);
-                    allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
-                    int64_t bank_offset_bytes = 0;
-                    if (alloc_config.storage_core_bank_size.value() != alloc_config.worker_l1_size) {
-                        uint64_t storage_core_offset = storage_bank_index * alloc_config.storage_core_bank_size.value();
-                        bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.storage_core_bank_size.value(); // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
-                    } else if (num_banks.per_storage_core != 1) {
-                        TT_THROW("Expected 1 bank per storage core if L1 bank size equals total worker L1 size but have {} banks", num_banks.per_storage_core);
-                    }
-                    bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
-                    bank_id++;
+                int64_t bank_offset_bytes = 0;
+                if (alloc_config.storage_core_bank_size.value() != alloc_config.worker_l1_size) {
+                    uint64_t storage_core_offset = storage_bank_index * alloc_config.storage_core_bank_size.value();
+                    bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.storage_core_bank_size.value(); // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
+                } else if (num_banks.per_storage_core != 1) {
+                    TT_THROW("Expected 1 bank per storage core if L1 bank size equals total worker L1 size but have {} banks", num_banks.per_storage_core);
                 }
-                allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, bank_ids});
+                bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
+                bank_id++;
             }
+            allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, bank_ids});
         }
     }
     TT_ASSERT(bank_id == shuffled_bank_id.size());
@@ -154,20 +152,17 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     std::unordered_map<uint32_t, int64_t> small_bank_id_to_bank_offset;
     if (alloc_config.l1_small_size > 0) {
         TT_ASSERT(num_banks.num_l1_small_banks > 0);
-        for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
-            for (uint32_t x = 0; x < alloc_config.worker_grid_size.x; x++) {
-                CoreCoord logical_core = CoreCoord(x, y);
-                CoreCoord noc_core = logical_to_noc_coord(logical_core);
+        for (const auto &logical_core : cores) {
+            CoreCoord noc_core = logical_to_noc_coord(logical_core);
 
-                if (alloc_config.core_type_from_noc_coord_table.at(noc_core) != AllocCoreType::ComputeAndStore) {
-                    continue;
-                }
-
-                allocator.logical_core_to_bank_ids[BufferType::L1_SMALL].insert({logical_core, {bank_id}});
-                allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
-                small_bank_id_to_bank_offset.insert({bank_id, 0});
-                bank_id++;
+            if (alloc_config.core_type_from_noc_coord_table.at(noc_core) != AllocCoreType::ComputeAndStore) {
+                continue;
             }
+
+            allocator.logical_core_to_bank_ids[BufferType::L1_SMALL].insert({logical_core, {bank_id}});
+            allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
+            small_bank_id_to_bank_offset.insert({bank_id, 0});
+            bank_id++;
         }
     }
 
@@ -193,7 +188,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(alloc_config.worker_l1_size) - alloc_config.l1_unreserved_base - alloc_config.l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
-    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, alloc_config.alignment, alloc_config.l1_unreserved_base);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, alloc_config.alignment, alloc_config.l1_unreserved_base, alloc_config.disable_interleaved);
 
     uint64_t small_interleaved_address_limit = alloc_config.worker_l1_size - alloc_config.l1_small_size;
     uint64_t small_alloc_offset = alloc_config.l1_unreserved_base + allocatable_l1_size;
@@ -206,7 +201,8 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         alloc_config.l1_small_size,
         small_interleaved_address_limit,
         alloc_config.alignment,
-        small_alloc_offset);
+        small_alloc_offset,
+        alloc_config.disable_interleaved);
 }
 
 }   // namespace allocator

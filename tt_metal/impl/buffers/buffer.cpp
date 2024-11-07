@@ -35,6 +35,10 @@ bool is_sharded(const TensorMemoryLayout &layout) {
         layout == TensorMemoryLayout::BLOCK_SHARDED);
 }
 
+bool is_l1(BufferType buffer_type) {
+    return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL;
+}
+
 void validate_buffer_size_and_page_size(
     DeviceAddr size,
     DeviceAddr page_size,
@@ -201,6 +205,17 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     return buffer_page_mapping;
 }
 
+void validate_sub_device_id(std::optional<uint32_t> sub_device_id, Device *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
+    // No need to validate if we're using the global allocator or not sharding
+    if (!sub_device_id.has_value()) {
+        return;
+    }
+    TT_FATAL(shard_parameters.has_value(), "Specifying sub-device for buffer requires buffer to be sharded");
+    TT_FATAL(is_l1(buffer_type), "Specifying sub-device for buffer requires buffer to be L1");
+    // TODO: Validate that cores used match the sub-device
+    TT_FATAL(*sub_device_id == 0, "Invalid sub-device id");
+}
+
 Buffer::Buffer(
     Device *device,
     DeviceAddr size,
@@ -209,6 +224,7 @@ Buffer::Buffer(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
+    const std::optional<uint32_t> sub_device_id,
     const bool owns_data,
     Private) :
     device_(device),
@@ -218,10 +234,13 @@ Buffer::Buffer(
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
     bottom_up_(bottom_up.value_or(this->is_dram())),
+    sub_device_id_(sub_device_id),
     owns_data_(owns_data),
     buffer_page_mapping_(nullptr) {
     TT_FATAL(this->device_ != nullptr && this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
-
+    if (this->sub_device_id_.has_value()) {
+        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters);
+    }
     if (size != 0) {
         validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     }
@@ -234,8 +253,9 @@ std::shared_ptr<Buffer> Buffer::create(
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up) {
-    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, true /* owns data */, Private());
+    const std::optional<bool> bottom_up,
+    const std::optional<uint32_t> sub_device_id) {
+    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, sub_device_id, true /* owns data */, Private());
     // Using a custom deleter to properly clean up the owned datas
     auto buffer = std::shared_ptr<Buffer>(bufferPtr, deleter);
     buffer->weak_self = buffer;
@@ -274,9 +294,10 @@ std::shared_ptr<Buffer> Buffer::create(
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up) {
+    const std::optional<bool> bottom_up,
+    const std::optional<uint32_t> sub_device_id) {
     // Not using a custom deleter, because it doesn't own any data to cleanup
-    auto buffer = std::make_shared<Buffer>(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, false /* owns data */, Private());
+    auto buffer = std::make_shared<Buffer>(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, sub_device_id, false /* owns data */, Private());
     buffer->weak_self = buffer;
 
     buffer->address_ = address;
@@ -377,7 +398,7 @@ CoreType Buffer::core_type() const {
 }
 
 bool Buffer::is_l1() const {
-    return buffer_type() == BufferType::L1 or buffer_type() == BufferType::L1_SMALL;
+    return ::is_l1(buffer_type());
 }
 bool Buffer::is_dram() const {
     return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE;
@@ -389,12 +410,12 @@ bool Buffer::is_trace() const {
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->is_dram(), "Expected DRAM buffer!");
-    return this->device_->dram_channel_from_bank_id(bank_id);
+    return this->device_->dram_channel_from_bank_id(bank_id, this->sub_device_id_);
 }
 
 CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->is_l1(), "Expected L1 buffer!");
-    return this->device_->logical_core_from_bank_id(bank_id);
+    return this->device_->logical_core_from_bank_id(bank_id, this->sub_device_id_);
 }
 
 CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
@@ -419,7 +440,7 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
 CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
 
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
-    auto num_banks = this->device_->num_banks(this->buffer_type_);
+    auto num_banks = this->device_->num_banks(this->buffer_type_, this->sub_device_id_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
@@ -427,7 +448,7 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
 }
 
 uint32_t Buffer::alignment() const {
-    return this->device_->get_allocator_alignment();
+    return this->device_->get_allocator_alignment(this->sub_device_id_);
 }
 DeviceAddr Buffer::aligned_page_size() const {
     return align(page_size(), this->alignment());
@@ -463,7 +484,7 @@ std::optional<uint32_t> Buffer::num_cores() const {
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    DeviceAddr base_page_address = this->address() + this->device_->bank_offset(this->buffer_type_, bank_id);
+    DeviceAddr base_page_address = this->address() + this->device_->bank_offset(this->buffer_type_, bank_id, this->sub_device_id_);
     return base_page_address + offset;
 }
 

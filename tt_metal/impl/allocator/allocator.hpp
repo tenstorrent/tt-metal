@@ -35,8 +35,8 @@ class BankManager {
    public:
     BankManager() {}
 
-    BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr alloc_offset=0);
-    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, DeviceAddr size_bytes, DeviceAddr interleaved_address_limit, uint32_t alignment_bytes, DeviceAddr alloc_offset=0);
+    BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr alloc_offset=0, bool disable_interleaved=false);
+    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, DeviceAddr size_bytes, DeviceAddr interleaved_address_limit, uint32_t alignment_bytes, DeviceAddr alloc_offset=0, bool disable_interleaved=false);
     BankManager&& operator=(BankManager&& that);
     ~BankManager();
     uint32_t num_banks() const;
@@ -45,7 +45,7 @@ class BankManager {
 
     int64_t bank_offset(uint32_t bank_id) const;
 
-    DeviceAddr allocate_buffer(DeviceAddr size, DeviceAddr page_size, bool bottom_up, CoreCoord compute_grid_size, std::optional<uint32_t> num_shards);
+    DeviceAddr allocate_buffer(DeviceAddr size, DeviceAddr page_size, bool bottom_up, const CoreRangeSet &compute_grid, std::optional<uint32_t> num_shards);
 
     void deallocate_buffer(DeviceAddr address);
     void deallocate_all();
@@ -109,6 +109,7 @@ std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator &allocator,
 DeviceAddr base_alloc(const AllocatorConfig & config, BankManager &bank_manager, DeviceAddr size, DeviceAddr page_size, bool bottom_up, std::optional<uint32_t> num_shards);
 
 void shrink_allocator_size(Allocator &allocator, const BufferType &buffer_type, DeviceAddr shrink_size, bool bottom_up=true);
+void reset_allocator_size(Allocator &allocator, const BufferType &buffer_type);
 
 DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, Buffer *buffer);
 

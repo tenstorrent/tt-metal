@@ -749,12 +749,14 @@ void Program::allocate_circular_buffers(const Device *device) { pimpl_->allocate
 void detail::Program_::validate_circular_buffer_region(const Device *device) {
     //ZoneScoped;
 
-    // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
-    // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
+    // Only pass sub_device_ids if sub-device manager is active
+    // Allocator is handled differently from other sub_device apis since the global allocator is always active
+    // State when there is no active manager is normally treated as having 1 sub_device, which is used to query state
+    // For allocator, we don't have a sub_device allocator when there is no active manager, only the global allocator
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
-    const std::vector<uint32_t> &bank_ids =
-        device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
-    std::optional<DeviceAddr> lowest_address = device->lowest_occupied_l1_address(bank_ids[0], this->determine_sub_device_ids(device));
+    constexpr bool active_sub_device_manager = false;
+    const auto &sub_device_ids = active_sub_device_manager ? this->determine_sub_device_ids(device) : std::vector<uint32_t>();
+    std::optional<DeviceAddr> lowest_address = device->lowest_occupied_compute_l1_address(sub_device_ids);
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
