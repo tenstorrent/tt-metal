@@ -72,7 +72,6 @@ class Cluster {
     }
 
     //! device driver and misc apis
-    void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
@@ -285,11 +284,7 @@ class Cluster {
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
-    tt_device_l1_address_params l1_address_params = {
-        (uint32_t)MEM_L1_BARRIER,
-        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
-        (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
-    };
+    tt_device_l1_address_params l1_address_params;
 
     tt_driver_eth_interface_params eth_interface_params = {
         NOC_ADDR_LOCAL_BITS,
