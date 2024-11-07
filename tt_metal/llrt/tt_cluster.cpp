@@ -384,20 +384,6 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) 
     this->driver_->assert_risc_reset_at_core(virtual_chip_coord);
 }
 
-inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {
-    uint64_t result = chip_y;
-    uint64_t noc_addr_local_bits_mask = (1UL << NOC_ADDR_LOCAL_BITS) - 1;
-    result <<= NOC_ADDR_NODE_ID_BITS;
-    result |= chip_x;
-    result <<= NOC_ADDR_NODE_ID_BITS;
-    result |= noc_y;
-    result <<= NOC_ADDR_NODE_ID_BITS;
-    result |= noc_x;
-    result <<= NOC_ADDR_LOCAL_BITS;
-    result |= (noc_addr_local_bits_mask & offset);
-    return result;
-}
-
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
