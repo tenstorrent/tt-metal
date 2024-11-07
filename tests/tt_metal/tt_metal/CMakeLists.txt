@@ -62,21 +62,38 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_common)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch_single_chip_multi_queue)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_common)
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch)
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch_single_chip_multi_queue)
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_buffer)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_event)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_program)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_trace)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
 
 add_custom_target(
     metal_tests
     DEPENDS
         ${METAL_TEST_TARGETS}
-        unit_tests
-        unit_tests_fast_dispatch
-        unit_tests_fast_dispatch_single_chip_multi_queue
-        unit_tests_frequent
-        metal_perf_microbenchmark_tests
-        unit_tests_galaxy
+        #unit_tests
+        #unit_tests_fast_dispatch
+        #unit_tests_fast_dispatch_single_chip_multi_queue
+        #unit_tests_frequent
+        #metal_perf_microbenchmark_tests
+        #unit_tests_galaxy
+        unit_tests_api
+        unit_tests_debug_tools
+        unit_tests_device
+        unit_tests_dispatch_buffer
+        unit_tests_dispatch_event
+        unit_tests_dispatch_program
+        unit_tests_dispatch_trace
+        unit_tests_stl
 )
