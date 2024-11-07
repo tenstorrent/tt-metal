@@ -260,7 +260,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op, user_defined_num_workers);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
-    bool enable_print = false;
     all_gather_config.print();
 
     bool is_sharded = input_tensor.is_sharded();
@@ -291,6 +290,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     std::map<string, string> worker_defines;
+    worker_defines["INPUT_TILE_SIZE"] = std::to_string(input_tensor_config->get_tile_size());
+    worker_defines["OUTPUT_TILE_SIZE"] = std::to_string(output_tensor_config->get_tile_size());
     if (rm) {
         worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {
@@ -367,13 +368,14 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     auto all_receiver_worker_cores = corerange_to_cores(all_receiver_workers, std::nullopt, true);
 
     // Circular Buffer Setup
-    uint32_t cb_page_size = input_page_size;
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
-    uint32_t cb_num_pages = 2 * max_pages_per_chunk;
-    log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
     uint32_t src0_cb_index = tt::CB::c_in0;
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
-    .set_page_size(src0_cb_index, cb_page_size);
+    const uint32_t cb_n_packets = 2;
+    const uint32_t CB_buffer_size = cb_n_packets * max_buffer_per_chunk;
+    log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(CB_buffer_size, {{src0_cb_index, df}})
+    .set_page_size(src0_cb_index, input_page_size)
+    .set_tile_dims(src0_cb_index, input_tensor_config->get_tile());
     CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
     CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
 
@@ -395,7 +397,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(output_page_size),
             static_cast<uint32_t>(ring_index),
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
-            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(ring_size)
         };
         if (is_sharded) {
@@ -438,7 +440,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
             // worker local L1 address of semaphore
             static_cast<uint32_t>(sender_worker_writer_semaphore_id),
-            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(num_edm_buffers_per_channel),
         };
 
@@ -451,7 +453,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
         log_trace(tt::LogOp, "\tring_index: {}", ring_index);
         log_trace(tt::LogOp, "\tsender_worker_writer_semaphore_id: {}", sender_worker_writer_semaphore_id);
-        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
+        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", max_pages_per_chunk);
 
         if (is_sharded) {
             log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
@@ -473,14 +475,14 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         std::vector<uint32_t> worker_receiver_reader_ct_args = {
             static_cast<uint32_t>(input_page_size),
             static_cast<uint32_t>(receiver_worker_semaphore_id),
-            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(num_edm_buffers_per_channel)
         };
 
         log_trace(tt::LogOp, "Worker RR ct args");
         log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
         log_trace(tt::LogOp, "\treceiver_worker_semaphore_id: {}", receiver_worker_semaphore_id);
-        log_trace(tt::LogOp, "\thalf_cb_num_pages : {}", cb_num_pages / 2);
+        log_trace(tt::LogOp, "\thalf_cb_num_pages : {}", max_pages_per_chunk);
         return worker_receiver_reader_ct_args;
     };
     std::vector<uint32_t> const& worker_receiver_reader_ct_args = build_worker_receiver_reader_ct_args();
@@ -499,7 +501,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(input_page_size),
             static_cast<uint32_t>(output_page_size),
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
-            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(ring_size),
             static_cast<bool>(fuse_op)
         };
@@ -513,7 +515,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
         log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
         log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
-        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
+        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", max_pages_per_chunk);
         log_trace(tt::LogOp, "\tring_size: {}", ring_size);
         log_trace(tt::LogOp, "\tfuse_op: {}", fuse_op);
 
@@ -688,7 +690,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 }
                 if (rem_pages != 0) {
                     rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_workers_per_link()) = rem_pages;
-                    TT_ASSERT(rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_workers_per_link()) <= cb_num_pages);
+                    TT_ASSERT(rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_workers_per_link()) <= max_pages_per_chunk * 2);
                 }
                 { // Logging
                     log_trace(tt::LogOp, "num_full_chunks, remaining pages per worker (clockwise):");
