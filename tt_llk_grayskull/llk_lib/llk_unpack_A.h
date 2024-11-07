@@ -185,9 +185,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const int transpose_of_f
     // Wait for free context
     wait_for_next_context(2);
 
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
     // Get tile address
     if (0 == unp_cfg_context) {
         if constexpr ((BType == BroadcastType::NONE) && (!acc_to_dest))  {
@@ -202,6 +199,9 @@ inline void _llk_unpack_A_(const std::uint32_t address, const int transpose_of_f
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address;
         }
     }
+
+    // Trisc::SEMPOST for context acquire
+    semaphore_post(semaphore::UNPACK_SYNC);
 
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);

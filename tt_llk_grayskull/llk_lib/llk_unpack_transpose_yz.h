@@ -49,15 +49,18 @@ inline void llk_unpack_transpose_yz(std::uint32_t operand, std::uint32_t tile_in
     // Wait for free context
     wait_for_next_context(2);
 
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
     // Get tile address
     if (0 == unp_cfg_context) {
         cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
     } else {
         cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
     }
+
+    // Trisc::SEMPOST for context acquire
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // Stall unpacker until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     mop_run(0, 4);
 
