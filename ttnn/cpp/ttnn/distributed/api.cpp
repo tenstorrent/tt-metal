@@ -25,9 +25,10 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
         std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
+        const Tile tile = tensor.get_tile();
         for (int i = 0; i < host_storage.num_buffers(); ++i)
         {
-            tensors.push_back(Tensor{OwnedStorage{host_storage.get_buffer(i)},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()});
+            tensors.push_back(Tensor{OwnedStorage{host_storage.get_buffer(i)},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout(),tile});
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
@@ -57,15 +58,19 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
     // Based whether the first tensor shard has OwnedBuffer or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = tensor_shards.at(0).storage_type();
+    Tile tile = tensor_shards.at(0).get_tile();
     if (storage_type == StorageType::OWNED) {
         std::vector<ttnn::Shape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto &shard : tensor_shards) {
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
             shapes.push_back(shard.get_shape());
+            if (shard.get_tile() != tile) {
+                TT_THROW("All tensor shards must have the same tile size");
+            }
         }
         auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
-        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
+        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout(),tile);
     } else {
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::Shape> shapes;
@@ -76,9 +81,12 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
             shapes.insert({device->id(), shard.get_shape()});
+            if (shard.get_tile() != tile) {
+                TT_THROW("All tensor shards must have the same tile size");
+            }
         }
         auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
-        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
+        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout(),tile);
     }
 }
 

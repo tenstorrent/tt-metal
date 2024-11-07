@@ -558,18 +558,21 @@ Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::op
             // Stalling reads for tensor data-type and layout are needed here
             // since some worker might have raced ahead to these lookups, while
             // another worker is populating this metadata.
+            const Tile tile = tensor.get_tile();
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 shard = Tensor{
                     DeviceStorage{s.get_buffer_for_device(target_device)},
                     s.get_tensor_shape_for_device(target_device),
                     tensor.get_dtype(),
-                    tensor.get_layout()};
+                    tensor.get_layout(),
+                    tile};
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 shard = Tensor{
                     OwnedStorage{s.get_buffer(buffer_index.value())},
                     s.get_tensor_shape(buffer_index.value()),
                     tensor.get_dtype(),
-                    tensor.get_layout()};
+                    tensor.get_layout(),
+                    tile};
             } else if constexpr (
                 std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage> ||
                 std::is_same_v<T, DeviceStorage>) {
