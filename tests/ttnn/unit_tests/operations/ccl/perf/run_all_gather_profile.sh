@@ -90,6 +90,7 @@ print(tabulate(average_df, headers='keys', tablefmt='pretty'))
         echo "$average_values"
     else
         echo "CSV path not found in the command output."
+        exit 1
     fi
 }
 
