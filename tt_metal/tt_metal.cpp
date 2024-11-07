@@ -837,16 +837,17 @@ DeviceAddr AllocateBuffer(Buffer *buffer) {
         GraphTracker::instance().track_allocate(buffer);
         return 0;
     }
-
+    // TODO: Validate correct sub-device manager id
+    auto& allocator = buffer->device()->get_initialized_allocator(buffer->sub_device_id());
     DeviceAddr allocated_addr;
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
+            *allocator,
             buffer->shard_spec().size() * buffer->num_cores().value() * buffer->page_size(),
             buffer);
     } else {
         allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
+            *allocator,
             buffer->size(),
             buffer);
     }
@@ -875,7 +876,9 @@ void DeallocateBuffer(Buffer *buffer) {
         TracyFreeN(reinterpret_cast<void const *>(buffer->address()), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
     }
 #endif
-    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
+    // TODO: Validate correct sub-device manager id
+    auto& allocator = buffer->device()->get_initialized_allocator(buffer->sub_device_id());
+    allocator::deallocate_buffer(*allocator, buffer);
 }
 
 void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
@@ -1137,37 +1140,38 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
 }
 
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
-    return Buffer::create(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, std::optional<DeviceAddr> address, std::optional<uint32_t> sub_device_id) {
+    if (address.has_value()) {
+        return Buffer::create(
+            config.device, *address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, sub_device_id);
+    } else {
+        return Buffer::create(
+            config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, sub_device_id);
+    }
 }
-
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
-    return Buffer::create(
-        config.device, address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
-}
-
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
-    return Buffer::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
-        config.shard_parameters,
-        std::nullopt);
-}
-
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
-    return Buffer::create(
-        config.device,
-        address,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
-        config.shard_parameters,
-        std::nullopt);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, std::optional<DeviceAddr> address, std::optional<uint32_t> sub_device_id) {
+    if (address.has_value()) {
+        return Buffer::create(
+            config.device,
+            *address,
+            config.size,
+            config.page_size,
+            config.buffer_type,
+            config.buffer_layout,
+            config.shard_parameters,
+            std::nullopt,
+            sub_device_id);
+    } else {
+        return Buffer::create(
+            config.device,
+            config.size,
+            config.page_size,
+            config.buffer_type,
+            config.buffer_layout,
+            config.shard_parameters,
+            std::nullopt,
+            sub_device_id);
+    }
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }

@@ -38,7 +38,7 @@ struct AllocatorConfig {
     uint32_t dram_unreserved_base = 0;
     //! worker specific configuration
     uint32_t l1_unreserved_base = 0;
-    CoreCoord worker_grid_size = {};
+    CoreRangeSet worker_grid = {};
     size_t worker_l1_size = 0;
     std::optional<uint32_t> storage_core_bank_size = 0;
     size_t l1_small_size = 0;
@@ -47,8 +47,9 @@ struct AllocatorConfig {
     std::unordered_map<int, int> worker_log_to_physical_routing_x = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
     BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
-    CoreCoord compute_grid_size = {};
+    CoreRangeSet compute_grid = {};
     uint32_t alignment = 0;
+    bool disable_interleaved = false;
     void reset();
     ~AllocatorConfig() { reset(); }
 };
