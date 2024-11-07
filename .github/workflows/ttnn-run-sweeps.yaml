@@ -93,6 +93,7 @@ on:
           - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
+          - eltwise.unary.tril.tril_sharded
           - eltwise.unary.triu.triu
           - eltwise.unary.normalize_hw.normalize_hw
           - eltwise.unary.normalize_global.normalize_global
