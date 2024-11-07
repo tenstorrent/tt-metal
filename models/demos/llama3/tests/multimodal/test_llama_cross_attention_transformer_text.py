@@ -279,13 +279,7 @@ def test_llama_cross_attention_transformer_text_inference(
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
             )
             if mode == "decode":
-                tt_full_text_mask_expand_11SD = ttnn.reshape(
-                    tt_full_text_mask_expand_11SD,
-                    shape=ttnn.Shape(
-                        [batch, 1, seq_len, head_dim],
-                        [batch, 1, 32, head_dim],
-                    ),
-                )
+                tt_full_text_mask_expand_11SD = None
 
             tt_out = tt_model(
                 tt_h,

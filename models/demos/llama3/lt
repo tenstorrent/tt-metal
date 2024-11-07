@@ -195,7 +195,7 @@ def main(stdscr):
                             for c in commands
                             for m in models
                             for d in devices
-                            if not (m in ["11b", "11b-b"] and d == "n150") or not (m == "70b" and d in ["n150", "n300"])
+                            if not ((m in ["11b", "11b-b"] and d == "n150") or (m == "70b" and d in ["n150", "n300"]))
                         ]
 
                         # Create output entries

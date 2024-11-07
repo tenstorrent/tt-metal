@@ -194,13 +194,7 @@ def test_llama_cross_attention_transformer_block_inference(
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
         if mode == "decode":
-            tt_full_text_mask_expand_11SD = ttnn.reshape(
-                tt_full_text_mask_expand_11SD,
-                shape=ttnn.Shape(
-                    [batch, 1, seq_len, head_dim],
-                    [batch, 1, 32, head_dim],
-                ),
-            )
+            tt_full_text_mask_expand_11SD = None
 
         pt_out = reference_model.forward(
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
