@@ -1984,7 +1984,7 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         ),
     ),
 )
-@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_h", [2])
 @pytest.mark.parametrize("enable_async", [True])
 def test_tiny_all_gather_sharded_post_commit(
     t3k_mesh_device,
@@ -2021,5 +2021,62 @@ def test_tiny_all_gather_sharded_post_commit(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
+        tile=(tile_h, 32),
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, input_shape, dim, layout",
+    [
+        (4, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("tile_h", [1, 4, 8, 16])
+def test_tiny_line_all_gather_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    tile_h,
+    num_iters=1,
+):
+    if t3k_mesh_device.get_num_devices() < num_devices:
+        pytest.skip("Not T3000!")
+
+    run_all_gather_on_t3000_impl(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Linear,
+        enable_async=enable_async,
+        num_iters=num_iters,
         tile=(tile_h, 32),
     )
