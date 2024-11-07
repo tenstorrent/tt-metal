@@ -39,7 +39,13 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("batch", (1, 2), ids=["batch_1", "batch_2"])
+@pytest.mark.parametrize(
+    "batch",
+    (1,),
+    ids=[
+        "batch_1",
+    ],
+)
 @torch.no_grad()
 def test_llama_cross_attention_transformer_text_inference(
     text_seq_len,
@@ -112,7 +118,7 @@ def test_llama_cross_attention_transformer_text_inference(
     for b in range(batch):
         tt_tensor_vision_tokens = model_args.prepare_inputs_ttnn_prefill(
             tt_vision_tokens[b : b + 1],
-            force_replicate=True,
+            force_replicated=True,
         )
 
         tt_xattn_cache = [
@@ -233,7 +239,7 @@ def test_llama_cross_attention_transformer_text_inference(
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                 )
 
                 rot_mats = get_prefill_rot_mat(

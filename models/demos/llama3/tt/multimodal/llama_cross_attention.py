@@ -133,7 +133,8 @@ class TtLlamaCrossAttention(LightweightModule):
 
     def compute_xattn_kv_cache(self, xattn_tokens, xattn_cache, user_id):
         # Always runs with batch=1
-        B, seqlen_y = 1, xattn_tokens.shape[2]
+        B, seqlen_y = xattn_tokens.shape[1], xattn_tokens.shape[2]
+        assert B == 1, "Batch size must be 1"
         MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
         if seqlen_y > MAX_MM_SEQ_LEN:
             xattn_tokens = ttnn.reshape(xattn_tokens, [1, B * seqlen_y // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
@@ -146,7 +147,6 @@ class TtLlamaCrossAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y, MAX_MM_SEQ_LEN),
         )
-
         xv = ttnn.linear(
             xattn_tokens,
             self.wv,

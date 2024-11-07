@@ -566,10 +566,19 @@ class TtModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
+            xattn_cache_y_cores = (
+                16 // self.num_devices
+            )  # Based on seqlen, this formula gives us a valid number of y cores
+            xattn_cache_x_cores = 8
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 # using n_heads since xattn repeats KV to match Q
-                (((self.n_heads // self.num_devices) * seq_len // 64), self.head_dim),
-                ttnn.CoreGrid(y=8, x=8),
+                (
+                    nearest_32(
+                        (self.n_heads // self.num_devices) * seq_len // (xattn_cache_y_cores * xattn_cache_x_cores)
+                    ),
+                    self.head_dim,
+                ),
+                ttnn.CoreGrid(y=xattn_cache_y_cores, x=xattn_cache_x_cores),
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
