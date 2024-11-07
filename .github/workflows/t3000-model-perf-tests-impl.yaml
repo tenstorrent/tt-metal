@@ -51,7 +51,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
-      - name: Download regular build artifact
+      - name: Download build artifact
         if: ${{ !matrix.test-group.tracy }}
         uses: actions/download-artifact@v4
         with:
@@ -74,9 +74,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ls -hal
-          export PERF_REPORT_FILENAME="Models_Perf_$(date +%Y_%m_%d).csv"
-          ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL="CCL_Perf_${TODAY}.csv"
+          if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+            echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+            echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
+            ls -hal "$PERF_REPORT_FILENAME_MODELS"
+          elif [ -f "$PERF_REPORT_FILENAME_CCL" ]; then
+            echo "Found CCL Perf report: $PERF_REPORT_FILENAME_CCL"
+            echo "perf_report_filename=$PERF_REPORT_FILENAME_CCL" >> "$GITHUB_OUTPUT"
+            ls -hal "$PERF_REPORT_FILENAME_CCL"
+          else
+            echo "No perf report found."
+            exit 1
+          fi
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
