@@ -93,6 +93,11 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         } else {
             TT_FATAL(false, "Only width or height concat on sharded tensors");
         }
+        TT_FATAL(
+            this->groups == 1 || memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Groups > 1 is only supported on height-sharded tensors (groups={} and memory_layout={} was provided)",
+            this->groups,
+            memory_layout);
     }
 }
 
@@ -125,18 +130,21 @@ std::vector<Tensor> ConcatDeviceOperation::create_output_tensors(const std::vect
 operation::ProgramWithCallbacks ConcatDeviceOperation::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     switch (this->get_parallelization_strategy(input_tensors)) {
-        case ConcatOpParallelizationStrategy::SHARDED_MULTI_CORE:
-            return detail::sharded_concat_multi_core(input_tensors, this->dim, output_tensors[0]);
+        case ConcatOpParallelizationStrategy::SHARDED_MULTI_CORE: {
+            return detail::sharded_concat_multi_core(input_tensors, this->dim, output_tensors[0], this->groups);
+        }
         case ConcatOpParallelizationStrategy::MULTI_CORE:
-        default:
+        default: {
+            TT_FATAL(this->groups == 1, "Groups > 1 not supported for ttnn.concat with interleaved input tensors");
             return detail::concat_multi_core(input_tensors, this->dim, output_tensors[0]);
+        }
     };
 }
 
-Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, const MemoryConfig &output_mem_config) {
+Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, const unsigned int groups, const MemoryConfig &output_mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensors[0]}))};
     operation::launch_op(
-        [dim, output_mem_config](
+        [dim, groups, output_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<std::optional<Tensor>> &optional_output_tensors) -> std::vector<Tensor> {
@@ -148,7 +156,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
             uint32_t normalized_dim = input_tensors[0].get_legacy_shape().get_normalized_index(dim);
 
             if (input_tensors[0].is_sharded()) {
-                return operation::run(ConcatDeviceOperation{normalized_dim, output_mem_config}, {input_tensors});
+                return operation::run(ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {input_tensors});
             } else {
                 if (input_tensors[0].get_layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
                     for (const auto &input_tensor : input_tensors) {
@@ -187,7 +195,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                 }
 
                 return operation::run_with_autoformat(
-                    ConcatDeviceOperation{normalized_dim, output_mem_config}, {input_tensors}, {input_format_params}, {target_layout});
+                    ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {input_tensors}, {input_format_params}, {target_layout});
             }
         },
         input_tensors,
