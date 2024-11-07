@@ -849,9 +849,12 @@ Result conv2d(
     auto output_parallel_config = parallel_config;
     if(!conv_config.shard_layout.has_value()) {
         conv_config.shard_layout = parallel_config.shard_scheme;
+    } else if (conv_config.shard_layout != parallel_config.shard_scheme) {
+        log_warning(tt::LogOp,"Changing shard layout from {} to {}",conv_config.shard_layout.value(), parallel_config.shard_scheme);
+        conv_config.shard_layout = parallel_config.shard_scheme;
     }
 
-    if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
+    if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
         uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
 
         output_parallel_config = {
