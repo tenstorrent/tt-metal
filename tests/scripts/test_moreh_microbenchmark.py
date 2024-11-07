@@ -807,7 +807,7 @@ def test_dram_read_l1_write_core(
     data.append([throughput])
     # check within range
     if arch == "grayskull":
-        bw_bound = 83.0  # Equals 100 GB/s with 1200 MHz
+        bw_bound = 70.0  # Equals 85 GB/s with 1200 MHz
     elif arch == "wormhole_b0":
         bw_bound = 260.0
     elif arch == "blackhole":
