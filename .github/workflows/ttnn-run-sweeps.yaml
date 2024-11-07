@@ -95,6 +95,7 @@ on:
           - eltwise.unary.tril.tril
           - eltwise.unary.tril.tril_sharded
           - eltwise.unary.triu.triu
+          - eltwise.unary.triu.triu_sharded
           - eltwise.unary.normalize_hw.normalize_hw
           - eltwise.unary.normalize_global.normalize_global
           - eltwise.unary.heaviside.heaviside
