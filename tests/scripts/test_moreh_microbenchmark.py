@@ -725,7 +725,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
 @pytest.mark.parametrize(
     "arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target",
     [
-        ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 2, 8, 0, None),
+        ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0, None),
         ("wormhole_b0", np.array([32768 * 2, 12 * 128]), 1, 64, 2, 12, 0, None),
         ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
         # FF1/FF3 shapes for TG llama 70b
@@ -807,7 +807,7 @@ def test_dram_read_l1_write_core(
     data.append([throughput])
     # check within range
     if arch == "grayskull":
-        bw_bound = 100.0
+        bw_bound = 83.0  # Equals 100 GB/s with 1200 MHz
     elif arch == "wormhole_b0":
         bw_bound = 260.0
     elif arch == "blackhole":
