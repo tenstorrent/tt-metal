@@ -27,6 +27,6 @@ struct tensor_args_t {
 
 using tensor_return_value_t = Tensor;
 
-using shape_return_value_t = ttnn::Shape;
+using shape_return_value_t = ttnn::SimpleShape;
 
 } // namespace ttnn::operations::unary

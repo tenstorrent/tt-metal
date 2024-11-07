@@ -163,7 +163,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
 
             /* Matmul setup */
-            bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_shape());
+            bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
