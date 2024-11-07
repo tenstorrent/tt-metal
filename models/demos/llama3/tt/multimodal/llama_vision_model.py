@@ -414,13 +414,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ),
             )
 
-            tt_full_text_mask_expand_11SD = ttnn.reshape(
-                tt_full_text_mask_expand_11SD,
-                shape=ttnn.Shape(
-                    [batch, 1, seq_len, self.configuration.head_dim],
-                    [batch, 1, 32, self.configuration.head_dim],
-                ),
-            )
+            tt_full_text_mask_expand_11SD = None
 
         logits = self.text_model.forward(
             tt_h,
