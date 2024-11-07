@@ -314,6 +314,35 @@ def run_dram_read_remote_cb_sync_cmd(
     run_moreh_single_test("DRAM read remote CB sync single-core ", command)
 
 
+def run_remote_cb_sync_matmul_single_core_cmd(
+    m, k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_layers
+):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul "
+        + " --m "
+        + str(m)
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --cb-num-blocks "
+        + str(cb_num_blocks)
+        + " --cb-padding "
+        + str(cb_padding)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-receivers "
+        + str(num_receivers)
+        + " --num-layers "
+        + str(num_layers)
+    )
+    run_moreh_single_test("DRAM read remote CB sync single-core ", command)
+
+
 # noc
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
@@ -819,42 +848,61 @@ def test_dram_read_l1_write_core(
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers",
+    "arch, test, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers",
     [
         # single layer single receiver test
-        ("wormhole_b0", 1000, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
+        ("wormhole_b0", None, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
         # single layer multi receiver test
-        ("wormhole_b0", 1000, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
+        ("wormhole_b0", None, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
         # multi layer multi receiver test
-        ("wormhole_b0", 1000, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
+        ("wormhole_b0", None, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
+        # Matmul test does not support mixed data format, just test for either bfp8 or fp16
+        # single layer single receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 4096, 128]), 1, 8, 10, 256, 0, 1, 1),
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 1, 1),
+        # # single layer multi receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 1),
+        # # multi layer multi receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 15),
     ],
 )
 def test_dram_read_remote_cb_sync(
-    arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
+    arch, test, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
 ):
     data = []
     cycle_list = []
     time_list = []
     throughput_list = []
     for _ in range(num_tests):
-        k = int(test_vector[0])
-        n = int(test_vector[1])
+        if test == None:
+            k = int(test_vector[0])
+            n = int(test_vector[1])
+        elif test == "Matmul":
+            m = int(test_vector[0])
+            k = int(test_vector[1])
+            n = int(test_vector[2])
         input_size = 0
         if data_format == 0:
             input_size += k * n * 1088 // 1024
         elif data_format == 1:
             input_size += k * n * 2048 // 1024
-        for i in range(num_mixed_df_layers - 1):
-            if i % 2 == 0:
-                input_size += k * n * 1088 // 1024
-            else:
-                input_size += k * n * 2048 // 1024
-        run_dram_read_remote_cb_sync_cmd(
-            k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
-        )
+        if test == None:
+            for i in range(num_mixed_df_layers - 1):
+                if i % 2 == 0:
+                    input_size += k * n * 1088 // 1024
+                else:
+                    input_size += k * n * 2048 // 1024
+            run_dram_read_remote_cb_sync_cmd(
+                k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
+            )
+        elif test == "Matmul":
+            input_size = input_size * num_mixed_df_layers
+            run_remote_cb_sync_matmul_single_core_cmd(
+                m, k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
+            )
         cycle = profile_results_kernel_duration()
-        time = cycle / freq / 1000.0 / 1000.0
-        throughput = input_size / cycle * freq / 1000.0
+        time = cycle / get_device_freq() / 1000.0 / 1000.0
+        throughput = input_size / cycle * get_device_freq() / 1000.0
         cycle_list.append(cycle)
         time_list.append(time)
         throughput_list.append(throughput)
@@ -866,13 +914,12 @@ def test_dram_read_remote_cb_sync(
     logger.info("DRAM read throughput: " + str(throughput))
     data.append([throughput])
     # check within range
-    dev_freq = get_device_freq()
-    if arch == "grayskull":
-        bw_bound = 100.0
-    elif arch == "wormhole_b0":
-        bw_bound = 22.0
-    elif arch == "blackhole":
-        bw_bound = 340.0
+    if test == None:
+        if arch == "wormhole_b0":
+            bw_bound = 22.0
+    elif test == "Matmul":
+        if arch == "wormhole_b0":
+            bw_bound = 18.0
     assert bw_bound <= throughput
 
 
