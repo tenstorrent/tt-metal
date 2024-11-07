@@ -103,13 +103,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_segformer(const 
     std::map<string, string> writer_defines;
 
     //////////////////////////////////////////////
-
-    // auto reader_kernel_id = tt_metal::CreateKernel(
-    //     program,
-    //     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-    //     all_cores,
-    //     tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
@@ -180,8 +173,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_segformer(const 
         auto src_dram_buffer = input_buffers.at(0);
 
         auto dst_dram_buffer_query = output_buffers.at(0);
-        //auto dst_dram_buffer_key = output_buffers.at(1);
-        //auto dst_dram_buffer_value = output_buffers.at(2);
 
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

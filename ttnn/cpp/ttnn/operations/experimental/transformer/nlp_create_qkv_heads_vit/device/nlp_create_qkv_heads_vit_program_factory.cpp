@@ -184,11 +184,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vit(const Tensor
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        // std::vector<uint32_t> reader_runtime_args = {
-        //     (std::uint32_t) in0_buffer->address(),
-        //     num_blocks_per_core * per_tensor_tiles,
-        //     num_blocks_written * per_tensor_tiles,
-        // };
         std::vector<uint32_t> reader_runtime_args = {
             (std::uint32_t) in0_buffer->address(),
             (std::uint32_t) in1_buffer_addr,
