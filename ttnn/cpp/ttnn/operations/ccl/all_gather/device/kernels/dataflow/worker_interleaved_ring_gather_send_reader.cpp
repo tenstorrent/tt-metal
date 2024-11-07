@@ -121,13 +121,13 @@ void kernel_main() {
         #ifdef INTERLEAVED_MEM_LAYOUT
         const DataFormat in0_df = get_dataformat(cb_id_in0);
 
-        const InterleavedAddrGenFast<src_is_dram> s = {
+        const InterleavedAddrGenFast<src_is_dram, INPUT_TILE_SIZE> s = {
             .bank_base_address = src_addr,
             .page_size = page_size,
             .data_format = in0_df
         };
 
-        InterleavedAddrGenFast<dst_is_dram> d = {
+        InterleavedAddrGenFast<dst_is_dram, OUTPUT_TILE_SIZE> d = {
             .bank_base_address = dst_addr,
             .page_size = output_page_size,
             .data_format = in0_df
