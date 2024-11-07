@@ -119,6 +119,7 @@ class Hal {
   private:
     std::mutex lock;
     bool initialized_;
+    tt::ARCH arch_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
@@ -132,6 +133,8 @@ class Hal {
     Hal();
 
     void initialize(tt::ARCH arch);
+
+    tt::ARCH get_arch() {return arch_;}
 
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;

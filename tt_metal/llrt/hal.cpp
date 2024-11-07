@@ -38,6 +38,8 @@ void Hal::initialize(tt::ARCH arch) {
             TT_THROW("Unsupported arch for HAL");
         }
 
+        this->arch_ = arch;
+
         this->initialized_ = true;
     }
 }
