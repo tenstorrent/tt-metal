@@ -33,6 +33,16 @@ namespace tt {
 
 namespace tt_metal {
 
+Tensor::TensorAttributes::TensorAttributes():
+    shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), tensor_layout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig{}) {}
+
+Tensor::TensorAttributes::TensorAttributes(const Storage storage, const TensorLayout& tensor_layout, const ttnn::SimpleShape& logical_shape) :
+    storage(storage), shape(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view()), tensor_layout(tensor_layout) {
+}
+
+Tensor::TensorAttributes::TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile)
+    : TensorAttributes(storage, TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), MemoryConfig{}, shape), shape.logical_shape()) {}
+
 void Tensor::TensorAttributes::increment_main_thread_ref_count(Device *worker) {
     if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and not tt::tt_metal::detail::InWorkerThread()) {
         main_thread_ref_count++;
@@ -134,7 +144,6 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
         },
         storage);
     this->tensor_attributes->num_workers_completed = this->tensor_attributes->num_shards_to_be_populated;
-    this->tensor_attributes->metadata_populated = true;
 }
 
 Tensor::Tensor(
@@ -391,13 +400,10 @@ void Tensor::deepcopy(const Tensor& other) {
     // Wait until the tensor being copied is populated
     other.wait_for_tensor_data_populated();
     // Populate tensor metadata
-    this->set_shape(other.get_shape());
-    this->set_storage(other.get_storage());
-    this->set_dtype(other.get_dtype());
-    this->set_layout(other.get_layout());
-    this->set_tile(other.get_tile());
+    this->tensor_attributes->shape = other.tensor_attributes->shape;
+    this->tensor_attributes->storage = other.tensor_attributes->storage;
+    this->tensor_attributes->tensor_layout = other.tensor_attributes->tensor_layout;
     // Set metadata populated flag for getters
-    this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
 }
 
@@ -405,10 +411,8 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     ZoneScoped;
     // Similar to deepcopy, but to be applied on a tensor that has an empty storage
     // container initialized. Require tensor storage to be correctly initialized.
-    this->set_shape(other.get_shape());
-    this->set_dtype(other.get_dtype());
-    this->set_layout(other.get_layout());
-    this->set_tile(other.get_tile());
+    this->tensor_attributes->shape = other.tensor_attributes->shape;
+    this->tensor_attributes->tensor_layout = other.tensor_attributes->tensor_layout;
     // Populate storage container with buffers + shapes
     std::visit(
         [this](auto&& storage) {
@@ -424,7 +428,6 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
         },
         other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the
                                // worker thread
-    this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
 }
 
@@ -433,11 +436,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
     // Initialize an empty worker vector (remains empty for host side storage)
     std::vector<Device*> workers = {};
 
-    if (this->tensor_attributes->dynamic_storage) {
-        // Tensor is populated by launch_with_autoformat
-        // Storage type can change based on op behaviour, wait until tensor populated.
-        this->wait_for_tensor_metadata_populated();
-    }
+    this->wait_for_tensor_data_populated();
 
     std::visit(
         [this, blocking, &workers](auto&& storage) {
@@ -450,8 +449,6 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                     blocking or (this->workers.size() == 1),
                     "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
                 if (this->workers.size() != 1) {
-                    // Not populated - sync.
-                    this->wait_for_tensor_data_populated();
                     workers = std::vector<Device*>{this->device()};
                 } else {
                     // Already populated.
@@ -464,8 +461,6 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                     blocking or (this->workers.size()),
                     "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
                 if (not this->workers.size()) {
-                    // Not populated - sync.
-                    this->wait_for_tensor_data_populated();
                     workers.reserve(storage.num_buffers());
                     for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
                         auto device_id = storage.ordered_device_ids[i];
@@ -482,25 +477,20 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 
 // Getters - Spin until tensor is populated before querying tensor metadata
 const tt::tt_metal::LegacyShape& Tensor::get_legacy_shape() const {
-    this->wait_for_tensor_metadata_populated();
     return this->tensor_attributes->shape.value;
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
-    this->wait_for_tensor_metadata_populated();
     return this->tensor_attributes->shape;
 }
-const DataType& Tensor::get_dtype() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->tensor_attributes->dtype;
+DataType Tensor::get_dtype() const {
+    return this->dtype();
 }
-const Layout& Tensor::get_layout() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->tensor_attributes->layout;
+Layout Tensor::get_layout() const {
+    return this->layout();
 }
-const Tile& Tensor::get_tile() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->tensor_attributes->tile;
+std::optional<Tile> Tensor::get_tile() const {
+    return this->tile();
 }
 
 const Storage& Tensor::get_storage() const {
@@ -834,13 +824,12 @@ Tensor allocate_tensor_on_device(
 
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
-                device_tensor.set_shape(ttnn::Shape(shape));
+                /*device_tensor.set_shape(ttnn::Shape(shape));
                 device_tensor.set_dtype(data_type);
                 device_tensor.set_layout(layout);
                 if (tile.has_value()) {
                     device_tensor.set_tile(tile.value());
-                }
-                device_tensor.tensor_attributes->metadata_populated = true;
+                }*/
             }
         });
     }

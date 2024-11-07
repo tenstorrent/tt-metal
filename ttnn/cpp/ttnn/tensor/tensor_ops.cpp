@@ -80,13 +80,13 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
             }
             insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
+            /*if (not num_workers_completed) {
                 device_tensor.set_shape(input_tensor.get_shape());
                 device_tensor.set_dtype(input_tensor.get_dtype());
                 device_tensor.set_layout(input_tensor.get_layout());
                 device_tensor.set_tile(input_tensor.get_tile());
                 device_tensor.tensor_attributes->metadata_populated = true;
-            }
+            }*/
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
@@ -122,13 +122,13 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
             shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
             insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
             uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
+            /*if (not num_workers_completed) {
                 host_tensor.set_shape(input_tensor.get_shape());
                 host_tensor.set_dtype(input_tensor.get_dtype());
                 host_tensor.set_layout(input_tensor.get_layout());
                 host_tensor.set_tile(input_tensor.get_tile());
                 host_tensor.tensor_attributes->metadata_populated = true;
-            }
+            }*/
         });
     }
 
@@ -211,13 +211,13 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
                 insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
                 uint32_t num_workers_completed = (tensor_modified_layout.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
+                /*if (not num_workers_completed) {
                     tensor_modified_layout.set_shape(input_tensor.get_shape());
                     tensor_modified_layout.set_dtype(input_tensor.get_dtype());
                     tensor_modified_layout.set_layout(target_layout);
                     tensor_modified_layout.set_tile(input_tensor.get_tile());
                     tensor_modified_layout.tensor_attributes->metadata_populated = true;
-                };
+                };*/
             });
         }
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
@@ -345,7 +345,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
         new_padded_shape.volume());
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
-            new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 && new_padded_shape[-1] % tile.get_tile_shape()[1] == 0 &&
+            new_padded_shape[-2] % tile->get_tile_shape()[0] == 0 && new_padded_shape[-1] % tile->get_tile_shape()[1] == 0 &&
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
     auto output = std::visit(

@@ -51,6 +51,11 @@ public:
     //  H is all dimensions except W multiplied and aligned to tile and shard height
     Size compute_physical_shape(const ttnn::SimpleShape& shape) const;
 
+    static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_);
+    }
+
 private:
     // Private to not expose alignment parameter to the public API
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);

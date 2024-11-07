@@ -36,22 +36,18 @@ struct Tensor {
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         ttnn::Shape shape;
-        DataType dtype;
-        Layout layout;
-        Tile tile;
+        TensorLayout tensor_layout;
         uint32_t num_shards_to_be_populated = 0;
         uint32_t main_thread_ref_count = 0;
         std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
         std::atomic<bool> main_thread_tensor = true;
-        std::atomic<bool> metadata_populated = false;
         std::atomic<int> num_workers_completed = 0;
         bool deallocated = false;      // Set to true if device side storage was deallocated
         bool dynamic_storage = false;  // Storage type can change, depending on op behaviour
         bool track_ref_count = false;
-        TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile = std::array<uint32_t, 2>{32, 32}) :
-            storage(storage), shape(shape), dtype(dtype), layout(layout), tile(tile) {}
-        TensorAttributes() :
-            shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID), tile(std::array<uint32_t, 2>{32, 32}) {}
+        TensorAttributes(const Storage storage, const TensorLayout& tensor_layout, const ttnn::SimpleShape& logical_shape);
+        TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile = std::array<uint32_t, 2>{32, 32});
+        TensorAttributes();
         ~TensorAttributes() = default;
 
         // Use these functions to manage the main_thread_ref_count for a tensor attr instance.
@@ -186,9 +182,9 @@ struct Tensor {
     // [[deprecated("Use get_shape() instead.")]]
     const tt::tt_metal::LegacyShape &get_legacy_shape() const;
     const ttnn::Shape &get_shape() const;
-    const DataType &get_dtype() const;
-    const Layout &get_layout() const;
-    const Tile &get_tile() const;
+    DataType get_dtype() const;
+    Layout get_layout() const;
+    std::optional<Tile> get_tile() const;
 
     ttnn::SimpleShape get_logical_shape() const;
     ttnn::SimpleShape get_padded_shape() const;
@@ -200,18 +196,18 @@ struct Tensor {
     inline const Storage &storage() const { return this->tensor_attributes->storage; };
     inline const tt::tt_metal::LegacyShape &legacy_shape() const { return this->tensor_attributes->shape.value; };
     inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
-    inline const DataType &dtype() const { return this->tensor_attributes->dtype; };
-    inline const Layout &layout() const { return this->tensor_attributes->layout; };
-    inline const Tile &tile() const { return this->tensor_attributes->tile; };
+    inline DataType dtype() const { return this->tensor_attributes->tensor_layout.get_data_type(); };
+    inline Layout layout() const { return this->tensor_attributes->tensor_layout.get_layout(); };
+    inline std::optional<Tile> tile() const { return this->tensor_attributes->tensor_layout.get_page_config().get_tile(); };
 
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
     inline void set_storage(const Storage &storage) { this->tensor_attributes->storage = storage; }
-    inline void set_shape(const ttnn::Shape &shape) { this->tensor_attributes->shape = shape; }
-    inline void set_dtype(const DataType &dtype) { this->tensor_attributes->dtype = dtype; }
-    inline void set_layout(const Layout &layout) { this->tensor_attributes->layout = layout; }
-    inline void set_tile(const Tile &tile) { this->tensor_attributes->tile = tile; }
+    //inline void set_shape(const ttnn::Shape &shape) { this->tensor_attributes->shape = shape; }
+    //inline void set_dtype(const DataType &dtype) { this->tensor_attributes->dtype = dtype; }
+    //inline void set_layout(const Layout &layout) { this->tensor_attributes->layout = layout; }
+    //inline void set_tile(const Tile &tile) { this->tensor_attributes->tile = tile; }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
@@ -273,9 +269,9 @@ struct Tensor {
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("storage", "shape", "dtype", "layout", "tile");
+    static constexpr auto attribute_names = std::forward_as_tuple("storage", "shape", "tensor_layout");
     const auto attribute_values() const {
-        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->shape, this->tensor_attributes->dtype, this->tensor_attributes->layout, this->tensor_attributes->tile);
+        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->shape, this->tensor_attributes->tensor_layout);
     }
 
     std::vector<uint32_t> host_page_ordering();
@@ -285,14 +281,6 @@ struct Tensor {
         // Stall until all the workers for this tensor
         // have populated the full tensor
         while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
-        }
-    }
-
-    // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
-    inline void wait_for_tensor_metadata_populated() const {
-        // First worker is responsible for updating all metadata fields
-        // Stall until this worker is done
-        while (not this->tensor_attributes->metadata_populated) {
         }
     }
 };

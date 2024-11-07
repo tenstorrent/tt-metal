@@ -99,7 +99,8 @@ ttnn::Tensor RepeatOperation::invoke(
 
             auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.view(),
                                                      tiled_output.get_padded_shape().view());
-            tiled_output.set_shape(padded_to_tiled_shape);
+            //????
+            //tiled_output.set_shape(padded_to_tiled_shape);
             return tiled_output;
         } else {
             return ttnn::slice(output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);

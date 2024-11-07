@@ -231,12 +231,10 @@ void launch_op(
                         }
                         insert_buffer_and_shape_for_device(target_device, *local_tensor, *output_tensor);
                         int num_workers_completed = (output_tensor->tensor_attributes->num_workers_completed)++;
+                        //?
                         if (not num_workers_completed) {
                             output_tensor->tensor_attributes->shape = local_tensor->tensor_attributes->shape;
-                            output_tensor->tensor_attributes->dtype = local_tensor->tensor_attributes->dtype;
-                            output_tensor->tensor_attributes->layout = local_tensor->tensor_attributes->layout;
-                            output_tensor->tensor_attributes->tile = local_tensor->tensor_attributes->tile;
-                            output_tensor->tensor_attributes->metadata_populated = true;
+                            output_tensor->tensor_attributes->tensor_layout = local_tensor->tensor_attributes->tensor_layout;
                         }
                     }
                 }

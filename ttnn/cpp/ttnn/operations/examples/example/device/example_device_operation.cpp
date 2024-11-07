@@ -32,8 +32,8 @@ ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_out
     const auto& input_tensor = tensor_args.input_tensor;
     return create_device_tensor(
         output_shape,
-        input_tensor.tensor_attributes->dtype,
-        input_tensor.tensor_attributes->layout,
+        input_tensor.dtype(),
+        input_tensor.layout(),
         input_tensor.device());
 }
 

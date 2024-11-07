@@ -680,14 +680,15 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     // convert_conv_weight_tensor adds the padding to the base shape.
     // Reshape the weights to remove padding from the base shape.
-    weight_tensor_.set_shape(
+    //???????????????????????????????????
+    /*weight_tensor_.set_shape(
         ttnn::Shape(std::array<uint32_t,4>{1, 1, weight_matrix_height, out_channels},
         std::array<std::array<uint32_t, 2>, 4>{
             std::array<uint32_t, 2>{0, 0},
             std::array<uint32_t, 2>{0, 0},
             std::array<uint32_t, 2>{0, weight_matrix_height_padding},
             std::array<uint32_t, 2>{0, out_channel_padding}
-    }));
+    }));*/
 
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     if (bias_tensor.has_value()) {
