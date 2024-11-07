@@ -81,7 +81,7 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 
 
 template <typename binary_operation_t>
-void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ", const std::string& note=" ") {
+void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ", const std::string& supported_dtype="BFLOAT16", const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -106,7 +106,19 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         Supports broadcasting.
 
         Note:
-            {5}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {5}
+                 - TILE
+                 - 2, 3, 4
+
+            {6}
 
         Example:
 
@@ -119,6 +131,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         description,
         math,
         info,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -173,7 +186,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& note="") {
+void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype = "BFLAOT16", const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -192,7 +205,19 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
             ttnn.Tensor: the output tensor.
 
         Note:
-            {4}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
 
         Example:
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
@@ -205,6 +230,7 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
         operation.python_fully_qualified_name(),
         description,
         math,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -471,7 +497,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
 }
 
 template <typename binary_operation_t>
-void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& note=" ") {
+void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype="BFLOAT16", const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -490,7 +516,19 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
             ttnn.Tensor: the output tensor.
 
         Note:
-            {4}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
 
         Example:
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
@@ -503,6 +541,7 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
         operation.python_fully_qualified_name(),
         description,
         math,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -577,7 +616,7 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
 }
 
 template <typename binary_operation_t>
-void bind_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype="BFLOAT16", const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -592,6 +631,21 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
             Returns:
                ttnn.Tensor: the output tensor.
 
+            Note:
+                Supported dtypes, layouts, and ranks:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                     - Ranks
+                   * - {4}
+                     - TILE
+                     - 2, 3, 4
+
+                {5}
+
             Example:
                 >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor1, tensor2)
@@ -599,7 +653,9 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -626,7 +682,7 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
 }
 
 template <typename binary_operation_t>
-void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& note=" ") {
+void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype = "BFLOAT16", const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -642,7 +698,19 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
             ttnn.Tensor: the output tensor.
 
         Note:
-            {4}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
@@ -653,6 +721,7 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
         operation.python_fully_qualified_name(),
         description,
         math,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -731,7 +800,7 @@ void py_module(py::module& module) {
         ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i))doc",
-        R"doc(: :code:`'None'` | :code:`'relu'`. )doc");
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -745,14 +814,7 @@ void py_module(py::module& module) {
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i))doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -765,15 +827,7 @@ void py_module(py::module& module) {
         ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i))doc",
-        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -821,91 +875,37 @@ void py_module(py::module& module) {
         module,
         ttnn::logical_and,
         R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",". ",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logical_or,
         R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",". ",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ldexp,
         R"doc(Compute ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = ldexp(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(\mathrm{{output\_tensor}} = ldexp(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logaddexp,
         R"doc(Compute logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = logaddexp(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(\mathrm{{output\_tensor}} = logaddexp(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logaddexp2,
         R"doc(Compute logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = logaddexp2(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(\mathrm{{output\_tensor}} = logaddexp2(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::squared_difference,
         R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc", ". ",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
@@ -939,14 +939,6 @@ void py_module(py::module& module) {
         ttnn::xlogy,
         R"doc(Compute xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
-        )doc",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
         )doc");
 
     detail::bind_binary_composite(
@@ -973,59 +965,25 @@ void py_module(py::module& module) {
         ttnn::logical_xor,
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",".",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
         R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc((\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_xor_,
         R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc((\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
         R"doc(Compute inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+        R"doc((\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite(
         module,
@@ -1105,16 +1063,7 @@ void py_module(py::module& module) {
         ttnn::polyval,
         R"doc(Compute polyval of all elements of :attr:`input_tensor_a` with coefficient :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \sum_{i=0}^{n} (\mathrm{coeffs}_i) (\mathrm{input\_tensor}^i)
-        )doc",
-
-        R"doc(Supported dtypes, layouts, and ranks:
-
-            +----------------------------+---------------------------------+-------------------+
-            |     Dtypes                 |         Layouts                 |     Ranks         |
-            +----------------------------+---------------------------------+-------------------+
-            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-            +----------------------------+---------------------------------+-------------------+
-            )doc");
+        )doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_overload_operation(
         module,
