@@ -51,29 +51,30 @@ void kernel_main() {
     constexpr uint32_t in1_block_h = get_compile_time_arg_val(6);
     constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(7);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(9);
     // in1 mcast args
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(11);
-    constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(12);
+    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
+    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(12);
+    constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(13);
     // batch args
-    constexpr uint32_t KtNt = get_compile_time_arg_val(13);
-    constexpr uint32_t batch = get_compile_time_arg_val(14);
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(15);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(14);
+    constexpr uint32_t batch = get_compile_time_arg_val(15);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(16);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(17);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(18);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(19);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(17);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(18);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(19);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(20);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(21);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(21);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(23);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(23);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(24);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
@@ -108,7 +109,7 @@ void kernel_main() {
         fused_op_receiver = MatmulOpReceiver(
             false, /* wait_for_op_signal */
             rt_args_idx,
-            num_blocks,
+            num_blocks_inner_dim,
             in1_block_h /* tiles_per_block (in the same dimension */
         );
     }
@@ -134,8 +135,8 @@ void kernel_main() {
 
 //  READER
 #ifdef IN1_SHARDED
-    cb_reserve_back(cb_id_in1, in1_block_num_tiles*num_blocks);
-    cb_push_back(cb_id_in1, in1_block_num_tiles*num_blocks);
+    cb_reserve_back(cb_id_in1, in1_block_num_tiles*num_blocks_inner_dim);
+    cb_push_back(cb_id_in1, in1_block_num_tiles*num_blocks_inner_dim);
 #else
     uint32_t l1_write_addr_in1;
 
@@ -188,7 +189,7 @@ void kernel_main() {
         uint32_t l1_read_addr_in1_offset = 0;
 #endif
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
-        for (uint32_t block = 0; block < num_blocks; ++block) {
+        for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
             if constexpr(fuse_op) {
                 fused_op_receiver.update_current_block_start_tile_id(
                     block,
