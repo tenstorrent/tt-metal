@@ -140,13 +140,17 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
-    auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &,
-            const std::vector<Tensor> &output_tensors) { ; };
+    auto override_runtime_arguments_callback = [num_input_tensors, cb_input, cb_output](
+                                                   const void *operation,
+                                                   Program &program,
+                                                   const std::vector<Tensor> &input_tensors,
+                                                   const std::vector<std::optional<const Tensor>> &,
+                                                   const std::vector<Tensor> &output_tensors) {
+        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+            UpdateDynamicCircularBufferAddress(program, cb_input[input_id], *input_tensors[input_id].buffer());
+        }
+        UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
+    };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

@@ -77,7 +77,6 @@ def test_concat(device, height, width, dim, async_mode):
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ROW_MAJOR_LAYOUT,
             True,
-            marks=pytest.mark.xfail(reason="two tensors concat kernel doesn't work with program cache (#13466)"),
         ),
         (
             [((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16))],
