@@ -207,9 +207,6 @@ inline void llk_unpack_tilizeA_B(
         // Wait for free context
         wait_for_next_context(2);
 
-        // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
-
         // Get tile address for src a
         if (0 == unp_cfg_context) {
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
@@ -218,6 +215,12 @@ inline void llk_unpack_tilizeA_B(
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
         }
+
+        // Trisc::SEMPOST for context acquire
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         // Run MOP
         ckernel::ckernel_template::run(instrn_buffer);

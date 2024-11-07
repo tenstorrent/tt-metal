@@ -250,9 +250,6 @@ inline void llk_unpack_tilizeA_B(
         // Wait for free context
         wait_for_next_context(2);
 
-        // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
-
         if constexpr (neginf_srcA) {
             TTI_UNPACR_NOP(SrcA,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
         }
@@ -265,6 +262,12 @@ inline void llk_unpack_tilizeA_B(
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_face_a;
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
         }
+
+        // Trisc::SEMPOST for context acquire
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         //Reset Y counters for SrcA
         TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
