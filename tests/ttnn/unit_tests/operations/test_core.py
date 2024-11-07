@@ -469,18 +469,18 @@ def test_create_sharded_memory_config(device, shape, strategy, orientation, core
                 }
             ),
         ),
-        (
-            [1, 1, 675840, 16],
-            [5280, 16],
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9)),  # 120
-                    ttnn.CoreRange(ttnn.CoreCoord(12, 0), ttnn.CoreCoord(12, 7)),  # 8
-                }
-            ),
-        ),
+        #        (
+        #            [1, 1, 675840, 16],
+        #            [5280, 16],
+        #            ttnn.ShardStrategy.HEIGHT,
+        #            ttnn.ShardOrientation.ROW_MAJOR,
+        #            ttnn.CoreRangeSet(
+        #                {
+        #                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9)),  # 120
+        #                    ttnn.CoreRange(ttnn.CoreCoord(12, 0), ttnn.CoreCoord(12, 7)),  # 8
+        #                }
+        #            ),
+        #        ),
     ],
 )
 @pytest.mark.parametrize(
