@@ -237,6 +237,7 @@ def append_device_data(ops, traceReplays, logFolder):
     devicesOps, hasTraceRuns = get_device_op_data(ops)
     logger.info(f"Appending device data")
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
+    traceOps = {}
     if os.path.isfile(deviceTimesLog):
         setup = device_post_proc_config.default_setup()
         setup.deviceInputLog = deviceTimesLog
