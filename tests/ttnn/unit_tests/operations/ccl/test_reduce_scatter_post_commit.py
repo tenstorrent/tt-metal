@@ -141,7 +141,14 @@ def run_reduce_scatter_test(
     # Run the op
     if trace_mode:
         output_tensor_mesh = run_with_trace(
-            mesh_device, input_tensor_mesh, scatter_dim, num_links, math_op, mem_config, num_iters, topology
+            mesh_device,
+            input_tensor_mesh,
+            scatter_dim,
+            num_links,
+            math_op,
+            mem_config,
+            num_iters=num_iters,
+            topology=topology,
         )
     else:
         for i in range(num_iters):

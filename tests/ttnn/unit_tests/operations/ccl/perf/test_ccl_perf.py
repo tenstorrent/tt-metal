@@ -146,8 +146,8 @@ def test_all_gather_on_t3000(
         ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 64], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 64 * 8], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -166,6 +166,7 @@ def test_all_gather_on_t3000(
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_reduce_scatter_on_t3000(
     t3k_mesh_device,
@@ -181,9 +182,77 @@ def test_reduce_scatter_on_t3000(
     function_level_defaults,
     enable_async,
     num_iters,
+    topology,
 ):
     run_reduce_scatter_test(
         t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        scatter_dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        topology=topology,
+        trace_mode=True,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (2, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape, scatter_dim, layout",
+    [
+        ([1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
+def test_reduce_scatter_on_n300(
+    n300_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    scatter_dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters,
+):
+    run_reduce_scatter_test(
+        n300_mesh_device,
         num_devices,
         per_chip_output_shape,
         scatter_dim,
