@@ -625,7 +625,7 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False):
+    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
@@ -665,11 +665,11 @@ class TtModelArgs:
         if torch.is_tensor(x):
             x = ttnn.from_torch(
                 x,
-                device=self.mesh_device,
+                device=self.mesh_device if not on_host else None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
-                memory_config=input_mem_cfg,
+                memory_config=input_mem_cfg if not on_host else None,
             )
         else:  # Convert the row major layout from embedding back to tile layout
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
