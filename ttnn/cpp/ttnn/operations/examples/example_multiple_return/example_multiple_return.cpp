@@ -11,17 +11,11 @@ std::vector<std::optional<Tensor>> CompositeExampleMutipleReturnOperation::invok
     return prim::example_multiple_return(input_tensor, return_output1, return_output2);
 }
 
-std::vector<Tensor> CompositeExampleMutipleReturnOperation::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& input_tensor = input_tensors.at(0);
+OptionalTensors CompositeExampleMutipleReturnOperation::create_async_optional_output_tensors(
+    const Tensor& input_tensor, bool return_output1, bool return_output2) {
     return {
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor}))};
-}
-
-std::vector<bool> CompositeExampleMutipleReturnOperation::create_async_return_flag(const Tensor& input_tensor, bool return_output1, bool return_output2) {
-
-    return {return_output1, return_output2};
+        return_output1 ? std::optional<Tensor>(operation::get_workers_for_op_output({input_tensor})) : std::nullopt,
+        return_output2 ? std::optional<Tensor>(operation::get_workers_for_op_output({input_tensor})) : std::nullopt};
 }
 
 }  // namespace ttnn::operations::examples
