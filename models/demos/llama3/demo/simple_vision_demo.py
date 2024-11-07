@@ -42,17 +42,7 @@ class LlamaVision:
         self.mesh_device = mesh_device
         self.vllm = vllm
 
-    def get_prefill_inputs(self, model_input):
-        """
-        Responsible for taking model_input: ModelInput and returning vision_images, vision_mask, tokens
-        """
-        images = model_input.vision.images
-        mask = model_input.vision.mask
-        tokens = model_input.tokens
-
-        return images, mask, tokens
-
-    def forward_prefill(
+    def prefill_forward_single_user(
         self,
         vision_images,
         vision_mask,
@@ -66,6 +56,7 @@ class LlamaVision:
         Performs vision encode step then text prefill.
         Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
         """
+        B = tokens.shape[0]
         xattn_caches, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
             batch_images=[vision_images],
             batch_masks=[vision_mask],
@@ -98,12 +89,11 @@ class LlamaVision:
             user_id,
         )
 
-        B = 1
         logits = self.model.process_output_prefill(tt_logits, B, prefill_len)
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
 
-    def forward_decode(
+    def decode_forward(
         self,
         position_id,
         tokens,
@@ -118,6 +108,9 @@ class LlamaVision:
 
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
+        # B = 1 # TODO: Only supports batch=1 right now! Might make tokens input a tensor.
+        # S = 1
+        B, S = tokens.shape
 
         (
             tt_h,
@@ -141,10 +134,21 @@ class LlamaVision:
             transformation_mats,
         )
 
-        B = tokens.shape[0]
-        S = 1
         logits = self.model.process_output_decode(tt_logits, B, S)
         return logits
+
+    def capture_trace(
+        self,
+        position_id,
+        tokens,
+        cross_attention_masks,
+        full_text_row_masked_out_mask,
+        xattn_caches,
+    ):
+        """
+        Captures a trace for the decode_forward method.
+        """
+        pass
 
 
 def get_sampler(temperature, top_p, tokenizer):
@@ -262,7 +266,9 @@ def test_llama_multimodal_demo_text(
             model_input = formatter.encode_dialog_prompt(dialog, tool_prompt_format=False)
 
             # Do initial prefill
-            vision_images, vision_mask, prompt_tokens = model.get_prefill_inputs(model_input)
+            vision_images = model_input.vision.images
+            vision_mask = model_input.vision.mask
+            prompt_tokens = model_input.tokens
             prefill_len = len(prompt_tokens)
             total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
             # Create tokens tensor
@@ -271,10 +277,16 @@ def test_llama_multimodal_demo_text(
             tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long)
             tokens[0, : len(prompt_tokens)] = torch.tensor(prompt_tokens, dtype=torch.long)
             prefill_start = time.perf_counter()
-            xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits = model.forward_prefill(
+            prompt_tokens_tensor = torch.tensor(prompt_tokens, dtype=torch.long).reshape(1, -1)  # B, S
+            (
+                xattn_caches,
+                cross_attention_masks,
+                full_text_row_masked_out_mask,
+                logits,
+            ) = model.prefill_forward_single_user(
                 vision_images,
                 vision_mask,
-                tokens,
+                prompt_tokens_tensor,
                 xattn_caches,
                 user_id=0,
                 total_len=total_len,
@@ -291,9 +303,10 @@ def test_llama_multimodal_demo_text(
             for gen_idx in range(max_gen_len - 1):
                 decode_start = time.perf_counter()
                 position_id = prefill_len + gen_idx
-                logits = model.forward_decode(
+                next_token_tensor = torch.tensor([next_token], dtype=torch.long).reshape(1, 1)  # B, S
+                logits = model.decode_forward(
                     position_id,
-                    tokens,
+                    next_token_tensor,
                     cross_attention_masks,
                     full_text_row_masked_out_mask,
                     xattn_caches,
