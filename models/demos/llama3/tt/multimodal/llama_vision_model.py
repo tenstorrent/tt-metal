@@ -282,14 +282,13 @@ class CrossAttentionTransformer(torch.nn.Module):
 
     def prepare_inputs_common(self, position_ids, tokens):
         self.validate_inputs(tokens, position_ids)
-        h = self.text_model.get_partially_trainable_embedding(tokens[:, position_ids])
+        h = self.text_model.get_partially_trainable_embedding(tokens)
         return h
 
     def prepare_inputs_prefill(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len):
         B = tokens.shape[0]
         assert B == 1, f"Only batch 1 is supported, got {B}"
-        # S = tokens.shape[1] # TODO: Get B, S from tokens when we don't pass full tokens around
-        S = prefill_len
+        S = tokens.shape[1]
         position_ids = torch.arange(S, dtype=torch.long)
         h = self.prepare_inputs_common(position_ids, tokens)
         padded_seq_len = _get_padded_prefill_seqlen(S)
