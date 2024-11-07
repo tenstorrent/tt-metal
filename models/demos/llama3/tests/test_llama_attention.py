@@ -7,10 +7,10 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.llama3.tt.llama_attention import TtLlamaAttention
+from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
-    get_single_rot_mat,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
@@ -50,6 +50,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
+    # model_args.max_batch_size = 4
     batch = model_args.max_batch_size
     seq_len = 1
 
@@ -57,13 +58,14 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     generation_length = 10
     all_tests_pass = True
 
-    # pre-compute the rotational embedding matrix and send to device
-    current_rot_mat, rot_matrix = get_single_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        model_args.num_devices,
-        start_pos=0,
+    # Setup RoPE transformation matrices
+    rope_setup = TtLlamaRotarySetup(
+        mesh_device, model_args.head_dim, model_args.max_seq_len, model_args.rope_theta, model_args.use_scaled_rope
     )
+    transformation_mats = rope_setup.get_trans_mats()
+    transformation_mats = {"decode": transformation_mats}
+
+    # Miguel: TODO add paged attention
 
     tt_model = TtLlamaAttention(
         mesh_device,
@@ -71,23 +73,29 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
         dtype=dtype,
+        transformation_mats=transformation_mats,
         configuration=model_args,
     )
 
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
+    cos, sin = precompute_freqs(
+        model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
+    )
     freqs_cis = torch.complex(cos, sin)
+
+    # Initial positions
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos_tensor = ttnn.from_torch(
+        current_pos,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
         pt_attention_input = torch.randn(batch, seq_len, model_args.dim) * 0.05
 
         tt_attention_input = pt_attention_input.clone()
-        current_pos = generation_start_pos + i
-        current_pos_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
         attention_input = model_args.prepare_inputs_ttnn_decode(
             tt_attention_input,
@@ -95,7 +103,14 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             force_replicated=True,
         )
 
-        tt_out = tt_model(attention_input, current_pos_tensor, rot_mats=current_rot_mat, mode="decode")
+        # Get cos/sin matrices for the current position of each user
+        rot_mats = rope_setup.get_rot_mats(current_pos)
+        tt_out = tt_model(
+            attention_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+        )
         # multi-device attention module returns replicated output
 
         tt_output_torch = (
@@ -104,8 +119,8 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
         )  # [ batch, seq, hidden_dim]
 
-        freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
-        # positions = torch.tensor([current_pos])
+        # TODO Miguel, check how to expand this for a batch
+        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)  # In this test all users have the same position
 
         reference_output = reference_model(pt_attention_input, current_pos, freqs_cis_i, mask=None)
 
@@ -114,13 +129,19 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         if passing:
-            logger.info(f"[pos={current_pos}] Llama_Attention Passed!")
+            logger.info(f"[pos={current_pos[0]}] Llama_Attention Passed!")
         else:
-            logger.warning(f"[pos={current_pos}] Llama_Attention Failed!")
+            logger.warning(f"[pos={current_pos[0]}] Llama_Attention Failed!")
             all_tests_pass = False
 
-        # Update rotation matrix for next iteration
-        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+        # Increment position
+        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos_tensor = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
         check_kv_cache = True
         if check_kv_cache:
