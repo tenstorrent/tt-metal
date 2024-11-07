@@ -42,13 +42,10 @@ uint32_t n_kgs_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
 bool trisc_enabled_g;
-bool erisc_enabled_g;
-uint32_t erisc_count_g;
 bool lazy_g;
 bool time_just_finish_g;
 bool use_global_g;
 bool use_trace_g;
-bool dispatch_from_eth_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -73,13 +70,9 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
         log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
-        log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
-        log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
-        log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, "  -tr: enable trace (default disabled)");
-        log_info(LogTest, "  -de: dispatch from eth cores (default tensix)");
         exit(0);
     }
 
@@ -100,7 +93,6 @@ void init(int argc, char **argv) {
     slow_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rs", 0);
     nfast_kernels_g = test_args::get_command_option_uint32(input_args, "-nf", 0);
     use_trace_g = test_args::has_command_option(input_args, "-tr");
-    dispatch_from_eth_g = test_args::has_command_option(input_args, "-de");
     if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -128,8 +120,6 @@ void init(int argc, char **argv) {
     brisc_enabled_g = !test_args::has_command_option(input_args, "-b");
     ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
     trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
-    erisc_enabled_g = test_args::has_command_option(input_args, "+e");
-    erisc_count_g = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
     workers_g = CoreRange({0, 0}, {core_x, core_y});
 
@@ -150,7 +140,7 @@ void set_runtime_args(tt_metal::Program& program, tt_metal::KernelHandle kernel_
     }
 }
 
-void initialize_program(Device *device, tt_metal::Program& program, uint32_t run_cycles) {
+void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
 
     program = tt_metal::CreateProgram();
 
@@ -217,29 +207,6 @@ void initialize_program(Device *device, tt_metal::Program& program, uint32_t run
         kg.start_coord = { kg.end_coord.x + 1, kg.end_coord.y };
         kg.end_coord = kg.start_coord;
     }
-
-    if (erisc_enabled_g) {
-        auto erisc_cores = device->get_active_ethernet_cores(true);
-        if (erisc_count_g > erisc_cores.size()) {
-            log_fatal("Requested number of erisc cores {} exceeds actual erisc core count {}", erisc_count_g, erisc_cores.size());
-            exit(0);
-        }
-        auto erisc_core = erisc_cores.begin();
-        for (uint32_t i = 0; i < erisc_count_g; i++, erisc_core++) {
-            auto eth_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-                *erisc_core,
-                tt::tt_metal::EthernetConfig {
-                    .eth_mode = Eth::RECEIVER,
-                    .noc = NOC::NOC_0,
-                    .defines = defines,
-                });
-            tt_metal::SetRuntimeArgs(program, eth_kernel, *erisc_core, args);
-            tt_metal::SetCommonRuntimeArgs(program, eth_kernel, common_args);
-        }
-    }
-
 }
 
 int main(int argc, char **argv) {
@@ -251,14 +218,17 @@ int main(int argc, char **argv) {
     try {
         int device_id = 0;
         tt_metal::Device* device;
-        DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, dispatch_core_type);
+        if (use_trace_g) {
+            device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000);
+        } else {
+            device = tt_metal::CreateDevice(device_id);
+        }
 
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
-        initialize_program(device, program[0], slow_kernel_cycles_g);
-        initialize_program(device, program[1], fast_kernel_cycles_g);
+        initialize_program(program[0], slow_kernel_cycles_g);
+        initialize_program(program[1], fast_kernel_cycles_g);
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
