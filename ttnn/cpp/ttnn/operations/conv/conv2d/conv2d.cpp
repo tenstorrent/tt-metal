@@ -850,7 +850,6 @@ Result conv2d(
     if(!conv_config.shard_layout.has_value()) {
         conv_config.shard_layout = parallel_config.shard_scheme;
     } else if (conv_config.shard_layout != parallel_config.shard_scheme) {
-        log_warning(tt::LogOp,"Changing shard layout from {} to {}",conv_config.shard_layout.value(), parallel_config.shard_scheme);
         conv_config.shard_layout = parallel_config.shard_scheme;
     }
 
