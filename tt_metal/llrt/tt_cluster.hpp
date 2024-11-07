@@ -285,12 +285,6 @@ class Cluster {
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
     tt_device_l1_address_params l1_address_params = {
-        (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_BRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_TRISC0_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC1_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC2_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC0_FIRMWARE_BASE,
         (uint32_t)MEM_L1_BARRIER,
         (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
         (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,

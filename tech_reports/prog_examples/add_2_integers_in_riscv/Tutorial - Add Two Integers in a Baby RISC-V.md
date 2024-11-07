@@ -1,4 +1,4 @@
-# Tutorial - Add Two Integers in a Baby RISC-V
+# Tutorial - Add Two Integers in a Baby RISC-V 🚧
 1. To build and execute use the following commands:
 
 ```export ARCH_NAME=<arch name>
