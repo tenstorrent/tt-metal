@@ -156,7 +156,8 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
-        std::optional<bool> bottom_up = std::nullopt);
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<uint32_t> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
         Device *device,
         DeviceAddr address,
@@ -165,7 +166,8 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
-        std::optional<bool> bottom_up = std::nullopt);
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<uint32_t> sub_device_id = std::nullopt);
 
     Buffer(const Buffer &other) = delete;
     Buffer &operator=(const Buffer &other) = delete;
@@ -223,6 +225,7 @@ class Buffer final {
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
+    std::optional<uint32_t> sub_device_id() const { return sub_device_id_; }
 
     Buffer(
         Device *device,
@@ -232,6 +235,7 @@ class Buffer final {
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
         std::optional<bool> bottom_up,
+        std::optional<uint32_t> sub_device_id,
         bool owns_data,
         Private);
 
@@ -256,6 +260,7 @@ class Buffer final {
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;
+    const std::optional<uint32_t> sub_device_id_;
     const bool owns_data_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
