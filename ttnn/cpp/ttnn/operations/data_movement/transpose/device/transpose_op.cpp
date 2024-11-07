@@ -56,8 +56,6 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
         if (row_major) {
             auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
             TT_FATAL((W * input_tensor.element_size()) % BUFFER_ALIGNMENT == 0, "Buffer is not aligned for this implementation row_size_bytes {} buffer_alignment {}", W * input_tensor.element_size(), BUFFER_ALIGNMENT);
-        } else {
-            TT_FATAL(C % TILE_HEIGHT == 0, "Error");
         }
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
@@ -92,9 +90,21 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
             std::swap(output_padded_shape[0], output_padded_shape[1]);
             break;
         case TransposeOpDim::HC:
-            std::swap(output_shape[1], output_shape[2]);
-            std::swap(output_padded_shape[1], output_padded_shape[2]);
-            break;
+            if (input_tensor.is_sharded() || input_tensor.get_layout() != Layout::TILE) {
+                std::swap(output_shape[1], output_shape[2]);
+                std::swap(output_padded_shape[1], output_padded_shape[2]);
+                break;
+            } else {
+                uint32_t C = output_shape[1];
+                uint32_t C_p = tt::round_up(C, input_tensor.get_tile().get_height());
+                uint32_t H = output_shape[2];
+                output_shape[1] = H;
+                output_shape[2] = C;
+                output_padded_shape[1] = H;
+                output_padded_shape[2] = C_p;
+                break;
+            }
+
         case TransposeOpDim::WH:
             std::swap(output_shape[2], output_shape[3]);
             std::swap(output_padded_shape[2], output_padded_shape[3]);

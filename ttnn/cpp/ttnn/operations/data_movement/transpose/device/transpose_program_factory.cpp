@@ -447,9 +447,177 @@ void override_runtime_args_mc_hc_rm(
     }
 }
 
+template <bool IS_CREATING>
+void override_runtime_args_mc_hc_tiled_interleaved(
+    const Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    const Tensor &input_tensor,
+    Tensor &output_tensor,
+    uint32_t num_cores_total,
+    uint32_t num_cores,
+    uint32_t num_cores_y,
+    CoreRangeSet core_group_1,
+    uint32_t num_tiles_per_core_group_1,
+    CoreRangeSet core_group_2,
+    uint32_t num_tiles_per_core_group_2
+){
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+
+    auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
+    uint32_t start_idx = 0;
+    for(uint32_t i = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_tiles_per_core;
+
+        if (core_group_1.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            //no-op
+            num_tiles_per_core = 0;
+        }
+
+        uint32_t end_idx = start_idx + num_tiles_per_core;
+        if constexpr (IS_CREATING) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                reader_kernel_id,
+                core,
+                {
+                    input_buffer->address(),
+                    num_tiles_per_core,
+                    start_idx,
+                }
+            );
+
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                writer_kernel_id,
+                core,
+                {
+                    output_buffer->address(),
+                    start_idx,
+                    end_idx
+                }
+            );
+        }
+        else {
+            auto& reader_args = cached_reader_args.at(core.x).at(core.y);
+            auto& writer_args = cached_writer_args.at(core.x).at(core.y);
+
+            reader_args[0] = input_buffer->address();
+            writer_args[0] = output_buffer->address();
+
+        }
+        start_idx = end_idx;
+    }
+}
+
+operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const Tensor &a, Tensor &output) {
+
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+
+    tt::tt_metal::Program program = tt::tt_metal::Program();
+    auto tile_shape = a.get_tile().get_tile_shape();
+    auto face_shape = a.get_tile().get_face_shape();
+    uint32_t num_tensor_tiles = a.volume() / (tile_shape[0] * tile_shape[1]);
+    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1], N = a.get_logical_shape()[0];
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+
+    auto compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+
+    uint32_t src0_cb_index = tt::CB::c_in0;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(2 * single_tile_size, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+
+
+    // create reader kernel with compile time and runtime args
+    tt::tt_metal::Buffer *src_buffer = a.buffer();
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
+
+    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+    program,
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+    total_cores,
+    tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    // create writer kernel with compile time and runtime args
+
+    tt::tt_metal::Buffer *dst_buffer = output.buffer();
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args =
+    {(std::uint32_t)dst_is_dram, a.element_size(), tt::CB::c_in0, C, H, W, tile_shape[0], tile_shape[1], face_shape[0], face_shape[1]};
+
+    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
+        total_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    override_runtime_args_mc_hc_tiled_interleaved<true>(
+        program,
+        unary_reader_kernel_id,
+        unary_writer_kernel_id,
+        a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+
+    auto override_runtime_args_callback = [
+            unary_reader_kernel_id,
+            unary_writer_kernel_id,
+            compute_with_storage_grid_size
+        ]
+    (
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
+    ) {
+        auto src_tensor = input_tensors.at(0);
+        auto dst_tensor = output_tensors.at(0);
+        auto tile_shape = src_tensor.get_tile().get_tile_shape();
+        uint32_t tile_hw = tile_shape[0] * tile_shape[1];
+        uint32_t num_tensor_tiles = src_tensor.volume() / tile_hw;
+
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+        uint32_t num_cores_total = num_cores_x * num_cores_y;
+
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+
+            override_runtime_args_mc_hc_tiled_interleaved<false>(
+                program,
+                unary_reader_kernel_id,
+                unary_writer_kernel_id,
+                src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+    };
+
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+
+}
+
 operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output) {
 
     const auto shape = a.get_legacy_shape();
+    if (a.get_layout() == Layout::TILE && !a.is_sharded()) {
+        return transpose_hc_multi_core_tiled_interleaved(a, output);
+    }
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;

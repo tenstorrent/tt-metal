@@ -60,17 +60,6 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
     // Convert tensor back to original
     auto input_shape = a.get_logical_shape();
 
-    // create_output_tensor shape is useless when we potentially have new padding to deal with
-    SmallVector<uint32_t> output_shape = {input_shape[N], input_shape[C], input_shape[H], input_shape[W]};
-    SmallVector<uint32_t> padded_output_shape = output_shape;
-
-    uint32_t input_rank = a.get_logical_shape().rank();
-    if (a.layout() == Layout::TILE) {
-        padded_output_shape[input_rank - 1] = tt::round_up(padded_output_shape[input_rank - 1], tt::constants::TILE_WIDTH);
-        padded_output_shape[input_rank - 2] = tt::round_up(padded_output_shape[input_rank - 2], tt::constants::TILE_HEIGHT);
-    }
-
-    ttnn::Shape final_shape = ttnn::Shape(output_shape, padded_output_shape);
     auto formatted_input_tensor = a;
     bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and formatted_input_tensor.get_layout() == Layout::TILE and (pad_n or pad_c) and !a.is_sharded();
     formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
@@ -130,7 +119,6 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
     } else {
         TT_ASSERT(false, "Illegal permute args");
     }
-    output =  ttnn::reshape(output, final_shape);
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
     return output;
 }

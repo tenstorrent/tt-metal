@@ -14,6 +14,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+torch.manual_seed(2005)
+
 
 def transpose(
     input_shape,
@@ -124,9 +126,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     H = 32
     W = 32
     input_shape = (N, C, H, W)
-    # CACHE MISS since its single core
-    # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=4, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=3, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -839,7 +839,17 @@ def test_transpose_5d(shape, dims, layout, device):
 
 @pytest.mark.parametrize(
     "shape",
-    [[1, 5, 10, 15], [1, 1, 1, 2]],
+    [
+        [1, 5, 10, 15],
+        [1, 1, 1, 2],
+        [1, 3, 2, 1],
+        [1, 17, 1, 1],
+        [1, 1, 16, 1],
+        [1, 1, 17, 1],
+        [1, 1, 1, 17],
+        [2, 1, 1, 1],
+        [2, 33, 33, 33],
+    ],
 )
 @pytest.mark.parametrize(
     "dims",
@@ -852,13 +862,15 @@ def test_transpose_5d(shape, dims, layout, device):
     "layout",
     [ttnn.TILE_LAYOUT],
 )
-def test_transpose_issue_11650_10350(shape, dims, layout, device):
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.float32, ttnn.bfloat16],
+)
+def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(dims[0], dims[1])
 
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
-    print(tt_input)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
-    print(tt_output)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)

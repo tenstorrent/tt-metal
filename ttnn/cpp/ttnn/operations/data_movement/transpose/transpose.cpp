@@ -53,9 +53,7 @@ inline bool rm_enough_available_space(const Tensor& input_tensor_a) {
 }
 
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
-    bool pad_c = false;
     bool tiled_only = false;
-    bool pad_n = false;
     constexpr uint32_t FACE_WIDTH = tt::constants::FACE_WIDTH; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
     // use device->get_allocator_alignment when the it reflects the alignment of the buffer and doesn't just default to DRAM
     auto BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
@@ -67,7 +65,6 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             if ((!tiled_only) && ((W * a.element_size()) % BUFFER_ALIGNMENT != 0)) { //
                 tiled_only = true;
             }
-            pad_c = tiled_only && a.get_padded_shape()[1] % tt::constants::TILE_HEIGHT != 0;
             break;
         // bubble dim around to make it possible as these implementations don't have a kernel
         case TransposeOpDim::NH:
@@ -94,57 +91,18 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     }
 
     if (a.get_layout() == Layout::ROW_MAJOR) {
-        // the assorted cases where only tiled works right now (HC with stick width constraint, WH with stick width constraint, CN)
+        // the assorted cases where only tiled works right now (HC with stick width constraint, WH with stick width constraint, CN).
         if (tiled_only) {
             // convert to tiled
             Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (Device *)nullptr);
-            // pad c if needed
-            if (pad_c) {
-                auto padded_shape = b.get_padded_shape();
-                auto shape = b.get_logical_shape();
-                uint32_t C_rounded = tt::round_up(padded_shape[1], tt::constants::TILE_HEIGHT);
-                b = ttnn::pad(b, std::array<uint32_t, 4>({padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}),
-                            std::array<uint32_t, 4>({0, 0, 0, 0}), 0);
-                b = ttnn::reshape(b, ttnn::Shape({shape[0], shape[1], shape[2], shape[3]}, {padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}));
-            }
-            // run the transpose
+            // run the transpose.
             b = operation::run(Transpose{transpose_dim, output_mem_config}, {b}).at(0);
-            auto logical_shape = b.get_logical_shape();
-            auto padded_shape = b.get_padded_shape();
             // back to original layout
             b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
-            // slice back to original shape
-            if (logical_shape != padded_shape) {
-                std::array<uint32_t, 4> begins = {0, 0, 0, 0};
-                std::array<uint32_t, 4> ends = {logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
-                std::array<uint32_t, 4> step = {1, 1, 1, 1};
-                b = ttnn::slice(b, begins, ends, step);
-            }
             return b;
         }
         return operation::run(Transpose{transpose_dim, output_mem_config}, {a}).at(0);
     } else {
-        if (TransposeOpDim::HC == transpose_dim) {
-            Tensor b = a;
-            if (pad_c) {
-                auto padded_shape = a.get_padded_shape();
-                auto shape = a.get_logical_shape();
-                uint32_t C_rounded = tt::round_up(padded_shape[1], tt::constants::TILE_HEIGHT);
-                b = ttnn::pad(a, std::array<uint32_t, 4>({padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}),
-                            std::array<uint32_t, 4>({0, 0, 0, 0}), 0);
-                b = ttnn::reshape(b, ttnn::Shape({shape[0], shape[1], shape[2], shape[3]}, {padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}));
-            }
-
-            b = operation::run(Transpose{transpose_dim, output_mem_config}, {b}).at(0);
-
-            if (b.get_logical_shape()[1] != b.get_padded_shape()[1] || b.get_logical_shape()[0] != b.get_padded_shape()[0]) {
-                std::array<uint32_t, 4> begins = {0, 0, 0, 0};
-                std::array<uint32_t, 4> ends = {b.get_logical_shape()[0], b.get_logical_shape()[1], b.get_padded_shape()[2], b.get_padded_shape()[3]};
-                std::array<uint32_t, 4> step = {1, 1, 1, 1};
-                return ttnn::slice(b, begins, ends, step);
-            }
-            return b;
-        }
         return operation::run(Transpose{transpose_dim, output_mem_config}, {a}).at(0);
     }
 }
@@ -190,25 +148,6 @@ ttnn::Tensor ExecuteTranspose::invoke(
     bool typecast = input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and input_unsqueezed.get_layout() == Layout::TILE and !wh and !input_unsqueezed.is_sharded();
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
-    auto input_shape = input_typecasted.get_logical_shape();
-
-    // create_output_tensor shape is useless when we potentially have new padding to deal with
-    SmallVector<uint32_t> output_shape;
-    output_shape.reserve(input_shape.rank());
-    for (int i = 0; i < input_shape.rank(); ++i) {
-        output_shape.push_back(input_shape[i]);
-    }
-    SmallVector<uint32_t> padded_output_shape = output_shape;
-
-    std::swap(output_shape[normalized_dim1], output_shape[normalized_dim2]);
-    std::swap(padded_output_shape[normalized_dim1], padded_output_shape[normalized_dim2]);
-
-    uint32_t input_rank = input_typecasted.get_logical_shape().rank();
-    if (input_typecasted.layout() == Layout::TILE) {
-        padded_output_shape[input_rank - 1] = tt::round_up(padded_output_shape[input_rank - 1], tt::constants::TILE_HEIGHT);
-        padded_output_shape[input_rank - 2] = tt::round_up(padded_output_shape[input_rank - 2], tt::constants::TILE_WIDTH);
-    }
-
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_typecasted}))};
 
     operation::launch_with_autoformat(
@@ -250,7 +189,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
             return {detail::transpose_(a, transpose_dim, memory_config)};
         }, {input_typecasted}, output_tensors);
 
-    auto output = ttnn::reshape(output_tensors.at(0), ttnn::Shape(output_shape, padded_output_shape));
+    auto output = output_tensors.at(0);
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 
