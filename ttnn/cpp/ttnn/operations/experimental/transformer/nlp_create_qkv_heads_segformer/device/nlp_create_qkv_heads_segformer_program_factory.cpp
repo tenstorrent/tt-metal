@@ -42,7 +42,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_segformer(const 
     // Per output tensor args
     // Output shape for Q/K/V is: [B, head_num, s, 32] # Needs shuffling from [B, 1, s, hidden_dim]
     uint32_t q_out_h_tiles = ashape[2] / TILE_WIDTH;
-    //uint32_t q_out_w_tiles = head_dim / TILE_WIDTH; // head_dim
     uint32_t q_out_w_tiles = 1; //hard-coding the head_dim = 32
     uint32_t q_out_c = q_num_tiles_per_tensor / q_out_w_tiles; // num_heads
     uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;

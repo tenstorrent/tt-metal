@@ -128,12 +128,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vit(const Tensor
     }
     //////////////////////////////////////////////
 
-    // auto reader_kernel_id = tt_metal::CreateKernel(
-    //     program,
-    //     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-    //     all_cores,
-    //     tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
