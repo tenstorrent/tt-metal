@@ -3319,7 +3319,8 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     auto &trace_data = this->trace_buffer_pool_[tid]->desc->data;
     trace_data = std::move(this->sysmem_manager().get_bypass_data());
     // Add command to terminate the trace buffer
-    DeviceCommand command_sequence(CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+    uint32_t cq_prefetch_cmd_bare_min_size = hal.get_alignment(HalMemType::HOST);
+    DeviceCommand command_sequence(cq_prefetch_cmd_bare_min_size);
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

@@ -10,10 +10,10 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 size_t round_up(size_t value, size_t multiple) {
-    TT_FATAL(multiple != 0, "round_up: multiple must not be 0");
+    if (multiple == 0) {
+        return value;
+    }
 
-    // can be faster if multiple is power of 2
-    // return (value + multiple - 1) & ~(multiple - 1);
     return ((value + multiple - 1) / multiple) * multiple;
 };
 
