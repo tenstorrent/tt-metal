@@ -871,8 +871,6 @@ int main(int argc, char **argv) {
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "device must be wh_b0");
-
         int clock_freq_mhz = get_tt_npu_clock(device);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
