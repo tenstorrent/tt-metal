@@ -1099,6 +1099,7 @@ void Matmul::validate(
                         TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
                     }
                     if (this->output_mem_config.is_sharded()) {
+                        TT_FATAL(program_config.fuse_batch, "Error");
                         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
                         uint32_t M =
                             (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
@@ -1145,6 +1146,7 @@ void Matmul::validate(
                         TT_FATAL(K == (shard_shape[1] / in0_tile_shape[1]), "Error");
                     }
                     if (this->output_mem_config.is_sharded()) {
+                        TT_FATAL(program_config.fuse_batch, "Error");
                         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
                         uint32_t M =
                             (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
@@ -1184,6 +1186,7 @@ void Matmul::validate(
                 TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 if (input_tensor_a.memory_config().is_sharded()) {
+                    TT_FATAL(program_config.fuse_batch, "Error");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout;
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t K = input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[1];
@@ -1223,6 +1226,7 @@ void Matmul::validate(
                 }
 
                 if (input_tensor_b.memory_config().is_sharded()) {
+                    TT_FATAL(program_config.fuse_batch, "Error");
                     TT_FATAL(!program_config.transpose_mcast, "Error");
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout;
                     TT_FATAL(tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
@@ -1236,6 +1240,7 @@ void Matmul::validate(
                 }
 
                 if (this->output_mem_config.is_sharded()) {
+                    TT_FATAL(program_config.fuse_batch, "Error");
                     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
