@@ -22,9 +22,8 @@ struct MorehGroupNorm {
         const std::optional<MemoryConfig>& mean_memory_config,
         const std::optional<MemoryConfig>& rstd_memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-    static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
-    static std::vector<bool> create_async_return_flag(
+
+    static OptionalTensors create_async_optional_output_tensors(
         const Tensor& input,
         const uint32_t num_groups,
         const float eps,

@@ -33,6 +33,7 @@
 #include "third_party/umd/device/tt_soc_descriptor.h"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "third_party/umd/device/xy_pair.h"
+#include "third_party/umd/device/hugepage.h"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -127,38 +128,6 @@ void Cluster::detect_arch_and_target() {
         this->target_type_);
 }
 
-std::filesystem::path get_cluster_desc_yaml() {
-    namespace fs = std::filesystem;
-
-    // TODO: The interface into create-ethernet-map should be through an API rather a
-    // subprocess call to the binary
-    const fs::path tt_metal_dir = fs::path(tt::llrt::OptionsG.get_root_dir()) / "tt_metal";
-    const fs::path umd_path = fs::path(tt::llrt::OptionsG.get_root_dir()) / ".umd";
-    fs::create_directory(umd_path);
-    const fs::path cluster_desc_path = umd_path / "cluster_desc.yaml";
-    if (!fs::exists(cluster_desc_path)) {
-        auto val = system(("touch " + cluster_desc_path.string()).c_str());
-        if (val != 0)
-            throw std::runtime_error("YAML Cluster folder and file before create-ethernet-map failed!");
-    }
-
-    // Generates the cluster descriptor in the CWD
-
-#if defined(__x86_64__) || defined(__i386__)
-    const fs::path eth_fpath = tt_metal_dir / "third_party/umd/device/bin/silicon/x86/create-ethernet-map";
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    const fs::path eth_fpath = tt_metal_dir / "third_party/umd/device/bin/silicon/aarch64/create-ethernet-map";
-#else
-#error "Unsupported host architecture"
-#endif
-    std::string cmd = eth_fpath.string() + " " + cluster_desc_path.string();
-    int val = system(cmd.c_str());
-    if (val != 0)
-        throw std::runtime_error("Cluster Generation with create-ethernet-map Failed!");
-
-    return fs::absolute(cluster_desc_path);
-}
-
 bool Cluster::is_galaxy_cluster() const {
     return this->is_tg_cluster_;
 }
@@ -169,10 +138,10 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
 
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0)
-                                   ? get_cluster_desc_yaml().string()
+                                   ? tt_ClusterDescriptor::get_cluster_descriptor_file_path()
                                    : "";
 
-    // create-eth-map not available for Blackhole bring up
+    // Cluster descriptor yaml not available for Blackhole bring up
     if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE or this->target_type_ == TargetDevice::Simulator) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
         std::vector<chip_id_t> physical_mmio_device_ids;
@@ -212,7 +181,7 @@ void Cluster::generate_cluster_descriptor() {
         }
     }
 
-    uint32_t total_num_hugepages = get_num_hugepages();
+    uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
     if (this->is_tg_cluster_) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(
@@ -302,7 +271,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
                 device_driver->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
             }
         }
-        device_driver->set_driver_host_address_params(host_address_params);
         device_driver->set_driver_eth_interface_params(eth_interface_params);
 
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
@@ -414,20 +382,6 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) 
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
     this->driver_->assert_risc_reset_at_core(virtual_chip_coord);
-}
-
-inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {
-    uint64_t result = chip_y;
-    uint64_t noc_addr_local_bits_mask = (1UL << NOC_ADDR_LOCAL_BITS) - 1;
-    result <<= NOC_ADDR_NODE_ID_BITS;
-    result |= chip_x;
-    result <<= NOC_ADDR_NODE_ID_BITS;
-    result |= noc_y;
-    result <<= NOC_ADDR_NODE_ID_BITS;
-    result |= noc_x;
-    result <<= NOC_ADDR_LOCAL_BITS;
-    result |= (noc_addr_local_bits_mask & offset);
-    return result;
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {

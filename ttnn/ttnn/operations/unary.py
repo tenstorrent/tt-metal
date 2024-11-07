@@ -78,7 +78,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "digamma": torch.digamma,
             "hardswish": torch.nn.functional.hardswish,
             "hardsigmoid": torch.nn.functional.hardsigmoid,
-            "hardtanh": torch.nn.functional.hardtanh,
             "lgamma": torch.lgamma,
             "log1p": torch.log1p,
             "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
@@ -163,7 +162,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.digamma,
     ttnn.hardswish,
     ttnn.hardsigmoid,
-    ttnn.hardtanh,
     ttnn.lgamma,
     ttnn.log1p,
     ttnn.mish,
@@ -239,6 +237,15 @@ def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.elu, golden_function=_golden_function_elu)
+
+
+def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, **kwargs):
+    import torch
+
+    return torch.nn.functional.hardtanh(input_tensor_a, min_val=min_val, max_val=max_val)
+
+
+ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hardtanh)
 
 
 def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kwargs):

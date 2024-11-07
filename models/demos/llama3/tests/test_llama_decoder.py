@@ -8,7 +8,6 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
-    prepare_inputs_ttnn,
     get_single_rot_mat,
 )
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
@@ -38,7 +37,8 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    model_args.n_layers = 1
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
@@ -77,7 +77,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
     freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
-        print(f"[Decoder] Generating token {i}")
+        logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
@@ -90,19 +90,20 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        decode_input = prepare_inputs_ttnn(
+        decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            model_args.dim,
-            tt_model.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Run TT model
         tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, :1, :, :]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+                :1, :, :, : model_args.dim
+            ]
             .permute(2, 1, 0, 3)
             .squeeze(1)[: model_args.max_batch_size, :, :]
-        )  # [seq, batch, hidden_dim]
+        )  # [seq, batch, dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
 

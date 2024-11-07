@@ -34,7 +34,9 @@ def test_llama_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc)
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    model_args.n_layers = 1
+    state_dict = model_args.load_state_dict()
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     reference_emb = HostEmbedding(model_args)
@@ -65,7 +67,7 @@ def test_llama_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc)
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     tt_output = tt_emb(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0].view(
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0].view(
         reference_output.shape
     )
     logger.info(f"tt_output_torch: {tt_output_torch.shape}")
