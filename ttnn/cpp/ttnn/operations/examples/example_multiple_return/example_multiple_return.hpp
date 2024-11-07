@@ -16,13 +16,9 @@ struct CompositeExampleMutipleReturnOperation {
     // is registered
     static std::vector<std::optional<Tensor>> invoke(const Tensor& input_tensor, bool return_output1, bool return_output2);
 
-    static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
+    static OptionalTensors create_async_optional_output_tensors(
+        const Tensor& input_tensor, bool return_output1, bool return_output2);
 
-    // The parameters of this function must be identical to those of invoke.
-    static std::vector<bool> create_async_return_flag(
-        const Tensor& input_tensor, bool return_output1, bool return_output2
-    );
 };
 
 }  // namespace ttnn::operations::examples

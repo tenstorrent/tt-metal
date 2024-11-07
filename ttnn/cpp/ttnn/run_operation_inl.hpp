@@ -211,15 +211,11 @@ void launch_op(
                     for (int i = 0; i < local_tensors.size(); i++) {
                         auto output_tensor = get_tensor(outputs[i]);
                         auto local_tensor = get_tensor(local_tensors[i]);
+
                         // not sure if it the case but in my opinion it should not happen
                         // both output and local tensor should be presented or absent
                         TT_ASSERT((output_tensor != nullptr && local_tensor != nullptr) || (local_tensor == nullptr && output_tensor == nullptr));
                         if (!output_tensor || !local_tensor) {
-                            continue;
-                        }
-
-                        // The return type is vector<optional<Tensor>>, and this refers to the case where the i-th value is nullopt.
-                        if (output_tensor->tensor_attributes.use_count() != 0 && local_tensor->tensor_attributes.use_count() == 0) {
                             continue;
                         }
 

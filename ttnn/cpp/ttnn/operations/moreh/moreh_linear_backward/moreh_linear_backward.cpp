@@ -105,17 +105,6 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     return true;
 }
 
-std::vector<Tensor> MorehLinearBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& output_grad = input_tensors.at(0);
-    const auto& input = input_tensors.at(1);
-    const auto& weight = input_tensors.at(2);
-    return {
-        Tensor(operation::get_workers_for_op_output({output_grad, input, weight})),
-        Tensor(operation::get_workers_for_op_output({output_grad, input, weight})),
-        Tensor(operation::get_workers_for_op_output({output_grad, input, weight}))};
-}
-
 std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
     const Tensor& output_grad,
     const Tensor& input,
@@ -197,7 +186,7 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
     return result;
 }
 
-std::vector<bool> MorehLinearBackward::create_async_return_flag(
+OptionalTensors MorehLinearBackward::create_async_optional_output_tensors(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& weight,
@@ -210,7 +199,10 @@ std::vector<bool> MorehLinearBackward::create_async_return_flag(
     const std::optional<ttnn::MemoryConfig>& weight_grad_memory_config,
     const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
     const DeviceComputeKernelConfig compute_kernel_config) {
-    return are_required_outputs;
+    return {
+        are_required_outputs.at(0) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight})) : std::nullopt,
+        are_required_outputs.at(1) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight})) : std::nullopt,
+        are_required_outputs.at(2) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight})) : std::nullopt};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_linear_backward
