@@ -100,15 +100,18 @@ inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uin
         // Wait for free context
         wait_for_next_context(2);
 
-        // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
-
         // Get tile address
         if (0 == unp_cfg_context) {
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
         } else {
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
         }
+
+        // Trisc::SEMPOST for context acquire
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         // Run MOP
         ckernel::ckernel_template::run(instrn_buffer);

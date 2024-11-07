@@ -105,15 +105,18 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     // Wait for free context
     wait_for_next_context(2);
 
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
     // Get tile address
     if (0 == unp_cfg_context) {
        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = base_address;
     } else {
        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = base_address;
     }
+
+    // Trisc::SEMPOST for context acquire
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // Stall unpacker until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     std::uint32_t face_2xr_cnt = 0;
     for (std::uint32_t r = 0; r < FACE_HEIGHT; r++) {
