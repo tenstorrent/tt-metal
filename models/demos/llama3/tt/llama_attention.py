@@ -20,6 +20,7 @@ class TtLlamaAttention(LightweightModule):
         weight_cache_path,
         layer_num,
         dtype,
+        transformation_mats,
         configuration,
     ):
         super().__init__()
@@ -48,6 +49,8 @@ class TtLlamaAttention(LightweightModule):
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+
+        self.transformation_mats = transformation_mats
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -245,26 +248,14 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
 
-        q_heads_1BQD = ttnn.linear(
-            q_heads_pre_rot_1BQD,
-            rot_mat,
-            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"](
-                q_heads_pre_rot_1BQD.shape[-2], q_heads_pre_rot_1BQD.shape[-1], rot_mat.shape[-1]
-            ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
+        # Q Rotary Embeddings
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_pre_rot_1BQD, rot_mat[0], rot_mat[1], self.transformation_mats["decode"], is_decode_mode=True
         )
 
-        k_heads_1BKD = ttnn.linear(
-            k_heads_pre_rot_1BKD,
-            rot_mat,
-            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"](
-                k_heads_pre_rot_1BKD.shape[-2], k_heads_pre_rot_1BKD.shape[-1], rot_mat.shape[-1]
-            ),
-            memory_config=k_heads_pre_rot_1BKD.memory_config(),
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
+        # K Rotary Embeddings
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_pre_rot_1BKD, rot_mat[0], rot_mat[1], self.transformation_mats["decode"], is_decode_mode=True
         )
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
