@@ -76,7 +76,7 @@ def sharded_impl(
         dtype=input_dtype,
         layout=tensor_layout,
         mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
-        tile=tile,
+        tile=ttnn.Tile(tile),
     )
 
     if trace_mode:
@@ -145,7 +145,7 @@ def run_normal(
         dtype=input_dtype,
         layout=layout,
         mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
-        tile=tile,
+        tile=ttnn.Tile(tile),
     )
     for i in range(num_iters):
         # Run barrier many times in a loop
@@ -429,8 +429,7 @@ def test_barrier_sharded(
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [8, 16])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16])
 def test_run_barrier_tiny_tile(
     t3k_mesh_device,
     num_devices,
@@ -445,7 +444,6 @@ def test_run_barrier_tiny_tile(
     all_gather_topology,
     enable_async,
     tile_h,
-    tile_w,
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
@@ -460,5 +458,5 @@ def test_run_barrier_tiny_tile(
         num_iters,
         all_gather_topology,
         enable_async,
-        tile=(tile_h, tile_w),
+        tile=(tile_h, 32),
     )
