@@ -469,6 +469,9 @@ def test_conv_ws(
     activations_dtype,
     auto_shard,
 ):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
+
     stride_h = stride
     stride_w = stride
     batch_size = 2
