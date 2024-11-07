@@ -50,7 +50,7 @@ def run_nlp_create_qkv_heads_segformer_test(batch, seq_len, hidden_dim, dtype, i
     passing_pcc_q, output_pcc_q = comp_pcc(pyt_got_back_rm_q, ref_q, pcc)
     logger.debug(f"Q passing={passing_pcc_q}")
     logger.debug(f"Q output pcc={output_pcc_q}")
-    # assert passing_pcc_q
+    assert passing_pcc_q
 
 
 @pytest.mark.parametrize(

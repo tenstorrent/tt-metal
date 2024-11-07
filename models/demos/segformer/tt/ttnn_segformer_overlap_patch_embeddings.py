@@ -21,7 +21,6 @@ class TtSegformerOverlapPatchEmbeddings:
         device = pixel_values.device()
 
         if pixel_values.shape[-1] == 3:
-            # pixel_values = ttnn.permute(pixel_values, (0, 2, 3, 1))
             pixel_values_rm = ttnn.from_device(pixel_values)
             pixel_values_rm = ttnn.to_layout(pixel_values_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
         else:

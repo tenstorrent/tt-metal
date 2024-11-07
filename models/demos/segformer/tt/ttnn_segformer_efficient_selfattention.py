@@ -109,6 +109,7 @@ class TtSegformerEfficientSelfAttention:
             elif len(hidden_states.shape) == 4:
                 batch_size, __, seq_len, num_channels = hidden_states.shape
 
+            # Need for RM input to reshape, then back to TILE after that
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
             hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, num_channels))

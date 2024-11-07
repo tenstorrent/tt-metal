@@ -157,12 +157,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             device=device,
             memory_config=input_mem_config,
         )
-        # print(shard_spec)
-        # print()
 
-    #####
-
-    # print(ttnn_input_tensor)
     ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
 
     ttnn_final_output = ttnn.to_torch(ttnn_output.last_hidden_state)

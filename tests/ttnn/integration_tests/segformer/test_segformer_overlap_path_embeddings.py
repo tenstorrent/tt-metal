@@ -125,7 +125,4 @@ def test_segformer_overlap_patch_embeddings(
     )
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    # if post_process_it:
-    #    ttnn_output = torch.permute(ttnn_output, (0,2,3,1))
-
     assert_with_pcc(torch_output[0], ttnn_output[0], pcc=0.99)
