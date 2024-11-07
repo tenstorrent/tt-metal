@@ -5,9 +5,9 @@
 import torch
 import ttnn
 from models.utility_functions import skip_for_grayskull
-from models.experimental.yolov4.reference.yolov4 import Yolov4
+from models.demos.yolov4.reference.yolov4 import Yolov4
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 import pytest
 import os
 
@@ -15,6 +15,7 @@ import os
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_yolov4(device, reset_seeds, model_location_generator):
+    torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
     if model_path == "models":

@@ -11,9 +11,9 @@ import math
 import pytest
 import os
 
-from models.experimental.yolov4.reference.yolov4 import Yolov4
-from models.experimental.yolov4.ttnn.yolov4 import TtYOLOv4
-from models.experimental.yolov4.ttnn.weight_parameter_update import update_weight_parameters
+from models.demos.yolov4.reference.yolov4 import Yolov4
+from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
 from collections import OrderedDict
 import ttnn
 from models.utility_functions import skip_for_grayskull
@@ -571,9 +571,9 @@ def test_yolov4_model(device, model_location_generator, reset_seeds, input_path,
         ttnn_model = TtYOLOv4(ttnn_weights)
 
     n_classes = 80
-    namesfile = "models/experimental/yolov4/demo/coco.names"
+    namesfile = "models/demos/yolov4/demo/coco.names"
     if input_path == "":
-        imgfile = "models/experimental/yolov4/demo/giraffe_320.jpg"
+        imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
     else:
         imgfile = input_path
     width = 320
