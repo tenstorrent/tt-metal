@@ -10,9 +10,8 @@
 
 #pragma once
 
-#include "noc/noc_parameters.h"
+#include <cstdint>
 
-constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT; // for NOC PCIe alignemnt
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;          // for L1 alignment
 
 // Prefetcher CMD ID enums
@@ -293,18 +292,7 @@ struct CQDispatchCmd {
 
 //////////////////////////////////////////////////////////////////////////////
 
-struct CQPrefetchHToPrefetchDHeader_s {
-    uint32_t length;
-};
-
-typedef union {
-    struct CQPrefetchHToPrefetchDHeader_s header;
-    unsigned char padding[CQ_PREFETCH_CMD_BARE_MIN_SIZE];
-} CQPrefetchHToPrefetchDHeader;
-
-
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
 static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);

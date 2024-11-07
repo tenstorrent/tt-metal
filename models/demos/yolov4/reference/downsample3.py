@@ -5,7 +5,7 @@
 
 import torch
 import torch.nn as nn
-from models.experimental.yolov4.reference.resblock import ResBlock
+from models.demos.yolov4.reference.resblock import ResBlock
 
 
 class Mish(torch.nn.Module):
