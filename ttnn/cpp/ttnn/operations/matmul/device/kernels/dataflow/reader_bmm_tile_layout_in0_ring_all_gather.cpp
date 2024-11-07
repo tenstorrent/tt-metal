@@ -35,21 +35,21 @@ void kernel_main() {
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
     // Push the local shard
-    cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
-    cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
+    cb_reserve_back(cb_id_in0, ring_size * batch * shard_size_in_tiles);
+    // cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
 
-    cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
+    // cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
 
     uint32_t local_shard_read_addr = get_read_ptr(cb_id_in0);
-    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in2);
+    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
     for (uint32_t b = 0; b < batch; ++b) {
 
         for (uint32_t shard_cnt = 0; shard_cnt < ring_size; shard_cnt++) {
 
-            uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * shard_cnt;
+            uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt + 1);
             uint64_t remote_curr_shard_write_addr = get_noc_addr(next_core_noc_x, next_core_noc_y, curr_shard_write_addr);
-            uint32_t curr_shard_read_addr = shard_cnt == 0 ? local_shard_read_addr : l1_write_addr_in0 + shard_size_bytes * (shard_cnt - 1);
+            uint32_t curr_shard_read_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt);
 
             if (shard_cnt == 0) {
                 noc_async_write_one_packet_set_state(remote_curr_shard_write_addr, shard_size_bytes);
@@ -67,9 +67,9 @@ void kernel_main() {
             }
 
             // Do stuff for matmul fusion here
-            if (shard_cnt > 0) {
-                cb_push_back(cb_id_in2, shard_size_in_tiles);
-            }
+            // if (shard_cnt > 0) {
+                cb_push_back(cb_id_in0, shard_size_in_tiles);
+            // }
         }
     }
 }

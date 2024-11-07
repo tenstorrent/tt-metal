@@ -1688,7 +1688,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-    uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
+    uint32_t in0_CB_tiles = num_cores * per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     /* in1 */
@@ -1802,7 +1802,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_activation_gathered.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_copy.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1828,12 +1828,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_globally_allocated_address(*in1_buffer);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    uint32_t src2_cb_index = 2;
-    tt_metal::CircularBufferConfig src2_cb_config =
-        tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
-            .set_page_size(src2_cb_index, in2_single_tile_size)
-            .set_tile_dims(src2_cb_index, in0_tile);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+    // uint32_t src2_cb_index = 2;
+    // tt_metal::CircularBufferConfig src2_cb_config =
+    //     tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
+    //         .set_page_size(src2_cb_index, in2_single_tile_size)
+    //         .set_tile_dims(src2_cb_index, in0_tile);
+    // auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
     uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t interm0_cb_index = 24;
