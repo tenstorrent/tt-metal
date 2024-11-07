@@ -201,12 +201,6 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     switch (ts->return_code) {
         case DPrintOK:
             break; // Continue to print the tile slice
-        case DPrintErrorBadTileIdx:
-            {
-            uint32_t page_size = ts->cb_ptr;
-            stream << fmt::format("Tried printing {}: unexpected tile size ({})\n", cb, page_size);
-            return;
-            }
         case DPrintErrorBadPointer:
             {
             uint32_t ptr = ts->cb_ptr;

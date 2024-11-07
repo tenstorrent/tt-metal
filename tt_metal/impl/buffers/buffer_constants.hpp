@@ -7,7 +7,6 @@
 #include <cstdint>
 
 namespace tt {
-
 namespace tt_metal {
 
 enum class TensorMemoryLayout {
@@ -32,5 +31,4 @@ enum class BufferType {
 };
 
 } // namespace tt_metal
-
 } // namespace tt
