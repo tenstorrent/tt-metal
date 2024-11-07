@@ -292,7 +292,7 @@ int main(int argc, char **argv) {
     SHAPE shape = {1, 1, Mt * 32, Kt * 32};
     tt::deprecated::Tensor<bfloat16> tensor =
         tt::deprecated::initialize_tensor<bfloat16>(
-            shape, tt::deprecated::Initialize::RANDOM, 100,
+            shape, tt::deprecated::Initialize::RANDOM, 0, 100,
             std::chrono::system_clock::now().time_since_epoch().count());
     auto identity = create_identity_matrix(
         Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);  // bflaot16 identity

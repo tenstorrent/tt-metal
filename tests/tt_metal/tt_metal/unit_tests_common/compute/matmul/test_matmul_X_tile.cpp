@@ -51,6 +51,7 @@ void create_test_stimuli(MatmulTileStimuli &stimuli, uint32_t M, uint32_t K, uin
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape,
         tt::deprecated::Initialize::RANDOM,
+        0,
         100,
         std::chrono::system_clock::now().time_since_epoch().count()
     );

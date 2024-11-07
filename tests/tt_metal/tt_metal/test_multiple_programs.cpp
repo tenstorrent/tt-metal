@@ -238,12 +238,12 @@ int main(int argc, char **argv) {
         //                      Execute Program One
         ////////////////////////////////////////////////////////////////////////////
         SHAPE shape = {1, 1, 32, 32};
-        tt::deprecated::Tensor<bfloat16> src0_tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> src0_tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src0_activations_tile_layout = convert_to_tile_layout(src0_tensor.get_values());
         auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_activations);
 
-        tt::deprecated::Tensor<bfloat16> src1_tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> src1_tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::ZEROS, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src1_activations_tile_layout = convert_to_tile_layout(src1_tensor.get_values());
         auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_activations);

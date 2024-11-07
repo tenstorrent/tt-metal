@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
-
 constexpr uint32_t ALIGNED_PAGE_SIZE = 16;
 
 constexpr uint32_t cb_start_addr = get_compile_time_arg_val(0);
@@ -168,7 +167,8 @@ void kernel_main() {
 
     start_page_size = page_size[0];
 
-    constexpr uint32_t cb_id = 0;
+    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t sync_cb_id = 2;
 
     setup_remote_receiver_cb_interface<ALIGNED_PAGE_SIZE>();
 
@@ -181,9 +181,13 @@ void kernel_main() {
         setup_remote_cb_page_size_block_aligned(curr_page_size, curr_block_size, noc_x, noc_y);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
+            cb_reserve_back(cb_id_in1, curr_block_num_tiles);
             remote_cb_wait_front(curr_block_num_tiles);
-
+            cb_push_back(cb_id_in1, curr_block_num_tiles);
+            // wait for compute done
+            cb_wait_front(sync_cb_id, 1);
             remote_cb_pop_front(curr_block_num_tiles, noc_x, noc_y);
+            cb_pop_front(sync_cb_id, 1);
         }
     }
 

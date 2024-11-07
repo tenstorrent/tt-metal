@@ -293,7 +293,7 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     SHAPE shape = {1, 1, M * 32, K * 32};
-    tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     vector<uint32_t> activations;
     if (activations_rm) {

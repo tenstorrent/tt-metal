@@ -1156,7 +1156,7 @@ int main(int argc, char** argv) {
     SHAPE in0_shape = {1, 1, Mt * 32, Kt * 32};
     tt::deprecated::Tensor<bfloat16> tensor =
         tt::deprecated::initialize_tensor<bfloat16>(
-            in0_shape, tt::deprecated::Initialize::RANDOM, 100,
+            in0_shape, tt::deprecated::Initialize::RANDOM, 0, 100,
             std::chrono::system_clock::now().time_since_epoch().count());
     auto activations_tilized = tilize(tensor.get_values(), Mt * 32, Kt * 32);
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
