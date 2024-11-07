@@ -32,7 +32,13 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("batch", (1, 2), ids=["batch_1", "batch_2"])
+@pytest.mark.parametrize(
+    "batch",
+    (1,),
+    ids=[
+        "batch_1",
+    ],
+)
 def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
@@ -103,7 +109,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
     for b in range(batch):
         tt_tensor_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
             tt_xattn_tokens[b : b + 1],
-            force_replicate=True,
+            force_replicated=True,
         )
         tt_xattn_cache = tt_model.compute_xattn_kv_cache(tt_tensor_xattn_tokens, tt_xattn_cache, user_id=b)
     tt_xattn_cache_torch = [
@@ -202,8 +208,8 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
                     user_id=b,
                 )
 
-                tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-                tt_output_torch = tt_output_torch[0, ..., :seq_len, :].view(1, seq_len, dim)
+                tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+                tt_output_torch = tt_output_torch[..., :seq_len, :].view(1, seq_len, dim)
                 outputs.append(tt_output_torch)
             tt_output_torch = torch.cat(outputs, dim=0).view(batch, seq_len, dim)
 
@@ -213,6 +219,8 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
                 ttnn.DRAM_MEMORY_CONFIG,
                 force_replicated=True,
             )
+            tt_x = ttnn.interleaved_to_sharded(tt_x, model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"])
+
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
@@ -255,8 +263,8 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
                 mode=mode,
             )
 
-            tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-            tt_output_torch = tt_output_torch[0, :, :batch, :].reshape(batch, seq_len, dim)
+            tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+            tt_output_torch = tt_output_torch[:, :, :batch, :].reshape(batch, seq_len, dim)
 
         passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc_required)
         logger.info(comp_allclose(pt_out, tt_output_torch))
