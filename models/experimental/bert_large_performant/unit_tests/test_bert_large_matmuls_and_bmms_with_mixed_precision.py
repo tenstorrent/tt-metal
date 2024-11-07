@@ -101,11 +101,8 @@ def run_bert_large_matmul_test(
     )
 
     if bias_mem_config is not None:
-        bias_t = (
-            ttnn.Tensor(BIAS, bias_dtype)
-            .pad(bias_pad_shape, [0, 0, 0, 0], 0)
-            .to(ttnn.TILE_LAYOUT)
-            .to(device, bias_mem_config)
+        bias_t = ttnn.from_torch(
+            BIAS, dtype=bias_dtype, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config, device=device
         )
     else:
         bias_t = None
