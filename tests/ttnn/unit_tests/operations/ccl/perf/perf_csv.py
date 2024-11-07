@@ -56,7 +56,9 @@ def perf_report(file_path):
     )
 
     df["dim"] = df["ATTRIBUTES"].apply(
-        lambda x: safe_parse_attributes(x).get("dim", "") if isinstance(safe_parse_attributes(x), dict) else ""
+        lambda x: safe_parse_attributes(x).get("dim", safe_parse_attributes(x).get("scatter_dim", ""))
+        if isinstance(safe_parse_attributes(x), dict)
+        else ""
     )
 
     df["num_links"] = df["ATTRIBUTES"].apply(
@@ -200,7 +202,10 @@ def perf_report(file_path):
             min_val = round(group_df[column].min(), 2)
             largest_vals = group_df[column].nlargest(3)
             max_val = round(largest_vals.iloc[-1], 2)
-            avg_val = round(group_df[column][~group_df[column].isin(largest_vals.head(2))].mean(), 2)
+            if min_val == max_val:
+                avg_val = min_val
+            else:
+                avg_val = round(group_df[column][~group_df[column].isin(largest_vals.head(2))].mean(), 2)
 
             group_data[column] = f"{min_val} - {avg_val} - {max_val}"
 

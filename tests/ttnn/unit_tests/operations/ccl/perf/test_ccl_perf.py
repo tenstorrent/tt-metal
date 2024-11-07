@@ -9,6 +9,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     run_all_gather_on_n300_impl,
     run_all_gather_on_t3000_impl_tight_loop,
 )
+from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import (
+    run_reduce_scatter_test,
+)
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -124,6 +127,73 @@ def test_all_gather_on_t3000(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=topology,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        trace_mode=True,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape, scatter_dim, layout",
+    [
+        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 64], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
+def test_reduce_scatter_on_t3000(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    scatter_dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters,
+):
+    run_reduce_scatter_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        scatter_dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
         num_iters=num_iters,
         enable_async=enable_async,
         trace_mode=True,
