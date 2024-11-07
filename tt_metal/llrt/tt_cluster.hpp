@@ -73,7 +73,7 @@ class Cluster {
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
-    void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
+    void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord, const TensixSoftResetOptions &soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
     void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
 
     void write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;

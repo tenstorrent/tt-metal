@@ -346,13 +346,20 @@ void Device::initialize_build() {
                             break;
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
-                            build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                            if (this->arch() == ARCH::BLACKHOLE) {
+                                bool enable_slaves = false; // Risc1 of active ethernet cores on BH run idle erisc FW
+                                build_states[index] = std::make_shared<JitBuildIdleEthernet>(
+                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr}, enable_slaves);
+                            } else {
+                                build_states[index] = std::make_shared<JitBuildActiveEthernet>(
+                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                            }
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
+                            bool enable_slaves = is_fw and processor_class == 0;
                             build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr}, enable_slaves);
                             break;
                         }
                         default:
@@ -425,7 +432,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            if (is_idle_eth) {
+            if (is_idle_eth or this->arch() == ARCH::BLACKHOLE) {
                 tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
             }
             if (not llrt::OptionsG.get_skip_loading_fw()) {
@@ -439,11 +446,12 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                 }
             }
-            if (is_idle_eth) {
-                llrt::program_risc_startup_addr(this->id(), phys_core);
+            if (is_idle_eth or this->arch() == ARCH::BLACKHOLE) {
+                llrt::program_risc_startup_addr(this->id(), phys_core, is_idle_eth);
             } else {
-                llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
+                llrt::launch_erisc_app_fw_on_core(this->id(), phys_core, is_idle_eth, (is_idle_eth or this->arch() == ARCH::BLACKHOLE));
             }
+            // llrt::launch_erisc_app_fw_on_core(this->id(), phys_core, is_idle_eth, (is_idle_eth or this->arch() == ARCH::BLACKHOLE));
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
             launch_msg->kernel_config.mode = (this->using_slow_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST :  DISPATCH_MODE_DEV;
@@ -663,12 +671,17 @@ void Device::initialize_and_launch_firmware() {
             this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 
-    // Load erisc app base FW to eth cores
+    // Load erisc app base FW to eth cores on WH and idle erisc FW on second risc of BH active eth cores
+    std::unordered_set<CoreCoord> bh_active_eth_cores;
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+        if (this->arch() == ARCH::BLACKHOLE) {
+            bh_active_eth_cores.insert(phys_eth_core);
+            not_done_cores.insert(phys_eth_core);
+        }
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
@@ -683,8 +696,15 @@ void Device::initialize_and_launch_firmware() {
     tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
-    for(const auto& worker_core : not_done_cores)
-        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+    TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
+    for(const auto& worker_core : not_done_cores) {
+        if (bh_active_eth_cores.find(worker_core) != bh_active_eth_cores.end()) {
+            // bit 12 needs to be deasserted to run second erisc on BH
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        }
+        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core), reset_val);
+    }
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init

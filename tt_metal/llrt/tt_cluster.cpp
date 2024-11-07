@@ -365,10 +365,10 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     return 0;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
+void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord, const TensixSoftResetOptions &soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
-    this->driver_->deassert_risc_reset_at_core(virtual_chip_coord);
+    this->driver_->deassert_risc_reset_at_core(virtual_chip_coord, soft_resets);
 }
 
 void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
@@ -695,6 +695,9 @@ void Cluster::initialize_ethernet_sockets() {
 }
 
 void Cluster::reserve_ethernet_cores_for_tunneling() {
+    // if (this->arch_ == tt::ARCH::BLACKHOLE) {
+    //     return; // BH chips have direct PCIe connection
+    // }
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
@@ -775,14 +778,36 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-    for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-        for (const auto &eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
-                skip_reserved_tunnel_cores) {
-                continue;
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        auto soc_desc = this->get_soc_desc(chip_id);
+        uint32_t training_status_addr = 0x7CC00;
+        auto physical_eth_cores = soc_desc.physical_ethernet_cores;
+        for (const CoreCoord &physical_eth_core : physical_eth_cores) {
+            uint32_t training_status;
+            read_core(&training_status, sizeof(uint32_t), tt_cxy_pair(chip_id, physical_eth_core), training_status_addr);
+            // Ethernet Training Status Legend, TODO: Confirm with Bing
+            // 0xFACE0000: ethernet inactive
+            // 0xFACE0001 to 0xFACE0004:
+            //      - ethernet is training (issuing reset at this time could lead to undefined behaviour)
+            //      - due to lack of timeouts in eth training, ports with nothing connected will stay at 0xFACE0001
+            // 0xFACE0005: ethernet is done training / active
+            bool is_active = false;
+            if (training_status == 0xFACE0005) { // TODO handle case when eth is training
+                CoreCoord logical_active_eth = soc_desc.get_logical_ethernet_core_from_physical(physical_eth_core);
+                active_ethernet_cores.insert(logical_active_eth);
+                is_active = true;
             }
-            active_ethernet_cores.insert(eth_core);
+        }
+    } else {
+        const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+        for (const auto &[other_chip_id, eth_cores] : connected_chips) {
+            for (const auto &eth_core : eth_cores) {
+                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
+                    skip_reserved_tunnel_cores) {
+                    continue;
+                }
+                active_ethernet_cores.insert(eth_core);
+            }
         }
     }
     return active_ethernet_cores;

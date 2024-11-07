@@ -63,7 +63,7 @@ namespace kernel_profiler {
 //}
 
 void set_deassert_addresses() {
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) && defined(ENABLE_SLAVES)
     // start_pc1 make this a const!
     WRITE_REG(0xFFB14008, MEM_SLAVE_IERISC_FIRMWARE_BASE);
 #endif
@@ -87,11 +87,13 @@ inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
 }
 
 inline void wait_slave_eriscs(uint32_t &heartbeat) {
+#ifdef ENABLE_SLAVES
     WAYPOINT("SEW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
         RISC_POST_HEARTBEAT(heartbeat);
     }
     WAYPOINT("SED");
+#endif
 }
 
 int main() {
