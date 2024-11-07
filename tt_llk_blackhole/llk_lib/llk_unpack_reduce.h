@@ -84,18 +84,21 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
     // Wait for free context
     wait_for_next_context(2);
 
-    // Load only 16 datums into srcB
-    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM-1, 0x0);
-
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
     // Get tile address
     if (0 == unp_cfg_context) {
         cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
     } else {
         cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
     }
+
+    // Trisc::SEMPOST for context acquire
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // Load only 16 datums into srcB
+    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM-1, 0x0);
+
+    // Stall unpacker until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
     mop_run(0, 4);

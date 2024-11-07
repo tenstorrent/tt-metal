@@ -124,6 +124,9 @@ inline void _llk_unpack_AB_(
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
 
+    // Stall unpacker until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
     // Run MOP
     ckernel::ckernel_template::run(instrn_buffer);
 
