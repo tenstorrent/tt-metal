@@ -8,7 +8,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/matmul.h"
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -29,7 +28,6 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t Ht = get_compile_time_arg_val(9); // How many rows (tiles) in n_heads dimension
 
-    // DPRINT << "in_cb: " << in_cb << " cos_cb: " << cos_cb << " sin_cb: " << sin_cb << ENDL();
     mm_init();
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb); // General Init for all binary ops
 
@@ -71,7 +69,6 @@ void MAIN {
         REL();
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
-        // UNPACK(DPRINT << "rotated_in_interm_cb "<< TSLICE(rotated_in_interm_cb, 0, SliceRange::h0_w0_32()) << ENDL());
 
         mul_bcast_rows_init_short();
         ACQ();
@@ -84,7 +81,6 @@ void MAIN {
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
-        // mul_bcast_rows_init_short(in_cb, cos_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // cos_interim = x * cos
@@ -93,8 +89,6 @@ void MAIN {
         }
         REL();
         cb_push_back(cos_interm_cb, Wt);
-        // cb_wait_front(cos_interm_cb, Wt);
-        // DPRINT  << TSLICE(cos_interm_cb, 0, SliceRange::h0_w0_32()) << ENDL();
         cb_pop_front(in_cb, Wt); // Done with input
 
 
@@ -109,7 +103,6 @@ void MAIN {
         }
         REL();
         cb_push_back(out_cb, Wt);
-        // DPRINT  << TSLICE(out_cb, 0, SliceRange::h0_w0_32()) << ENDL();
         cb_pop_front(sin_interm_cb, Wt);
         cb_pop_front(cos_interm_cb, Wt);
 

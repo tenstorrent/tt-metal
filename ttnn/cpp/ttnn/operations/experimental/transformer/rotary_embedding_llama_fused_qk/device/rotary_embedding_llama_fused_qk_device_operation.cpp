@@ -23,44 +23,45 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
 
     auto ref_device = q_input_tensor.device();
     for (const auto& input : input_tensors) {
-        TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
+        TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
         TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+        TT_FATAL((input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED), "inputs for RoPE must be HEIGHT_SHARDED.");
+        TT_FATAL((input.get_dtype() == DataType::BFLOAT16), "Inputs to rotary embedding must be bfloat16");
     }
 
+    // Check for decode mode
+    TT_FATAL(q_input_tensor.get_logical_shape()[0] == 1 && k_input_tensor.get_logical_shape()[0] == 1, "rotary_embedding_llama_fused_qk currently only supports deocde mode qith seq_len=1.");
+
+    TT_FATAL(q_input_tensor.get_logical_shape()[-1] == k_input_tensor.get_logical_shape()[-1], "Q input tensor and K input tensor must have same head dimensions");
     uint32_t head_dim = q_input_tensor.get_logical_shape()[-1];
     TT_FATAL(head_dim <= 128 || std::get<ttnn::WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
-    // Check that head_dim is less than 256
-    TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
+
     // Check that head_dim is a multiple of 32
     TT_FATAL(head_dim % TILE_WIDTH == 0, "Head dim must be a multiple of TILE_WIDTH");
 
-    TT_FATAL(q_input_tensor.get_dtype() == cos.get_dtype()  && cos.get_dtype() == sin.get_dtype()
-        && sin.get_dtype() == trans_mat.get_dtype() && trans_mat.get_dtype() == DataType::BFLOAT16, "All input tensors must have dtype = bfloat16");
-    TT_FATAL(q_input_tensor.memory_config().memory_layout == this->q_output_mem_config.memory_layout, "Input tensor and output tensor must have same memory layout");
+    TT_FATAL(q_input_tensor.memory_config().memory_layout == this->q_output_mem_config.memory_layout, "Q Input tensor and Q output tensor must have same memory layout");
+    TT_FATAL(k_input_tensor.memory_config().memory_layout == this->k_output_mem_config.memory_layout, "K Input tensor and K output tensor must have same memory layout");
+
+    // check that q and k have same batch size and lesser that equal to 32
+    uint32_t q_batch_size = q_input_tensor.get_logical_shape()[1];
+    uint32_t k_batch_size = k_input_tensor.get_logical_shape()[1];
+    TT_FATAL(q_batch_size == k_batch_size, "Q and K must have the equal batch size");
+    TT_FATAL(q_batch_size <= 32, "Q and K must have batch size less than or equal to 32, due to parallelization over core-grid of 64");
+    uint32_t q_num_cores = q_input_tensor.shard_spec()->grid.bounding_box().grid_size().x * q_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
+    uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.bounding_box().grid_size().x * k_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
+    TT_FATAL(q_num_cores + k_num_cores <= 64, "Q and K must not exceed max core grid size of 64");
+
 
     // Check that cos and sin have same dims
     TT_FATAL(cos.get_logical_shape() == sin.get_logical_shape(), "Cos and Sin dims must match");
-
-
-    uint32_t seq_len = q_input_tensor.get_logical_shape()[0];
-    TT_FATAL(seq_len == 1, "rotary_embedding_llama_fused_qk currently only supports sharded inputs in decode mode, and therefore, seq_len (in dim 0) must be 1.");
-
-    for (const auto& input : input_tensors) {
-        TT_FATAL((input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED), "Sharded inputs for RoPE must be HEIGHT_SHARDED.");
-    }
-
-    uint32_t num_cores = q_input_tensor.device()->compute_with_storage_grid_size().x * q_input_tensor.device()->compute_with_storage_grid_size().y;
-    uint32_t batch = q_input_tensor.get_logical_shape()[1];
-    TT_FATAL(batch <= num_cores, "In decode mode, RoPE is parallelized over batch dimension, and therefore, batch size must be less than or equal to the number of cores");
-
-    // Checks for cos and sin
-    // TT_FATAL(batch == cos.get_logical_shape()[1], "Cos and Sin must have the same batch size as the input");
-    TT_FATAL(cos.shard_spec()->shape[0] == TILE_HEIGHT, "In decode mode, RoPE only supports n_heads (shard_shape[0]) less than equal to TILE_HEIGHT"); // TODO: might be supported by kernel currently, but need to check with pytest
+    uint32_t cos_sin_batch_size = cos.get_logical_shape()[1];
+    TT_FATAL(cos_sin_batch_size == (q_batch_size + k_batch_size), "Cos and Sin are repeated for Q and K, so they must have the same batch size as the sum of Q and K batch sizes");
 
     // Checks for transformation matrix
-    TT_FATAL(trans_mat.get_logical_shape()[0] == 1 && trans_mat.get_logical_shape()[1] == 1, "Transformation matrix must have 1st & 2nd dim equal to 1");
+    uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.bounding_box().grid_size().x * trans_mat.shard_spec()->grid.bounding_box().grid_size().y;
+    TT_FATAL(trans_mat_num_cores == (q_num_cores + k_num_cores), "Transformation matrix is repeated for Q and K must be sharded over core grid of Q and K");
     TT_FATAL(trans_mat.shard_spec()->shape[0] == TILE_HEIGHT, "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
     TT_FATAL(trans_mat.shard_spec()->shape[1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
 

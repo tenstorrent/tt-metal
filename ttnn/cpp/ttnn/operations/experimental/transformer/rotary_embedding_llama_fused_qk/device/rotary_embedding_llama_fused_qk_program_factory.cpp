@@ -149,27 +149,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
     auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
-    // uint32_t k_rotated_input_interm_cb_index = CB::c_intermed3;
-    // tt_metal::CircularBufferConfig cb_k_rotated_input_interm_config =
-    //     tt_metal::CircularBufferConfig(
-    //         num_interm_tiles * input_single_tile_size, {{k_rotated_input_interm_cb_index, input_cb_data_format}})
-    //         .set_page_size(k_rotated_input_interm_cb_index, input_single_tile_size);
-    // auto cb_k_rotated_input_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_k_rotated_input_interm_config);
-
-    // uint32_t k_cos_interm_cb_index = CB::c_intermed4;
-    // tt_metal::CircularBufferConfig cb_k_cos_interm_config =
-    //     tt_metal::CircularBufferConfig(
-    //         num_interm_tiles * input_single_tile_size, {{k_cos_interm_cb_index, cos_cb_data_format}})
-    //         .set_page_size(k_cos_interm_cb_index, cos_single_tile_size);
-    // auto cb_k_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_k_cos_interm_config);
-
-    // uint32_t k_sin_interm_cb_index = CB::c_intermed5;
-    // tt_metal::CircularBufferConfig cb_k_sin_interm_config =
-    //     tt_metal::CircularBufferConfig(
-    //         num_interm_tiles * input_single_tile_size, {{k_sin_interm_cb_index, sin_cb_data_format}})
-    //         .set_page_size(k_sin_interm_cb_index, sin_single_tile_size);
-    // auto cb_k_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_k_sin_interm_config);
-
     uint32_t q_output_cb_index = CB::c_out0;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
@@ -177,7 +156,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             .set_page_size(q_output_cb_index, output_single_tile_size)
             .set_globally_allocated_address(*q_dst_buffer);
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
-    uint32_t k_output_cb_index = CB::c_out1;  // output operands start at index 16
+    uint32_t k_output_cb_index = CB::c_out1;  // output operands start at index 17
     tt_metal::CircularBufferConfig cb_k_output_config =
         tt_metal::CircularBufferConfig(
             num_output_tiles * output_single_tile_size, {{k_output_cb_index, output_cb_data_format}})

@@ -44,7 +44,7 @@ class TtLlamaRotary(torch.nn.Module):
             get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
         )
 
-    def apply_rotary(self, q, k, cos, sin):
+    def apply_rotary(self, x, cos, sin):
         # n_head = 8 for Q
         # n_head = 1 for K
 
@@ -55,78 +55,21 @@ class TtLlamaRotary(torch.nn.Module):
             fp32_dest_acc_en=(True if self.head_dim <= 128 else False),
             packer_l1_acc=True,
         )
-        # q = torch.ones(1, 32, 32, 32)
-        # q = ttnn.from_torch(q, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # q_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(ttnn.TILE_SIZE, 32),
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-        # q = ttnn.interleaved_to_sharded(q, q_mem_config)
 
-        # k = torch.ones(1, 32, 32, 32)
-        # k = ttnn.from_torch(k, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # k_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(ttnn.TILE_SIZE, 32),
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(7,7))}),
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-        # k = ttnn.interleaved_to_sharded(k, k_mem_config)
-
-        # cos = torch.concat((torch.ones(1, 32, 1, 32), 1*torch.ones(1, 32, 1, 32)), dim=1)
-        # cos = ttnn.from_torch(cos, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # cos_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(32, 32),
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-        # cos = ttnn.interleaved_to_sharded(cos, cos_mem_config)
-
-        # sin = torch.ones(1, 64, 1, 32)
-        # sin = ttnn.from_torch(sin, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # sin_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(32, 32),
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-        # sin = ttnn.to_memory_config(sin, sin_mem_config)
-
-        # self.transformation_mat = torch.ones(1, 1, 64 * 32, 32)
-        # self.transformation_mat = ttnn.from_torch(
-        #     self.transformation_mat, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        # )
-        # self.transformation_mat_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(32, 32),
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-        # self.transformation_mat = ttnn.interleaved_to_sharded(self.transformation_mat, self.transformation_mat_mem_config)
-
-        rotary_output1, rotary_output2 = ttnn.experimental.rotary_embedding_llama_fused_qk(
-            q,
-            k,
+        rotary_output = ttnn.experimental.rotary_embedding_llama(
+            x,
             cos,
             sin,
             self.transformation_mat,
+            is_decode_mode=self.mode == "decode",
             compute_kernel_config=compute_kernel_config,
         )
-        breakpoint()
 
-        return rotary_output1, rotary_output2
+        return rotary_output
 
     def forward(self, xq, xk, cos, sin):
-        xq, xk = self.apply_rotary(xq, xk, cos, sin)
-        # xk = self.apply_rotary(xk, cos, sin)
+        xq = self.apply_rotary(xq, cos, sin)
+        xk = self.apply_rotary(xk, cos, sin)
         return xq, xk
 
 
@@ -233,29 +176,16 @@ def run_test_rotary_embedding_llama(
         grid = (
             ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True).bounding_box().grid_size()
         )
-
-        q_input_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        input_mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, batch, ttnn.TILE_SIZE, head_dim),
+            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        k_input_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(7, 7))}),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
         )
 
         tt_inp = [
-            ttnn.from_torch(
-                inp[0], device=device, dtype=datatype, memory_config=q_input_mem_config, layout=ttnn.TILE_LAYOUT
-            ),
-            ttnn.from_torch(
-                inp[1], device=device, dtype=datatype, memory_config=k_input_mem_config, layout=ttnn.TILE_LAYOUT
-            ),
+            ttnn.from_torch(i, device=device, dtype=datatype, memory_config=input_mem_config, layout=ttnn.TILE_LAYOUT)
+            for i in inp
         ]
         tt_inp += [cos, sin]  # Append cos and sin to the input list
     else:
@@ -316,11 +246,11 @@ def run_test_rotary_embedding_llama(
         (1, 8192),
         (1, 16384),
         (1, 128 * 1024),
-        # (64, 1),
+        (64, 1),
         (32, 1),
-        # (16, 1),
-        # (8, 1),
-        # (1, 1),
+        (16, 1),
+        (8, 1),
+        (1, 1),
     ),
     ids=(
         "prefill_32",
@@ -333,22 +263,22 @@ def run_test_rotary_embedding_llama(
         "prefill_8k",
         "prefill_16k",
         "prefill_128k",
-        # "decode_64",
+        "decode_64",
         "decode_32",
-        # "decode_16",
-        # "decode_8",
-        # "decode_1",
+        "decode_16",
+        "decode_8",
+        "decode_1",
     ),
 )
 @pytest.mark.parametrize(
     "n_heads, n_kv_heads, head_dim",
     (
-        (1, 1, 32),
-        # (8, 1, 128),
-        # (11, 3, 128),
-        # (71, 32, 64),
-        # (8, 1, 96),
-        # (8, 1, 256),
+        (8, 1, 64),
+        (8, 1, 128),
+        (11, 3, 128),
+        (71, 32, 64),
+        (8, 1, 96),
+        (8, 1, 256),
     ),
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))

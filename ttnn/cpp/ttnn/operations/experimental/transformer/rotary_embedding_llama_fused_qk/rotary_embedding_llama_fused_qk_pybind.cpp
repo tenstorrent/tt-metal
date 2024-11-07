@@ -19,19 +19,16 @@ void py_bind_rotary_embedding_llama_fused_qk(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::rotary_embedding_llama_fused_qk,
-        R"doc(rotary_embedding_llama_fused_qk(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, trans_mat: ttnn.Tensor, is_decode_mode: bool, memory_config: MemoryConfig, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
+        R"doc(rotary_embedding_llama_fused_qk(q_input_tensor: ttnn.Tensor, k_input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, trans_mat: ttnn.Tensor, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
-            Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
-
-            When token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
+            Applies the rotary embedding to the q_input_tensor and k_input_tensor parallely using the cos_cache and sin_cache tensors.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor
-                * :attr:`cos_cache`: Cosine Cache Tensor
-                * :attr:`sin_cache`: Sine Cache Tensor
-                * :attr:`trans_mat`: Transformation Matrix Tensor
-                * :attr:`is_decode_mode`: Specify mode of operation
-                * :attr:`memory_config`: Memory Config of the output tensor = DEFAULT_OUTPUT_MEMORY_CONFIG
+                * :attr:`q_input_tensor`: Q Input Tensor [1, q_batch, num_heads, head_dim]
+                * :attr:`k_input_tensor`: K Input Tensor [1, k_batch, num_kv_heads, head_dim]
+                * :attr:`cos_cache`: Cosine Cache Tensor [1, (q_batch + k_batch), 1(32), head_dim]
+                * :attr:`sin_cache`: Sine Cache Tensor [1, (q_batch + k_batch), 1(32), head_dim]
+                * :attr:`trans_mat`: Transformation Matrix Tensor  [1, (q_batch + k_batch), 32, 32]
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
         )doc",
         ttnn::pybind_arguments_t {
@@ -41,8 +38,6 @@ void py_bind_rotary_embedding_llama_fused_qk(pybind11::module& module) {
             py::arg("sin_cache"),
             py::arg("trans_mat"),
             py::kw_only(),
-            py::arg("q_memory_config") = std::nullopt,
-            py::arg("k_memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 }
 
