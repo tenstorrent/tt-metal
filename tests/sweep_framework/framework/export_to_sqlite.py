@@ -240,7 +240,7 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
 
     ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
-    sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    sweeps_path = pathlib.Path(__file__).parent.parent / "sweeps"
     es_client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     global VERBOSE
     VERBOSE = args.verbose

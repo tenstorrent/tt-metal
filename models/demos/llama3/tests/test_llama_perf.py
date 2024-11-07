@@ -9,7 +9,6 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn,
     sample,
     HostEmbedding,
     get_single_rot_mat,
@@ -50,36 +49,21 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
     elif "3.2-3B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.065
     elif "3.1-8B" in model_args.DEFAULT_CACHE_PATH:
-        expected_inference_time = 0.07
+        expected_inference_time = 0.08
     elif "3.2-11B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.085
+    elif "3.1-70B" in model_args.DEFAULT_CACHE_PATH:
+        expected_inference_time = 0.15
     else:
-        assert False, f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B]"
+        assert False, f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B, 3.2-11B, 3.1-70B]"
 
     # model_args.n_layers = 1
     # Clear global profiler state before starting measurements
     profiler.clear()
 
     profiler.start("weight_loading")
-    if model_args.is_vision():
-        state_dict_prefix = "text_model."
-    else:
-        state_dict_prefix = ""
+    state_dict = model_args.load_state_dict()
 
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-    state_dict = {
-        k: v
-        for k, v in state_dict.items()
-        if (
-            any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k
-            in [
-                state_dict_prefix + "tok_embeddings.weight",
-                state_dict_prefix + "norm.weight",
-                state_dict_prefix + "output.weight",
-            ]
-        )
-    }
     profiler.end("weight_loading")
 
     prompts = ["This is a test"] * model_args.max_batch_size
@@ -87,6 +71,7 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
 
     # Embedding on host
     embd = HostEmbedding(model_args)
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = kv_cache_len
@@ -175,6 +160,15 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.uint32,
+    )
+
+    # Generate first input on host
+    pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
+    # Send first input to device
+    tt_decode_input = pt_decode_input
+    decode_input = tt_model.args.prepare_inputs_ttnn_decode(
+        tt_decode_input,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
 
     current_pos = ttnn.from_torch(
