@@ -1,0 +1,58 @@
+name: "[internal] Create and Publish Release Docker Image"
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      is_major_version:
+        required: true
+        type: boolean
+        default: false
+jobs:
+  create-docker-image:
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+      - name: Get the name of the wheel and set up env variables
+        run: |
+          echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
+          echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
+          TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          build-args: |
+            WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
+            BASE_IMAGE_NAME=tt-metalium/${{ matrix.os }}-amd64
+          tags: ${{ env.TAG_NAME }}
+          context: .
+          file: dockerfile/release.Dockerfile
+
+      - name: Tag latest if this is a major version release
+        if: ${{ is_major_version }}
+        run: |
+          docker pull $TAG_NAME
+          docker tag $TAG_NAME $REPO_IMAGE_NAME:latest
+          docker push $REPO_IMAGE_NAME:latest
