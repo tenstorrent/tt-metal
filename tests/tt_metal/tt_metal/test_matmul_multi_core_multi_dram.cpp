@@ -364,6 +364,7 @@ int main(int argc, char **argv) {
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
             shape,
             tt::deprecated::Initialize::RANDOM,
+            0,
             100,
             10 /* seed */);
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 identity
