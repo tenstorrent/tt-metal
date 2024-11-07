@@ -17,6 +17,7 @@
 #include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/binary_ng/binary_ng_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
@@ -66,6 +67,9 @@ void py_module(py::module& module) {
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
+
+    auto m_binary_ng = module.def_submodule("binary_ng", "binary_ng operations");
+    binary_ng::py_module(m_binary_ng);
 
     auto m_ternary = module.def_submodule("ternary", "ternary operations");
     ternary::py_module(m_ternary);
