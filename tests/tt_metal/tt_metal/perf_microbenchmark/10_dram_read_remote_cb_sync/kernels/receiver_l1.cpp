@@ -5,9 +5,8 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
-#include "debug/dprint.h"
 
 constexpr uint32_t ALIGNED_PAGE_SIZE = 16;
 
@@ -97,6 +96,32 @@ FORCE_INLINE void setup_remote_cb_page_size(uint32_t page_size, uint32_t remote_
     }
 }
 
+FORCE_INLINE void setup_remote_cb_page_size_block_aligned(uint32_t page_size, uint32_t block_size, uint32_t remote_noc_x, uint32_t remote_noc_y, uint8_t noc = noc_index) {
+    uint32_t num_blocks = remote_cb_interface.fifo_size / block_size;
+    uint32_t cb_size_block_aligned = num_blocks * block_size;
+
+    remote_cb_interface.fifo_limit_page_aligned = cb_size_block_aligned + remote_cb_interface.fifo_start_addr;
+    remote_cb_interface.fifo_page_size = page_size;
+    remote_cb_interface.fifo_aligned_num_pages = num_blocks * block_size / remote_cb_interface.aligned_page_size;
+
+    uint32_t curr_fifo_rd_ptr = remote_cb_interface.fifo_rd_ptr;
+    bool fifo_rd_ptr_exceed_fifo_limit = curr_fifo_rd_ptr > remote_cb_interface.fifo_limit_page_aligned;
+    uint32_t num_blocks_till_fifo_limit = (remote_cb_interface.fifo_limit_page_aligned - curr_fifo_rd_ptr) / block_size;
+
+    if (fifo_rd_ptr_exceed_fifo_limit) {
+        remote_cb_interface.fifo_rd_ptr = remote_cb_interface.fifo_start_addr;
+    } else {
+        uint32_t next_fifo_rd_ptr = remote_cb_interface.fifo_limit_page_aligned - num_blocks_till_fifo_limit * block_size;
+        uint32_t pages_acked = (next_fifo_rd_ptr - remote_cb_interface.fifo_rd_ptr) / remote_cb_interface.aligned_page_size;
+        remote_cb_interface.fifo_rd_ptr = next_fifo_rd_ptr;
+
+        // increment the aligned pages acked because we skipped to next aligned page location
+        *remote_cb_interface.pages_acked += pages_acked;
+        uint64_t remote_ack_ptr_addr = get_noc_addr(remote_noc_x, remote_noc_y, (uint32_t)remote_cb_interface.pages_acked, noc);
+        noc_semaphore_inc(remote_ack_ptr_addr, pages_acked, noc);
+    }
+}
+
 FORCE_INLINE void remote_cb_wait_front(uint32_t num_pages) {
     uint32_t len_bytes = num_pages * remote_cb_interface.fifo_page_size;
     uint32_t num_pages_wait = len_bytes / remote_cb_interface.aligned_page_size;
@@ -152,7 +177,8 @@ void kernel_main() {
         uint32_t curr_num_blocks = num_blocks[l];
         uint32_t curr_block_num_tiles = block_num_tiles[l];
 
-        setup_remote_cb_page_size(curr_page_size, noc_x, noc_y);
+        uint32_t curr_block_size = curr_block_num_tiles * curr_page_size;
+        setup_remote_cb_page_size_block_aligned(curr_page_size, curr_block_size, noc_x, noc_y);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
             remote_cb_wait_front(curr_block_num_tiles);

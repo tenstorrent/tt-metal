@@ -22,7 +22,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::Shape& shape);
+bool is_input_batched(const ttnn::SimpleShape& logical_shape);
 
 }  // namespace detail
 

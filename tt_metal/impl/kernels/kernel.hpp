@@ -27,7 +27,6 @@ class Device;
 }  // namespace v0
 
 constexpr uint32_t max_runtime_args = 256;
-constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE / sizeof(uint32_t);
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 struct KernelSource {
@@ -243,12 +242,6 @@ class ComputeKernel : public Kernel {
 }  // namespace v0
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
-
-struct KernelDefinesHash {
-    KernelDefinesHash() {}
-
-    size_t operator()(const std::map<std::string, std::string> &c_defines) const;
-};
 
 }  // namespace tt_metal
 

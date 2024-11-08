@@ -82,11 +82,11 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
     if(!output_tensors.empty() && output_tensors[0].has_value()){
-        const auto output_shape_required = this->compute_output_shapes(input_tensors)[0];
+        const auto output_shape_required = std::get<0>(this->compute_output_specs(input_tensors)[0]);
         const auto& out_tensor = output_tensors[0].value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        TT_FATAL(out_tensor.get_padded_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_padded_shape());
     }
-    auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
+    auto output_tensor_shape = std::get<0>(this->compute_output_specs(input_tensors)[0]);
     if (has_step) { // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
@@ -117,40 +117,18 @@ void SliceDeviceOperation::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    SmallVector<uint32_t> out_shape;
-    auto rank = input_tensors[0].get_legacy_shape().rank();
-    out_shape.reserve(rank);
+std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors[0];
+    SmallVector<uint32_t> out_shape(input_tensor.get_logical_shape().rank());
 
     auto output_dim_i = [this] (size_t i) {
         return (this->slice_end[i] - this->slice_start[i] + this->step[i] - 1) / this->step[i];
     };
-    for (uint32_t i = 0; i < rank; i++) {
-        out_shape.push_back(output_dim_i(i));
+    for (uint32_t i = 0; i < out_shape.size(); i++) {
+        out_shape[i] = output_dim_i(i);
     }
-    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
-    return {output_tensor_shape};
-}
-
-std::vector<Tensor> SliceDeviceOperation::create_output_tensors(
-    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
-    if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        return {output_tensors[0].value()};
-    }
-    const auto &input_tensor_a = input_tensors.at(0);
-    const auto shapes = compute_output_shapes(input_tensors);
-
-    if (input_tensor_a.is_sharded()) {
-        return {create_device_tensor(
-            shapes[0],
-            input_tensor_a.get_dtype(),
-            input_tensor_a.get_layout(),
-            input_tensor_a.device(),
-            this->output_mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), this->output_mem_config);
-    }
+    ttnn::SimpleShape output_tensor_shape(std::move(out_shape));
+    return {ttnn::TensorSpec(output_tensor_shape, tt::tt_metal::TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), this->output_mem_config))};
 }
 
 operation::ProgramWithCallbacks SliceDeviceOperation::create_program(

@@ -4,6 +4,7 @@ set(COMMON_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/work_split.cpp
 )
 
 add_library(common STATIC ${COMMON_SRCS}) # FIXME(14541): Should be OBJECT, but can't handle circular deps between Object libs

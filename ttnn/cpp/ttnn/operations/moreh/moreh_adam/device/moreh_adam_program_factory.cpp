@@ -194,9 +194,9 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
@@ -228,9 +228,9 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
             tile_offset};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {step});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {step});
         } else {
             TT_THROW("Core not in specified core ranges.");
@@ -312,9 +312,9 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
             }
         }
         {
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {operation_attributes.step});
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {operation_attributes.step});
             } else {
                 TT_THROW("Core not in specified core ranges.");

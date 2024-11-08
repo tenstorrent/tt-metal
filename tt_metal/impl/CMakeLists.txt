@@ -4,6 +4,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
@@ -33,6 +34,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
     PRIVATE
         Boost::smart_ptr
+        range-v3::range-v3
 )
 
 target_include_directories(
@@ -40,6 +42,7 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal/include
 )
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)

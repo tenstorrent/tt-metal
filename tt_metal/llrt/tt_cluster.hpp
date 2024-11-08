@@ -11,14 +11,12 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "host_mem_address_map.h"
 #include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
 // clang-format off
 #include "noc/noc_parameters.h"
-#include "eth_interface.h"
 #include "eth_l1_address_map.h"
 #include "dev_msgs.h"
 // clang-format on
@@ -73,7 +71,6 @@ class Cluster {
     }
 
     //! device driver and misc apis
-    void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
@@ -286,42 +283,7 @@ class Cluster {
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
-    tt_device_l1_address_params l1_address_params = {
-        (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_BRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_TRISC0_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC1_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC2_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC0_FIRMWARE_BASE,
-        (uint32_t)MEM_L1_BARRIER,
-        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
-        (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
-    };
-
-    tt_driver_host_address_params host_address_params = {
-        host_mem::address_map::ETH_ROUTING_BLOCK_SIZE, host_mem::address_map::ETH_ROUTING_BUFFERS_START};
-
-    tt_driver_eth_interface_params eth_interface_params = {
-        NOC_ADDR_LOCAL_BITS,
-        NOC_ADDR_NODE_ID_BITS,
-        ETH_RACK_COORD_WIDTH,
-        CMD_BUF_SIZE_MASK,
-        MAX_BLOCK_SIZE,
-        REQUEST_CMD_QUEUE_BASE,
-        RESPONSE_CMD_QUEUE_BASE,
-        CMD_COUNTERS_SIZE_BYTES,
-        REMOTE_UPDATE_PTR_SIZE_BYTES,
-        CMD_DATA_BLOCK,
-        CMD_WR_REQ,
-        CMD_WR_ACK,
-        CMD_RD_REQ,
-        CMD_RD_DATA,
-        CMD_BUF_SIZE,
-        CMD_DATA_BLOCK_DRAM,
-        ETH_ROUTING_DATA_BUFFER_ADDR,
-        REQUEST_ROUTING_CMD_QUEUE_BASE,
-        RESPONSE_ROUTING_CMD_QUEUE_BASE,
-        CMD_BUF_PTR_MASK};
+    tt_device_l1_address_params l1_address_params;
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };

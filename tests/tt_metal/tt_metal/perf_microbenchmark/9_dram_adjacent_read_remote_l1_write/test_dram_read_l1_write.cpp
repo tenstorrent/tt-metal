@@ -449,6 +449,9 @@ void get_l1_writer_core_coords_blackhole(
         uint32_t adj_core_x = dram_reader_core_phy.x + 1;
         uint32_t adj_core_y = dram_reader_core_phy.y;
         adj_core_physical.push_back(CoreCoord(adj_core_x, adj_core_y));
+        uint32_t adj_core_x2 = dram_reader_core_phy.x + 2;
+        uint32_t adj_core_y2 = dram_reader_core_phy.y;
+        adj_core_physical.push_back(CoreCoord(adj_core_x2, adj_core_y2));
     }
 
     // move worker if they are in the harvested rows
@@ -614,6 +617,9 @@ void get_l1_writer_core_coords_grayskull(
         uint32_t adj_core_x = dram_reader_core_phy.x;
         uint32_t adj_core_y = dram_reader_core_phy.y + 1;
         adj_core_physical.push_back(CoreCoord(adj_core_x, adj_core_y));
+        uint32_t adj_core_x2 = dram_reader_core_phy.x + 1;
+        uint32_t adj_core_y2 = dram_reader_core_phy.y + 1;
+        adj_core_physical.push_back(CoreCoord(adj_core_x2, adj_core_y2));
     }
 
     // move worker if they are in the harvested rows
@@ -864,8 +870,6 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
-
-        TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "device must be wh_b0");
 
         int clock_freq_mhz = get_tt_npu_clock(device);
 

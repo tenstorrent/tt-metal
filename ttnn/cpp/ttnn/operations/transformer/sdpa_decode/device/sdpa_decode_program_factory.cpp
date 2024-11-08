@@ -148,7 +148,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         for (int i = 0; i < num_cores_available; ++i) {
             CoreCoord core;
-            if (i%num_cores_per_batch==0){
+            if (i%num_cores_per_batch==0 && reducer_idx<num_output_cores){
                 core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
                 reducer_idx++;
             }
@@ -182,6 +182,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("num_reducer_cores: {}", num_reducer_cores);
     log_debug("num_output_cores: {}", num_output_cores);
     log_debug("core_group: {}", core_group);
+    log_debug("core_group_idle: {}", core_group_idle);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles  = PNHt * DHt;
@@ -630,7 +631,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             CoreCoord core = core_group_idle[i];
             log_debug("Setting core {} to idle", core);
             // reader runtime args
-            std::vector<uint32_t> reader_rt_args = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            std::vector<uint32_t> reader_rt_args = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
             // writer runtime args
             std::vector<uint32_t> writer_rt_args = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};

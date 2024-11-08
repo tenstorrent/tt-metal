@@ -820,21 +820,28 @@ inline MatmulProgramConfig get_program_config(
     return config;
 }
 
-tt::tt_metal::Tile get_output_tile(const MemoryConfig& output_mem_config, const std::array<uint32_t, 2>& in0_tile_shape, const std::array<uint32_t, 2>& in1_tile_shape, const std::optional<const tt::tt_metal::Tile> output_tile) {
+tt::tt_metal::Tile get_output_tile(const MemoryConfig& output_mem_config, const tt::tt_metal::Tile& in0_tile, const tt::tt_metal::Tile& in1_tile, const std::optional<const tt::tt_metal::Tile> output_tile) {
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
     if (output_tile.has_value()) {
+        uint32_t in0_tile_h = in0_tile_shape[0];
+        uint32_t in1_tile_w = in1_tile_shape[1];
         const auto& out_tile_shape = output_tile->get_tile_shape();
         TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
-        TT_FATAL(out_tile_shape[1] % in1_tile_shape[1] == 0, "the override output tile width be multiple of in1 tile width");
+        TT_FATAL(out_tile_shape[1] % in1_tile_w == 0, "the override output tile width be multiple of in1 tile width");
         TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
-        TT_FATAL(out_tile_shape[0] == in0_tile_shape[0], "the override output tile height must equal to the in0 tile height");
-        if (out_tile_shape[1] != in1_tile_shape[1]) {
+        TT_FATAL(out_tile_shape[0] == in0_tile_h, "the override output tile height must equal to the in0 tile height");
+        if (out_tile_shape[1] != in1_tile_w) {
             TT_FATAL(out_tile_shape[0] <= constants::FACE_HEIGHT, "the override output tile height must equal or less to face height");
         }
         if (!output_mem_config.is_sharded()) {
-            TT_FATAL(out_tile_shape[1] == in1_tile_shape[1], "the override output tile width must equal to the in0 tile width");
+            TT_FATAL(out_tile_shape[1] == in1_tile_w, "the override output tile width must equal to the in0 tile width");
         }
+
+        return output_tile.value();
+    } else {
+        return tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
     }
-    return output_tile.value_or(tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]}));
 }
 
 }  // namespace
@@ -913,10 +920,10 @@ Matmul create_matmul_struct(
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
-    const auto& in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
-    const auto& in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
+    const auto& in0_tile = input_tensor_a.get_tile();
+    const auto& in1_tile = input_tensor_b.get_tile();
     tt::tt_metal::Tile output_tile = get_output_tile(
-            parameters.output_mem_config, in0_tile_shape, in1_tile_shape, parameters.output_tile);
+            parameters.output_mem_config, in0_tile, in1_tile, parameters.output_tile);
 
     return Matmul{
         parameters.program_config,
@@ -992,7 +999,7 @@ void Matmul::validate(
     }
 
     TT_FATAL(
-        (input_tensor_a.get_tile().get_tile_shape()[1] == TILE_WIDTH && input_tensor_b.get_tile().get_tile_shape()[0] == TILE_WIDTH),
+        (input_tensor_a.get_tile().get_tile_shape()[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_WIDTH),
         "Input tile dims must have inner dim equal to 32 due to llk constraints");
 
     TT_FATAL(
@@ -1036,7 +1043,7 @@ void Matmul::validate(
     if (optional_bias.has_value()) {
         TT_FATAL(
             (optional_bias->get_tile().get_tile_shape()[0] == input_tensor_a.get_tile().get_tile_shape()[0] &&
-            optional_bias->get_tile().get_tile_shape()[1] == input_tensor_b.get_tile().get_tile_shape()[1]),
+            optional_bias->get_tile().get_tile_shape()[1] == in1_tile_shape[1]),
             "Input tile dims must have inner dim equal to 32 due to llk constraints");
         const auto& bias = optional_bias.value();
         TT_FATAL(bias.get_layout() == Layout::TILE, "Unsupported input layout");
@@ -1373,7 +1380,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     CoreRangeSet all_cores =
-                        num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, true);
+                        num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
@@ -1460,7 +1467,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    CoreRangeSet all_cores = num_cores_to_corerange_set(
+                    CoreRangeSet all_cores = num_cores_to_corerangeset(
                         num_cores,
                         program_config.compute_with_storage_grid_size,
                         shard_orientation == ShardOrientation::ROW_MAJOR);

@@ -22,16 +22,7 @@ std::vector<std::optional<Tensor>> MorehLayerNorm::invoke(
         input, normalized_dims, eps, gamma, beta, output, mean, rstd, memory_config, compute_kernel_config);
 }
 
-std::vector<Tensor> MorehLayerNorm::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& input = input_tensors.at(0);
-    return {
-        Tensor(operation::get_workers_for_op_output({input})),
-        Tensor(operation::get_workers_for_op_output({input})),
-        Tensor(operation::get_workers_for_op_output({input}))};
-}
-
-std::vector<bool> MorehLayerNorm::create_async_return_flag(
+OptionalTensors MorehLayerNorm::create_async_optional_output_tensors(
     const Tensor& input,
     const uint32_t normalized_dims,
     const float eps,
@@ -45,6 +36,9 @@ std::vector<bool> MorehLayerNorm::create_async_return_flag(
     const auto return_mean = mean.has_value();
     const auto return_rstd = rstd.has_value();
 
-    return {true, return_mean, return_rstd};
+    return {
+        std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})),
+        return_mean ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt,
+        return_rstd ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm
