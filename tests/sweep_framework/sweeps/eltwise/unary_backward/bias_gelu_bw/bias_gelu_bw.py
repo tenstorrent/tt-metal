@@ -18,10 +18,12 @@ from models.utility_functions import torch_random
 
 
 def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
-    shard_orientation_list = [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR]
+    assert sharding_strategy in ["block", "width", "height"]
+
+    shard_orientation_list = ["col_major", "row_major"]
     tensor_hw_as_shard_shape_list = [True, False]
 
-    if sharding_strategy == ttnn.ShardStrategy.BLOCK:
+    if sharding_strategy == "block":
         if not sanitize_args:
             interval_1 = 1
             interval_2 = 2
@@ -34,7 +36,7 @@ def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
             + gen_shapes([1, 32 * y, 32 * x], [12, 512, 512], [1, interval_1, interval_2], num_shapes)
             + gen_shapes([32 * y, 32 * x], [512, 512], [interval_1, interval_2], num_shapes)
         )
-    elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
+    elif sharding_strategy == "width":
         if not sanitize_args:
             interval = 1
         else:
