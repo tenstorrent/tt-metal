@@ -24,10 +24,12 @@ random.seed(0)
 
 
 def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
-    shard_orientation_list = [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR]
+    assert sharding_strategy in ["block", "width", "height"]
+
+    shard_orientation_list = ["col_major", "row_major"]
     tensor_hw_as_shard_shape_list = [True, False]
 
-    if sharding_strategy == ttnn.ShardStrategy.BLOCK:
+    if sharding_strategy == "block":
         if not sanitize_args:
             interval_1 = 1
             interval_2 = 2
@@ -40,7 +42,7 @@ def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
             + gen_shapes([1, 32 * y, 32 * x], [12, 512, 512], [1, interval_1, interval_2], num_shapes)
             + gen_shapes([32 * y, 32 * x], [512, 512], [interval_1, interval_2], num_shapes)
         )
-    elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
+    elif sharding_strategy == "width":
         if not sanitize_args:
             interval = 1
         else:
@@ -78,16 +80,16 @@ def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": list(gen_sharded_spec(4, ttnn.ShardStrategy.BLOCK, Y, X))
-        + list(gen_sharded_spec(4, ttnn.ShardStrategy.HEIGHT, Y, X))
-        + list(gen_sharded_spec(4, ttnn.ShardStrategy.WIDTH, Y, X)),
+        "input_spec": list(gen_sharded_spec(4, "block", Y, X))
+        + list(gen_sharded_spec(4, "height", Y, X))
+        + list(gen_sharded_spec(4, "width", Y, X)),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     },
     "xfail": {
-        "input_spec": list(gen_sharded_spec(16, ttnn.ShardStrategy.BLOCK, Y, X, sanitize_args=False))
-        + list(gen_sharded_spec(16, ttnn.ShardStrategy.HEIGHT, Y, X, sanitize_args=False))
-        + list(gen_sharded_spec(16, ttnn.ShardStrategy.WIDTH, Y, X, sanitize_args=False)),
+        "input_spec": list(gen_sharded_spec(16, "block", Y, X, sanitize_args=False))
+        + list(gen_sharded_spec(16, "height", Y, X, sanitize_args=False))
+        + list(gen_sharded_spec(16, "width", Y, X, sanitize_args=False)),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     },
@@ -100,7 +102,7 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     input_spec = test_vector["input_spec"]
 
-    if input_spec["sharding_strategy"] == ttnn.ShardStrategy.BLOCK:
+    if input_spec["sharding_strategy"] == "block":
         if math.prod(input_spec["input_shape"][:-1]) % Y != 0:
             return (
                 True,
@@ -116,13 +118,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         if (input_spec["input_shape"][-1] // X) // 32 <= 0:
             return True, "Shard wdith must be greater than 32"
 
-    if input_spec["sharding_strategy"] == ttnn.ShardStrategy.WIDTH:
+    if input_spec["sharding_strategy"] == "width":
         if input_spec["input_shape"][-1] % (Y * X) != 0:
             return True, "Last dimension must be divisible by a total number of cores when using width sharding"
         if (input_spec["input_shape"][-1] // (Y * X)) // 32 <= 0:
             return True, "Shard wdith must be greater than 32"
 
-    if input_spec["sharding_strategy"] == ttnn.ShardStrategy.HEIGHT:
+    if input_spec["sharding_strategy"] == "height":
         if math.prod(input_spec["input_shape"][:-1]) % (Y * X) != 0:
             return (
                 True,
@@ -154,6 +156,17 @@ def run(
     torch.manual_seed(data_seed)
 
     input_shape, sharding_strategy, shard_orientation, tensor_hw_as_shard_shape = input_spec.values()
+    if shard_orientation == "col_major":
+        shard_orientation = ttnn.ShardOrientation.COL_MAJOR
+    else:
+        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+
+    if sharding_strategy == "block":
+        sharding_strategy = ttnn.ShardStrategy.BLOCK
+    elif sharding_strategy == "width":
+        sharding_strategy = ttnn.ShardStrategy.WIDTH
+    else:
+        sharding_strategy = ttnn.ShardStrategy.BLOCK
 
     device_grid_size = ttnn.CoreGrid(y=Y, x=X)
 
