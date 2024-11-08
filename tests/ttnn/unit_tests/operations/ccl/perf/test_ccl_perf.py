@@ -154,7 +154,6 @@ def test_all_gather_on_t3000(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
