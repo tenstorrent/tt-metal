@@ -91,16 +91,6 @@ Please refer to the [README](README.md) for source installation and environment
 setup instructions, then please read the [Getting Started
 page](docs/source/get_started/get_started.rst).
 
-### Setting up Git
-
-We use `#` as a special character to denote issue numbers in our commit
-messages. Please change your comment character in your Git to not conflict with
-this:
-
-```
-git config core.commentchar ">"
-```
-
 ### Setting logger level
 
 In order to get debug level log messages, set the environment variable
@@ -519,24 +509,11 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 ### Git rules and guidelines
 
-- Any commit message must be accompanied with an appropriate GitHub issue
-  number with a colon and following message. The message must start with an
-  imperative verb and description of what was done. Preferably a reason is
-  included. Ex.
-  ```
-  #41: Fix data format error in Gelu op.
-  ```
+- Filing an issue is encouraged for any item that needs alignment or long term tracking.
 
-- The following is not allowed in commit messages:
-  - Commit messages which state that a code review or comments are being
-    addressed. You must explicitly state what you are doing in each commit even
-    if it's just cosmetic.
+- Link your issue under the `Ticket` headline in your PR description.
 
-- If you are working on a branch and would like to skip the Git commit hooks,
-  you may delete the `git_hooks` Makefile directive in `/module.mk` before your
-  first build. However, you are responsible for making sure your final
-  submission follows the contribution guidelines. Failure to do so constitutes
-  a violation of these contribution guidelines.
+- Use descriptive commit messages
 
 - Merge commits are not allowed in our main branch. We enforce a linear
   history.
@@ -546,30 +523,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   - Squash and merge
   - Rebase and merge
 
-  If you use squashing, when GitHub asks you to enter a new commit message,
-  ensure that your commit message follows our required format as outlined above
-  in this section. Failure to do so is a violation of our standards.
-
-### Git commit runbook
-
-The tt-metal repository has a single main branch, with pull requests being
-merged in via rebase or squash merge.
-
-For a pull request, you will need to deal with a local branch and an origin
-branch.
-
-The local branch should be on your machine, and you should interact with it
-through the command line or Visual Studio. The following uses the command line.
-
-The origin branch is on Github and you should use the Github UI to interact
-with the branch.
-
-#### Creating the initial Pull Request (PR)
-
-You need to have an issue. Either someone creates one and assigns it to you, or
-you need to create an issue. For example issue 123.
-
-#### Creating a branch on a machine
+#### Creating a branch
 
 Include the user, the issue number, and optionally a description of the change.
 / and - are used as separators between user and issue number. And - and _
@@ -602,14 +556,8 @@ git restore '*'
 git restore --staged abc.py # if the file was already added
 ```
 
-Once you are satisfied that everything works, create a commit. The message
-needs to specify the issue number, with a pound sign and a colon, and the
-description should describe the change itself, and cannot be generic and refer
-to something else, such as saying that you are addressing reviewer feedback.
-Please see [Git rules and guidelines](#git-rules-and-guidelines) for details.
-
 ```
-git commit -m"#123: rename method x"
+git commit -m "Rename method x"
 ```
 
 Note: each commit on the main branch and any feature branch where multiple
