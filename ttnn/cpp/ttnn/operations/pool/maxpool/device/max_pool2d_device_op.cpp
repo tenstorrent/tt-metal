@@ -33,7 +33,7 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     if (in_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_shards_c = sliding_window_config.num_cores_c;
         const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
-        TT_FATAL(input_shape[3] % num_shards_c == 0, "For width and block sharding, input channels should be divisible by num_shards");
+        TT_FATAL(input_shape[3] % num_shards_c == 0, "For width and block sharding, input channels ({}) should be divisible by num_shards ({})", input_shape[3], num_shards_c);
     }
 }
 

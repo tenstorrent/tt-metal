@@ -62,11 +62,18 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_ntiles_c = (uint32_t) std::ceil((float) input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     uint32_t out_ntiles_c = (uint32_t) std::ceil((float) output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
+
+    uint32_t max_rows_for_reduction = 16;
+    // TODO #14588: temporarily disabling 32 row reductions due to issues in large kernels
+    /* uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
+    // For GRAYSKULL, make reduction for 16 rows at a time.
+    if (device->arch() == tt::ARCH::GRAYSKULL)
+        max_rows_for_reduction /= 2; */
+
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
-    constexpr uint32_t MAX_SMALL_KERNEL_SIZE_HW = 16;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    const bool is_large_kernel = kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW;
+    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
@@ -148,6 +155,9 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         in_cb_sz = (input_shape[3] / num_shards_c * kernel_size_hw_padded) > (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             : input_shape[3] / num_shards_c * kernel_size_hw_padded;
+        if (is_wide_reduction) {
+            in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
+        }
     } else {
         if (is_wide_reduction) {
             in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * kernel_size_hw_padded;
@@ -188,22 +198,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto in_tiled_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
-    if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
-        uint32_t max_pool_partials_cb_pagesize = in_cb_sz;
-        uint32_t max_pool_partials_cb_npages = nblocks;
-        CircularBufferConfig max_pool_partials_cb_config =
-            CircularBufferConfig(
-                max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, in_df}})
-                .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
-        auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
-        log_debug(
-            tt::LogOp,
-            "CB {} :: PS = {}, NP = {}",
-            max_pool_partials_cb_id,
-            max_pool_partials_cb_pagesize,
-            max_pool_partials_cb_npages);
-    }
 
     // output of reduce == writer to write
     uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
@@ -217,6 +211,22 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
+    if (is_large_kernel) {
+        uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
+        uint32_t max_pool_partials_cb_pagesize = std::min(out_cb_pagesize, TILE_SIZE * 8 * out_nbytes);
+        uint32_t max_pool_partials_cb_npages = nblocks;
+        CircularBufferConfig max_pool_partials_cb_config =
+            CircularBufferConfig(
+                max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, out_df}})
+                .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
+        auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}",
+            max_pool_partials_cb_id,
+            max_pool_partials_cb_pagesize,
+            max_pool_partials_cb_npages);
+    }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
     #if 1
@@ -267,10 +277,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     }
     #endif
 
-    uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
-    /* For GRAYSKULL, make reduction for 16 rows at a time.*/
-    if (device->arch() == tt::ARCH::GRAYSKULL)
-        max_rows_for_reduction /= 2;
     /**
      * Reader Kernel: input rows -> input cb
      */
@@ -292,6 +298,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         0,             // split reader id
         bf16_one_u32,
         in_nblocks_c,
+        in_cb_sz,
         max_rows_for_reduction};
 
     std::vector<uint32_t> reader1_ct_args = {
@@ -309,6 +316,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         1,             // split reader id
         bf16_one_u32,
         in_nblocks_c,
+        in_cb_sz,
         max_rows_for_reduction};
 
     std::string reader_kernel_fname;
@@ -399,7 +407,6 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
     uint32_t out_h = output_shape[1];
     uint32_t out_w = output_shape[2];
 
-    bool is_width_sharded = input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
     bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);

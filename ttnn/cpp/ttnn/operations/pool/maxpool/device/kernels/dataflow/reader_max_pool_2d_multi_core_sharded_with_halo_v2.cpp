@@ -64,8 +64,6 @@ void kernel_main() {
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
 
-    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
-
     constexpr uint32_t TILE_WIDTH = 32;
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
