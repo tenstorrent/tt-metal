@@ -37,7 +37,7 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
-    env pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m $test_marker
+    env pytest -n auto models/demos/squeezenet/tests/test_perf_squeezenet.py -m $test_marker
 
     env pytest -n auto models/demos/mnist/tests -m $test_marker
 
@@ -91,7 +91,7 @@ run_device_perf_models() {
 
     env pytest models/demos/convnet_mnist/tests/ -m $test_marker
 
-    env pytest models/demos/bert_tiny/tests/ -m $test_marker
+    env pytest models/demos/squeezenet/tests/test_perf_squeezenet.py -m $test_marker
 
     env pytest models/demos/mnist/tests -m $test_marker
 

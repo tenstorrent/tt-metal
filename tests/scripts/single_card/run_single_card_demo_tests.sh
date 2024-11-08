@@ -52,6 +52,8 @@ run_common_func_tests() {
 
   # Mnist
   pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600; fail+=$?
+  #SqueezeNet
+  pytest --disable-warnings models/demos/squeezenet/demo/demo.py --timeout 600; fail+=$?
 
   # SqueezeBERT
   pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
