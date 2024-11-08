@@ -173,7 +173,7 @@ Result conv_transpose2d(
         const bool mm_conv = conv2d::use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
 
         //Call Halo Transpose
-        auto [input_tensor_post_tm, parallel_config, tensor_manipulated, use_non_tile_height] = conv2d::shard_or_reshard_tensor_if_required(
+        auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = conv2d::shard_or_reshard_tensor_if_required(
             device,
             input_tensor,
             conv_config,
@@ -213,12 +213,15 @@ Result conv_transpose2d(
         //Call Conv2d u_op with Stride = 1, Padding = 0.
         auto conv_out_memory_config = conv2d::create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
-        parallel_config,
+        output_parallel_config,
         round_up_size);
+
+        auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores() ? output_parallel_config : parallel_config;
+
         auto opt_conv_op_parallel_config = conv2d::determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
-            conv2d::get_num_cores_nhw_from_parallel_config(parallel_config),
-            conv2d::get_num_cores_channels_from_parallel_config(parallel_config)
+            conv2d::get_num_cores_nhw_from_parallel_config(largest_parallel_config),
+            conv2d::get_num_cores_channels_from_parallel_config(largest_parallel_config)
         );
         auto opt_conv_op_block_config = conv2d::determine_per_core_conv_block_config(
             parallel_config,
