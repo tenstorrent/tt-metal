@@ -5,9 +5,8 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
-#include "debug/dprint.h"
 
 constexpr uint32_t ALIGNED_PAGE_SIZE = 16;
 

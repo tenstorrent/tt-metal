@@ -12,8 +12,8 @@ from ttnn.model_preprocessing import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers import SegformerModel
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
-from models.experimental.functional_segformer.reference.segformer_selfoutput import SegformerSelfOutput
+from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
+from models.demos.segformer.reference.segformer_selfoutput import SegformerSelfOutput
 from models.utility_functions import skip_for_grayskull
 
 

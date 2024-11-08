@@ -36,6 +36,7 @@ def run_all_gather_matmul_on_t3000_impl(
     mem_config_weights=None,
     num_iters=1,
     enable_trace=False,
+    tile=(32, 32),
 ):
     # Set the default config
     if mem_config_weights is None:
@@ -43,7 +44,7 @@ def run_all_gather_matmul_on_t3000_impl(
 
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
-        ag_output_shape, dim, mem_config_ag, num_devices, num_links, ag_input_dtype, layout
+        ag_output_shape, dim, mem_config_ag, num_devices, num_links, ag_input_dtype, layout, tile
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -59,18 +60,21 @@ def run_all_gather_matmul_on_t3000_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, ag_input_dtype).to(layout).to(devices[i], mem_config_input))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, ag_input_dtype, {}, ttnn.Tile(tile)).to(layout).to(devices[i], mem_config_input)
+        )
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     ##### Create the weight matrix for the matmul #####
     weights_tensor = torch.randn([1, 1, hidden_dim, matmul_output_dim * num_devices]).float()
-    weight_tt = ttnn.as_tensor(
+    weight_tt = ttnn.from_torch(
         weights_tensor,
         dtype=matmul_weights_dtype,
         layout=layout,
         device=t3k_mesh_device,
         memory_config=mem_config_weights,
         mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
+        tile=ttnn.Tile(tile),
     )
 
     ##### Configs for ttnn.matmul #####
