@@ -183,11 +183,11 @@ struct dispatch_constants {
             if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
                 device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
             } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
-                device_cq_addr_sizes_[dev_addr_idx] = L1_ALIGNMENT - sizeof(uint32_t);
+                device_cq_addr_sizes_[dev_addr_idx] = l1_alignment - sizeof(uint32_t);
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
-                device_cq_addr_sizes_[dev_addr_idx] = 32; // Should this be 2x L1_ALIGNMENT?
+                device_cq_addr_sizes_[dev_addr_idx] = 32; // Should this be 2x l1_alignment?
             } else {
-                device_cq_addr_sizes_[dev_addr_idx] = L1_ALIGNMENT;
+                device_cq_addr_sizes_[dev_addr_idx] = l1_alignment;
             }
         }
 
