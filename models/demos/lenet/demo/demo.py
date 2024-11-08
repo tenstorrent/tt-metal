@@ -53,7 +53,7 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator, r
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [64])
 @pytest.mark.parametrize("iterations", [1])
 def test_demo_dataset(
     device,
