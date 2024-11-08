@@ -14,7 +14,7 @@ from models.demos.lenet import lenet_utils
 
 @pytest.mark.parametrize(
     "batch_size",
-    [8],
+    [64],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_lenet_inference(device, batch_size, model_location_generator, reset_seeds):
