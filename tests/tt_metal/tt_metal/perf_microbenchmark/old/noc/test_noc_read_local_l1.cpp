@@ -108,6 +108,7 @@ int main(int argc, char **argv) {
                 auto tensor = tt::deprecated::initialize_tensor<bfloat16>(
                     shape,
                     tt::deprecated::Initialize::RANDOM,
+                    0,
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
 

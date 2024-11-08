@@ -19,16 +19,29 @@ def generate_reference_outputs(total_length, output_file):
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Load the model state dict
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Initialize the reference model
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    reference_state_dict = {
+        k[len(state_dict_prefix) :]: v
+        for k, v in state_dict.items()
+        if (
+            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+            or any(
+                [
+                    f"{state_dict_prefix}{name}" in k
+                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                ]
+            )
+        )
+    }
     reference_model = Transformer(model_args)
-    reference_model.load_state_dict(state_dict)
+    reference_model.load_state_dict(reference_state_dict)
     reference_model.eval()  # Set to evaluation mode
 
     # Initialize HostEmbedding
     embd = HostEmbedding(model_args)
-    state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # Load the book text and encode tokens
@@ -139,7 +152,7 @@ def generate_reference_outputs(total_length, output_file):
 # New main function with argparse
 def main():
     parser = argparse.ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
-    parser.add_argument("--total_length", type=int, default=1500, help="Total length of tokens to process")
+    parser.add_argument("--total_length", type=int, default=1024, help="Total length of tokens to process")
     parser.add_argument(
         "--output_file", type=str, default="reference_outputs.pt", help="Output file path for reference data"
     )

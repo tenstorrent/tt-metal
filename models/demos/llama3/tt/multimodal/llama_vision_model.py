@@ -26,10 +26,7 @@ from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text im
     TtLlamaCrossAttentionTransformerText,
 )
 from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn_prefill,
-    prepare_inputs_ttnn,
     get_prefill_rot_mat,
-    prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     get_single_rot_mat,
 )
@@ -354,14 +351,13 @@ class CrossAttentionTransformer(torch.nn.Module):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
         )
         # Check mask shapes, pad if in prefill?
         if mode == "prefill":
             h = torch.nn.functional.pad(h, (0, 0, 0, padded_seq_len - h.shape[1]), "constant", 0)
-            tt_h = prepare_inputs_ttnn_prefill(
+            tt_h = self.configuration.prepare_inputs_ttnn_prefill(
                 h,
-                self.mesh_device,
             )
             rot_mats = get_prefill_rot_mat(
                 self.configuration.head_dim, self.configuration.max_seq_len, self.mesh_device, seq_len=seq_len
@@ -376,10 +372,9 @@ class CrossAttentionTransformer(torch.nn.Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            tt_h = prepare_inputs_ttnn(
+            tt_h = self.configuration.prepare_inputs_ttnn_decode(
                 h,
-                self.configuration.dim,
-                self.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
             )
             rot_mats, rot_matrix = get_single_rot_mat(
                 self.configuration.head_dim,
@@ -419,13 +414,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ),
             )
 
-            tt_full_text_mask_expand_11SD = ttnn.reshape(
-                tt_full_text_mask_expand_11SD,
-                shape=ttnn.Shape(
-                    [batch, 1, seq_len, self.configuration.head_dim],
-                    [batch, 1, 32, self.configuration.head_dim],
-                ),
-            )
+            tt_full_text_mask_expand_11SD = None
 
         logits = self.text_model.forward(
             tt_h,
