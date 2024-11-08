@@ -42,54 +42,56 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
     Tensor host_tensor = ttnn::numpy::arange<float>(0, 32 * 32 * 4, 1);
-    Tensor readback_tensor({}, 1);
+    // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
+    Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
+    auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
+    auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
 
-    auto func = [device, host_tensor, readback_tensor]() mutable {
-        // Ensure that both the lambda and global scope have ownership to this tensor
-        EXPECT_EQ(host_tensor.tensor_attributes.use_count(), 2);
-        std::visit(
-            [](auto&& storage) {
-                using T = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<T, OwnedStorage>) {
-                    std::visit(
-                        [](auto&& buf) {
-                            using buf_type = std::decay_t<decltype(buf)>;
-                            if constexpr (std::is_same_v<buf_type, owned_buffer::Buffer<float>>) {
-                                EXPECT_EQ(buf.use_count(), 1);
-                            }
-                        },
-                        storage.buffer);
-                }
-            },
-            host_tensor.get_storage());
-        // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
-        auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
-        auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
+    Tensor readback_tensor(1, thread_local_tensor.tensor_layout(), thread_local_tensor.get_logical_shape());
+    // Ensure that both the lambda and global scope have ownership to this tensor
+    EXPECT_EQ(host_tensor.tensor_attributes.use_count(), 2);
+    std::visit(
+        [](auto&& storage) {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
+                std::visit(
+                    [](auto&& buf) {
+                        using buf_type = std::decay_t<decltype(buf)>;
+                        if constexpr (std::is_same_v<buf_type, owned_buffer::Buffer<float>>) {
+                            EXPECT_EQ(buf.use_count(), 1);
+                        }
+                    },
+                    storage.buffer);
+            }
+        },
+        host_tensor.get_storage());
+        readback_tensor.set_storage(thread_local_tensor.get_storage());
         readback_tensor.set_storage(thread_local_tensor.get_storage());
         /*readback_tensor.set_shape(thread_local_tensor.get_shape());
         readback_tensor.set_dtype(thread_local_tensor.get_dtype());
         readback_tensor.set_layout(thread_local_tensor.get_layout());*/
-        readback_tensor.tensor_attributes->num_workers_completed++;
-        // Ensure that the readback buffer is owned inside and outside the lambda
-        std::visit(
-            [](auto&& storage) {
-                using T = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<T, OwnedStorage>) {
-                    std::visit(
-                        [](auto&& buf) {
-                            using buf_type = std::decay_t<decltype(buf)>;
-                            if constexpr (std::is_same_v<buf_type, owned_buffer::Buffer<float>>) {
-                                EXPECT_EQ(buf.use_count(), 2);
-                            }
-                        },
-                        storage.buffer);
-                }
-            },
-            readback_tensor.get_storage());
-    };
+    readback_tensor.set_storage(thread_local_tensor.get_storage());
+        /*readback_tensor.set_shape(thread_local_tensor.get_shape());
+        readback_tensor.set_dtype(thread_local_tensor.get_dtype());
+        readback_tensor.set_layout(thread_local_tensor.get_layout());*/
+    readback_tensor.tensor_attributes->num_workers_completed++;
+    // Ensure that the readback buffer is owned inside and outside the lambda
+    std::visit(
+        [](auto&& storage) {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
+                std::visit(
+                    [](auto&& buf) {
+                        using buf_type = std::decay_t<decltype(buf)>;
+                        if constexpr (std::is_same_v<buf_type, owned_buffer::Buffer<float>>) {
+                            EXPECT_EQ(buf.use_count(), 2);
+                        }
+                    },
+                    storage.buffer);
+            }
+        },
+        readback_tensor.get_storage());
 
-    func();
     std::visit(
         [](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
@@ -240,8 +242,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
-    Tensor readback_tensor({}, 1);
-    ;
+    Tensor readback_tensor;
     std::thread worker;
 
     {
@@ -277,10 +278,8 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
             auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
+            readback_tensor = Tensor(1, thread_local_tensor.tensor_layout(), thread_local_tensor.get_logical_shape());
             readback_tensor.set_storage(thread_local_tensor.get_storage());
-            /*readback_tensor.set_shape(thread_local_tensor.get_shape());
-            readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-            readback_tensor.set_layout(thread_local_tensor.get_layout());*/
             readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
             // This is because we explictly pass in the buffer to a new tensor_attr object

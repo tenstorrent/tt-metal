@@ -67,7 +67,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, workers, mem_config);
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor device_tensor = Tensor(workers);
+    Tensor device_tensor = Tensor(workers, input_tensor.tensor_layout(), input_tensor.get_logical_shape());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t num_workers = workers.size();
@@ -79,14 +79,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
                 shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, std::nullopt);
             }
             insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-            /*if (not num_workers_completed) {
-                device_tensor.set_shape(input_tensor.get_shape());
-                device_tensor.set_dtype(input_tensor.get_dtype());
-                device_tensor.set_layout(input_tensor.get_layout());
-                device_tensor.set_tile(input_tensor.get_tile());
-                device_tensor.tensor_attributes->metadata_populated = true;
-            }*/
+            device_tensor.tensor_attributes->num_workers_completed++;
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
@@ -110,7 +103,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     }
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor host_tensor({}, workers.size());
+    Tensor host_tensor(workers.size(), input_tensor.tensor_layout(), input_tensor.get_logical_shape());
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
@@ -121,14 +114,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
             auto shard = get_shard_for_device(input_tensor, target_device);
             shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
             insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-            uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
-            /*if (not num_workers_completed) {
-                host_tensor.set_shape(input_tensor.get_shape());
-                host_tensor.set_dtype(input_tensor.get_dtype());
-                host_tensor.set_layout(input_tensor.get_layout());
-                host_tensor.set_tile(input_tensor.get_tile());
-                host_tensor.tensor_attributes->metadata_populated = true;
-            }*/
+            host_tensor.tensor_attributes->num_workers_completed++;
         });
     }
 
@@ -196,7 +182,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
             auto& host_storage = std::get<MultiDeviceHostStorage>(input_tensor.get_storage());
             distributed_config = host_storage.strategy;
         }
-        Tensor tensor_modified_layout = Tensor({}, workers.size(), distributed_config);
+        Tensor tensor_modified_layout = Tensor(workers.size(), input_tensor.tensor_layout(), input_tensor.get_logical_shape(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
             worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
@@ -210,14 +196,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
                 auto shard = get_shard_for_device(input_tensor, worker, worker_index);
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
                 insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
-                uint32_t num_workers_completed = (tensor_modified_layout.tensor_attributes->num_workers_completed)++;
-                /*if (not num_workers_completed) {
-                    tensor_modified_layout.set_shape(input_tensor.get_shape());
-                    tensor_modified_layout.set_dtype(input_tensor.get_dtype());
-                    tensor_modified_layout.set_layout(target_layout);
-                    tensor_modified_layout.set_tile(input_tensor.get_tile());
-                    tensor_modified_layout.tensor_attributes->metadata_populated = true;
-                };*/
+                tensor_modified_layout.tensor_attributes->num_workers_completed++;
             });
         }
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);

@@ -870,7 +870,8 @@ Tensor allocate_tensor_on_device(
     const std::optional<Tile>& tile
     ) {
     // Top level wrapper to asynchronously create a device tensor (multi-device)
-    Tensor device_tensor = Tensor(mesh_device->get_devices());
+    TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape);
+    Tensor device_tensor = Tensor(mesh_device->get_devices(), tensor_layout, shape.logical_shape());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     const auto& workers = device_tensor.get_workers();
     uint32_t num_workers = workers.size();
@@ -881,15 +882,7 @@ Tensor allocate_tensor_on_device(
             auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config, tile);
             insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
 
-            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
-                /*device_tensor.set_shape(ttnn::Shape(shape));
-                device_tensor.set_dtype(data_type);
-                device_tensor.set_layout(layout);
-                if (tile.has_value()) {
-                    device_tensor.set_tile(tile.value());
-                }*/
-            }
+            device_tensor.tensor_attributes->num_workers_completed++;
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
