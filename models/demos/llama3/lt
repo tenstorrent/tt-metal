@@ -55,6 +55,8 @@ def ensure_ttsmi_installed():
 class OutputEntryList:
     def __init__(self):
         self._entries = []
+        # Create logs directory
+        os.makedirs("logs", exist_ok=True)
 
     def __len__(self):
         return len(self._entries)
@@ -66,11 +68,27 @@ class OutputEntryList:
         return iter(self._entries)
 
     def append(self, entry):
-        entry["log_id"] = self.next_log_id()
+        log_id = self.next_log_id()
+
+        # Remove any existing logs with same ID
+        for existing_file in os.listdir("logs"):
+            if existing_file.startswith(entry.log_prefix):
+                os.remove(os.path.join("logs", existing_file))
+
+        entry["log_id"] = log_id
         self._entries.append(entry)
 
     def pop(self, index):
         result = self._entries.pop(index)
+
+        try:
+            os.remove(result.get_log_filename())
+        except (OSError, FileNotFoundError):
+            pass
+
+        # Mark all subsequent entries as changed
+        for entry in self._entries[index:]:
+            entry.mark_changed()
         return result
 
     def index(self, entry):
@@ -81,6 +99,76 @@ class OutputEntryList:
 
     def next_log_id(self):
         return max([entry["log_id"] for entry in self._entries], default=0) + 1
+
+
+class Entry:
+    def __init__(self, command_name, model, device, command_input):
+        self.command_name = command_name
+        self.model = model
+        self.device = device.upper()
+        self.command_input = command_input
+        self.status = "Waiting"
+        self.output = ""
+        self.process = None
+        self.log_file = None
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.log_id = None  # Will be set by OutputEntryList
+        self.speed = None
+        self.pcc = None
+        self.thread = None
+        self.changed = True  # Initialize as changed to ensure first draw
+
+    @property
+    def log_prefix(self):
+        """Generate the log file prefix based on the entry's log ID"""
+        return f"{self.log_id:04d}-"
+
+    def mark_changed(self):
+        self.changed = True
+
+    def mark_drawn(self):
+        self.changed = False
+
+    def __setattr__(self, name, value):
+        # Mark as changed whenever any attribute is modified
+        # (except for 'changed' itself to avoid recursion)
+        if name != "changed" and hasattr(self, "changed"):
+            self.changed = True
+        super().__setattr__(name, value)
+
+    def __getitem__(self, key):
+        # Support dictionary-style access for backward compatibility
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Support dictionary-style assignment for backward compatibility
+        setattr(self, key, value)
+
+    def get(self, key, default=None):
+        # Support dictionary-style get() for backward compatibility
+        return getattr(self, key, default)
+
+    def get_log_filename(self):
+        """Generate log filename based on entry properties"""
+        command_name = self._get_command_name()
+        filename = f"{self.log_prefix}{self.device}-{self.model}-{command_name}.log"
+        return os.path.join("logs", filename.replace("/", "_"))
+
+    def _get_command_name(self):
+        """Extract command name from command input"""
+        if "pytest" in self.command_input:
+            match = re.search(r"pytest\s+([\S]+)", self.command_input)
+            if match:
+                test_file = match.group(1)
+                return os.path.basename(test_file).split(".")[0]
+            return "pytest"
+        return os.path.basename(shlex.split(self.command_input)[0])
+
+    def open_log_file(self):
+        """Open and return log file for writing"""
+        self.log_file = open(self.get_log_filename(), "w")
+        return self.log_file
 
 
 def main(stdscr):
@@ -232,18 +320,7 @@ def main(stdscr):
                         # Create output entries
                         for command, model, device in combinations:
                             command_name = get_command_name(command)
-                            entry = {
-                                "command_name": command_name,
-                                "model": model,
-                                "device": device.upper(),
-                                "status": "Waiting",
-                                "output": "",
-                                "process": None,
-                                "log_file": None,
-                                "stop_event": threading.Event(),
-                                "lock": threading.Lock(),
-                                "command_input": command,  # Save the individual command
-                            }
+                            entry = Entry(command_name, model, device, command)
                             output_entries.append(entry)
                         # Update total_lines
                         total_lines = len(input_fields) + len(output_entries)
@@ -415,28 +492,24 @@ def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_
     output_start_y = header_y + 1
     for idx, entry in enumerate(output_entries):
         y = output_start_y + idx
-        if y >= max_y - 3:  # Change this line from max_y - 2 to max_y - 3
+        if y >= max_y - 3:
             break
-        if (
-            idx >= len(last_drawn_state["output_entries"])
-            or entry != last_drawn_state["output_entries"][idx]
-            or current_line != last_drawn_state["current_line"]
-        ):
+
+        # Only draw if entry has changed or selection state changed
+        if entry.changed or current_line != last_drawn_state["current_line"]:
             draw_output_entry(stdscr, entry, y, current_line == len(input_fields) + idx, max_x)
+            entry.mark_drawn()  # Mark as drawn after updating
 
     # Clear any extra lines if output entries were removed
     for y in range(
         output_start_y + len(output_entries),
-        min(
-            output_start_y + len(last_drawn_state["output_entries"]), max_y - 3
-        ),  # Change this line from max_y - 2 to max_y - 3
+        min(output_start_y + len(last_drawn_state["output_entries"]), max_y - 3),
     ):
         stdscr.move(y, 0)
         stdscr.clrtoeol()
 
-    # Update last_drawn_state
-    last_drawn_state["output_entries"] = [entry.copy() for entry in output_entries]
     last_drawn_state["current_line"] = current_line
+    last_drawn_state["output_entries"] = [{"log_id": entry.log_id} for entry in output_entries]
 
 
 def draw_input_field(stdscr, field, is_selected, max_x):
@@ -453,13 +526,13 @@ def draw_input_field(stdscr, field, is_selected, max_x):
 
 def draw_output_entry(stdscr, entry, y, is_selected, max_x):
     cols = [
-        entry["command_name"],
-        entry["model"],
-        entry["device"],
-        entry["status"],
-        entry.get("speed", ""),
-        entry.get("pcc", ""),
-        entry["output"],
+        entry.command_name,
+        entry.model,
+        entry.device,
+        entry.status,
+        getattr(entry, "speed", ""),
+        getattr(entry, "pcc", ""),
+        entry.output,
     ]
     col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
 
@@ -471,7 +544,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
         else:
             color = curses.color_pair(0)
             if i == 3:  # Status column
-                status = entry["status"]
+                status = entry.status
                 if status == "Waiting" or status == "Cancelled":
                     color = COLOR_PAIR_WAITING
                 elif status in ["Running", "Initializing device", "Prefill", "Decode", "Starting"] or status.startswith(
@@ -557,17 +630,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     env["FAKE_DEVICE"] = entry["device"]
     env["LLAMA_DIR"] = get_llama_dir(entry["model"])
 
-    # Prepare log directory
-    os.makedirs("logs", exist_ok=True)
-
-    # Remove any existing logs with the same slot index
-    for existing_file in os.listdir("logs"):
-        if existing_file.startswith(f"{entry['log_id']:04d}-"):
-            os.remove(os.path.join("logs", existing_file))
-
-    # Create new log file with slot index
-    log_filename = get_log_filename(entry["device"], entry["model"], entry["command_input"], entry["log_id"])
-    entry["log_file"] = open(os.path.join("logs", log_filename), "w")
+    # Open log file
+    entry.open_log_file()
 
     # Define command shortcuts
     command_shortcuts = {
@@ -637,31 +701,31 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
 
 def process_output(entry, screen_lock, output_entries, screen_needs_update):
-    process = entry["process"]
-    log_file = entry["log_file"]
+    process = entry.process
+    log_file = entry.log_file
     previous_line = ""
     try:
         for line in iter(process.stdout.readline, ""):
-            if entry["stop_event"].is_set():
+            if entry.stop_event.is_set():
                 break
             # Write to log file
             log_file.write(line)
             log_file.flush()
 
             # Update status and output based on output
-            status, output, speed, pcc = parse_output_line(line, previous_line, entry["status"])
+            status, output, speed, pcc = parse_output_line(line, previous_line, entry.status)
             previous_line = line.strip()
-            with entry["lock"]:
-                if status != entry["status"] or output or speed is not None or pcc is not None:
-                    entry["status"] = status
+            with entry.lock:
+                if status != entry.status or output or speed is not None or pcc is not None:
+                    entry.status = status  # This will mark entry as changed via __setattr__
                     if output:
-                        entry["output"] = output
+                        entry.output = output
                     if speed is not None:
-                        entry["speed"] = f"{speed:.1f}"
+                        entry.speed = f"{speed:.1f}"
                     if pcc is not None:
-                        current_pcc = entry.get("pcc")
+                        current_pcc = getattr(entry, "pcc", None)
                         if current_pcc is None or float(pcc) < float(current_pcc):
-                            entry["pcc"] = pcc
+                            entry.pcc = pcc
                     screen_needs_update.set()
 
             with screen_lock:
@@ -674,17 +738,17 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
         # Wait for the process to fully terminate
         process.wait()
 
-        with entry["lock"]:
+        with entry.lock:
             if process.returncode != 0:
-                exception_name = find_exception_in_log(entry["log_file"].name)
-                entry["status"] = "Error"
+                exception_name = find_exception_in_log(entry.log_file.name)
+                entry.status = "Error"
                 if exception_name:
-                    entry["output"] = exception_name
+                    entry.output = exception_name
                     reset_device_async(entry, screen_lock, screen_needs_update)
                     screen_needs_update.set()
             else:
-                entry["status"] = "Finished"
-        entry["process"] = None
+                entry.status = "Finished"
+        entry.process = None
         log_file.close()
 
         screen_needs_update.set()  # Ensure screen is updated after process termination
@@ -783,13 +847,6 @@ def get_command_name(command_input):
     return command_name
 
 
-def get_log_filename(device, model, command_input, slot_index):
-    command_name = get_command_name(command_input)
-    filename = f"{slot_index:04d}-{device}-{model}-{command_name}.log"
-    filename = filename.replace("/", "_")
-    return filename
-
-
 def find_exception_in_log(log_filename):
     exception_name = None
     with open(log_filename, "r") as f:
@@ -844,12 +901,12 @@ def reset_device_async(entry, screen_lock, screen_needs_update):
         except subprocess.CalledProcessError as e:
             pass
         finally:
-            with entry["lock"]:
-                entry["status"] = previous_status
+            with entry.lock:
+                entry.status = previous_status
             screen_needs_update.set()
 
-    previous_status = entry["status"]
-    entry["status"] = "Resetting"
+    previous_status = entry.status
+    entry.status = "Resetting"
     reset_thread = threading.Thread(target=reset_thread)
     reset_thread.daemon = True
     reset_thread.start()
