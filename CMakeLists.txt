@@ -191,7 +191,8 @@ ADJUST_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
 target_link_libraries(compiler_flags INTERFACE linker_flags compiler_warnings stdlib)
-target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
+#target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
+target_compile_options(compiler_flags INTERFACE -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
 if(ENABLE_CODE_TIMERS)
     target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)

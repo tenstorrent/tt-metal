@@ -7,7 +7,9 @@
 #include <iostream>
 #include <random>
 #include <vector>
+#if defined(__x86_64__)
 #include <immintrin.h>
+#endif
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
