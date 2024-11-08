@@ -38,10 +38,6 @@ def find_max_subblock(out_block_h, out_block_w):
 
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 
-# x, y
-CORE_RANGE = [(x, y) for y in range(4) for x in range(8)]
-random.shuffle(CORE_RANGE)
-
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -49,74 +45,47 @@ random.shuffle(CORE_RANGE)
     "out_sharded, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode",
     [
         # 32, 2304, 3840
-        # (
-        #     True,
-        #     32,
-        #     2304,
-        #     3840,
-        #     None,
-        #     ttnn.bfloat16,
-        #     ttnn.bfloat4_b,
-        #     ttnn.MathFidelity.LoFi,
-        #     True,
-        #     True,
-        # ),
-        # # 256, 8192, 8192
-        # (
-        #     True,
-        #     256,
-        #     1024,
-        #     8192,
-        #     None,
-        #     ttnn.bfloat16,
-        #     ttnn.bfloat4_b,
-        #     ttnn.MathFidelity.LoFi,
-        #     True,
-        #     True,
-        # ),
+        (
+            True,
+            32,
+            2304,
+            3840,
+            None,
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            ttnn.MathFidelity.LoFi,
+            True,
+            True,
+        ),
         # 256, 8192, 8192
         (
             True,
-            128 + 32,
-            1024,  # 1280,
-            8192,  # 10240,
+            256,
+            1024,
+            8192,
             None,
             ttnn.bfloat16,
-            ttnn.bfloat8_b,
+            ttnn.bfloat4_b,
             ttnn.MathFidelity.HiFi4,
-            False,
-            False,
+            True,
+            True,
         ),
-        # 64, 32, 32
-        # (
-        #     True,
-        #     32,
-        #     32,
-        #     32,
-        #     None,
-        #     ttnn.bfloat16,
-        #     ttnn.bfloat4_b,
-        #     ttnn.MathFidelity.HiFi4,
-        #     True,
-        #     True,
-        # ),
     ],
 )
 @pytest.mark.parametrize(
-    "grid_size",
+    "grid",
     [
-        # (1, 1),
         # (3, 1),
         # (8, 1),
         # (8, 2),
-        # (8, 3),
+        (8, 3),
         (8, 4),
         # (8, 8)
     ],
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [False],
+    [True, False],
 )
 def test_multi_core_matmul_1d_wh(
     device,
@@ -131,14 +100,14 @@ def test_multi_core_matmul_1d_wh(
     K,
     N,
     activation,
-    grid_size,
+    grid,
     use_arbitrary_cores,
     function_level_defaults,
 ):
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
-    num_cores = grid_size[0] * grid_size[1]
+    num_cores = grid[0] * grid[1]
 
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE
@@ -163,7 +132,9 @@ def test_multi_core_matmul_1d_wh(
     logger.debug("out subblock h w " + str(out_subblock_h) + " " + str(out_subblock_w))
 
     if use_arbitrary_cores:
-        assert len(CORE_RANGE) == num_cores
+        # x, y
+        CORE_RANGE = [(x, y) for y in range(grid[1]) for x in range(grid[0])]
+        random.shuffle(CORE_RANGE)
 
         core_range_set = ttnn.CoreRangeSet(
             [
@@ -179,7 +150,7 @@ def test_multi_core_matmul_1d_wh(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                    ttnn.CoreCoord(grid[0] - 1, grid[1] - 1),
                 ),
             }
         )
@@ -217,26 +188,9 @@ def test_multi_core_matmul_1d_wh(
         ),
     )
 
-    in0 = torch.ones(in0_shape)
-    in1 = torch.ones(in1_shape)
+    in0 = torch.randn(in0_shape)
+    in1 = torch.randn(in1_shape)
     bias = torch.randn(bias_shape)
-
-    # FIXME: Because .set_globally_allocated address is broken, need to add padding to input tensor
-    padded_K = K * (num_cores)
-    input_tensor_padding = torch.ones([1, 1, M, padded_K]).float()
-    in0_padded_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=input_tensor_padding.shape,
-        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    _ = ttnn.from_torch(
-        input_tensor_padding,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=in0_dtype,
-        memory_config=in0_padded_sharded_mem_config,
-    )
 
     in0_t = ttnn.from_torch(
         in0,
@@ -254,7 +208,7 @@ def test_multi_core_matmul_1d_wh(
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        compute_with_storage_grid_size=grid,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -277,7 +231,7 @@ def test_multi_core_matmul_1d_wh(
         in0_t,
         in1_t,
         program_config=program_config,
-        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        memory_config=output_sharded_mem_config,
         compute_kernel_config=compute_kernel_config,
     )
     tt_out = ttnn.to_torch(output_t)
@@ -285,11 +239,6 @@ def test_multi_core_matmul_1d_wh(
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
-
-    # breakpoint()
-    import time
-
-    time.sleep(3)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
