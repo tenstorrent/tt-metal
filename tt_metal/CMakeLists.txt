@@ -11,7 +11,6 @@ target_sources(
 target_link_libraries(
     tt_metal
     PUBLIC
-        metal_header_directories
         Metalium::Metal::Impl
         Metalium::Metal::STL
         umd::device

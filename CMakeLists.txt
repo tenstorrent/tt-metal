@@ -100,7 +100,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                ON
+                FALSE #FIXME(14541): We've got work to do :(
     )
 
     if(ENABLE_CCACHE)
@@ -313,29 +313,6 @@ if(ENABLE_TRACY)
     add_compile_definitions(TRACY_ENABLE)
     add_compile_options(-fno-omit-frame-pointer)
     add_link_options(-rdynamic)
-endif()
-
-add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-foreach(lib ${BoostPackages})
-    target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
-if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            tt_metal/hw/inc/wormhole
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
-            ${UMD_HOME}/device/wormhole
-    )
-else()
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
-            ${UMD_HOME}/device/$ENV{ARCH_NAME}
-    )
 endif()
 
 if(WITH_PYTHON_BINDINGS)
