@@ -243,12 +243,6 @@ class ComputeKernel : public Kernel {
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
 
-struct KernelDefinesHash {
-    KernelDefinesHash() {}
-
-    size_t operator()(const std::map<std::string, std::string> &c_defines) const;
-};
-
 }  // namespace tt_metal
 
 }  // namespace tt

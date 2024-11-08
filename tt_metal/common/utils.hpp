@@ -9,6 +9,7 @@
 #include <thread>
 #include <mutex>
 #include <vector>
+#include <map>
 
 using std::string;
 
@@ -26,6 +27,11 @@ namespace utils
         std::hash<T> hasher;
         seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
+
+    struct DefinesHash {
+        DefinesHash() {}
+        size_t operator()(const std::map<std::string, std::string> &c_defines) const;
+    };
 
     inline std::vector<std::string> strsplit(std::string input, char delimiter) {
         std::vector<std::string> result = {};
