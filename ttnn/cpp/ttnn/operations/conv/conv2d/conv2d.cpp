@@ -533,8 +533,9 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool, bool> shard_or_re
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout,
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec.value().orientation
     };
+    auto shard_layout = input_tensor_sharded_memory_config.memory_layout;
     auto output_parallel_config = parallel_config;
-    if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !is_mm_conv) {
+    if(shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !is_mm_conv) {
         uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
         output_parallel_config = {
             .grid = num_cores_to_corerangeset( find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH),max_num_cores), compute_grid_size, true),
@@ -857,8 +858,6 @@ Result conv2d(
         }
         conv_config.deallocate_activation = true;
     }
-
-    conv_config.shard_layout = parallel_config.shard_scheme;
 
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
