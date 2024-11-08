@@ -90,10 +90,8 @@ class OutputEntryList:
                     )
                     entry.output = entry_data["output"]
                     entry.log_id = entry_data["log_id"]
-                    if "speed" in entry_data:
-                        entry.speed = entry_data["speed"]
-                    if "pcc" in entry_data:
-                        entry.pcc = entry_data["pcc"]
+                    entry.speed = entry_data["speed"]
+                    entry.pcc = entry_data["pcc"]
                     self._entries.append(entry)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
@@ -467,10 +465,8 @@ def main(stdscr):
                         # Reset the entry to "Waiting" status
                         entry["status"] = "Waiting"
                         entry["output"] = ""
-                        if "speed" in entry:
-                            del entry["speed"]
-                        if "pcc" in entry:
-                            del entry["pcc"]
+                        entry["speed"] = None
+                        entry["pcc"] = None
                         entry["process"] = None
                         entry["log_file"] = None
                         entry["stop_event"].clear()
@@ -612,8 +608,8 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
         entry.model,
         entry.device,
         entry.status,
-        getattr(entry, "speed", ""),
-        getattr(entry, "pcc", ""),
+        entry.speed if entry.speed else "",
+        entry.pcc if entry.pcc else "",
         entry.output,
     ]
     col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
@@ -803,8 +799,7 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
                     if speed is not None:
                         entry.speed = f"{speed:.1f}"
                     if pcc is not None:
-                        current_pcc = getattr(entry, "pcc", None)
-                        if current_pcc is None or float(pcc) < float(current_pcc):
+                        if entry.pcc is None or float(pcc) < float(entry.pcc):
                             entry.pcc = pcc
                     screen_needs_update.set()
 
@@ -827,7 +822,7 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
                     entry.status = "Error"
                     if exception_name:
                         entry.output = exception_name
-                        reset_device_async(entry, screen_lock, screen_needs_update)
+                    reset_device_async(entry, screen_lock, screen_needs_update)
             else:
                 entry.status = "Finished"
         entry.process = None
