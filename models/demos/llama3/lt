@@ -14,6 +14,7 @@ import re
 import time
 import signal
 import psutil
+import json
 
 
 def ensure_less_installed():
@@ -57,6 +58,66 @@ class OutputEntryList:
         self._entries = []
         # Create logs directory
         os.makedirs("logs", exist_ok=True)
+        # Load existing state
+        self._load_state()
+
+    def _load_state(self):
+        try:
+            with open("logs/state.json", "r") as f:
+                state = json.load(f)
+                for entry_data in state:
+                    entry = Entry(
+                        entry_data["command_name"],
+                        entry_data["model"],
+                        entry_data["device"],
+                        entry_data["command_input"],
+                    )
+                    # Restore saved attributes
+                    entry.status = (
+                        "Cancelled"
+                        if entry_data["status"]
+                        in [
+                            "Running",
+                            "Resetting",
+                            "Initializing device",
+                            "Starting",
+                            "Prefill",
+                            "Decode",
+                            "Terminating",
+                            "Exiting",
+                        ]
+                        else entry_data["status"]
+                    )
+                    entry.output = entry_data["output"]
+                    entry.log_id = entry_data["log_id"]
+                    if "speed" in entry_data:
+                        entry.speed = entry_data["speed"]
+                    if "pcc" in entry_data:
+                        entry.pcc = entry_data["pcc"]
+                    self._entries.append(entry)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    def save_state(self):
+        state = []
+        for entry in self._entries:
+            entry_data = {
+                "command_name": entry.command_name,
+                "model": entry.model,
+                "device": entry.device,
+                "command_input": entry.command_input,
+                "status": entry.status,
+                "output": entry.output,
+                "log_id": entry.log_id,
+            }
+            if hasattr(entry, "speed"):
+                entry_data["speed"] = entry.speed
+            if hasattr(entry, "pcc"):
+                entry_data["pcc"] = entry.pcc
+            state.append(entry_data)
+
+        with open("logs/state.json", "w") as f:
+            json.dump(state, f, indent=2)
 
     def __len__(self):
         return len(self._entries)
@@ -68,15 +129,18 @@ class OutputEntryList:
         return iter(self._entries)
 
     def append(self, entry):
-        log_id = self.next_log_id()
+        if entry.log_id is None:
+            entry.log_id = self.next_log_id()
 
         # Remove any existing logs with same ID
         for existing_file in os.listdir("logs"):
             if existing_file.startswith(entry.log_prefix):
                 os.remove(os.path.join("logs", existing_file))
 
-        entry["log_id"] = log_id
+        # Set parent list reference before appending
+        entry.set_parent_list(self)
         self._entries.append(entry)
+        self.save_state()
 
     def pop(self, index):
         result = self._entries.pop(index)
@@ -89,6 +153,8 @@ class OutputEntryList:
         # Mark all subsequent entries as changed
         for entry in self._entries[index:]:
             entry.mark_changed()
+
+        self.save_state()
         return result
 
     def index(self, entry):
@@ -98,7 +164,12 @@ class OutputEntryList:
         return self._entries
 
     def next_log_id(self):
-        return max([entry["log_id"] for entry in self._entries], default=0) + 1
+        # Fix potential issue with list comprehension on dictionary access
+        max_id = 0
+        for entry in self._entries:
+            if entry.log_id > max_id:
+                max_id = entry.log_id
+        return max_id + 1
 
 
 class Entry:
@@ -118,6 +189,7 @@ class Entry:
         self.pcc = None
         self.thread = None
         self.changed = True  # Initialize as changed to ensure first draw
+        self._parent_list = None  # Reference to parent OutputEntryList
 
     @property
     def log_prefix(self):
@@ -131,11 +203,18 @@ class Entry:
         self.changed = False
 
     def __setattr__(self, name, value):
+        super().__setattr__(name, value)
         # Mark as changed whenever any attribute is modified
         # (except for 'changed' itself to avoid recursion)
         if name != "changed" and hasattr(self, "changed"):
             self.changed = True
-        super().__setattr__(name, value)
+        # Save state if we have a parent list and this isn't an unpersisted attribute
+        if (
+            hasattr(self, "_parent_list")
+            and self._parent_list
+            and name not in ["process", "log_file", "stop_event", "lock", "thread"]
+        ):
+            self._parent_list.save_state()
 
     def __getitem__(self, key):
         # Support dictionary-style access for backward compatibility
@@ -170,6 +249,9 @@ class Entry:
         self.log_file = open(self.get_log_filename(), "w")
         return self.log_file
 
+    def set_parent_list(self, parent_list):
+        self._parent_list = parent_list
+
 
 def main(stdscr):
     curses.curs_set(0)  # Hide cursor
@@ -190,7 +272,6 @@ def main(stdscr):
 
     output_entries = OutputEntryList()
     current_line = 0  # Index of the current line (input fields + output entries)
-    total_lines = len(input_fields)
 
     screen_lock = threading.Lock()
     screen_needs_update = threading.Event()  # New event to signal screen updates
@@ -322,12 +403,12 @@ def main(stdscr):
                             command_name = get_command_name(command)
                             entry = Entry(command_name, model, device, command)
                             output_entries.append(entry)
-                        # Update total_lines
-                        total_lines = len(input_fields) + len(output_entries)
+
                         current_line = 0
                         screen_needs_update.set()
                     else:
                         # Otherwise if not the last field, move to next field
+                        total_lines = len(input_fields) + len(output_entries)
                         current_line = (current_line + 1) % total_lines
                         screen_needs_update.set()
                 else:
@@ -335,13 +416,13 @@ def main(stdscr):
                     entry_index = current_line - len(input_fields)
                     if entry_index < len(output_entries):
                         entry = output_entries[entry_index]
-                        if entry["log_file"]:
+                        if os.path.exists(entry.get_log_filename()):
                             # Save current terminal state
                             curses.def_prog_mode()
                             # Exit curses temporarily
                             curses.endwin()
                             # Run less command
-                            os.system(f"less -R {entry['log_file'].name}")
+                            os.system(f"less -R {entry.get_log_filename()}")
                             # Resume curses
                             curses.reset_prog_mode()
                             stdscr.refresh()
@@ -369,11 +450,12 @@ def main(stdscr):
                         elif entry["status"] != "Resetting":
                             # Remove the entry if it's already cancelled
                             output_entries.pop(entry_index)
-                            total_lines -= 1
+                            total_lines = len(input_fields) + len(output_entries)
                             if current_line >= total_lines:
                                 current_line = total_lines - 1
                     screen_needs_update.set()
         elif c == 9:  # Tab key
+            total_lines = len(input_fields) + len(output_entries)
             current_line = (current_line + 1) % total_lines
             screen_needs_update.set()
         elif c == ord("r") and current_line >= len(input_fields):
@@ -706,8 +788,6 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
     previous_line = ""
     try:
         for line in iter(process.stdout.readline, ""):
-            if entry.stop_event.is_set():
-                break
             # Write to log file
             log_file.write(line)
             log_file.flush()
@@ -740,12 +820,14 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 
         with entry.lock:
             if process.returncode != 0:
-                exception_name = find_exception_in_log(entry.log_file.name)
-                entry.status = "Error"
-                if exception_name:
-                    entry.output = exception_name
-                    reset_device_async(entry, screen_lock, screen_needs_update)
-                    screen_needs_update.set()
+                if entry.stop_event.is_set():
+                    entry.status = "Cancelled"
+                else:
+                    exception_name = find_exception_in_log(entry.log_file.name)
+                    entry.status = "Error"
+                    if exception_name:
+                        entry.output = exception_name
+                        reset_device_async(entry, screen_lock, screen_needs_update)
             else:
                 entry.status = "Finished"
         entry.process = None
