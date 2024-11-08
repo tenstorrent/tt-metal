@@ -4,6 +4,10 @@
 
 #include "tt_metal/impl/program/program.hpp"
 
+#include <range/v3/view/filter.hpp>
+#include <range/v3/view/transform.hpp>
+
+#include "buffers/circular_buffer_types.hpp"
 #include "common/executor.hpp"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
@@ -22,6 +26,7 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
+#include "tt_metal/program.hpp"
 
 namespace tt::tt_metal {
 
@@ -44,17 +49,18 @@ void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::share
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_kernel_defines_hash) {
     // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per
     // device This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
 
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
     string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
+        device_kernel_defines_hash,
         tt::llrt::OptionsG.get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
@@ -69,7 +75,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
     {
         unique_lock<mutex> lock;
         f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+          << " :: " << kernel->compute_hash() << " :: " << device_kernel_defines_hash << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -244,6 +250,7 @@ class Program_ {
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
+    friend Internal_;
 };
 
 KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type) {
@@ -270,6 +277,16 @@ void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer) {
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
+
+class Internal_ {
+   public:
+    using map_type = decltype(detail::Program_::circular_buffer_by_id_);
+
+    static const map_type &get_circular_buffers_by_id(const Program &program) noexcept {
+        return program.pimpl_->circular_buffer_by_id_;
+    }
+};
+
 }  // namespace detail
 
 std::atomic<uint64_t> detail::Program_::program_counter = 0;
@@ -1377,7 +1394,7 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
+                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key(), device->get_device_kernel_defines_hash());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
@@ -1575,6 +1592,80 @@ const std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept 
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
+}
+
+v1::ProgramHandle v1::CreateProgram() { return {}; }
+
+v1::KernelHandle v1::CreateKernel(
+    v1::ProgramHandle &program,
+    std::string_view file_name,
+    const CoreRangeSet &core_spec,
+    const DataMovementConfig &config) {
+    return v1::KernelHandle{v0::CreateKernel(program, std::string{file_name}, core_spec, config)};
+}
+
+v1::KernelHandle v1::CreateKernel(
+    v1::ProgramHandle &program,
+    std::string_view file_name,
+    const CoreRangeSet &core_spec,
+    const ComputeConfig &config) {
+    return v1::KernelHandle{v0::CreateKernel(program, std::string{file_name}, core_spec, config)};
+}
+
+v1::KernelHandle v1::CreateKernel(
+    v1::ProgramHandle &program,
+    std::string_view file_name,
+    const CoreRangeSet &core_spec,
+    const EthernetConfig &config) {
+    return v1::KernelHandle{v0::CreateKernel(program, std::string{file_name}, core_spec, config)};
+}
+
+uint32_t v1::CreateSemaphore(
+    v1::ProgramHandle &program, const CoreRangeSet &core_spec, uint32_t initial_value, CoreType core_type) {
+    return v0::CreateSemaphore(program, core_spec, initial_value, core_type);
+}
+
+v1::CircularBufferHandle v1::CreateCircularBuffer(
+    v1::ProgramHandle &program, const CoreRangeSet &core_spec, const CircularBufferConfig &config) {
+    return v1::CircularBufferHandle{v0::CreateCircularBuffer(program, core_spec, config)};
+}
+
+const CircularBufferConfig &v1::GetCircularBufferConfig(
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle) {
+    return v0::GetCircularBufferConfig(program, static_cast<v0::CBHandle>(cb_handle));
+}
+
+constexpr auto to_handle() {
+    return [](const detail::Internal_::map_type::value_type &pair) {
+        return v1::CircularBufferHandle{pair.first};
+    };
+}
+
+v1::SizedCircularBufferRange v1::GetCircularBuffers(v1::ProgramHandle &program) {
+    return detail::Internal_::get_circular_buffers_by_id(program) |
+           ranges::views::transform(to_handle());
+}
+
+inline auto is_on_logical_corerange(CoreRange cr) {
+    return [=](const detail::Internal_::map_type::value_type &pair) {
+        return pair.second->is_on_logical_corerange(cr);
+    };
+}
+
+v1::CircularBufferRange v1::GetCircularBuffersOnCoreRange(v1::ProgramHandle &program, CoreRange cr) {
+    return detail::Internal_::get_circular_buffers_by_id(program) |
+           ranges::views::filter(is_on_logical_corerange(cr)) |
+           ranges::views::transform(to_handle());
+}
+
+void v1::UpdateCircularBufferTotalSize(
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle, std::uint32_t total_size) {
+    v0::UpdateCircularBufferTotalSize(program, static_cast<v0::CBHandle>(cb_handle), total_size);
+}
+
+void v1::UpdateDynamicCircularBufferAddress(
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle, v1::BufferHandle buffer) {
+    v0::UpdateDynamicCircularBufferAddress(program, static_cast<v0::CBHandle>(cb_handle), *buffer);
 }
 
 }  // namespace tt::tt_metal
