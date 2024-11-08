@@ -1,0 +1,9 @@
+# Order is important; the last matching pattern takes the most
+# precedence.
+
+.github/ @dmakoviichuk-tt @rfurko-tt
+
+CODEOWNERS @dmakoviichuk-tt @rfurko-tt
+
+# all files in a repo
+./** @dmakoviichuk-tt @rfurko-tt
