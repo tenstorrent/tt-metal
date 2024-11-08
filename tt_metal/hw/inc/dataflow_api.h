@@ -246,11 +246,17 @@ template <uint32_t tile_hw = 1024>
 FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     constexpr uint8_t datum_shift = (tile_hw == 1024) ? 10 :
                                     (tile_hw == 512)  ? 9  :
-                                    (tile_hw == 256)  ? 8  : 10;
+                                    (tile_hw == 256)  ? 8  :
+                                    (tile_hw == 128)  ? 7  :
+                                    (tile_hw == 64)   ? 6  :
+                                    (tile_hw == 32)   ? 5  : 10;
 
-    constexpr uint8_t exp_shift   = (tile_hw == 1024) ? 2  :
-                                    (tile_hw == 512)  ? 1  :
-                                    (tile_hw == 256)  ? 0  : 2;
+    constexpr uint8_t exp_shift   = (tile_hw == 1024) ? 6  :
+                                    (tile_hw == 512)  ? 5  :
+                                    (tile_hw == 256)  ? 4  :
+                                    (tile_hw == 128)  ? 3  :
+                                    (tile_hw == 64)   ? 2  :
+                                    (tile_hw == 32)   ? 1  : 6;
     switch (format & 0x1F) {
         case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
         case ((uint8_t)DataFormat::UInt16):
@@ -260,13 +266,13 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
         case ((uint8_t)DataFormat::UInt32):
         case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
         case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (4 + exp_shift)));
+        case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (exp_shift)));
         case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (4 + exp_shift)));
+        case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (exp_shift)));
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b):
         // Keep default as Bfp8?
-        default: return ((index << datum_shift) + (index << (4 + exp_shift)));
+        default: return ((index << datum_shift) + (index << (exp_shift)));
     };
 }
 

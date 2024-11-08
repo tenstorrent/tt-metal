@@ -158,10 +158,11 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
             input_tensor.device(),
-            this->output_mem_config
+            this->output_mem_config,
+            input_tensor.get_tile()
             )};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
     }
 }
 
