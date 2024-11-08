@@ -2,8 +2,8 @@
 
 # Run this test w/
 #   sweep_bw_and_latency.sh 2>&1 | tee log
-# the run
-# filt_pgm_dispatch.pl
+# then run
+# filt_pgm_dispatch.pl log
 # then paste the results into the BW spreadsheet
 
 if [ "$ARCH_NAME" = "grayskull" ]; then
