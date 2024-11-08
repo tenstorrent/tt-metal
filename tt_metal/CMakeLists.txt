@@ -47,6 +47,7 @@ target_include_directories(
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}
+        include
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
