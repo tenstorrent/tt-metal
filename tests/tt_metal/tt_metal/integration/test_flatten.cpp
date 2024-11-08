@@ -2,22 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
-#include "llrt/llrt.hpp"
-
-
 using std::vector;
 using namespace tt;
 
-namespace gtest_smoke::test_flatten{
+namespace test_flatten {
 
 uint32_t prod(vector<uint32_t> &shape) {
     uint32_t shape_prod = 1;
@@ -196,15 +189,15 @@ TEST_F(DispatchFixture, TensixFlatten){
     GTEST_SKIP();
     uint32_t num_tiles_r = 2;
     uint32_t num_tiles_c = 2;
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+    if (!this->IsSlowDispatch()){
         log_info(LogTest, "Flatten running with num_tiles_r=1, num_tiles_c=1");
         num_tiles_r = 1;
         num_tiles_c = 1;
     }
     for (unsigned int id=0; id < devices_.size(); id++){
         // TODO: #6097, fix this for fast dispatch remote device.
-        if (!this->slow_dispatch_ && id > 0)
+        if (!this->IsSlowDispatch() && id > 0)
             continue;
-        ASSERT_TRUE(gtest_smoke::test_flatten::flatten(this, devices_.at(id), num_tiles_r, num_tiles_c));
+        ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
 }

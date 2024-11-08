@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include "tests/tt_metal/tt_metal/unit_tests/common/basic_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 

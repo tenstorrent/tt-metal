@@ -1,5 +1,6 @@
 set(UNIT_TESTS_DEVICE_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device_cluster_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_device_init_and_teardown.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_galaxy_cluster_api.cpp

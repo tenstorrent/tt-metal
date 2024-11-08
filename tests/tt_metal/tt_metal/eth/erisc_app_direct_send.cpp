@@ -12,9 +12,6 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 namespace {
@@ -142,7 +139,7 @@ bool send_over_eth(
 
 }  // namespace unit_tests::erisc::direct_send
 
-TEST_F(N300DeviceFixture, EthSingleCoreDirectSendChip0ToChip1) {
+TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     ASSERT_TRUE(this->num_devices_ == 2);
@@ -172,7 +169,7 @@ TEST_F(N300DeviceFixture, EthSingleCoreDirectSendChip0ToChip1) {
         device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, EthSingleCoreDirectSendChip1ToChip0) {
+TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     ASSERT_TRUE(this->num_devices_ == 2);
@@ -202,7 +199,7 @@ TEST_F(N300DeviceFixture, EthSingleCoreDirectSendChip1ToChip0) {
         device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, EthBidirectionalCoreDirectSend) {
+TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     ASSERT_TRUE(this->num_devices_ == 2);
@@ -248,7 +245,7 @@ TEST_F(N300DeviceFixture, EthBidirectionalCoreDirectSend) {
         device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, EthRandomDirectSendTests) {
+TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     srand(0);

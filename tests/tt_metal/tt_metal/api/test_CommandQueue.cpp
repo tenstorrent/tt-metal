@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
+#include "gtest/gtest.h"
 
 #include "command_queue_fixture.hpp"
-#include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -14,7 +13,6 @@ using namespace tt::tt_metal;
 
 namespace host_tests {
 
-namespace multi_device_tests {
 TEST_F(CommandQueueMultiDeviceFixture, DISABLED_TestAccessCommandQueue) {
     for (unsigned int device_id = 0; device_id < num_devices_; device_id++) {
         EXPECT_NO_THROW(devices_[device_id]->command_queue());
@@ -66,7 +64,8 @@ TEST_F(CommandQueueMultiDeviceFixture, DISABLED_TestDirectedLoopbackToUniqueHuge
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        tt::Cluster::instance().write_sysmem(data.data(), data.size() * sizeof(uint32_t), address, mmio_device_id, channel);
+        tt::Cluster::instance().write_sysmem(
+            data.data(), data.size() * sizeof(uint32_t), address, mmio_device_id, channel);
 
         golden_data[device_id] = data;
     }
@@ -80,9 +79,4 @@ TEST_F(CommandQueueMultiDeviceFixture, DISABLED_TestDirectedLoopbackToUniqueHuge
         EXPECT_EQ(readback_data, golden_data.at(device_id));
     }
 }
-}
-
-
-
-
-}   // namespace host_tests
+}  // namespace host_tests

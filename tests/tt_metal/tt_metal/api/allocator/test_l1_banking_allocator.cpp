@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
-#include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 

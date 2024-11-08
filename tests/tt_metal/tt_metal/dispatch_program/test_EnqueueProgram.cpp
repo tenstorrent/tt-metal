@@ -5,17 +5,15 @@
 #include <cstddef>
 #include <cstdint>
 #include "command_queue_fixture.hpp"
-#include "trace_fixture.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"
 #include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
+#include "test_utils.hpp"
 #include "tt_soc_descriptor.h"
 
 using std::vector;
