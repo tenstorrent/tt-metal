@@ -21,10 +21,10 @@ from models.utility_functions import skip_for_grayskull
 
 from transformers import SegformerModel, SegformerConfig
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_encoder import (
+from models.demos.segformer.tt.ttnn_segformer_encoder import (
     TtSegformerEncoder,
 )
-from models.experimental.functional_segformer.reference.segformer_encoder import SegformerEncoder
+from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
 
 
 def create_custom_preprocessor(device):
@@ -52,10 +52,10 @@ def create_custom_preprocessor(device):
             for i in range(4):
                 parameters["layer_norm"][i] = {}
                 parameters["layer_norm"][i]["weight"] = preprocess_layernorm_parameter(
-                    model.layer_norm[i].weight, dtype=ttnn.bfloat16
+                    model.layer_norm[i].weight, dtype=ttnn.bfloat8_b
                 )
                 parameters["layer_norm"][i]["bias"] = preprocess_layernorm_parameter(
-                    model.layer_norm[i].bias, dtype=ttnn.bfloat16
+                    model.layer_norm[i].bias, dtype=ttnn.bfloat8_b
                 )
 
         return parameters
@@ -93,13 +93,6 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config
 
@@ -127,8 +120,47 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
 
     ttnn_model = TtSegformerEncoder(config, parameters)
 
+    sharded_input_enabled = 0
+
+    if not sharded_input_enabled:
+        torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor_permuted,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 13, 0, 0, 0, 0, 0, 0))
+        N, H, W, C = torch_input_tensor.shape
+        torch_input_tensor = torch.reshape(torch_input_tensor, (N, 1, H * W, C))
+
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 7),
+                ),
+            }
+        )
+        n_cores = 64
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+
     ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
 
     ttnn_final_output = ttnn.to_torch(ttnn_output.last_hidden_state)
+    torch_final_output = torch.permute(torch_output.last_hidden_state, (0, 2, 3, 1))
 
-    assert_with_pcc(torch_output.last_hidden_state, ttnn_final_output, pcc=0.885)
+    assert_with_pcc(torch_final_output, ttnn_final_output, pcc=0.929)
