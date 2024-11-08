@@ -112,7 +112,7 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        dram_buffer_size, 100, 0);
 
     if (test_config.fp32_dest_acc_en) {
         auto src_vec_float = generate_uniform_random_vector<float>(
