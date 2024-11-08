@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include "dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
@@ -14,8 +12,8 @@
 #include "test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+#include "matmul_test_utils.hpp"
+
 using std::vector;
 using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast {

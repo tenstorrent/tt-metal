@@ -12,8 +12,8 @@
 #include "test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+#include "matmul_test_utils.hpp"
+
 using std::vector;
 using namespace tt;
 

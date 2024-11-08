@@ -75,6 +75,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_buffer)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_event)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_program)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_trace)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
 
@@ -86,8 +89,8 @@ add_custom_target(
         #unit_tests_fast_dispatch
         #unit_tests_fast_dispatch_single_chip_multi_queue
         #unit_tests_frequent
-        #metal_perf_microbenchmark_tests
         #unit_tests_galaxy
+        metal_perf_microbenchmark_tests
         unit_tests_api
         unit_tests_debug_tools
         unit_tests_device
@@ -95,5 +98,8 @@ add_custom_target(
         unit_tests_dispatch_event
         unit_tests_dispatch_program
         unit_tests_dispatch_trace
+        unit_tests_eth
+        unit_tests_integration
+        unit_tests_llk
         unit_tests_stl
 )

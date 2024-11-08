@@ -29,7 +29,6 @@ target_link_libraries(unit_tests_api PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_api
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests

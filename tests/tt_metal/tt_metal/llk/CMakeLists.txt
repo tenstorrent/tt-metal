@@ -3,7 +3,7 @@ set(UNIT_TESTS_LLK_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_copy_block_matmul_partials.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dropout_sfpu_compute.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_impls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp
@@ -20,7 +20,6 @@ target_link_libraries(unit_tests_llk PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_llk
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
