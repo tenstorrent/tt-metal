@@ -53,6 +53,8 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.bounding_box().grid_size().x * k_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
     TT_FATAL(q_num_cores + k_num_cores <= 64, "Q and K must not exceed max core grid size of 64");
 
+    bool is_overlap = q_input_tensor.shard_spec()->grid.intersects(k_input_tensor.shard_spec()->grid);
+    TT_FATAL(!is_overlap, "Q and K must not overlap");
 
     // Check that cos and sin have same dims
     TT_FATAL(cos.get_logical_shape() == sin.get_logical_shape(), "Cos and Sin dims must match");
