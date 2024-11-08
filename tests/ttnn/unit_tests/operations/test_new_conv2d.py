@@ -427,12 +427,15 @@ def test_conv_features(
         (128, 256, 8, 8, 3, 3, 1, 1, 1),
         (576, 576, 8, 8, 3, 3, 0, 0, 1),
         (960, 960, 4, 4, 3, 3, 0, 0, 1),
-        (256, 2048, 8, 8, 3, 3, 1, 1, 8),
-        (512, 2048, 16, 16, 3, 3, 1, 1, 4),
+        (256, 2048, 8, 8, 3, 3, 1, 1, 1),
+        (512, 2048, 16, 16, 3, 3, 1, 1, 1),
         (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
         (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
+        (768, 32, 8, 8, 3, 3, 1, 1, 1),
+        (64, 128, 8, 8, 3, 3, 1, 1, 1),
+        (32, 128, 8, 8, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -447,7 +450,7 @@ def test_conv_features(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,
@@ -466,6 +469,9 @@ def test_conv_ws(
     activations_dtype,
     auto_shard,
 ):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
+
     stride_h = stride
     stride_w = stride
     batch_size = 2
