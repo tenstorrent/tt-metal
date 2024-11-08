@@ -172,16 +172,16 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
 
     // Set up the kernel
     std::vector<uint32_t> q_compute_kernel_args = {
-        (std::uint32_t)q_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)q_output_cb_index,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)q_n_heads_t,
+        q_input_cb_index,
+        cos_cb_index,
+        sin_cb_index,
+        trans_mat_cb_index,
+        rotated_input_interm_cb_index,
+        cos_interm_cb_index,
+        sin_interm_cb_index,
+        q_output_cb_index,
+        head_dim_t,
+        q_n_heads_t,
         };
 
     auto q_rotary_embedding_kernel_id = tt_metal::CreateKernel(
@@ -191,16 +191,16 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = q_compute_kernel_args});
 
     std::vector<uint32_t> k_compute_kernel_args = {
-        (std::uint32_t)k_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)k_output_cb_index,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)k_n_heads_t,
+        k_input_cb_index,
+        cos_cb_index,
+        sin_cb_index,
+        trans_mat_cb_index,
+        rotated_input_interm_cb_index,
+        cos_interm_cb_index,
+        sin_interm_cb_index,
+        k_output_cb_index,
+        head_dim_t,
+        k_n_heads_t,
         };
 
     auto k_rotary_embedding_kernel_id = tt_metal::CreateKernel(

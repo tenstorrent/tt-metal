@@ -19,17 +19,23 @@ void py_bind_rotary_embedding_llama_fused_qk(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::rotary_embedding_llama_fused_qk,
-        R"doc(rotary_embedding_llama_fused_qk(q_input_tensor: ttnn.Tensor, k_input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, trans_mat: ttnn.Tensor, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
+        R"doc(
 
-            Applies the rotary embedding to the q_input_tensor and k_input_tensor parallely using the cos_cache and sin_cache tensors. Note, the q_input_tensor and k_input_tensor must have the same batch size and head dimensions.
+            Applies rotary embeddings to both `q_input_tensor` and `k_input_tensor` in parallel using precomputed sine and cosine values. This function is optimized for parallel execution, and both input tensors should share the same batch size and head dimensions.
 
             Args:
-                * :attr:`q_input_tensor`: Q Input Tensor [1, batch, num_heads, head_dim]
-                * :attr:`k_input_tensor`: K Input Tensor [1, batch, num_kv_heads, head_dim]
-                * :attr:`cos_cache`: Cosine Cache Tensor [1, (batch + batch), 1(32), head_dim]
-                * :attr:`sin_cache`: Sine Cache Tensor [1, (batch + batch), 1(32), head_dim]
-                * :attr:`trans_mat`: Transformation Matrix Tensor  [1, (batch + batch), 32, 32]
-                * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
+                q_input_tensor (ttnn.Tensor): The Q input tensor, with shape [1, batch, num_heads, head_dim].
+                k_input_tensor (ttnn.Tensor): The K input tensor, with shape [1, batch, num_kv_heads, head_dim].
+                cos_cache (ttnn.Tensor): Precomputed cosine values, with shape [1, 2 * batch, 32, head_dim].
+                sin_cache (ttnn.Tensor): Precomputed sine values, with shape [1, 2 * batch, 32, head_dim].
+                trans_mat (ttnn.Tensor): Transformation matrix tensor, with shape [1, 2 * batch, 32, 32].
+
+            Keyword args:
+                compute_kernel_config (Optional[DeviceComputeKernelConfig]): Optional configuration for the device compute kernel. Defaults to None.
+
+            Returns:
+                ttnn.Tensor, ttnn.Tensor: q and k output tensors with rotary embeddings applied.
+
         )doc",
         ttnn::pybind_arguments_t {
             py::arg("q_input_tensor"),
