@@ -19,6 +19,14 @@ option(ENABLE_CCACHE "Build with compiler cache" FALSE)
 option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 ###########################################################################################
 
+if(CMAKE_CXX_CLANG_TIDY AND TT_UNITY_BUILDS)
+    # There should be a way to have clang-tidy handle Unity builds properly,
+    # but it didn't work in my brief testing.  Worth investigating deeper later
+    # as it may provide some speedups.
+    message(WARNING "Disabling UNITY builds for clang-tidy scans")
+    set(TT_UNITY_BUILDS OFF)
+endif()
+
 if(TT_UNITY_BUILDS)
     if(CMAKE_EXPORT_COMPILE_COMMANDS)
         message(STATUS "Disabling Unity builds because CMAKE_EXPORT_COMPILE_COMMANDS is ON")

@@ -1,4 +1,8 @@
-set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
+# Shadow the cache variable with a blank value
+# Placing a no-op .clang-tidy file at the root of CPM cache is insufficient as some projects may define
+# their own .clang-tidy within themselves and still not be clean against it <cough>flatbuffers</cough>
+set(CMAKE_C_CLANG_TIDY "")
+set(CMAKE_CXX_CLANG_TIDY "")
 
 ############################################################################################################################
 # Boost
@@ -75,3 +79,9 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 ############################################################################################################################
 
 CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+
+############################################################################################################################
+# range-v3 : https://github.com/ericniebler/range-v3
+############################################################################################################################
+
+CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.0)
