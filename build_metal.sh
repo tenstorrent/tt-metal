@@ -1,4 +1,9 @@
 #!/bin/bash
+#
+# Copyright
+# © 2023 Tenstorrent Inc.
+# © 2024 Tactical Computing Labs, LLC
+#
 
 set -eo pipefail
 

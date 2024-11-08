@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+#
+# Copyright
+# © 2023 Tenstorrent Inc.
+# © 2024 Tactical Computing Labs, LLC
+#
 
 source scripts/tools_setup_common.sh
 

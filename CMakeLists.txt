@@ -1,3 +1,9 @@
+# Copyright
+#
+# © 2023 Tenstorrent Inc.
+# © 2024 Tactical Computing Labs, LLC
+#
+
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(VERSION 3.16)
 
