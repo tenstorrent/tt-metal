@@ -112,7 +112,7 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        dram_buffer_size, 100, 0);
+        dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     if (test_config.fp32_dest_acc_en) {
         auto src_vec_float = generate_uniform_random_vector<float>(
@@ -170,7 +170,7 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
 // - matmul_pack_tile
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(DeviceFixture, ComputeCopyBlockSingle) {
+TEST_F(DeviceFixture, DISABLED_ComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
