@@ -2,6 +2,11 @@ name: "[internal] T3000 frequent tests impl"
 
 on:
   workflow_call:
+    inputs:
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service"
 
 jobs:
   t3000-frequent-tests:
@@ -27,7 +32,11 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-functional"]
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-functional
+      - ${{ inputs.extra-tag }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/ensure-active-weka-mount
