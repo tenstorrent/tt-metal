@@ -21,6 +21,9 @@ static Tensor reduce_impl(
     float scalar,
     bool reshape) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
+    if (not keepdim) {
+        TT_THROW("keepdim=False is not supported");
+    }
 
     auto input_shape = input_tensor_arg.get_shape();
     auto rank = input_shape.size();
