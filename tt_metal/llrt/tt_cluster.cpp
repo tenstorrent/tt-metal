@@ -271,7 +271,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
                 device_driver->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
             }
         }
-        device_driver->set_driver_eth_interface_params(eth_interface_params);
 
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs

@@ -263,7 +263,6 @@ if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
             tt_metal/hw/inc/wormhole
             ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
             ${UMD_HOME}/device/wormhole
-            ${UMD_HOME}/src/firmware/riscv/wormhole
     )
 else()
     target_include_directories(
@@ -271,7 +270,6 @@ else()
         INTERFACE
             ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
             ${UMD_HOME}/device/$ENV{ARCH_NAME}
-            ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
     )
 endif()
 
