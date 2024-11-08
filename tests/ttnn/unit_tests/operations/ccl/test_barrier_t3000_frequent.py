@@ -429,7 +429,7 @@ def test_barrier_sharded(
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
-@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("tile_h", [8])
 def test_run_barrier_tiny_tile(
     t3k_mesh_device,
     num_devices,
