@@ -12,10 +12,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from transformers import SegformerModel
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_model import (
+from models.demos.segformer.tt.ttnn_segformer_model import (
     TtSegformerModel,
 )
-from models.experimental.functional_segformer.reference.segformer_model import SegformerModelReference
+from models.demos.segformer.reference.segformer_model import SegformerModelReference
 from models.utility_functions import skip_for_grayskull
 
 
@@ -70,13 +70,7 @@ def test_segformer_model(
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
+
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config
 
@@ -102,6 +96,15 @@ def test_segformer_model(
 
     ttnn_model = TtSegformerModel(config, parameters)
 
+    torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor_permuted,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
     ttnn_output = ttnn_model(
         ttnn_input_tensor,
         output_attentions=None,
@@ -110,5 +113,6 @@ def test_segformer_model(
         parameters=parameters,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
+    torch_final_output = torch.permute(torch_output.last_hidden_state, (0, 2, 3, 1))
 
-    assert_with_pcc(torch_output[0], ttnn_final_output, pcc=0.885)
+    assert_with_pcc(torch_final_output, ttnn_final_output, pcc=0.929)
