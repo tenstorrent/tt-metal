@@ -21,9 +21,6 @@ static Tensor reduce_impl(
     float scalar,
     bool reshape) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    if (not keepdim) {
-        TT_THROW("keepdim=False is not supported");
-    }
 
     auto input_shape = input_tensor_arg.get_shape();
     auto rank = input_shape.size();
@@ -42,6 +39,19 @@ static Tensor reduce_impl(
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
         }
+    }
+
+    for (int i = 0; i < dim.size(); i++) {
+        if (dim[i] < 0) {
+            dim[i] += rank;
+        }
+        int dim_i = dim[i];
+        TT_FATAL(
+            dim_i >= 0 && dim_i < rank,
+            "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}",
+            dim_i,
+            i,
+            rank);
     }
 
     if (dim.size() == 1) {
@@ -83,14 +93,6 @@ static Tensor reduce_impl(
         }
     }
 
-    for (int& axis : dim) {
-        if (axis < 0) {
-            axis += rank;
-        }
-        if (axis >= rank) {
-            TT_THROW("Invalid dim");
-        }
-    }
     std::sort(dim.begin(), dim.end());
 
     ttnn::SmallVector<uint32_t> output_shape;
