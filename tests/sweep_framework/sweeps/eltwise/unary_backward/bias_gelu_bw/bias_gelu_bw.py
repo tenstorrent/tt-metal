@@ -4,6 +4,7 @@
 
 from typing import Optional, Tuple
 from functools import partial
+import itertools
 
 import torch
 import random
@@ -14,6 +15,55 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+
+
+def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
+    shard_orientation_list = [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR]
+    tensor_hw_as_shard_shape_list = [True, False]
+
+    if sharding_strategy == ttnn.ShardStrategy.BLOCK:
+        if not sanitize_args:
+            interval_1 = 1
+            interval_2 = 2
+        else:
+            interval_1 = 32 * y
+            interval_2 = 32 * x
+
+        input_shape_list = (
+            gen_shapes([1, 1, 32 * y, 32 * x], [6, 12, 512, 512], [1, 1, interval_1, interval_2], num_shapes)
+            + gen_shapes([1, 32 * y, 32 * x], [12, 512, 512], [1, interval_1, interval_2], num_shapes)
+            + gen_shapes([32 * y, 32 * x], [512, 512], [interval_1, interval_2], num_shapes)
+        )
+    elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
+        if not sanitize_args:
+            interval = 1
+        else:
+            interval = 32 * x * y
+        input_shape_list = (
+            gen_shapes([1, 1, 32, 32 * x * y], [4, 6, 64, 32 * x * y], [1, 1, 32, interval], num_shapes)
+            + gen_shapes([1, 32, 32 * x * y], [6, 64, 32 * x * y], [1, 32, interval], num_shapes)
+            + gen_shapes([32, 32 * x * y], [64, 32 * x * y], [32, interval], num_shapes)
+        )
+    else:
+        if not sanitize_args:
+            interval = 1
+        else:
+            interval = 32 * x * y
+        input_shape_list = (
+            gen_shapes([1, 1, 32 * x * y, 32], [4, 6, 32 * x * y, 64], [1, 1, interval, 32], num_shapes)
+            + gen_shapes([1, 32 * x * y, 32], [6, 32 * x * y, 64], [1, interval, 32], num_shapes)
+            + gen_shapes([32 * x * y, 32], [32 * x * y, 64], [interval, 32], num_shapes)
+        )
+
+    for input_shape, shard_orientation, tensor_hw_as_shard_shape in itertools.product(
+        input_shape_list, shard_orientation_list, tensor_hw_as_shard_shape_list
+    ):
+        yield {
+            "input_shape": input_shape,
+            "sharding_strategy": sharding_strategy,
+            "shard_orientation": shard_orientation,
+            "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
+        }
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -103,18 +153,27 @@ def run(
         memory_config=grad_memory_config,
     )
 
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape=input_shape,
+        core_grid=device_grid_size,
+        strategy=sharding_strategy,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+    )
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=sharded_config,
     )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.bias_gelu_bw(
         grad_tensor, input_tensor_a, scalar, approximate=approximate, memory_config=output_memory_config
     )[0]
+
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
