@@ -50,6 +50,7 @@ Tensor MorehClipGradNorm::invoke(
         memory_config.value_or(inputs.at(0).memory_config()));
 
     // Run Step 1
+    // Sum[|e|^p]
     uint32_t tile_offset{0};
     auto num_inputs = total_num_inputs;
     for (uint32_t i = 0; i < num_iter; i++) {
@@ -70,6 +71,7 @@ Tensor MorehClipGradNorm::invoke(
     }
 
     // Run Step 2
+    // Sum[Sum[|e|^p]]^(1/p)
     const auto &output_total_norm = ttnn::prim::moreh_clip_grad_norm_step2(
         tmp_pow_sum,
         norm_type,
@@ -96,6 +98,7 @@ Tensor MorehClipGradNorm::invoke(
     scalar.deallocate();
 
     // Run Step 3
+    // Inplace update inputs(inputs *= clip_coef_clamped)
     uint32_t start_input_idx{0};
     num_inputs = total_num_inputs;
     for (uint32_t i = 0; i < num_iter; ++i) {
