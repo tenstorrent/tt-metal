@@ -50,6 +50,7 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO,
     GO_MSG,
     LAUNCH_MSG_BUFFER_RD_PTR,
+    FW_VERSION_ADDR, // Really only applicable to active eth core right now
     COUNT // Keep this last so it always indicates number of enum options
 };
 
