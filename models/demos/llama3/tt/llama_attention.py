@@ -22,6 +22,7 @@ class TtLlamaAttention(LightweightModule):
         dtype,
         transformation_mats,
         configuration,
+        paged_attention_config=None,
     ):
         super().__init__()
 
@@ -35,7 +36,7 @@ class TtLlamaAttention(LightweightModule):
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
-        self.paged_attention_config = configuration.paged_attention_config
+        self.paged_attention_config = paged_attention_config
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
 
         self.n_local_heads = self.n_heads // configuration.num_devices
@@ -44,7 +45,6 @@ class TtLlamaAttention(LightweightModule):
         self.dtype = dtype
 
         self.kv_seq_len = configuration.kv_seq_len
-        self.sliding_window = configuration.sliding_window
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
@@ -167,7 +167,7 @@ class TtLlamaAttention(LightweightModule):
                 (
                     self.max_batch_size,
                     self.n_kv_heads,
-                    self.sliding_window,
+                    self.kv_seq_len,
                     self.head_dim,
                 )
             )
@@ -175,7 +175,7 @@ class TtLlamaAttention(LightweightModule):
                 (
                     self.max_batch_size,
                     self.n_kv_heads,
-                    self.sliding_window,
+                    self.kv_seq_len,
                     self.head_dim,
                 )
             )
@@ -208,7 +208,7 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-        assert self.max_batch_size * self.n_kv_heads < 64
+        # assert self.max_batch_size * self.n_kv_heads < 64  # TODO Miguel Are these needed? - check these params
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -266,14 +266,14 @@ class TtLlamaAttention(LightweightModule):
         ###
         keys = self.layer_past[0]
         values = self.layer_past[1]
-
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, sliding_window, head_dim]
+        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, kv_seq_len, head_dim]
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
+
         self.layer_past[0] = keys
         self.layer_past[1] = values
 

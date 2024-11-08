@@ -23,17 +23,21 @@ from pathlib import Path
 from tqdm import tqdm
 
 
-class TtModelArgs:
-    paged_attention_config = None
+# Miguel change these for VLLM
+class PagedAttentionConfig:
+    block_size = 64
+    max_num_blocks = 2048
 
-    # TODO Update these params. In init we update the max_seq_len to 32k if it's a single device
-    max_batch_size = 4
+
+class TtModelArgs:
+    max_batch_size = 32
     # Context length for Llama models (if single device, reduce to 32k in init)
     max_seq_len = 8192 * 16  # 128k
     kv_seq_len = 8192 * 16  # 128k
-    sliding_window = 8192 * 16  # 128k
-
+    sliding_window = 8192 * 16  # 128k # TODO Miguel: Remove this parameter (just use kv_seqlen)
     tile_size = 32
+
+    paged_attention_config = PagedAttentionConfig()
 
     OP_KEYS = (
         # Embedding

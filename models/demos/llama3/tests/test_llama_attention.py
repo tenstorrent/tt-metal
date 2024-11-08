@@ -31,13 +31,18 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "paged_attention",
+    (True, False),
+    ids=("paged_attention", "non_paged_attention"),
+)
+def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, paged_attention, ensure_gc):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    mesh_device.enable_async(True)
+    mesh_device.enable_async(False)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=32)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -50,7 +55,6 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    # model_args.max_batch_size = 4
     batch = model_args.max_batch_size
     seq_len = 1
 
@@ -65,7 +69,25 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     transformation_mats = rope_setup.get_trans_mats()
     transformation_mats = {"decode": transformation_mats}
 
-    # Miguel: TODO add paged attention
+    page_table_tt = None
+    paged_attention_config = None
+    if paged_attention:
+        paged_attention_config = model_args.paged_attention_config if paged_attention else None
+
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     tt_model = TtLlamaAttention(
         mesh_device,
@@ -75,6 +97,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,
+        paged_attention_config=paged_attention_config,
     )
 
     cos, sin = precompute_freqs(
@@ -105,11 +128,13 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
+
         tt_out = tt_model(
             attention_input,
             current_pos_tensor,
             rot_mats=rot_mats,
             mode="decode",
+            page_table=page_table_tt,
         )
         # multi-device attention module returns replicated output
 
@@ -119,10 +144,10 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
         )  # [ batch, seq, hidden_dim]
 
-        # TODO Miguel, check how to expand this for a batch
-        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)  # In this test all users have the same position
+        # In this test all users have the same position
+        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
-        reference_output = reference_model(pt_attention_input, current_pos, freqs_cis_i, mask=None)
+        reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
@@ -151,10 +176,29 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
                 reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
             ]
             # TT hardware execution -------------------------------------------------------------
-            tt_layer_present = [
-                ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
-                for cache in tt_model.layer_past
-            ]
+            if paged_attention:
+                tt_layer_present = [
+                    (
+                        ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
+                            reverse_permutation
+                        ]
+                        .reshape(
+                            model_args.max_batch_size,
+                            paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                            model_args.n_kv_heads,
+                            paged_attention_config.block_size,
+                            model_args.head_dim,
+                        )
+                        .transpose(1, 2)
+                        .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[:batch, ...]
+                    )
+                    for cache in tt_model.layer_past
+                ]
+            else:
+                tt_layer_present = [
+                    ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                    for cache in tt_model.layer_past
+                ]
 
             for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                 cache_length_to_check = min(model_args.sliding_window, generation_start_pos + generation_length + 1)
