@@ -2,15 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
 #pragma once
 
+#undef MEM_L1_BASE
+#undef MEM_ETH_BASE
+constexpr std::uint32_t MEM_L1_BASE = 0x0;
+constexpr std::uint32_t MEM_ETH_BASE = 0x0;
+
+namespace {
+  inline std::uint32_t compute_size(const tt::tt_metal::Hal& hal, tt::tt_metal::HalProgrammableCoreType core_type) {
+    return hal.get_dev_size(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED) +
+           hal.get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+  }
+  inline std::uint32_t mem_l1_size(const tt::tt_metal::Hal& hal) {
+    return compute_size(hal, tt::tt_metal::HalProgrammableCoreType::TENSIX);
+  }
+  inline std::uint32_t mem_eth_size(const tt::tt_metal::Hal& hal) {
+    if (hal.get_arch() == tt::ARCH::GRAYSKULL) {
+      return 0;
+    }
+    return compute_size(hal, tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+  }
+}
+
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
-#define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + MEM_L1_SIZE))
+#define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + mem_l1_size(tt_metal::hal)))
 
 // what's the size of the NOC<n> address space?  using 0x1000 for now
 #define DEBUG_VALID_REG_ADDR(a)                                                        \
@@ -22,7 +45,7 @@ namespace tt {
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
-#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
+#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + mem_eth_size(tt_metal::hal)))
 
 static bool coord_found_p(std::vector<CoreCoord>coords, CoreCoord core) {
     for (CoreCoord item : coords) {

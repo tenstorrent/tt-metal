@@ -14,6 +14,8 @@
 //
 #pragma once
 
+#include <cstdint>
+
 // NOC logging enabled independently of watcher, need to include it here because it hooks into DEBUG_SANITIZE_NOC_*
 #include "noc_logging.h"
 
@@ -28,6 +30,11 @@
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
+
+#undef MEM_L1_BASE
+#undef MEM_ETH_BASE
+constexpr std::uint32_t MEM_L1_BASE = 0x0;
+constexpr std::uint32_t MEM_ETH_BASE = 0x0;
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true

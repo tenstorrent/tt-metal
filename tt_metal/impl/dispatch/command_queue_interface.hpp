@@ -15,6 +15,23 @@
 
 #include <magic_enum.hpp>
 
+namespace {
+  inline std::uint32_t compute_size(const tt::tt_metal::Hal& hal, tt::tt_metal::HalProgrammableCoreType core_type) {
+    return hal.get_dev_size(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED) +
+           hal.get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+  }
+  inline std::uint32_t mem_l1_size(const tt::tt_metal::Hal& hal) {
+    return compute_size(hal, tt::tt_metal::HalProgrammableCoreType::TENSIX);
+  }
+  inline std::uint32_t mem_eth_size(const tt::tt_metal::Hal& hal) {
+    if (hal.get_arch() == tt::ARCH::GRAYSKULL) {
+      return 0;
+    }
+    return compute_size(hal, tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+  }
+}
+
+// FIXME: Don't do this in header files
 using namespace tt::tt_metal;
 
 // todo consider moving these to dispatch_addr_map
@@ -192,7 +209,7 @@ struct dispatch_constants {
         uint32_t prefetch_dispatch_unreserved_base = device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
         cmddat_q_base_ = prefetch_dispatch_unreserved_base + ((prefetch_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
         scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
-        const uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
+        const uint32_t l1_size = core_type == CoreType::WORKER ? mem_l1_size(hal) : mem_eth_size(hal);
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
         dispatch_buffer_base_ = ((prefetch_dispatch_unreserved_base - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
         dispatch_buffer_block_size_pages_ =
