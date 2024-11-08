@@ -44,6 +44,19 @@ static Tensor reduce_impl(
         }
     }
 
+    for (int i = 0; i < dim.size(); i++) {
+        if (dim[i] < 0) {
+            dim[i] += rank;
+        }
+        int dim_i = dim[i];
+        TT_FATAL(
+            dim_i >= 0 && dim_i < rank,
+            "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}",
+            dim_i,
+            i,
+            rank);
+    }
+
     if (dim.size() == 1) {
         if (dim[0] == rank - 3) {
             // Pad before running the op to only pay cost of formatting once
@@ -83,14 +96,6 @@ static Tensor reduce_impl(
         }
     }
 
-    for (int& axis : dim) {
-        if (axis < 0) {
-            axis += rank;
-        }
-        if (axis >= rank) {
-            TT_THROW("Invalid dim");
-        }
-    }
     std::sort(dim.begin(), dim.end());
 
     ttnn::SmallVector<uint32_t> output_shape;
