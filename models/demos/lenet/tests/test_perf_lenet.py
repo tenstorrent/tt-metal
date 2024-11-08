@@ -26,7 +26,7 @@ from models.perf.perf_utils import prep_perf_report
 def get_expected_times(tt_lenet):
     if is_grayskull():
         return {
-            tt_lenet: (3.7, 0.7),
+            tt_lenet: (7.525, 0.9495),
         }[tt_lenet]
     elif is_wormhole_b0():
         return {
@@ -36,7 +36,7 @@ def get_expected_times(tt_lenet):
 
 @pytest.mark.parametrize(
     "batch_size",
-    [8],
+    [64],
 )
 @pytest.mark.parametrize(
     "tt_lenet",
@@ -101,7 +101,7 @@ def test_perf_lenet(device, batch_size, tt_lenet, model_location_generator, rese
 
 @pytest.mark.parametrize(
     "batch_size",
-    [8],
+    [64],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal(batch_size, reset_seeds):
@@ -109,9 +109,9 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     num_iterations = 1
     margin = 0.03
     if is_grayskull():
-        expected_perf = 419.5
+        expected_perf = 6330.022
     elif is_wormhole_b0():
-        expected_perf = 15975.52
+        expected_perf = 20028.54
 
     command = f"pytest tests/ttnn/integration_tests/lenet/test_lenet.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
