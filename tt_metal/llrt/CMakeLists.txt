@@ -17,11 +17,14 @@ set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_idle_eth.cpp
 )
 
-add_library(llrt OBJECT ${LLRT_SRC})
+add_library(llrt STATIC ${LLRT_SRC}) # FIXME(14541): Should be OBJECT, but can't handle circular deps between Object libs
+add_library(Metalium::Metal::LLRT ALIAS llrt)
+
 target_link_libraries(
     llrt
     PUBLIC
-        common
+        Metalium::Metal::Common
         umd::device
+        Metalium::Metal::Hardware
 )
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

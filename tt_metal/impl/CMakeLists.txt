@@ -29,11 +29,13 @@ add_library(Metalium::Metal::Impl ALIAS impl)
 
 target_link_libraries(
     impl
+    PUBLIC
+        common
+        Metalium::Metal::LLRT
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
 )
-target_link_libraries(impl PUBLIC common)
 
 target_include_directories(
     impl
