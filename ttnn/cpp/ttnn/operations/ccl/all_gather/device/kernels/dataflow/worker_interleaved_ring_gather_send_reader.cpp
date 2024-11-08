@@ -55,25 +55,27 @@ void kernel_main() {
     uint32_t sem_addr = get_semaphore(get_compile_time_arg_val(5));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(6);
     constexpr uint32_t ring_size = get_compile_time_arg_val(7);
+    constexpr uint32_t input_tile_size = get_compile_time_arg_val(8);
+    constexpr uint32_t output_tile_size = get_compile_time_arg_val(9);
     #ifdef SHARDED_MEM_LAYOUT
 
-    constexpr tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(8));
-    constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(9);
-    constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(10);
-    constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(11);
-    constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(12);
-    constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(13);
-    constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(14);
-    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(15) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(10));
+    constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(11);
+    constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(12);
+    constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(13);
+    constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(14);
+    constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(15);
+    constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(16);
+    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(17) != 0;
 
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(16));
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(17);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(18);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(19);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(20);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(21);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(22);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(23) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(18));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(19);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(20);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(21);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(22);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(23);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(24);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(25) != 0;
     #endif
 
     ASSERT(half_cb_n_pages > rem_num_pages);
@@ -121,13 +123,13 @@ void kernel_main() {
         #ifdef INTERLEAVED_MEM_LAYOUT
         const DataFormat in0_df = get_dataformat(cb_id_in0);
 
-        const InterleavedAddrGenFast<src_is_dram, INPUT_TILE_SIZE> s = {
+        const InterleavedAddrGenFast<src_is_dram, input_tile_size> s = {
             .bank_base_address = src_addr,
             .page_size = page_size,
             .data_format = in0_df
         };
 
-        InterleavedAddrGenFast<dst_is_dram, OUTPUT_TILE_SIZE> d = {
+        InterleavedAddrGenFast<dst_is_dram, output_tile_size> d = {
             .bank_base_address = dst_addr,
             .page_size = output_page_size,
             .data_format = in0_df

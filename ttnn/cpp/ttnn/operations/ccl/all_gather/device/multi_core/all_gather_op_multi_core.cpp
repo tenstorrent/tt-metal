@@ -290,8 +290,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     std::map<string, string> worker_defines;
-    worker_defines["INPUT_TILE_SIZE"] = std::to_string(input_tensor_config->get_tile_size());
-    worker_defines["OUTPUT_TILE_SIZE"] = std::to_string(output_tensor_config->get_tile_size());
     if (rm) {
         worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {
@@ -371,6 +369,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
     uint32_t src0_cb_index = tt::CB::c_in0;
     const uint32_t cb_n_packets = 2;
+    const uint32_t cb_size_in_pages = cb_n_packets * max_pages_per_chunk;
     const uint32_t CB_buffer_size = cb_n_packets * max_buffer_per_chunk;
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(CB_buffer_size, {{src0_cb_index, df}})
@@ -398,7 +397,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(ring_index),
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
             static_cast<uint32_t>(max_pages_per_chunk),
-            static_cast<uint32_t>(ring_size)
+            static_cast<uint32_t>(ring_size),
+            static_cast<uint32_t>(input_tensor_config->get_tile_size()),
+            static_cast<uint32_t>(output_tensor_config->get_tile_size())
         };
         if (is_sharded) {
             emit_sharded_tensor_kernel_ct_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
@@ -442,6 +443,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(sender_worker_writer_semaphore_id),
             static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(num_edm_buffers_per_channel),
+            static_cast<uint32_t>(output_tensor_config->get_tile_size())
         };
 
         if (is_sharded) {
@@ -503,7 +505,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
             static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(ring_size),
-            static_cast<bool>(fuse_op)
+            static_cast<bool>(fuse_op),
+            static_cast<uint32_t>(output_tensor_config->get_tile_size())
         };
 
         if (is_sharded) {
@@ -690,7 +693,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 }
                 if (rem_pages != 0) {
                     rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_workers_per_link()) = rem_pages;
-                    TT_ASSERT(rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_workers_per_link()) <= max_pages_per_chunk * 2);
+                    TT_ASSERT(rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_workers_per_link()) <= cb_size_in_pages);
                 }
                 { // Logging
                     log_trace(tt::LogOp, "num_full_chunks, remaining pages per worker (clockwise):");
