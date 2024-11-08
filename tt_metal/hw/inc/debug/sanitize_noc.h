@@ -28,14 +28,7 @@
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
-
-// Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
-#ifndef NOC_0_X
-#define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
-#endif
-#ifndef NOC_0_Y
-#define NOC_0_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
-#endif
+#include "noc_common.h"
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true

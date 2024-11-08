@@ -15,7 +15,7 @@
 #include "common.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
-
+#include "tt_metal/hw/inc/noc_common.h"
 
 #include "llrt/hal.hpp"
 
