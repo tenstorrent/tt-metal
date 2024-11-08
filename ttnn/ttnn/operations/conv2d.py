@@ -185,7 +185,7 @@ def conv2d(
         output_width,
         prepared_device_weight,
         prepared_device_bias,
-    ) = ttnn._ttnn.operations.conv2d.conv2d(
+    ) = ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
