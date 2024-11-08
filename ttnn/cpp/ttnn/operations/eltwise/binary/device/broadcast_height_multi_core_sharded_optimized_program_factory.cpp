@@ -166,7 +166,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h_sharded_optimised.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en, .compile_args = {}, .defines = bcast_defines});
 
     uint32_t ncores_y = ncores / ncores_x;
     TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be devisible by batch size of input1");

@@ -172,7 +172,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp",
         all_device_cores,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines});
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en, .compile_args = {}, .defines = bcast_compute_defines});
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);

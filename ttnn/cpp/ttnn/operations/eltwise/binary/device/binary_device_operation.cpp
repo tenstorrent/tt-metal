@@ -315,6 +315,11 @@ BinaryDeviceOperation::invoke(
             output_dtype.value() == optional_output_tensor.value().get_dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
+    DataType dtype = output_dtype.has_value() ? output_dtype.value() :
+    optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : input_tensor_a_arg.dtype();
+    bool fp32_dest_acc_en = dtype == DataType::UINT32 or
+                        dtype == DataType::INT32 or
+                        dtype == DataType::FLOAT32;
 
     return {
         operation_attributes_t{
@@ -324,7 +329,8 @@ BinaryDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             output_dtype.value_or(input_tensor_a_arg.get_dtype()),
-            std::nullopt},
+            std::nullopt,
+            fp32_dest_acc_en},
         tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
 }
 
@@ -344,6 +350,12 @@ BinaryDeviceOperation::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
+    DataType dtype = output_dtype.has_value() ? output_dtype.value() :
+    optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : input_tensor_a_arg.dtype();
+    bool fp32_dest_acc_en = dtype == DataType::UINT32 or
+                        dtype == DataType::INT32 or
+                        dtype == DataType::FLOAT32;
+
     return {
         operation_attributes_t{
             binary_op_type,
@@ -352,7 +364,8 @@ BinaryDeviceOperation::invoke(
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             output_dtype.value_or(input_tensor_a_arg.get_dtype()),
-            std::nullopt},
+            std::nullopt,
+            fp32_dest_acc_en},
         tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor}};
 }
 

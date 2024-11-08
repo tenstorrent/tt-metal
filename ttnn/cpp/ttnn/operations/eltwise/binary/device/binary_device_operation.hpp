@@ -35,6 +35,9 @@ struct BinaryDeviceOperation {
         const MemoryConfig memory_config;
         const DataType dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const bool fp32_dest_acc_en = false;
+
+
 
         tt::stl::hash::hash_t to_hash() const {
             // hash has to exclude the scalar value
