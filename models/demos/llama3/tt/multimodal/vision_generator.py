@@ -382,7 +382,6 @@ class LlamaVision:
         tokens = []
 
         stop_reason = None
-        breakpoint()
         for result in self.generate(
             model_input=self.formatter.encode_dialog_prompt(messages, tool_prompt_format=False),
             max_gen_len=max_gen_len,
