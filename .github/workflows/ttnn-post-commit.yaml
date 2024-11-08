@@ -86,6 +86,13 @@ jobs:
       - "in-service"
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/retry-command
+        if: ${{ matrix.test-group.ttnn_integration_test }}
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
@@ -93,8 +100,8 @@ jobs:
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-      - name: Set WH eth dispatch if exists in config
-        if: ${{  }}
+      - name: Set WH eth dispatch for models tests
+        if: ${{ matrix.test-group.ttnn_integration_test }}
         run: |
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
