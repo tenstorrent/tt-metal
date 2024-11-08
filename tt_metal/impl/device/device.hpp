@@ -231,7 +231,7 @@ class Device {
     // machine inf
     float sfpu_inf() const;
 
-    void generate_device_headers(const std::string &path) const;
+    void generate_global_arrays();
     const JitBuildEnv& build_env() const { return this->build_env_; }
     const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const;
     const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const;
@@ -259,6 +259,7 @@ class Device {
     void initialize_build();
     void initialize_device_kernel_defines();
     void build_firmware();
+    void initialize_global_array(const HalProgrammableCoreType &core_type, CoreCoord phys_core);
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
     void reset_cores();
     void initialize_and_launch_firmware();
@@ -396,6 +397,11 @@ class Device {
     SubDeviceManagerId next_sub_device_manager_id_ = {0};
     SubDeviceManagerId default_sub_device_manager_id_ = {0};
     detail::SubDeviceManager *default_sub_device_manager_ = nullptr;
+
+    std::vector<int32_t> dram_bank_offset_map_;
+    std::vector<int32_t> l1_bank_offset_map_;
+    std::vector<uint16_t> dram_bank_to_noc_xy_;
+    std::vector<uint16_t> l1_bank_to_noc_xy_;
 };
 
 }  // namespace v0

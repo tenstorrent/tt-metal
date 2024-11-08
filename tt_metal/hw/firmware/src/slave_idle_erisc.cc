@@ -11,7 +11,6 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 
 #include "debug/waypoint.h"
