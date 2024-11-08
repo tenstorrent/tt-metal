@@ -10,13 +10,20 @@
 #include <cstdint>
 
 #include "eth_l1_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "limits.h"
 #include "mod_div_lib.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "stream_io_map.h"
 #include "tensix.h"
+
+// Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
+#ifndef NOC_0_X
+#define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
+#endif
+#ifndef NOC_0_Y
+#define NOC_0_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
+#endif
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))

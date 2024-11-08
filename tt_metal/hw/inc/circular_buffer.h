@@ -4,8 +4,12 @@
 
 #pragma once
 
-#include "hostdevcommon/common_runtime_address_map.h"
+#include <cstdint>
+
 #include "risc_attribs.h"
+
+constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
+constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region

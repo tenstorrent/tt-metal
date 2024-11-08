@@ -21,7 +21,6 @@
 #include "debug/sanitize_noc.h"
 #include "debug/waypoint.h"
 #include "eth_l1_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"

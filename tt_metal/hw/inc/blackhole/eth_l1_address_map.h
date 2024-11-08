@@ -6,8 +6,6 @@
 
 #include <cstdint>
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
-
 namespace eth_l1_mem {
 
 
