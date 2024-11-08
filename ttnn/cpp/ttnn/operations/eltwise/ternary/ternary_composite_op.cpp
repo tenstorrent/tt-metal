@@ -37,7 +37,7 @@ Tensor _addcdiv(
     Tensor t_factor = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
     t_div.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
-    Tensor t_inf = ttnn::full_like(input_a, std::numeric_limits<float>::infinity());
+    float t_inf = std::numeric_limits<float>::infinity();
     Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
     return ttnn::where(
         ttnn::eqz(input_c, output_mem_config),
@@ -45,7 +45,7 @@ Tensor _addcdiv(
                      : ttnn::where(
                            ttnn::eqz(input_b, output_mem_config),
                            t_nan,
-                           ttnn::multiply(t_inf, ttnn::sign(input_b, output_mem_config), std::nullopt, output_mem_config)),
+                           ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf, std::nullopt, output_mem_config)),
         result,
         output_mem_config);
 }
