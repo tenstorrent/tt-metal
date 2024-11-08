@@ -1,4 +1,8 @@
-set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
+# Shadow the cache variable with a blank value
+# Placing a no-op .clang-tidy file at the root of CPM cache is insufficient as some projects may define
+# their own .clang-tidy within themselves and still not be clean against it <cough>flatbuffers</cough>
+set(CMAKE_C_CLANG_TIDY "")
+set(CMAKE_CXX_CLANG_TIDY "")
 
 ############################################################################################################################
 # Boost
