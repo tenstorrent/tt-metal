@@ -47,19 +47,24 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - name: Download profiler build artifact
+        id: download-profiler-artifact
         if: ${{ matrix.test-group.tracy }}
         uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+        continue-on-error: true
       - name: Download build artifact
+        id: download-artifact
         if: ${{ !matrix.test-group.tracy }}
         uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
@@ -71,7 +76,7 @@ jobs:
           env python models/perf/merge_perf_results.py
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy) }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
