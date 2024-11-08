@@ -48,7 +48,9 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
 
 
     const uint32_t batch = q_input.get_padded_shape()[1];
-    const uint32_t n_heads_t = q_shard_spec->shape[0] / constants::TILE_HEIGHT;
+    const uint32_t q_n_heads_t = q_shard_spec->shape[0] / constants::TILE_HEIGHT;
+    const uint32_t k_n_heads_t = k_shard_spec->shape[0] / constants::TILE_HEIGHT;
+
     const uint32_t head_dim_t = q_shard_spec->shape[1] / constants::TILE_WIDTH;
 
     tt_metal::Device *device = q_input.device();
@@ -67,8 +69,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
 
     CoreRange all_cores = cos_sin_shard_spec->grid.bounding_box();
 
-    const uint32_t num_input_tiles = n_heads_t * head_dim_t;
-    const uint32_t num_output_tiles = num_input_tiles;
+    const uint32_t num_q_input_tiles = q_n_heads_t * head_dim_t;
+    const uint32_t num_q_output_tiles = num_q_input_tiles;
+
+    const uint32_t num_k_input_tiles = k_n_heads_t * head_dim_t;
+    const uint32_t num_k_output_tiles = num_k_input_tiles;
 
 
     // Parallelization
@@ -91,7 +96,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     uint32_t q_input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_q_input_config =
         tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{q_input_cb_index, input_cb_data_format}})
+            num_q_input_tiles * input_single_tile_size, {{q_input_cb_index, input_cb_data_format}})
             .set_page_size(q_input_cb_index, input_single_tile_size)
             .set_globally_allocated_address(*q_src_buffer);
     auto cb_q_input = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_input_config);
@@ -99,7 +104,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     uint32_t k_input_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig cb_k_input_config =
         tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{k_input_cb_index, input_cb_data_format}})
+            num_k_input_tiles * input_single_tile_size, {{k_input_cb_index, input_cb_data_format}})
             .set_page_size(k_input_cb_index, input_single_tile_size)
             .set_globally_allocated_address(*k_src_buffer);
     auto cb_k_input = tt_metal::CreateCircularBuffer(program, k_cores, cb_k_input_config);
@@ -152,20 +157,38 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     uint32_t q_output_cb_index = CB::c_out0;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{q_output_cb_index, output_cb_data_format}})
+            num_q_output_tiles * output_single_tile_size, {{q_output_cb_index, output_cb_data_format}})
             .set_page_size(q_output_cb_index, output_single_tile_size)
             .set_globally_allocated_address(*q_dst_buffer);
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
     uint32_t k_output_cb_index = CB::c_out1;  // output operands start at index 17
     tt_metal::CircularBufferConfig cb_k_output_config =
         tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{k_output_cb_index, output_cb_data_format}})
+            num_k_output_tiles * output_single_tile_size, {{k_output_cb_index, output_cb_data_format}})
             .set_page_size(k_output_cb_index, output_single_tile_size)
             .set_globally_allocated_address(*k_dst_buffer);
     auto cb_k_output = tt_metal::CreateCircularBuffer(program, k_cores, cb_k_output_config);
 
 
     // Set up the kernel
+    std::vector<uint32_t> q_compute_kernel_args = {
+        (std::uint32_t)q_input_cb_index,
+        (std::uint32_t)cos_cb_index,
+        (std::uint32_t)sin_cb_index,
+        (std::uint32_t)trans_mat_cb_index,
+        (std::uint32_t)rotated_input_interm_cb_index,
+        (std::uint32_t)cos_interm_cb_index,
+        (std::uint32_t)sin_interm_cb_index,
+        (std::uint32_t)q_output_cb_index,
+        (std::uint32_t)head_dim_t,
+        (std::uint32_t)q_n_heads_t,
+        };
+
+    auto q_rotary_embedding_kernel_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp",
+        q_cores,
+        tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = q_compute_kernel_args});
 
     std::vector<uint32_t> k_compute_kernel_args = {
         (std::uint32_t)k_input_cb_index,
@@ -177,7 +200,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         (std::uint32_t)sin_interm_cb_index,
         (std::uint32_t)k_output_cb_index,
         (std::uint32_t)head_dim_t,
-        (std::uint32_t)n_heads_t,
+        (std::uint32_t)k_n_heads_t,
         };
 
     auto k_rotary_embedding_kernel_id = tt_metal::CreateKernel(
@@ -185,25 +208,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp",
         k_cores,
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = k_compute_kernel_args});
-
-    std::vector<uint32_t> q_compute_kernel_args = {
-        (std::uint32_t)q_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)q_output_cb_index,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)n_heads_t,
-        };
-
-    auto q_rotary_embedding_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp",
-        q_cores,
-        tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = q_compute_kernel_args});
 
     auto override_runtime_arguments_callback = [
         cb_q_input,
