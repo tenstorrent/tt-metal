@@ -45,3 +45,5 @@ venv/
 .envrc
 
 wandb/
+
+cluster_descriptor.yaml
