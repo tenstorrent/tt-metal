@@ -8,7 +8,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
-#include "command_queue_test_utils.hpp"
+#include "test_utils.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
@@ -22,8 +22,6 @@ void FinishAllCqs(vector<std::reference_wrapper<CommandQueue>>& cqs) {
         Finish(cqs[i]);
     }
 }
-
-
 }
 
 namespace basic_tests {

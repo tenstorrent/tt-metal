@@ -1,4 +1,9 @@
-set(UNIT_TESTS_DISPATCH_EVENT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueWaitForEvent.cpp)
+set(UNIT_TESTS_DISPATCH_EVENT_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueWaitForEvent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_events.cpp
+    CACHE INTERNAL
+    ""
+)
 
 add_executable(unit_tests_dispatch_event ${UNIT_TESTS_DISPATCH_EVENT_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_event)
@@ -11,6 +16,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/dispatch/common
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )

@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "command_queue_fixture.hpp"
-#include "command_queue_test_utils.hpp"
+#include "test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"

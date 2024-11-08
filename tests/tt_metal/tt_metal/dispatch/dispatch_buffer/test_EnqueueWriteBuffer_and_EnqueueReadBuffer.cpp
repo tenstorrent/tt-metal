@@ -5,7 +5,7 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
-#include "command_queue_test_utils.hpp"
+#include "test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
@@ -13,19 +13,6 @@
 
 using std::vector;
 using namespace tt::tt_metal;
-
-struct BufferStressTestConfig {
-    // Used for normal write/read tests
-    uint32_t seed;
-    uint32_t num_pages_total;
-
-    uint32_t page_size;
-    uint32_t max_num_pages_per_buffer;
-
-    // Used for wrap test
-    uint32_t num_iterations;
-    uint32_t num_unique_vectors;
-};
 
 class BufferStressTestConfigSharded {
    public:

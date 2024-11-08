@@ -6,7 +6,6 @@
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 

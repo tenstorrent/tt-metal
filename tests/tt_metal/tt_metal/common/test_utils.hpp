@@ -5,7 +5,54 @@
 #pragma once
 #include <cstdint>
 #include <deque>
+#include "tt_metal/host_api.hpp"
 #include "impl/kernels/kernel.hpp"
+
+struct TestBufferConfig {
+    uint32_t num_pages;
+    uint32_t page_size;
+    BufferType buftype;
+};
+
+struct BufferStressTestConfig {
+    // Used for normal write/read tests
+    uint32_t seed;
+    uint32_t num_pages_total;
+
+    uint32_t page_size;
+    uint32_t max_num_pages_per_buffer;
+
+    // Used for wrap test
+    uint32_t num_iterations;
+    uint32_t num_unique_vectors;
+};
+
+inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_t start = 0) {
+    TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "Error");
+    std::vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
+
+    for (uint32_t i = 0; i < src.size(); i++) {
+        src.at(i) = start + i;
+    }
+    return src;
+}
+
+inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(tt::tt_metal::Device* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
+    // This function just enqueues a buffer (which should be large in the config)
+    // write as a precursor to testing the wrap mechanism
+    size_t buf_size = config.num_pages * config.page_size;
+    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
+
+    std::vector<uint32_t> src = create_random_vector_of_bfloat16(
+      buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+
+    EnqueueWriteBuffer(cq, *buffer, src, false);
+    return std::make_pair(std::move(buffer), src);
+}
+
+inline bool does_device_have_active_eth_cores(const Device *device) {
+    return !(device->get_active_ethernet_cores(true).empty());
+}
 
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const uint32_t num_unique_rt_args,
