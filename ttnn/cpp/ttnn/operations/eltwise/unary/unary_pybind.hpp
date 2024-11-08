@@ -897,7 +897,7 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_power(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "") {
+void bind_power(py::module& module, const unary_operation_t& operation, const std::string& supported_dtype="BFLOAT16", const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -918,7 +918,19 @@ void bind_power(py::module& module, const unary_operation_t& operation, const st
             ttnn.Tensor: the output tensor.
 
         Note:
-            {2}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {2}
+                 - TILE
+                 - 2, 3, 4
+
+            {3}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -926,6 +938,7 @@ void bind_power(py::module& module, const unary_operation_t& operation, const st
         )doc",
         ttnn::pow.base_name(),
         ttnn::pow.python_fully_qualified_name(),
+        supported_dtype,
         info_doc);
 
     bind_registered_operation(
@@ -1789,16 +1802,7 @@ void py_module(py::module& module) {
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
-    detail::bind_power(module, ttnn::pow,
-        R"doc(Supported dtypes, layouts, and ranks:
-
-            +----------------------------+---------------------------------+-------------------+
-            |     Dtypes                 |         Layouts                 |     Ranks         |
-            +----------------------------+---------------------------------+-------------------+
-            |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
-            +----------------------------+---------------------------------+-------------------+
-
-        )doc");
+    detail::bind_power(module, ttnn::pow, R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     // unary composite imported into ttnn
     detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc");

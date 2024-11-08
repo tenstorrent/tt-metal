@@ -7,11 +7,11 @@ import pytest
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
-from models.experimental.functional_segformer.tt.ttnn_segformer_mlp import (
+from models.demos.segformer.tt.ttnn_segformer_mlp import (
     TtSegformerMLP,
 )
 
-from models.experimental.functional_segformer.reference.segformer_mlp import (
+from models.demos.segformer.reference.segformer_mlp import (
     SegformerMLP,
 )
 from transformers import SegformerForSemanticSegmentation
