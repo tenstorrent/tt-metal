@@ -12,6 +12,106 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 from ttnn.distributed.distributed import ShardTensorToMesh
 
 
+def sharded_impl(
+    device,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    use_program_cache,
+    function_level_defaults,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    all_gather_topology,
+    enable_async,
+    trace_mode,
+    num_iter,
+    tile=(32, 32),
+):
+    if device.get_num_devices() < num_devices:
+        pytest.skip("Not T3000!")
+    n_worker = None
+    n_buffer = None
+    device.enable_async(enable_async)
+    unchunked_input_shape = list(input_shape)
+    unchunked_input_shape[dim] *= num_devices
+
+    input_tensor = torch.rand(unchunked_input_shape).bfloat16()
+
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        input_shard_shape,
+        orientation,
+        False,
+    )
+    mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+    # Check if the case is supported for all gather
+    (is_known_failure, message) = is_unsupported_case_t3k(
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, tensor_mem_layout, tile
+    )
+    if is_known_failure:
+        pytest.skip(f"Skipping unsupported case {message}.")
+    output_shard_shape = list(input_shard_shape)
+    if dim == 3:
+        output_shard_shape[1] *= num_devices
+    else:
+        output_shard_shape[0] *= num_devices
+    output_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        output_shard_shape,
+        orientation,
+        False,
+    )
+
+    if num_devices < 2:
+        pytest.skip("Requires multiple devices to run")
+
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=device,
+        dtype=input_dtype,
+        layout=tensor_layout,
+        mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
+        tile=ttnn.Tile(tile),
+    )
+
+    if trace_mode:
+        tt_out_tensor = run_with_trace(
+            device,
+            all_gather_topology,
+            input_tensor_mesh,
+            dim,
+            num_links,
+            mem_config,
+            n_worker,
+            n_buffer,
+            num_iter,
+        )
+    else:
+        ## Alternate between barrier and all gather in a loop
+        for i in range(num_iter):
+            tt_out_tensor = ttnn.all_gather(
+                input_tensor_mesh,
+                dim,
+                num_links=num_links,
+                memory_config=mem_config,
+                num_workers=n_worker,
+                num_buffers_per_channel=n_buffer,
+                topology=all_gather_topology,
+            )
+            ttnn.barrier(
+                input_tensor_mesh,
+                memory_config=mem_config,
+                topology=all_gather_topology,
+            )
+        ## Wait for completion
+        ttnn.synchronize_devices(device)
+
+
 def run_normal(
     device,
     num_devices,
@@ -23,6 +123,7 @@ def run_normal(
     num_iters,
     all_gather_topology,
     enable_async,
+    tile=(32, 32),
 ):
     print("Running barrier test")
     if num_iters < 1:
@@ -44,6 +145,7 @@ def run_normal(
         dtype=input_dtype,
         layout=layout,
         mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
+        tile=ttnn.Tile(tile),
     )
     for i in range(num_iters):
         # Run barrier many times in a loop
@@ -136,7 +238,7 @@ def run_with_trace(
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
 def test_run_barrier_impl(
-    mesh_device,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     output_shard_spec,
@@ -149,10 +251,10 @@ def test_run_barrier_impl(
     all_gather_topology,
     enable_async,
 ):
-    if mesh_device.get_num_devices() < num_devices:
+    if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
     run_normal(
-        mesh_device,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -276,80 +378,85 @@ def test_barrier_sharded(
     trace_mode,
     num_iter,
 ):
+    sharded_impl(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        use_program_cache,
+        function_level_defaults,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        all_gather_topology,
+        enable_async,
+        trace_mode,
+        num_iter,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices",
+    [
+        (8),
+    ],
+)
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape, output_shard_spec,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 32, 8192),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
+@pytest.mark.parametrize("num_iters", [1000])
+@pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
+@pytest.mark.parametrize("tile_h", [8])
+def test_run_barrier_tiny_tile(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    output_shard_spec,
+    shard_grid,
+    dim,
+    input_dtype,
+    mem_config,
+    layout,
+    num_iters,
+    all_gather_topology,
+    enable_async,
+    tile_h,
+):
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
-    n_worker = None
-    n_buffer = None
-    t3k_mesh_device.enable_async(enable_async)
-    unchunked_input_shape = list(input_shape)
-    unchunked_input_shape[dim] *= num_devices
-
-    input_tensor = torch.rand(unchunked_input_shape).bfloat16()
-
-    input_shard_spec = ttnn.ShardSpec(
-        shard_grid,
-        input_shard_shape,
-        orientation,
-        False,
+    run_normal(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        dim,
+        input_dtype,
+        mem_config,
+        layout,
+        num_iters,
+        all_gather_topology,
+        enable_async,
+        tile=(tile_h, 32),
     )
-    mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-    # Check if the case is supported for all gather
-    (is_known_failure, message) = is_unsupported_case_t3k(
-        input_shape, dim, mem_config, num_devices, num_links, input_dtype, tensor_mem_layout
-    )
-    if is_known_failure:
-        pytest.skip(f"Skipping unsupported case {message}.")
-    output_shard_shape = list(input_shard_shape)
-    if dim == 3:
-        output_shard_shape[1] *= num_devices
-    else:
-        output_shard_shape[0] *= num_devices
-    output_shard_spec = ttnn.ShardSpec(
-        shard_grid,
-        output_shard_shape,
-        orientation,
-        False,
-    )
-
-    if num_devices < 2:
-        pytest.skip("Requires multiple devices to run")
-
-    input_tensor_mesh = ttnn.from_torch(
-        input_tensor,
-        device=t3k_mesh_device,
-        dtype=input_dtype,
-        layout=tensor_layout,
-        mesh_mapper=ShardTensorToMesh(mesh_device=t3k_mesh_device, dim=dim),
-    )
-
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            t3k_mesh_device,
-            all_gather_topology,
-            input_tensor_mesh,
-            dim,
-            num_links,
-            mem_config,
-            n_worker,
-            n_buffer,
-            num_iter,
-        )
-    else:
-        ## Alternate between barrier and all gather in a loop
-        for i in range(num_iter):
-            tt_out_tensor = ttnn.all_gather(
-                input_tensor_mesh,
-                dim,
-                num_links=num_links,
-                memory_config=mem_config,
-                num_workers=n_worker,
-                num_buffers_per_channel=n_buffer,
-                topology=all_gather_topology,
-            )
-            ttnn.barrier(
-                input_tensor_mesh,
-                memory_config=mem_config,
-                topology=all_gather_topology,
-            )
-        ## Wait for completion
-        ttnn.synchronize_devices(t3k_mesh_device)
