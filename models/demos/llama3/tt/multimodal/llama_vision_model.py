@@ -498,7 +498,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         """
         Does any transformations on device tensors which are necessary before ttnn_decode_forward
         """
-        print("transforming xattn mask")
         assert (
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
