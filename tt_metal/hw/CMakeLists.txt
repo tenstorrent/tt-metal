@@ -18,14 +18,16 @@ set(TYPES
     kernel
 )
 
-add_custom_target(
+include(FetchContent)
+FetchContent_Declare(
     sfpi
-    ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.sh ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.version ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.md5
+    URL
+        https://github.com/tenstorrent/sfpi/releases/download/v0.0.0-lfsectomy/sfpi-release.tgz
+    URL_HASH MD5=3ffa5a871a6289f19617de7293c1dac0
+    SOURCE_DIR
     ${PROJECT_SOURCE_DIR}/runtime/sfpi
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.version
-    USES_TERMINAL
 )
+FetchContent_MakeAvailable(sfpi)
 
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
@@ -198,7 +200,6 @@ foreach(ARCH IN LISTS ARCHS)
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
             DEPENDS
                 ${${HWLIB}_SOURCE}
-                sfpi
             COMMENT "Building hw lib ${HWLIB}.o"
             VERBATIM
         )
