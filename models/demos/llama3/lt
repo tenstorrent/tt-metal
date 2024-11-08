@@ -527,6 +527,21 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     env["FAKE_DEVICE"] = entry["device"]
     env["LLAMA_DIR"] = get_llama_dir(entry["model"])
 
+    # Calculate slot index (1-based) based on position in output_entries
+    slot_index = output_entries.index(entry) + 1
+
+    # Prepare log directory
+    os.makedirs("logs", exist_ok=True)
+
+    # Remove any existing logs with the same slot index
+    for existing_file in os.listdir("logs"):
+        if existing_file.startswith(f"{slot_index:03d}-"):
+            os.remove(os.path.join("logs", existing_file))
+
+    # Create new log file with slot index
+    log_filename = get_log_filename(entry["device"], entry["model"], entry["command_input"], slot_index)
+    entry["log_file"] = open(os.path.join("logs", log_filename), "w")
+
     # Define command shortcuts
     command_shortcuts = {
         "demo": "pytest models/demos/llama3/demo/demo.py -k instruct_weights-1",
@@ -574,11 +589,6 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Prepare the command
     cmd_list = shlex.split(command_input)
-
-    # Open log file
-    log_filename = get_log_filename(entry["device"], entry["model"], command_input)
-    os.makedirs("logs", exist_ok=True)
-    entry["log_file"] = open(os.path.join("logs", log_filename), "w")
 
     # If the command is invalid, write the output to the log file and return before trying to run the bad command
     if entry["status"] == "Error":
@@ -746,9 +756,9 @@ def get_command_name(command_input):
     return command_name
 
 
-def get_log_filename(device, model, command_input):
+def get_log_filename(device, model, command_input, slot_index):
     command_name = get_command_name(command_input)
-    filename = f"{device}-{model}-{command_name}.log"
+    filename = f"{slot_index:03d}-{device}-{model}-{command_name}.log"
     filename = filename.replace("/", "_")
     return filename
 
