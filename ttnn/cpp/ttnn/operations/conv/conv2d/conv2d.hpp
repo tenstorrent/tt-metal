@@ -161,7 +161,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     uint32_t out_channels);
 
 template <typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -254,7 +254,7 @@ struct Conv2dOperation{
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
         const std::optional<const MemoryConfig> memory_config = std::nullopt);
-    };
+};
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
