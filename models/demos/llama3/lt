@@ -52,6 +52,37 @@ def ensure_ttsmi_installed():
         sys.exit(1)
 
 
+class OutputEntryList:
+    def __init__(self):
+        self._entries = []
+
+    def __len__(self):
+        return len(self._entries)
+
+    def __getitem__(self, index):
+        return self._entries[index]
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    def append(self, entry):
+        entry["log_id"] = self.next_log_id()
+        self._entries.append(entry)
+
+    def pop(self, index):
+        result = self._entries.pop(index)
+        return result
+
+    def index(self, entry):
+        return self._entries.index(entry)
+
+    def get_entries(self):
+        return self._entries
+
+    def next_log_id(self):
+        return max([entry["log_id"] for entry in self._entries], default=0) + 1
+
+
 def main(stdscr):
     curses.curs_set(0)  # Hide cursor
     curses.start_color()
@@ -69,7 +100,7 @@ def main(stdscr):
         {"label": "Device (n150, n300, t3k) [all]", "value": "", "x": 0, "y": 2},
     ]
 
-    output_entries = []
+    output_entries = OutputEntryList()
     current_line = 0  # Index of the current line (input fields + output entries)
     total_lines = len(input_fields)
 
@@ -209,7 +240,6 @@ def main(stdscr):
                                 "output": "",
                                 "process": None,
                                 "log_file": None,
-                                "index": len(output_entries),
                                 "stop_event": threading.Event(),
                                 "lock": threading.Lock(),
                                 "command_input": command,  # Save the individual command
@@ -527,19 +557,16 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     env["FAKE_DEVICE"] = entry["device"]
     env["LLAMA_DIR"] = get_llama_dir(entry["model"])
 
-    # Calculate slot index (1-based) based on position in output_entries
-    slot_index = output_entries.index(entry) + 1
-
     # Prepare log directory
     os.makedirs("logs", exist_ok=True)
 
     # Remove any existing logs with the same slot index
     for existing_file in os.listdir("logs"):
-        if existing_file.startswith(f"{slot_index:03d}-"):
+        if existing_file.startswith(f"{entry['log_id']:04d}-"):
             os.remove(os.path.join("logs", existing_file))
 
     # Create new log file with slot index
-    log_filename = get_log_filename(entry["device"], entry["model"], entry["command_input"], slot_index)
+    log_filename = get_log_filename(entry["device"], entry["model"], entry["command_input"], entry["log_id"])
     entry["log_file"] = open(os.path.join("logs", log_filename), "w")
 
     # Define command shortcuts
@@ -758,7 +785,7 @@ def get_command_name(command_input):
 
 def get_log_filename(device, model, command_input, slot_index):
     command_name = get_command_name(command_input)
-    filename = f"{slot_index:03d}-{device}-{model}-{command_name}.log"
+    filename = f"{slot_index:04d}-{device}-{model}-{command_name}.log"
     filename = filename.replace("/", "_")
     return filename
 
