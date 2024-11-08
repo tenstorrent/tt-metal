@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "noc/noc_parameters.h" // L1_ALIGNMENT
+
 namespace eth_l1_mem {
 
 
