@@ -280,6 +280,12 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
     std::uint32_t dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
     device_driver->set_device_dram_address_params(tt_device_dram_address_params{dram_barrier_base});
+
+    l1_address_params.tensix_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    if (tt_metal::hal.get_arch() != tt::ARCH::GRAYSKULL) {
+        l1_address_params.eth_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
+        l1_address_params.fw_version_addr = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FW_VERSION_ADDR);
+    }
     device_driver->set_device_l1_address_params(l1_address_params);
 
     this->get_metal_desc_from_tt_desc(
@@ -340,18 +346,6 @@ uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
         return 0;
     } else {
         return this->driver_->harvested_rows_per_target.at(chip);
-    }
-}
-
-void Cluster::verify_eth_fw() const {
-    for (const auto &[chip, mmio_device_id] : this->device_to_mmio_device_) {
-        std::vector<uint32_t> fw_versions;
-        for (const CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
-            uint32_t val;
-            read_core(&val, sizeof(uint32_t), tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR);
-            fw_versions.push_back(val);
-        }
-        verify_sw_fw_versions(chip, SW_VERSION, fw_versions);
     }
 }
 
