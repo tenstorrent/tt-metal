@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool output_64b_aligned = (input.device()->arch() == tt::ARCH::BLACKHOLE) and dst_is_dram;
+    bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     tt_metal::KernelHandle unary_writer_kernel_id;
     if (input.get_layout() == Layout::TILE) {
@@ -142,7 +142,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
-    uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
+    uint32_t padded_offset_bytes;
+
     for (const auto& core : cores) {
         if (input.get_layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
@@ -218,8 +219,12 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            if (output_64b_aligned) {
-                padded_shard_width = shard_width;
+            uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+            uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+            uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
+            if(is_blackhole) {
+                if(!dst_is_dram)
+                    padded_shard_width = align(output_unit_size, l1_alignment);
             }
             tt_metal::SetRuntimeArgs(
                 program,

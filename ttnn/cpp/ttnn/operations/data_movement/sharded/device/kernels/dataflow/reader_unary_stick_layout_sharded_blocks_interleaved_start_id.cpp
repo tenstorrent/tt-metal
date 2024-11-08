@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
@@ -53,10 +53,9 @@ void kernel_main() {
             l1_write_addr += padded_block_width_bytes;
         }
     } else {
-        cb_reserve_back(cb_id_in1, 1);
+        cb_reserve_back(cb_id_in1, 4);
         uint32_t scratch_l1_write_addr = get_write_ptr(cb_id_in1);
         uint64_t scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr + aligned_offset);
-
         for (uint32_t h = 0; h < block_height; ++h) {
             uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
             noc_async_read(src_noc_addr, scratch_l1_write_addr, aligned_block_width_bytes);

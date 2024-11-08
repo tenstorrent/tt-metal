@@ -50,7 +50,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr(stick_id, s0);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
         stick_id++;
-        l1_read_addr += padded_block_width_bytes;
+        l1_read_addr += block_width_bytes;
         noc_async_write_barrier();
     }
     cb_pop_front(cb_id_out0, block_height);

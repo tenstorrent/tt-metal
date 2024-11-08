@@ -444,7 +444,8 @@ def test_create_sharded_memory_config(device, shape, strategy, orientation, core
 @pytest.mark.parametrize(
     "shape, shard_shape, strategy, orientation, core_grid",
     [
-        ([1, 1, 16, 32], None, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
+        ([1, 1, 2, 16], None, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=1)),
+        ([1, 1, 2, 16], None, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
         ([1, 1, 32, 16], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
         ([1, 1, 64, 16], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
         (
@@ -469,6 +470,7 @@ def test_create_sharded_memory_config(device, shape, strategy, orientation, core
                 }
             ),
         ),
+        # TODO: Add this test back by checking for core grid size and skipping if we can't do it
         #        (
         #            [1, 1, 675840, 16],
         #            [5280, 16],
@@ -487,7 +489,7 @@ def test_create_sharded_memory_config(device, shape, strategy, orientation, core
     "input_buffer_type",
     [
         ttnn.L1_MEMORY_CONFIG,
-        #        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
     ],
 )
 @pytest.mark.parametrize(
@@ -501,8 +503,6 @@ def test_bh_alignment_i2s(
     device, shape, shard_shape, strategy, orientation, core_grid, input_buffer_type, output_buffer_type
 ):
     torch.manual_seed(0)
-    # input_size = torch.Size(shape)
-    # input_data = torch.arange(input_size.numel()).reshape(input_size).bfloat16().float()
     input_data = torch.randn(shape, dtype=torch.bfloat16)
     if shard_shape == None:
         shard_config = ttnn.create_sharded_memory_config(
