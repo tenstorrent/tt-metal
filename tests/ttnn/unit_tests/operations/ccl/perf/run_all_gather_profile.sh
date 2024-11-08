@@ -72,22 +72,31 @@ run_profile_and_extract_csv() {
 
     if [ -n "$csv_path" ]; then
         echo "CSV path found: $csv_path"
+        echo "Generating performance report..."
 
-        # Run the Python script to generate performance report
-        average_values=$(PYTHONPATH="$MODULE_DIR" python3 -c "
+        tmp_file="/tmp/perf_report_output.log"
+        PYTHONPATH="$MODULE_DIR" python3 -c "
+import sys
 import pandas as pd
 from perf_csv import perf_report
 from tabulate import tabulate
 
-# Generate the report and convert it to a DataFrame
-average_df = perf_report('$csv_path')
-# Print the DataFrame in a pretty table format
-print(tabulate(average_df, headers='keys', tablefmt='pretty'))
-")
+try:
+    # Generate the report and convert it to a DataFrame
+    average_df = perf_report('$csv_path')
+    # Print the DataFrame in a pretty table format
+    print('Min - Avg - Max by Common Runs:')
+    print(tabulate(average_df, headers='keys', tablefmt='pretty'))
+except Exception as e:
+    print(f'Error in performance report generation: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1 | tee "$tmp_file"
 
-        # Print the output
-        echo "Min - Avg - Max by Common Runs:"
-        echo "$average_values"
+        if grep -q "Error in performance report generation" "$tmp_file"; then
+            echo "Error: Performance report generation failed."
+            exit 1
+        fi
+
     else
         echo "CSV path not found in the command output."
         exit 1
