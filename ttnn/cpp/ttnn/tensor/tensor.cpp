@@ -196,6 +196,65 @@ Tensor::Tensor(
     }
 }
 
+Tensor::Tensor(const std::vector<Device *>& workers,
+    const TensorLayout& tensor_layout,
+    const ttnn::SimpleShape& logical_shape,
+    std::optional<DistributedTensorConfig> distributed_tensor_config) :
+    deallocate_through_destructor(false) {
+    if (workers.empty()) {
+        return;
+    }
+
+    Storage storage = [&](){
+        if (workers.size() == 1) {
+            return Storage(DeviceStorage());
+        }
+        MultiDeviceStorage storage;
+        std::transform(
+            workers.cbegin(),
+            workers.cend(),
+            std::back_inserter(storage.ordered_device_ids),
+            [](const Device *worker) { return worker->id(); });
+        return Storage(std::move(storage));
+    }();
+    tensor_attributes = std::make_shared<TensorAttributes>(storage, tensor_layout, logical_shape);
+    tensor_attributes->num_shards_to_be_populated = workers.size();
+    if (!tt::tt_metal::detail::InWorkerThread()) {
+        tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
+    } else {
+        // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
+        // deallocated inside the worker (composite ops do this).
+        tensor_attributes->main_thread_tensor = false;
+    }
+}
+
+Tensor::Tensor(uint32_t num_buffers,
+    const TensorLayout& tensor_layout,
+    const ttnn::SimpleShape& logical_shape,
+    std::optional<DistributedTensorConfig> distributed_tensor_config) :
+    deallocate_through_destructor(false) {
+    if(num_buffers == 0) {
+        return;
+    }
+
+    ttnn::Shape shape(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view());
+
+    Storage storage = [&]() {
+        if (num_buffers == 1) {
+            return Storage(OwnedStorage());
+        }
+        MultiDeviceHostStorage storage;
+        if (distributed_tensor_config.has_value()) {
+            storage.strategy = distributed_tensor_config.value();
+        }
+        storage.buffers = std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
+        storage.shapes = std::vector<ttnn::Shape>(num_buffers, shape);
+        return Storage(std::move(storage));
+    }();
+    tensor_attributes = std::make_shared<TensorAttributes>(storage, tensor_layout, logical_shape);
+    tensor_attributes->num_shards_to_be_populated = num_buffers;
+}
+
 Tensor &Tensor::operator=(const Tensor &other) {
     // Don't self-assign
     this->tensor_id = other.tensor_id;

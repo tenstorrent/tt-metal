@@ -584,17 +584,13 @@ Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
         return to_host_helper<T>(tensor, blocking, cq_id);
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto devices = get_devices(tensor);
-        Tensor host_tensor({}, devices.size());
-        /*for (int device_index = 0; device_index < devices.size(); ++device_index) {
+        Tensor host_tensor(devices.size(), tensor.tensor_layout(), tensor.get_logical_shape());
+        for (int device_index = 0; device_index < devices.size(); ++device_index) {
             const auto& device = devices[device_index];
             auto shard = get_shard_for_device(tensor, device);
             shard = to_host_helper<T>(shard, blocking, cq_id);
-            host_tensor.set_shape(tensor.get_shape());
-            host_tensor.set_dtype(tensor.get_dtype());
-            host_tensor.set_layout(tensor.get_layout());
-            host_tensor.set_tile(tensor.get_tile());
             insert_buffer_and_shape_for_device(device, shard, host_tensor, device_index);
-        }*/
+        }
         return host_tensor;
     } else {
         return tensor;

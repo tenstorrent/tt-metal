@@ -98,6 +98,9 @@ struct Tensor {
         uint32_t num_buffers = 0,
         std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
 
+    Tensor(uint32_t num_buffers, const TensorLayout& tensor_layout, const ttnn::SimpleShape& logical_shape, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+    Tensor(const std::vector<Device *>& workers, const TensorLayout& tensor_layout, const ttnn::SimpleShape& logical_shape, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+
     Tensor(const Tensor &other);
 
     Tensor &operator=(const Tensor &other);
@@ -199,6 +202,7 @@ struct Tensor {
     inline DataType dtype() const { return this->tensor_attributes->tensor_layout.get_data_type(); };
     inline Layout layout() const { return this->tensor_attributes->tensor_layout.get_layout(); };
     inline std::optional<Tile> tile() const { return this->tensor_attributes->tensor_layout.get_page_config().get_tile(); };
+    inline const TensorLayout& tensor_layout() const { return this->tensor_attributes->tensor_layout; }
 
     // ======================================================================================
     //                                      Setters
