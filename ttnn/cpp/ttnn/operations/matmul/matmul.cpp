@@ -18,7 +18,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::Shape& shape) {
+bool is_input_batched(const ttnn::SimpleShape& shape) {
     auto is_batched = false;
     for (auto i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
@@ -109,7 +109,7 @@ Tensor MatmulOperation::invoke(
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool user_run_batched = detail::is_input_batched(input_tensor_b.get_shape());
+    bool user_run_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
     return bound_matmul(
         input_tensor_a,
         input_tensor_b,
@@ -147,7 +147,7 @@ Tensor LinearOperation::invoke(
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool b_is_batched = detail::is_input_batched(input_tensor_b.get_shape());
+    bool b_is_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
     TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
 
     return bound_matmul(

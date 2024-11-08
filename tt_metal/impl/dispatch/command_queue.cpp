@@ -2378,9 +2378,17 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     // Increment the expected worker cores counter due to trace programs completion
     this->expected_num_workers_completed += trace_inst->desc->num_completion_worker_cores;
     // After trace runs, the rdptr on each worker will be incremented by the number of programs in the trace
-    // Update the wptr on host to match state
-    this->device->worker_launch_message_buffer_state.set_mcast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_multicast);
-    this->device->worker_launch_message_buffer_state.set_unicast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_unicast);
+    // Update the wptr on host to match state. If the trace doesn't execute on a
+    // class of worker (unicast or multicast), it doesn't reset or modify the
+    // state for those workers.
+    if (trace_inst->desc->num_traced_programs_needing_go_signal_multicast) {
+        this->device->worker_launch_message_buffer_state.set_mcast_wptr(
+            trace_inst->desc->num_traced_programs_needing_go_signal_multicast);
+    }
+    if (trace_inst->desc->num_traced_programs_needing_go_signal_unicast) {
+        this->device->worker_launch_message_buffer_state.set_unicast_wptr(
+            trace_inst->desc->num_traced_programs_needing_go_signal_unicast);
+    }
     // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so that
     // it will force a stall and avoid stomping on in-use state.
     // TODO(jbauman): Reuse old state from the trace.
