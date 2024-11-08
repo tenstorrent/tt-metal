@@ -355,7 +355,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
-            (std::uint32_t)in0_num_blocks_y,
+            (std::uint32_t)out_num_blocks_x,
+            (std::uint32_t)out_num_blocks_y,
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -378,13 +379,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)1,                // in1_tensor_stride_w
         (std::uint32_t)N,                // in1_tensor_stride_h
         (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
+        (std::uint32_t)in1_block_w,       // in1_tensor_next_w_dim_block_stride
         // in1 block args
         (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,               // in1_block_h
         (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
-        (std::uint32_t)in1_num_blocks_x,  // num_blocks
+        (std::uint32_t)out_num_blocks_x,
+        (std::uint32_t)out_num_blocks_y,
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -401,6 +404,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -427,7 +432,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
-        (std::uint32_t)in0_num_blocks_y,
+        (std::uint32_t)out_num_blocks_x,
+        (std::uint32_t)out_num_blocks_y,
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -443,7 +449,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
-        (std::uint32_t)in1_num_blocks_x,  // num_blocks
+        (std::uint32_t)out_num_blocks_x,
+        (std::uint32_t)out_num_blocks_y,
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -456,6 +463,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h

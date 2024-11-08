@@ -14,7 +14,7 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
+#include "debug/dprint.h"
 
 
 // Please update
@@ -139,10 +139,18 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
+    // UNPACK(( DPRINT << "batch " << batch <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL() ));
+    // UNPACK(( DPRINT << "in0_num_subblocks " << in0_num_subblocks <<ENDL() ));
+    // UNPACK(( DPRINT << "in1_num_subblocks " << in1_num_subblocks <<ENDL() ));
+
+
     mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            for (uint32_t bw = 0; bh < num_blocks_w_dim; ++bw) {
+            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -169,6 +177,7 @@ void MAIN {
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                    // UNPACK(( DPRINT  << "last_out"  << (uint)last_out<<ENDL() ));
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -215,6 +224,7 @@ void MAIN {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
+                                // UNPACK(( DPRINT  << "last_out"  << (uint)last_out<<ENDL() ));
 // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
 #if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
                                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -248,6 +258,9 @@ void MAIN {
 
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+
+                                // cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
+                                // UNPACK(( DPRINT  << "out_subblock_num_tiles " << out_subblock_num_tiles<<ENDL() ));
 
                             } else {
                                 tile_regs_commit();
