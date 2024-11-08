@@ -90,8 +90,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     // hardcode testing, testing multiple blocks on height for now
-    uint32_t out_block_h = per_core_M / 1;
-    uint32_t out_block_w = per_core_N / 1;
+    uint32_t out_block_h = per_core_M / 2;
+    uint32_t out_block_w = per_core_N / 2;
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
     uint32_t in0_num_blocks_y = per_core_M / out_block_h;
@@ -297,6 +297,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+
+    TT_FATAL(
+        out_block_h % out_subblock_h == 0 and out_block_h >= out_subblock_h,
+        "out_block_h must be multiple of out_subblock_h");
+    TT_FATAL(
+        out_block_w % out_subblock_w == 0 and out_block_w >= out_subblock_w,
+        "out_block_w must be multiple of out_subblock_w");
 
     std::vector<uint32_t> in0_sender_compile_time_args;
 

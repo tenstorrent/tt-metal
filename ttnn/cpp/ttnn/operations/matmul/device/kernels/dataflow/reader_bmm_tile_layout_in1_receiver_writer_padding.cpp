@@ -7,6 +7,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     // READER
     // in1 mcast args
@@ -61,6 +63,11 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(17);  // if 0
     // Don't need batch; same as batch from READER args
+
+    // DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
+    // DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL();
+    // DPRINT << "out_tensor_next_w_dim_block_stride " << out_tensor_next_w_dim_block_stride <<ENDL();
+    // DPRINT << "out_tensor_next_h_dim_block_stride " << out_tensor_next_h_dim_block_stride <<ENDL();
 
 #ifdef FUSE_BIAS
     // in3 block args
@@ -176,13 +183,17 @@ void kernel_main() {
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
                     // Pop fully padded subblocks along the row
-                    cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
-                    cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+                    if (bw == num_blocks_w_dim - 1) {
+                        cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
+                        cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+                    }
                     out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                 }
                 // Pop row(s) of fully padded subblocks
-                cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
-                cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
+                if (bh == num_blocks_h_dim - 1) {
+                    cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
+                    cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
+                }
 #endif
                 out_tensor_current_w_dim_block_tile_id += out_tensor_next_w_dim_block_stride;
             }

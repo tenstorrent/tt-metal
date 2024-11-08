@@ -8,6 +8,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -82,11 +84,11 @@ void kernel_main() {
     constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
     // Don't need batch; same as batch from READER args
 
-    DPRINT << "in1_tensor_next_w_dim_block_stride " << in1_tensor_next_w_dim_block_stride <<ENDL();
-    DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
-    DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL();
-    DPRINT << "out_tensor_next_w_dim_block_stride " << out_tensor_next_w_dim_block_stride <<ENDL();
-    DPRINT << "out_tensor_next_h_dim_block_stride " << out_tensor_next_h_dim_block_stride <<ENDL();
+    // DPRINT << "padded_block_tiles_h_skip " << padded_block_tiles_h_skip <<ENDL();
+    // DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
+    // DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL();
+    // DPRINT << "out_tensor_next_w_dim_block_stride " << out_tensor_next_w_dim_block_stride <<ENDL();
+    // DPRINT << "out_tensor_next_h_dim_block_stride " << out_tensor_next_h_dim_block_stride <<ENDL();
 
 
 #ifdef FUSE_BIAS
@@ -202,9 +204,11 @@ void kernel_main() {
 #endif
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+            // DPRINT << "bh " << bh <<ENDL();
             uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_start_tile_id;
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                // DPRINT << "bw " << bw <<ENDL();
                 uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
@@ -259,6 +263,8 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                     // Operand 1
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+
+                    // DPRINT << "block " << block <<ENDL();
                     l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
                     uint64_t in1_start_address = l1_write_addr_in1;  // copy start address of block, to be used for mcasting
@@ -284,6 +290,7 @@ void kernel_main() {
 #endif  // IN1_DRAM_SHARDED
 
 #ifndef SKIP_MCAST
+                    // DPRINT << "in1_block_size_bytes " << in1_block_size_bytes <<ENDL();
                     // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value
                     // should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next block
                     noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
@@ -450,13 +457,17 @@ void kernel_main() {
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
                     // Pop fully padded subblocks along the row
-                    cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
-                    cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+                    if (bw == num_blocks_w_dim - 1) {
+                        cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
+                        cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+                    }
                     out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                 }
                 // Pop row(s) of fully padded subblocks
-                cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
-                cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
+                if (bh == num_blocks_h_dim - 1) {
+                    cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
+                    cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
+                }
 
 #endif
                 in1_tensor_current_w_dim_block_tile_id += in1_tensor_next_w_dim_block_stride;

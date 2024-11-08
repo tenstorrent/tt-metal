@@ -139,7 +139,7 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    // UNPACK(( DPRINT << "batch " << batch <<ENDL() ));
+    // UNPACK(( DPRINT << "in1_block_num_tiles " << in1_block_num_tiles <<ENDL() ));
     // UNPACK(( DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL() ));
     // UNPACK(( DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL() ));
     // UNPACK(( DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL() ));
@@ -150,7 +150,9 @@ void MAIN {
     mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+            // UNPACK(( DPRINT  << "bh"  << (uint)bh<<ENDL() ));
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                // UNPACK(( DPRINT  << "bw"  << (uint)bw<<ENDL() ));
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -166,6 +168,7 @@ void MAIN {
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
+                    // UNPACK(( DPRINT  << "in1_block_num_tiles "  << (uint)in1_block_num_tiles<<ENDL() ));
                     bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -176,8 +179,9 @@ void MAIN {
 #endif
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                    // UNPACK(( DPRINT  << "block"  << (uint)block<<ENDL() ));
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
-                    // UNPACK(( DPRINT  << "last_out"  << (uint)last_out<<ENDL() ));
+
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -321,6 +325,7 @@ void MAIN {
 
                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                    // UNPACK(( DPRINT << "in0_block_num_tiles " << in0_block_num_tiles <<ENDL() ));
                 }
 
 #ifdef FUSE_BIAS

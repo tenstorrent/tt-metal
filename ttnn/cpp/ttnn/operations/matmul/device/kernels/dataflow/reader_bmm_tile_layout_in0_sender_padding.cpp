@@ -187,6 +187,7 @@ void kernel_main() {
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
+                    // DPRINT << "in0_block_size_bytes " << in0_block_size_bytes <<ENDL();
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_async_write_multicast(
                         in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true, true);
