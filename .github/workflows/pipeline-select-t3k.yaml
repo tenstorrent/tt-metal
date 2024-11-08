@@ -12,6 +12,10 @@ on:
           - RelWithDebInfo
           - CI
         default: "Release"
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service"
       build-with-tracy:
         required: false
         type: boolean
@@ -54,29 +58,41 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-unit }}
   t3000-demo-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-demo }}
   t3000-frequent-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-nightly }}
   t3000-model-perf-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-model-perf }}
   t3000-profiler-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-profiler }}
