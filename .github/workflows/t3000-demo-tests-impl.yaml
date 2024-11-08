@@ -4,9 +4,9 @@ on:
   workflow_call:
     inputs:
       extra-tag:
-        required: false
+        required: true
         type: string
-        default: ""
+        default: "in-service"
 
 jobs:
   t3000-demo-tests:
@@ -31,8 +31,7 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - config-t3000
-      - in-service
-      - pipeline-functional
+      - pipeline-perf
       - ${{ inputs.extra-tag }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0

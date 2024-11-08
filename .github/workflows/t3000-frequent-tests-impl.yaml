@@ -4,9 +4,9 @@ on:
   workflow_call:
     inputs:
       extra-tag:
-        required: false
+        required: true
         type: string
-        default: ""
+        default: "in-service"
 
 jobs:
   t3000-frequent-tests:

@@ -13,9 +13,9 @@ on:
           - CI
         default: "Release"
       extra-tag:
-        required: false
+        required: true
         type: string
-        default: ""
+        default: "in-service"
       build-with-tracy:
         required: false
         type: boolean

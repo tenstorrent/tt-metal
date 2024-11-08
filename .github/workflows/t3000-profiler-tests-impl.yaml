@@ -17,7 +17,11 @@ jobs:
           {
             name: "T3000 profiler tests",
             arch: wormhole_b0,
-            runs-on: ${{ toJson([ "arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf" ] + (inputs.extra-tag != '' && inputs.extra-tag != null ? [inputs.extra-tag] : [])) }}
+            runs-on:
+              - arch-wormhole_b0
+              - config-t3000
+              - pipeline-perf
+              - ${{ inputs.extra-tag }}
             cmd: './tests/scripts/run_profiler_regressions.sh'
           },
         ]
