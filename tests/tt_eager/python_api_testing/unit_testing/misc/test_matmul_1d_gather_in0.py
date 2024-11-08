@@ -122,7 +122,7 @@ def test_multi_core_matmul_1d_wh(
         pytest.skip(f"num_blocks_total {num_blocks_total} != num_cores {num_cores}")
 
     out_subblock_h = 1
-    out_subblock_w = 4
+    out_subblock_w = 8 if (out_block_h == 1 and out_block_w <= 8) else 4
     while out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
 

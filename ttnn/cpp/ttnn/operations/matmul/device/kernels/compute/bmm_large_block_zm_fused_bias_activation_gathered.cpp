@@ -140,7 +140,7 @@ void MAIN {
     constexpr uint32_t in1_transpose_tile = false;
 #endif
 
-    constexpr bool spill = num_blocks > 1;
+    constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
     mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
@@ -251,7 +251,7 @@ void MAIN {
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
-                    } else {
+                    } else if (spill) {
                         tile_regs_commit();
                         // Wait for tiles in output buffer to be written out since interm and output share memory
                         if (block == 0) {
@@ -284,7 +284,7 @@ void MAIN {
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
-            if (block < num_blocks - 1) {
+            if (block < num_blocks - 1 && spill) {
                 // Wait for l1 accumulation to populate interm buffer,
                 // then pop to update fifo rd pointer
                 cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
@@ -294,11 +294,11 @@ void MAIN {
             enable_reload = false;
 #else
             // Last iteration does spill and reload to output buffer
-            if (block < num_blocks - 2) {
+            if (block < num_blocks - 2 && spill) {
                 cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
                 cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
             }
-            if (block == num_blocks - 2) {
+            if (block == num_blocks - 2 && spill) {
                 enable_reload = true;
             }  // reload when last iteration
 #endif
