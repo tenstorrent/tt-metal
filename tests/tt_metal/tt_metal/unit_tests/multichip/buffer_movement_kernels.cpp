@@ -187,10 +187,10 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
-        tt::test_utils::generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
             -1.0f,
             1.0f,
-            cfg.size_bytes / tt::test_utils::df::bfloat16::SIZEOF,
+            cfg.size_bytes / bfloat16::SIZEOF,
             std::chrono::system_clock::now().time_since_epoch().count());*/
 
     tt::tt_metal::InterleavedBufferConfig sender_config{

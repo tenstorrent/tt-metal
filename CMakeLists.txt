@@ -55,6 +55,7 @@ endif()
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(project_options)
+include(unity)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -133,6 +134,7 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
+message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)

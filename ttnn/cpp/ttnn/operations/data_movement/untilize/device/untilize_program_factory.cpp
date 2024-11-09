@@ -287,7 +287,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t stick_s = a.get_legacy_shape()[-1];
     uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
+    uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
 
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
