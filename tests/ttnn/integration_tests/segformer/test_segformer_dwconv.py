@@ -8,9 +8,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers import SegformerModel
-from models.experimental.functional_segformer.reference.segformer_dwconv import SegformerDWConv
+from models.demos.segformer.reference.segformer_dwconv import SegformerDWConv
 import pytest
-from models.experimental.functional_segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
+from models.demos.segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
 from models.utility_functions import skip_for_grayskull
 
 

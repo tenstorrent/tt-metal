@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import math
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers import SegformerForSemanticSegmentation
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
-from models.experimental.functional_segformer.reference.segformer_decode_head import SegformerDecodeHead
-from models.experimental.functional_segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
+from models.demos.segformer.reference.segformer_decode_head import SegformerDecodeHead
+from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from tests.ttnn.integration_tests.segformer.test_segformer_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )
@@ -58,45 +59,39 @@ def test_segformer_decode_head(device, is_ci_env):
     torch_input_tensor_2 = torch.randn(1, 160, 32, 32)
     torch_input_tensor_3 = torch.randn(1, 256, 16, 16)
 
-    if 0:
-        torch_input_tensor_0_folded = torch_input_tensor_0
-        torch_input_tensor_1_folded = torch_input_tensor_1
-        torch_input_tensor_2_folded = torch_input_tensor_2
-        torch_input_tensor_3_folded = torch_input_tensor_3
-    else:
-        torch_input_tensor_0_folded = torch.reshape(torch_input_tensor_0, (batch_size, 32, 128 * 128))
-        torch_input_tensor_0_folded = torch.permute(torch_input_tensor_0_folded, (0, 2, 1))
-        torch_input_tensor_1_folded = torch.reshape(torch_input_tensor_1, (batch_size, 64, 64 * 64))
-        torch_input_tensor_1_folded = torch.permute(torch_input_tensor_1_folded, (0, 2, 1))
-        torch_input_tensor_2_folded = torch.reshape(torch_input_tensor_2, (batch_size, 160, 32 * 32))
-        torch_input_tensor_2_folded = torch.permute(torch_input_tensor_2_folded, (0, 2, 1))
-        torch_input_tensor_3_folded = torch.reshape(torch_input_tensor_3, (batch_size, 256, 16 * 16))
-        torch_input_tensor_3_folded = torch.permute(torch_input_tensor_3_folded, (0, 2, 1))
+    torch_input_tensor_0_folded = torch.reshape(torch_input_tensor_0, (batch_size, 32, 128 * 128))
+    torch_input_tensor_0_folded = torch.permute(torch_input_tensor_0_folded, (0, 2, 1))
+    torch_input_tensor_1_folded = torch.reshape(torch_input_tensor_1, (batch_size, 64, 64 * 64))
+    torch_input_tensor_1_folded = torch.permute(torch_input_tensor_1_folded, (0, 2, 1))
+    torch_input_tensor_2_folded = torch.reshape(torch_input_tensor_2, (batch_size, 160, 32 * 32))
+    torch_input_tensor_2_folded = torch.permute(torch_input_tensor_2_folded, (0, 2, 1))
+    torch_input_tensor_3_folded = torch.reshape(torch_input_tensor_3, (batch_size, 256, 16 * 16))
+    torch_input_tensor_3_folded = torch.permute(torch_input_tensor_3_folded, (0, 2, 1))
 
     ttnn_input_tensor_0 = ttnn.from_torch(
         torch_input_tensor_0_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn_input_tensor_1 = ttnn.from_torch(
         torch_input_tensor_1_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn_input_tensor_2 = ttnn.from_torch(
         torch_input_tensor_2_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn_input_tensor_3 = ttnn.from_torch(
         torch_input_tensor_3_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -138,13 +133,12 @@ def test_segformer_decode_head(device, is_ci_env):
 
     ttnn_model = TtSegformerDecodeHead(config, parameters)
     ttnn_output = ttnn_model(ttnn_input_tensor, parameters)
+    ttnn.deallocate(ttnn_input_tensor_0)
 
-    ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+    h = w = int(math.sqrt(ttnn_output.shape[-1]))
+    ttnn_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
 
-    # torch_output = torch.permute(torch_output,(0,3,2,1))
-    # torch_output = torch.reshape(torch_output,(batch_size, 1, 16384, 256))
-
-    # print("ddd", torch_output.shape, ttnn_output.shape)
-
+    print(torch_output.shape, ttnn_output.shape)
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

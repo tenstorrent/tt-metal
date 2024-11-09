@@ -3,17 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <magic_enum.hpp>
 #include <mutex>
 
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
-#include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/llrt/hal.hpp"
-
-#include <magic_enum.hpp>
+#include "tt_metal/llrt/llrt.hpp"
 
 using namespace tt::tt_metal;
 
@@ -170,11 +168,11 @@ struct dispatch_constants {
             if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
                 device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
             } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
-                device_cq_addr_sizes_[dev_addr_idx] = L1_ALIGNMENT - sizeof(uint32_t);
+                device_cq_addr_sizes_[dev_addr_idx] = l1_alignment - sizeof(uint32_t);
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
-                device_cq_addr_sizes_[dev_addr_idx] = 32; // Should this be 2x L1_ALIGNMENT?
+                device_cq_addr_sizes_[dev_addr_idx] = 32; // Should this be 2x l1_alignment?
             } else {
-                device_cq_addr_sizes_[dev_addr_idx] = L1_ALIGNMENT;
+                device_cq_addr_sizes_[dev_addr_idx] = l1_alignment;
             }
         }
 
@@ -449,17 +447,13 @@ class SystemMemoryManager {
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
 
-    tt::tt_metal::WorkerConfigBufferMgr config_buffer_mgr;
-
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
         device_id(device_id),
         num_hw_cqs(num_hw_cqs),
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         bypass_enable(false),
-        bypass_buffer_write_offset(0),
-        config_buffer_mgr() {
-
+        bypass_buffer_write_offset(0) {
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
         this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -530,12 +524,6 @@ class SystemMemoryManager {
         }
         std::vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
-
-        for (uint32_t index = 0; index < tt::tt_metal::hal.get_programmable_core_type_count(); index++) {
-            this->config_buffer_mgr.init_add_core(
-                tt::tt_metal::hal.get_dev_addr(tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-                tt::tt_metal::hal.get_dev_size(tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
-        }
     }
 
     uint32_t get_next_event(const uint8_t cq_id) {
@@ -844,9 +832,6 @@ class SystemMemoryManager {
         this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
-
-    tt::tt_metal::WorkerConfigBufferMgr& get_config_buffer_mgr() { return config_buffer_mgr; }
-
 };
 
 struct LaunchMessageRingBufferState {

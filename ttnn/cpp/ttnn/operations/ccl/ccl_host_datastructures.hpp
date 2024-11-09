@@ -49,6 +49,7 @@ struct CCLOpConfig {
         std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
     uint32_t get_page_size() const;
+    Tile get_tile() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
@@ -64,6 +65,8 @@ struct CCLOpConfig {
     bool input_sharded;
     bool output_sharded;
     bool is_row_major;
+    tt::DataFormat df;
+    Tile tile;
 
     std::vector<Tensor> const* input_tensors;
     std::vector<Tensor> const* output_tensors;

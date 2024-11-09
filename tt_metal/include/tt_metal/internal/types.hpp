@@ -4,14 +4,10 @@
 
 #pragma once
 
-#include "tt_metal/api/types.hpp"
+#include "tt_metal/types.hpp"
 
-namespace tt::tt_metal{
-
+namespace tt::tt_metal {
 namespace v1 {
 
 }
-
-
-
-}
+}  // namespace tt::tt_metal
