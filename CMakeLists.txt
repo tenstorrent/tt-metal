@@ -44,6 +44,7 @@ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(project_options)
 include(unity)
+include(clang-tidy)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,7 +88,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                ON
+                FALSE #FIXME(14541): We've got work to do :(
     )
 
     if(ENABLE_CCACHE)
@@ -157,7 +158,14 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-include(dependencies)
+set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
+include(CPM)
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
+    add_subdirectory(dependencies EXCLUDE_FROM_ALL)
+else()
+    add_subdirectory(dependencies EXCLUDE_FROM_ALL SYSTEM)
+endif()
 
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
@@ -248,29 +256,6 @@ if(ENABLE_TRACY)
     add_compile_definitions(TRACY_ENABLE)
     add_compile_options(-fno-omit-frame-pointer)
     add_link_options(-rdynamic)
-endif()
-
-add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-foreach(lib ${BoostPackages})
-    target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
-if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            tt_metal/hw/inc/wormhole
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
-            ${UMD_HOME}/device/wormhole
-    )
-else()
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
-            ${UMD_HOME}/device/$ENV{ARCH_NAME}
-    )
 endif()
 
 if(WITH_PYTHON_BINDINGS)

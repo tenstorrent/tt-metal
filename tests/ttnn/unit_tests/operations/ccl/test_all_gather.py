@@ -10,12 +10,14 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull
 
 
-def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
+def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
 
     if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
         return True, "Unsupported test case"
+    if tile != (32, 32) and input_dtype != ttnn.bfloat16:
+        return True, "Tiny tile only supports bfloat16"
 
     ## Check that we can readback results
     fast_dispatch_page_size_limit = 55 * 1024
@@ -46,23 +48,28 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
             f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
         )
 
-    if input_shape == [8, 8, 256, 384] and dim == 1 and layout == ttnn.TILE_LAYOUT and input_dtype == ttnn.bfloat8_b:
+    if (
+        input_shape == [8, 8, 256, 384]
+        and dim == 1
+        and layout == ttnn.TILE_LAYOUT
+        and (input_dtype == ttnn.bfloat8_b or tile != (32, 32))
+    ):
         return True, "Known failure"
 
     return False, ""
 
 
-def is_unsupported_case_t3k(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
+def is_unsupported_case_t3k(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile):
     if num_devices < 2:
         return True, "Requires multiple devices to run"
     elif num_devices == 2 and num_links <= 2:
         return True, "Not enough links to run"
 
-    return is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout)
+    return is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile)
 
 
-def is_unsupported_case_n300(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
-    return is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout)
+def is_unsupported_case_n300(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile):
+    return is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile)
 
 
 def run_with_trace(
@@ -132,6 +139,7 @@ def run_all_gather_impl(
     num_iters=1,
     enable_async=False,
     trace_mode=False,
+    tile=(32, 32),
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -151,7 +159,9 @@ def run_all_gather_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout).to(mesh_device.get_devices()[i], mem_config)
+        )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     if trace_mode:
@@ -199,12 +209,13 @@ def run_all_gather_on_n300_impl(
     num_iters=1,
     enable_async=False,
     trace_mode=False,
+    tile=(32, 32),
 ):
     if mesh_device.get_num_devices() != 2:
         pytest.skip("Not N300!")
 
     (is_known_failure, message) = is_unsupported_case_n300(
-        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -224,6 +235,7 @@ def run_all_gather_on_n300_impl(
         num_iters=num_iters,
         enable_async=enable_async,
         trace_mode=trace_mode,
+        tile=tile,
     )
 
 
@@ -242,12 +254,13 @@ def run_all_gather_on_t3000_impl(
     num_iters=1,
     enable_async=False,
     trace_mode=False,
+    tile=(32, 32),
 ):
     if mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
 
     (is_known_failure, message) = is_unsupported_case_t3k(
-        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -267,6 +280,7 @@ def run_all_gather_on_t3000_impl(
         num_iters=num_iters,
         enable_async=enable_async,
         trace_mode=trace_mode,
+        tile=tile,
     )
 
 
@@ -285,6 +299,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     num_iters,
     enable_async=False,
     trace_mode=False,
+    tile=(32, 32),
 ):
     run_all_gather_on_t3000_impl(
         mesh_device,
@@ -301,6 +316,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         num_iters=num_iters,
         enable_async=enable_async,
         trace_mode=trace_mode,
+        tile=tile,
     )
 
 
@@ -1129,6 +1145,7 @@ def run_all_gather_sharded(
     n_buffer=None,
     num_iter=1,
     trace_mode=False,
+    tile=(32, 32),
 ):
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
     unchunked_input_shape = list(input_shape)
@@ -1199,13 +1216,16 @@ def run_all_gather_sharded(
 
     tt_input_tensors_dups = []
     tt_input_tensors = []
-
     for i, t in enumerate(input_tensors):
         tt_input_tensors_dups.append(
-            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(mesh_device.get_devices()[i], input_mem_config)
+            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile))
+            .to(tensor_layout)
+            .to(mesh_device.get_devices()[i], input_mem_config)
         )
         tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(mesh_device.get_devices()[i], input_mem_config)
+            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile))
+            .to(tensor_layout)
+            .to(mesh_device.get_devices()[i], input_mem_config)
         )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
@@ -1289,6 +1309,7 @@ def run_all_gather_sharded_t3k(
     n_buffer=None,
     num_iter=1,
     trace_mode=False,
+    tile=(32, 32),
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
@@ -1316,6 +1337,7 @@ def run_all_gather_sharded_t3k(
         n_buffer,
         num_iter,
         trace_mode,
+        tile=tile,
     )
 
 
@@ -1929,3 +1951,132 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         eq, output = comp_equal(tt_output_tensor, input_tensor)
         assert eq, f"{i} FAILED: {output}"
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (4, 1, 256, 32),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("tile_h", [2])
+@pytest.mark.parametrize("enable_async", [True])
+def test_tiny_all_gather_sharded_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    tile_h,
+):
+    run_all_gather_sharded_t3k(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        # num_cores,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Ring,
+        enable_async=enable_async,
+        tile=(tile_h, 32),
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, input_shape, dim, layout",
+    [
+        (4, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("tile_h", [1, 4, 8, 16])
+def test_tiny_line_all_gather_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    tile_h,
+    num_iters=1,
+):
+    if t3k_mesh_device.get_num_devices() < num_devices:
+        pytest.skip("Not T3000!")
+
+    run_all_gather_on_t3000_impl(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Linear,
+        enable_async=enable_async,
+        num_iters=num_iters,
+        tile=(tile_h, 32),
+    )
