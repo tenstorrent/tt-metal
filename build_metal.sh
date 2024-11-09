@@ -34,6 +34,8 @@ show_help() {
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
     echo "  --disable-unity-builds           Disable Unity builds"
+    echo "  --cxx-compiler-path              Set path to C++ compiler."
+    echo "  --c-compiler-path                Set path to C++ compiler."
 }
 
 clean() {
@@ -60,6 +62,8 @@ cxx_compiler_path=""
 c_compiler_path=""
 build_static_libs="OFF"
 unity_builds="ON"
+cxx_compiler_path=""
+c_compiler_path=""
 
 declare -a cmake_args
 
@@ -118,6 +122,10 @@ while true; do
             build_static_libs="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
+        --cxx-compiler-path)
+            cxx_compiler_path="$2";shift;;
+        --c-compiler-path)
+            c_compiler_path="$2";shift;;
         --release)
             build_type="Release";;
         --development)
@@ -177,7 +185,6 @@ echo "INFO: Enable Unity builds: $unity_builds"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
-cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 

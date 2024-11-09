@@ -12,6 +12,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 #include <filesystem>
 #include <iostream>
 #include <map>

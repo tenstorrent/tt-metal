@@ -28,6 +28,7 @@ if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
     set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
 endif()
 
+>>>>>>> 1063f0ba51 (synchronizing with main)
 if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
     message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
     message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
@@ -61,6 +62,12 @@ include(clang-tidy)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+    set (X86 TRUE)
+else ()
+    set (X86 FALSE)
+endif ()
 
 if(ENABLE_LIBCXX)
     add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
@@ -222,7 +229,9 @@ target_link_libraries(
 
 string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
 add_compile_definitions(ARCH_${ARCH_NAME_DEF})
+
 if(X86)
+
 add_compile_options(
     -Werror
     -Wdelete-non-virtual-dtor
@@ -260,7 +269,9 @@ add_compile_options(
     "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
     "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
+
 else()
+
 add_compile_options(
     -Werror
     -Wdelete-non-virtual-dtor
@@ -297,6 +308,7 @@ add_compile_options(
     "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
     "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
+
 endif()
 
 add_link_options(

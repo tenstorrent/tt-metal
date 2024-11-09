@@ -246,6 +246,7 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) & 0x3; // Extract the byte in which the shared exponent is stored. Each byte is shared amongst 16 datums.
+#if defined(__x86_64__)
                         __m256i exp_vector = _mm256_set1_epi32(get_byte(exp_word, sub_word_index)); // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values
                         __m128i first = _mm_set1_epi32(bfp8_tiles.at(num_exp_words + tile_and_data_index)); // Replicate first uint32_t 4 times (one for each BFP8 value)
