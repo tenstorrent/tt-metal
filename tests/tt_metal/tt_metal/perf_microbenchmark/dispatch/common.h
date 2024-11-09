@@ -12,7 +12,8 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "noc/noc_parameters.h"
-#include "tt_metal/hw/inc/noc_common.h"
+
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
 
 extern bool debug_g;
 extern bool use_coherent_data_g;
