@@ -369,7 +369,6 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/clone/device/clone_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/clone/device/clone_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sharding_utilities.cpp
-
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/moreh_adam_pybind.cpp
@@ -546,7 +545,8 @@ set(TTNN_FINAL_SRC
     ${TTNN_SRC}
     ${QUEUE_SRCS}
     ${TENSOR_SRCS}
-    ${TT_DNN_SRCS})
+    ${TT_DNN_SRCS}
+)
 
 set(TTNN_PUBLIC_INCLUDE_DIRS
     ${UMD_HOME}
@@ -555,8 +555,13 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-    )
-set(TTNN_PUBLIC_LINK_LIBRARIES compiler_flags metal_header_directories metal_common_libs tt_metal)
+)
+set(TTNN_PUBLIC_LINK_LIBRARIES
+    compiler_flags
+    metal_header_directories
+    metal_common_libs
+    tt_metal
+)
 set(TTNN_PUBLIC_LINK_DIRS "")
 
 set(TTNN_PRECOMPILED_HEADERS
@@ -570,28 +575,46 @@ set(TTNN_PRECOMPILED_HEADERS
     <memory>
     <unordered_map>
     <variant>
-    <vector>)
+    <vector>
+)
 
 if(WITH_PYTHON_BINDINGS)
-#TODO : should be using pybind11_add_module, but right now it introduces many build problems
-#pybinds will always be built as a shared library
-    list(APPEND TTNN_FINAL_SRC
+    #TODO : should be using pybind11_add_module, but right now it introduces many build problems
+    #pybinds will always be built as a shared library
+    list(
+        APPEND
+        TTNN_FINAL_SRC
         ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
         ${PYBIND_SRC}
-        ${TT_LIB_SRCS}) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
+        ${TT_LIB_SRCS}
+    ) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
 
-    list(APPEND TTNN_PUBLIC_INCLUDE_DIRS
+    list(
+        APPEND
+        TTNN_PUBLIC_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tt_lib
         ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include
-        ${Python3_INCLUDE_DIRS})
+        ${Python3_INCLUDE_DIRS}
+    )
 
     list(APPEND TTNN_PUBLIC_LINK_DIRS ${Python3_LIBRARY_DIRS})
 
-    list(APPEND TTNN_PUBLIC_LINK_LIBRARIES pch_pybinds ${Python3_LIBRARIES})
+    list(
+        APPEND
+        TTNN_PUBLIC_LINK_LIBRARIES
+        pch_pybinds
+        ${Python3_LIBRARIES}
+    )
 endif()
 
 add_library(ttnn SHARED ${TTNN_FINAL_SRC})
-target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+target_compile_options(
+    ttnn
+    PUBLIC
+        -MP
+        -Wno-int-to-pointer-cast
+        -fno-var-tracking
+)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
@@ -611,12 +634,21 @@ set(TTNN_INSTALL_RPATH
 
 #Make sure library built is _ttnn.so and that it can find all it's linked libraries
 #ttnn breaks if - fvisibility = hidden, so CXX_VISIBILITY_PRESET set to default
-set_target_properties(ttnn PROPERTIES
-    OUTPUT_NAME "_ttnn"
-    PREFIX ""
-    SUFFIX ".so"
-    BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-    INSTALL_RPATH "${TTNN_INSTALL_RPATH}"
-    CXX_VISIBILITY_PRESET "default"
-    ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
+set_target_properties(
+    ttnn
+    PROPERTIES
+        OUTPUT_NAME
+            "_ttnn"
+        PREFIX
+            ""
+        SUFFIX
+            ".so"
+        BUILD_RPATH
+            "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+        INSTALL_RPATH
+            "${TTNN_INSTALL_RPATH}"
+        CXX_VISIBILITY_PRESET
+            "default"
+        ADDITIONAL_CLEAN_FILES
+            "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )

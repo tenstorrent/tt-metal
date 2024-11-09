@@ -1,4 +1,3 @@
-
 add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 
@@ -35,11 +34,9 @@ set(TT_EAGER_TESTS_TENSORS
     tensors/test_async_tensor_apis.cpp
 )
 
-set(TT_EAGER_TESTS_INTEGRATION
-    integration_tests/test_bert.cpp
-)
+set(TT_EAGER_TESTS_INTEGRATION integration_tests/test_bert.cpp)
 
-set(EAGER_TEST_TARGETS "")  # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
+set(EAGER_TEST_TARGETS "") # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_OPS}")
