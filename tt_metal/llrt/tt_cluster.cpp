@@ -9,16 +9,47 @@
 #include <immintrin.h>
 #endif
 
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
+#include <map>                                                       // for map
+#include <memory>
+#include <set>                                                       // for set
+#include <stdexcept>
 #include <string>
+#include <tuple>                                                     // for get
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
-#include "hostdevcommon/dprint_common.h"
-#include "rtoptions.hpp"
-#include "third_party/umd/device/tt_silicon_driver_common.hpp"
+#include "fmt/base.h"
+#include "tt_metal/common/base.hpp" // TODO: Eliminate this file, catchall include and is ARCH_NAME dependent
+#include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/metal_soc_descriptor.h"
+#include "tt_metal/common/test_common.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "third_party/umd/device/tt_arch_types.h"
+#include "third_party/umd/device/tt_cluster_descriptor.h"
+#include "third_party/umd/device/tt_cluster_descriptor_types.h"
+#include "third_party/umd/device/tt_device.h"
+#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "third_party/umd/device/tt_xy_pair.h"
+#include "third_party/umd/device/xy_pair.h"
+
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+#include "dev_msgs.h"
+#include "tensix.h"
+//
+//
+#include "llrt/hal.hpp"                                              // for Hal
+
+#include "third_party/tracy/public/tracy/Tracy.hpp"
 #include "third_party/umd/device/simulation/tt_simulation_device.h"
-#include "tools/profiler/profiler.hpp"
+
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
