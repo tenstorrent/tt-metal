@@ -76,7 +76,7 @@ def test_run_yolov4_trace_2cqs_inference(
         batch_size,
         act_dtype,
         weight_dtype,
-        model_location_generator,
+        model_location_generator=None,
     )
     for iter in range(0, 10):
         input_shape = (1, 3, 320, 320)
