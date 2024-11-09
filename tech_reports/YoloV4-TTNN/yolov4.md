@@ -1,5 +1,8 @@
 # YOLOv4 in TT-NN
 
+**Authors**: Punith Sekar and Dalar Vartanians\
+**Correspondence**: `dvartanians@tenstorrent.com`
+
 ## Contents
 
 - [YOLOv4 in TT-NN](#YOLOv4-in-tt-nn)
@@ -286,21 +289,7 @@ In the diagram above,in Downsample1 sub_module, we can see that the input passed
 We have set deallocate_activation=True for conv1 since the input passed to conv1 is not used elsewhere, as indicated by the dotted edges. For conv3, deallocate_activation=False is set because its input is used by conv4 later in the flow. However, we are deallocating the input passed to conv4, as it is not needed beyond that point.
 
 
-4. Enable `reshard_if_not_optimal`, if `shard_layout = TensorMemoryLayout::HEIGHT_SHARDED` and `override_sharding_config` is false which allows Conv to pick the optimal sharding config based on “height_sharding” config and reshards activation tensor to it.
-```py
-                conv_config = ttnn.Conv2dConfig(
-                        reshard_if_not_optimal=True,
-                        )
-```
-
-5. Enable `override_sharding_config` if `shard_layout = TensorMemoryLayout::HEIGHT_SHARDED` and `reshard_if_not_optimal` is `false` and if `true`, core_grid must be provided. If enabled Conv op reshards activation tensor to it
-```py
-                conv_config = ttnn.Conv2dConfig(
-                        override_sharding_config=True,
-                        )
-
-```
-6. Configure sharding with respect to the input dimension, i.e., it is advised to use `BLOCK_SHARDED` if C ~= N*H*W, `HEIGHT_SHARDED` if  N*H*W >>> C and `WIDTH_SHARDED` if C >>> N*H*W. It has been explained in the link available [here](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md#sharding).
+4. Configure sharding with respect to the input dimension, i.e., it is advised to use `BLOCK_SHARDED` if C ~= N*H*W, `HEIGHT_SHARDED` if  N*H*W >>> C and `WIDTH_SHARDED` if C >>> N*H*W. It has been explained in the link available [here](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md#sharding).
 
 Example,
 if input shape is 1,128,128,32[NHWC], we can use height sharding since  N*H*W >>> C,
@@ -320,23 +309,6 @@ if input shape is 1,16,16,1024[NHWC], we can use width sharding since C >>> N*H*
                 conv_config = ttnn.Conv2dConfig(
                         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                         )
-```
-7. Provide core_grid if `override_sharding_config` is enabled. While increasing the core_grid results in a higher core count and a higher FPS, it lowers core utilization. Reducing the core_grid results in a lower core count, which raises core utilization but lowers FPS.
-
-```py
-                from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-                shard_grid = get_shard_grid_from_num_cores(self.core_count, device)
-                conv_config.core_grid = shard_grid
-                conv_config.override_sharding_config = True
-```
-
-8. Enabling `enable_act_double_buffer`, `enable_split_reader` may increase the performance of conv
-
-```py
-                conv_config = ttnn.Conv2dConfig(
-                enable_act_double_buffer=True,
-                enable_split_reader=True,
-                )
 ```
 
 The YOLOv4() module serves as the main component of YOLOv4, calling the Downsample1, Downsample2, Downsample3, Downsample4, Downsample5, as well as the Neck and Head sub-modules.
