@@ -137,6 +137,11 @@ class Hal {
 
     tt::ARCH get_arch() {return arch_;}
 
+    template <typename IndexType, typename SizeType, typename CoordType>
+    auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const -> decltype(noc_size - 1 - coord) {
+        return noc_index == 0 ? coord : (noc_size - 1 - coord);
+    }
+
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
