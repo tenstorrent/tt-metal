@@ -301,6 +301,7 @@ on:
           - data_movement.reshape.reshape
           - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
+          - data_movement.backward.concat_bw.concat_bw
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window
