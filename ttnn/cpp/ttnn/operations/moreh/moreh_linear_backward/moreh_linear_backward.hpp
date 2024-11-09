@@ -12,9 +12,6 @@ namespace ttnn::operations::moreh::moreh_linear_backward {
 struct MorehLinearBackward {
     static std::tuple<bool, bool, bool> get_required_outputs(const std::vector<bool>& are_required_outputs);
 
-    static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
-
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& output_grad,
         const Tensor& input,
@@ -29,7 +26,7 @@ struct MorehLinearBackward {
         const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
         const DeviceComputeKernelConfig compute_kernel_config);
 
-    static std::vector<bool> create_async_return_flag(
+    static OptionalTensors create_async_optional_output_tensors(
         const Tensor& output_grad,
         const Tensor& input,
         const Tensor& weight,

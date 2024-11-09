@@ -20,8 +20,8 @@ namespace tt::tt_metal {
 
 class RowMajorPageConfig {
 public:
-    Alignment create_default_alignment(DataType dtype) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype) const;
+    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
+    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
     Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
@@ -31,8 +31,8 @@ class TilePageConfig {
 public:
     TilePageConfig(const Tile& tile = Tile());
 
-    Alignment create_default_alignment(DataType dtype) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype) const;
+    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
+    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
     Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
@@ -51,8 +51,8 @@ public:
     PageConfig(Layout layout);
     PageConfig(Layout layout, const std::optional<Tile>& tile);
 
-    Alignment create_default_alignment(DataType dtype) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype) const;
+    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
+    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
     Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;

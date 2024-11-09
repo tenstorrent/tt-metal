@@ -19,11 +19,11 @@ def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
 
-Conv2dConfig = ttnn._ttnn.operations.conv2d.Conv2dConfig
+Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv2d.get_conv_padded_input_shape_and_mem_config
-OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv2d.OptimizedConvParallelizationConfig
-OptimizedConvBlockConfig = ttnn._ttnn.operations.conv2d.OptimizedConvBlockConfig
+get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv.get_conv_padded_input_shape_and_mem_config
+OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
+OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
 
 
 def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
@@ -44,7 +44,7 @@ def convert_conv_weight_tensor_to_tiled_layout(conv_weight_tensor, in1_block_h, 
     | a        | Input tensor         | Tensor    |             | Yes      |
     +----------+----------------------+-----------+-------------+----------+
     """
-    return ttnn._ttnn.operations.conv2d.convert_conv_weight_tensor_to_tiled_layout(
+    return ttnn._ttnn.operations.conv.convert_conv_weight_tensor_to_tiled_layout(
         conv_weight_tensor, in1_block_h, in1_block_w, output_dtype
     )
 
@@ -62,7 +62,7 @@ def convert_conv_weight_tensor_to_special_padding_tiled_layout(
     | a        | Input tensor         | Tensor    |             | Yes      |
     +----------+----------------------+-----------+-------------+----------+
     """
-    return ttnn._ttnn.operations.conv2d.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+    return ttnn._ttnn.operations.conv.convert_conv_weight_tensor_to_special_padding_tiled_layout(
         conv_weight_tensor, in1_block_h, in1_block_w, output_dtype
     )
 
@@ -78,7 +78,7 @@ def convert_conv_weight_tensor_to_grouped_layout(conv_weight_tensor, num_groups,
     | a        | Input tensor         | Tensor    |             | Yes      |
     +----------+----------------------+-----------+-------------+----------+
     """
-    return ttnn._ttnn.operations.conv2d.convert_conv_weight_tensor_to_grouped_layout(
+    return ttnn._ttnn.operations.conv.convert_conv_weight_tensor_to_grouped_layout(
         conv_weight_tensor, num_groups, output_dtype
     )
 
@@ -105,7 +105,7 @@ def conv2d(
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,  # ignored
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    return ttnn._ttnn.operations.conv2d.conv2d(
+    return ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,

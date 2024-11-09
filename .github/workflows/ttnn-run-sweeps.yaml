@@ -266,10 +266,14 @@ on:
           - eltwise.ternary_backward.addcmul_bw
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
+          - reduction.backward.prod_bw.prod_bw
           - reduction.topk.topk
           - reduction.argmax.argmax
           - reduction.prod
           - reduction.sum
+          - reduction.var.var
+          - reduction.std.std
+          - reduction.mean.mean
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved

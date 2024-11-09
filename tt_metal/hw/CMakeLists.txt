@@ -49,24 +49,9 @@ foreach(ARCH IN LISTS ARCHS)
 
             # add output file to the custom target
             list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
-        endforeach(
-            TYPE
-            IN
-            LISTS
-            TYPES
-        )
-    endforeach(
-        PROC
-        IN
-        LISTS
-        PORCS
-    )
-endforeach(
-    ARCH
-    IN
-    LISTS
-    ARCHS
-)
+        endforeach()
+    endforeach()
+endforeach()
 
 # Function appends b0 if its wormhole
 function(get_alias INPUT_STRING OUTPUT_VAR)
@@ -193,18 +178,8 @@ foreach(ARCH IN LISTS ARCHS)
             VERBATIM
         )
         list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
-    endforeach(
-        HWLIB
-        IN
-        LISTS
-        HWLIBS
-    )
-endforeach(
-    ARCH
-    IN
-    LISTS
-    ARCHS
-)
+    endforeach()
+endforeach()
 
 # custom target that depends on all the output files
 add_custom_target(
@@ -213,4 +188,17 @@ add_custom_target(
     DEPENDS
         ${PREPROCESSED_LD_FILES}
         ${PREPROCESSED_O_FILES}
+)
+
+add_library(hw INTERFACE)
+add_library(Metalium::Metal::Hardware ALIAS hw)
+
+set(currentArch "$ENV{ARCH_NAME}")
+string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
+target_include_directories(
+    hw
+    INTERFACE
+        inc
+        inc/${currentArch}
+        $<$<STREQUAL:${currentArch},wormhole>:${CMAKE_CURRENT_SOURCE_DIR}/inc/wormhole/wormhole_b0_defines>
 )

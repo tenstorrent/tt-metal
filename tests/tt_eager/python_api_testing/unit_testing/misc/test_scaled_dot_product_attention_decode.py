@@ -886,7 +886,10 @@ def test_sdpa_decode_paged_attention(
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([16, 8, 1, 32768, 128, (8, 6)],),  # Llama2-70B
+    (
+        [1, 8, 1, 32768, 128, (8, 8)],
+        [16, 8, 1, 32768, 128, (8, 8)],
+    ),  # Llama2-70B
 )
 def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     ttnn.device.DisablePersistentKernelCache()

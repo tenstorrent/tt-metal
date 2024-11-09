@@ -4,6 +4,10 @@
 
 #include "tt_metal/impl/program/program.hpp"
 
+#include <range/v3/view/filter.hpp>
+#include <range/v3/view/transform.hpp>
+
+#include "buffers/circular_buffer_types.hpp"
 #include "common/executor.hpp"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
@@ -11,17 +15,19 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/program.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
 
 namespace tt::tt_metal {
 
@@ -44,17 +50,18 @@ void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::share
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_kernel_defines_hash) {
     // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per
     // device This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
 
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
     string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
+        device_kernel_defines_hash,
         tt::llrt::OptionsG.get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
@@ -69,7 +76,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
     {
         unique_lock<mutex> lock;
         f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+          << " :: " << kernel->compute_hash() << " :: " << device_kernel_defines_hash << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -136,9 +143,12 @@ class Program_ {
     uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
    private:
     void populate_dispatch_data(Device *device);
+
+    HWCommandQueue *last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
@@ -202,6 +212,7 @@ class Program_ {
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
 
     std::vector<ProgramConfig> program_configs_;
+    // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
@@ -240,10 +251,12 @@ class Program_ {
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
+    bool kernel_binary_always_stored_in_ringbuffer();
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
+    friend Internal_;
 };
 
 KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type) {
@@ -270,6 +283,16 @@ void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer) {
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
+
+class Internal_ {
+   public:
+    using map_type = decltype(detail::Program_::circular_buffer_by_id_);
+
+    static const map_type &get_circular_buffers_by_id(const Program &program) noexcept {
+        return program.pimpl_->circular_buffer_by_id_;
+    }
+};
+
 }  // namespace detail
 
 std::atomic<uint64_t> detail::Program_::program_counter = 0;
@@ -290,7 +313,9 @@ detail::Program_::Program_() :
     }
 
     program_configs_.resize(programmable_core_count);
-    program_config_sizes_.resize(programmable_core_count);
+    program_config_sizes_.resize(programmable_core_count + 1);
+    // Always need one launch buffer msg for a program.
+    program_config_sizes_[programmable_core_count] = 1;
 }
 
 Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
@@ -1377,7 +1402,7 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
+                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key(), device->get_device_kernel_defines_hash());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
@@ -1437,9 +1462,10 @@ uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_c
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
-    uint32_t base_addr = device->using_fast_dispatch ?
-        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
-        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t base_addr = device->using_fast_dispatch
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr().get_last_slot_addr(
+                                   programmable_core_type)
+                             : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].sem_offset;
 }
@@ -1454,15 +1480,24 @@ uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_co
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
-    uint32_t base_addr = device->using_fast_dispatch ?
-        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
-        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t base_addr = device->using_fast_dispatch
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr().get_last_slot_addr(
+                                   programmable_core_type)
+                             : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].cb_offset;
 }
 
 uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
     return pimpl_->get_cb_base_addr(device, logical_core, core_type);
+}
+
+void detail::Program_::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+    this->last_used_command_queue_for_testing = queue;
+}
+
+void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+    pimpl_->set_last_used_command_queue_for_testing(queue);
 }
 
 uint32_t detail::Program_::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
@@ -1506,6 +1541,18 @@ bool detail::Program_::runs_on_noc_multicast_only_cores() {
 }
 
 bool Program::runs_on_noc_multicast_only_cores() { return pimpl_->runs_on_noc_multicast_only_cores(); }
+
+bool detail::Program_::kernel_binary_always_stored_in_ringbuffer() {
+    // Active ethernet cores use a fixed address for the kernel binary, because they don't have enough memory to have
+    // that big of a ringbuffer.
+    return !(
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
+}
+
+bool Program::kernel_binary_always_stored_in_ringbuffer() {
+    return pimpl_->kernel_binary_always_stored_in_ringbuffer();
+}
 
 Program::Program(Program &&other) noexcept = default;
 
@@ -1575,6 +1622,80 @@ const std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept 
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
+}
+
+v1::ProgramHandle v1::CreateProgram() { return {}; }
+
+v1::KernelHandle v1::CreateKernel(
+    v1::ProgramHandle &program,
+    std::string_view file_name,
+    const CoreRangeSet &core_spec,
+    const DataMovementConfig &config) {
+    return v1::KernelHandle{v0::CreateKernel(program, std::string{file_name}, core_spec, config)};
+}
+
+v1::KernelHandle v1::CreateKernel(
+    v1::ProgramHandle &program,
+    std::string_view file_name,
+    const CoreRangeSet &core_spec,
+    const ComputeConfig &config) {
+    return v1::KernelHandle{v0::CreateKernel(program, std::string{file_name}, core_spec, config)};
+}
+
+v1::KernelHandle v1::CreateKernel(
+    v1::ProgramHandle &program,
+    std::string_view file_name,
+    const CoreRangeSet &core_spec,
+    const EthernetConfig &config) {
+    return v1::KernelHandle{v0::CreateKernel(program, std::string{file_name}, core_spec, config)};
+}
+
+uint32_t v1::CreateSemaphore(
+    v1::ProgramHandle &program, const CoreRangeSet &core_spec, uint32_t initial_value, CoreType core_type) {
+    return v0::CreateSemaphore(program, core_spec, initial_value, core_type);
+}
+
+v1::CircularBufferHandle v1::CreateCircularBuffer(
+    v1::ProgramHandle &program, const CoreRangeSet &core_spec, const CircularBufferConfig &config) {
+    return v1::CircularBufferHandle{v0::CreateCircularBuffer(program, core_spec, config)};
+}
+
+const CircularBufferConfig &v1::GetCircularBufferConfig(
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle) {
+    return v0::GetCircularBufferConfig(program, static_cast<v0::CBHandle>(cb_handle));
+}
+
+constexpr auto to_handle() {
+    return [](const detail::Internal_::map_type::value_type &pair) {
+        return v1::CircularBufferHandle{pair.first};
+    };
+}
+
+v1::SizedCircularBufferRange v1::GetCircularBuffers(v1::ProgramHandle &program) {
+    return detail::Internal_::get_circular_buffers_by_id(program) |
+           ranges::views::transform(to_handle());
+}
+
+inline auto is_on_logical_corerange(CoreRange cr) {
+    return [=](const detail::Internal_::map_type::value_type &pair) {
+        return pair.second->is_on_logical_corerange(cr);
+    };
+}
+
+v1::CircularBufferRange v1::GetCircularBuffersOnCoreRange(v1::ProgramHandle &program, CoreRange cr) {
+    return detail::Internal_::get_circular_buffers_by_id(program) |
+           ranges::views::filter(is_on_logical_corerange(cr)) |
+           ranges::views::transform(to_handle());
+}
+
+void v1::UpdateCircularBufferTotalSize(
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle, std::uint32_t total_size) {
+    v0::UpdateCircularBufferTotalSize(program, static_cast<v0::CBHandle>(cb_handle), total_size);
+}
+
+void v1::UpdateDynamicCircularBufferAddress(
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle, v1::BufferHandle buffer) {
+    v0::UpdateDynamicCircularBufferAddress(program, static_cast<v0::CBHandle>(cb_handle), *buffer);
 }
 
 }  // namespace tt::tt_metal

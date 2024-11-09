@@ -84,9 +84,9 @@ void print(const Tensor<T>& tensor) {
 }
 
 template <class T>
-Tensor<T> initialize_tensor(std::array<uint32_t, 4> &shape, Initialize init_type, int rand_max_val = 100, int seed = 0) {
+Tensor<T> initialize_tensor(std::array<uint32_t, 4> &shape, Initialize init_type, int rand_min_val = 0, int rand_max_val = 100, int seed = 0) {
     std::vector<T> values;
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_val), std::mt19937(seed));
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(rand_min_val, rand_max_val), std::mt19937(seed));
     for(auto w = 0; w < shape[0]; w++) {
         for(auto z = 0; z < shape[1]; z++) {
             for(auto y = 0; y < shape[2]; y++) {
