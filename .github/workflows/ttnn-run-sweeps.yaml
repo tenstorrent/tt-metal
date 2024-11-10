@@ -164,6 +164,8 @@ on:
           - eltwise.unary_backward.hardswish_bw.hardswish_bw
           - eltwise.unary_backward.rpow_bw.rpow_bw
           - eltwise.unary_complex.conj
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.is_imag
           - eltwise.unary_complex.reciprocal
           - eltwise.unary_complex.reciprocal_bw
           - eltwise.binary_complex.div_bw.div_bw
@@ -193,6 +195,7 @@ on:
           - eltwise.unary_complex.angle.angle
           - eltwise.unary_complex.polar_bw.polar_bw
           - eltwise.unary_complex.angle_bw.angle_bw
+          - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
