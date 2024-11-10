@@ -1166,6 +1166,83 @@ void bind_unary_composite_floats_with_default(
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
             py::arg("memory_config") = std::nullopt});
 }
+
+template <typename unary_operation_t>
+void bind_hardtanh(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    float parameter_a_value,
+    const std::string& parameter_name_b,
+    const std::string& parameter_b_doc,
+    float parameter_b_value,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& info_doc = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Performs {0} function on :attr:`input_tensor`, :attr:`{2}`, :attr:`{5}`.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2} (float): {3}. Defaults to `{4}`.
+            {5} (float): {6}. Defaults to `{7}`.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {8}
+                 - TILE
+                 - 2, 3, 4
+
+            {9}
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2} = {4}, {5} = {7})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
+        supported_dtype,
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               float parameter_b,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, parameter_a, parameter_b, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
 void bind_unary_composite_int(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
@@ -1226,10 +1303,10 @@ void bind_unary_composite_floats(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword args:
             {2} (float): {3}.
             {4} (float): {5}.
+
+        Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1846,7 +1923,7 @@ void py_module(py::module& module) {
         "scale", "Scale value", 1.0f/6.0f,
         "shift", "Shift value", 0.5f);
 
-    detail::bind_unary_composite_floats_with_default(
+    detail::bind_hardtanh(
         module,
         ttnn::hardtanh,
         "min_val", "min value", -1.0f,
