@@ -243,6 +243,14 @@ struct ExecuteMinimum
 
 };
 
+struct ExecutePrelu
+{
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
 } // namespace binary
 }  // namespace operations
 
@@ -306,5 +314,8 @@ constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<
 constexpr auto lcm = ttnn::register_operation_with_auto_launch_op<
     "ttnn::lcm",
     operations::binary::ExecuteLCM>();
+constexpr auto prelu = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::prelu",
+    operations::binary::ExecutePrelu>();
 
 }  // namespace ttnn

@@ -993,3 +993,25 @@ def test_binary_lcm_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 3, 32, 32])),
+        (torch.Size([1, 6, 32, 32])),
+        (torch.Size([1, 7, 320, 384])),
+        (torch.Size([1, 4, 320, 384])),
+    ),
+)
+def test_binary_prelu_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    channels = input_shapes[1]
+    in_data2 = torch.rand((channels,), dtype=torch.bfloat16) * 200 - 100
+    input_tensor2 = ttnn.from_torch(in_data2, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.prelu(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

@@ -66,7 +66,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
             # Unaries with float parameter
-            # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
             # Other unaries (composite operations)
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
@@ -148,7 +147,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.gelu,
     ttnn.rsqrt,
     # Unaries with float parameter
-    # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
     ttnn.log_sigmoid,
     ttnn.softplus,
@@ -237,6 +235,15 @@ def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.elu, golden_function=_golden_function_elu)
+
+
+def _golden_function_prelu(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.prelu(input_tensor_a, weight=input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.prelu, golden_function=_golden_function_prelu)
 
 
 def _golden_function_hardtanh(input_tensor_a, min_val=-1.0, max_val=1.0, *args, **kwargs):
