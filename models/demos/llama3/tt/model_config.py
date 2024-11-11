@@ -32,9 +32,9 @@ class PagedAttentionConfig:
 class TtModelArgs:
     max_batch_size = 32
     # Context length for Llama models (if single device, reduce to 32k in init)
-    max_seq_len = 8192 * 16  # 128k
-    kv_seq_len = 8192 * 16  # 128k
-    sliding_window = 8192 * 16  # 128k # TODO Miguel: Remove this parameter (just use kv_seqlen)
+    max_seq_len = 1024 * 128  # 128k
+    kv_seq_len = max_seq_len  # 128k
+    sliding_window = 1024 * 128  # 128k # TODO Miguel: Remove this parameter (just use kv_seqlen)
     tile_size = 32
 
     paged_attention_config = PagedAttentionConfig()
