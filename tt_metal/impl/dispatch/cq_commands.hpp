@@ -50,6 +50,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 15,
     CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 16,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 17,
+    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 18,
     CQ_DISPATCH_CMD_MAX_COUNT,              // for checking legal IDs
 };
 
@@ -259,8 +260,9 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
 
 struct CQDispatchGoSignalMcastCmd {
     uint32_t go_signal;
-    uint8_t num_mcast_txns; // Cmd expects noc_mcast_coords and num_mcast_dests follow the cmd
-    uint8_t num_unicast_txns; // Cmd expects noc_unicast_coords to follow the mcast data
+    uint8_t num_mcast_txns;
+    uint8_t num_unicast_txns;
+    uint8_t noc_data_start_index;
     uint32_t wait_count;
     uint32_t wait_addr;
 } __attribute__((packed));
@@ -276,6 +278,12 @@ struct CQDispatchSetNumWorkerSemsCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t num_worker_sems;
+} __attribute__ ((packed));
+
+struct CQDispatchSetGoSignalNocDataCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t num_words;
 } __attribute__ ((packed));
 
 struct CQDispatchCmd {
@@ -295,6 +303,7 @@ struct CQDispatchCmd {
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
         CQDispatchNotifySlaveGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
+        CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
     } __attribute__((packed));
 };
 

@@ -1261,7 +1261,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
                         settings.upstream_cores.push_back(demux_settings.worker_physical_core);
                         settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                        settings.compile_args.resize(30);
+                        settings.compile_args.resize(31);
                         auto& compile_args = settings.compile_args;
                         compile_args[0] = settings.cb_start_address;
                         compile_args[1] = settings.cb_log_page_size;
@@ -1285,14 +1285,15 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[19] = settings.num_compute_cores;
                         compile_args[20] = 0; // unused: dispatch_d only
                         compile_args[21] = 1; // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-                        compile_args[22] = 0; // unused: dispatch_d only
+                        compile_args[22] = 1; // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
                         compile_args[23] = 0; // unused: dispatch_d only
-                        compile_args[24] = 0;
-                        compile_args[25] = host_completion_queue_wr_ptr;
-                        compile_args[26] = dev_completion_queue_wr_ptr;
-                        compile_args[27] = dev_completion_queue_rd_ptr;
-                        compile_args[28] = false; // is_dram_variant
-                        compile_args[29] = true; // is_host_variant
+                        compile_args[24] = 0; // unused: dispatch_d only
+                        compile_args[25] = 0;
+                        compile_args[26] = host_completion_queue_wr_ptr;
+                        compile_args[27] = dev_completion_queue_wr_ptr;
+                        compile_args[28] = dev_completion_queue_rd_ptr;
+                        compile_args[29] = false; // is_dram_variant
+                        compile_args[30] = true; // is_host_variant
 
                         dispatch_idx++;
                     }
@@ -1315,7 +1316,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
                             settings.upstream_cores.push_back(demux_settings.worker_physical_core);
                             settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                            settings.compile_args.resize(30);
+                            settings.compile_args.resize(31);
                             auto& compile_args = settings.compile_args;
                             compile_args[0] = settings.cb_start_address;
                             compile_args[1] = settings.cb_log_page_size;
@@ -1339,14 +1340,15 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[19] = settings.num_compute_cores;
                             compile_args[20] = 0; // unused: dispatch_d only
                             compile_args[21] = 1; // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-                            compile_args[22] = 0; // unused: dispatch_d only
+                            compile_args[22] = 1; // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
                             compile_args[23] = 0; // unused: dispatch_d only
-                            compile_args[24] = 0;
-                            compile_args[25] = host_completion_queue_wr_ptr;
-                            compile_args[26] = dev_completion_queue_wr_ptr;
-                            compile_args[27] = dev_completion_queue_rd_ptr;
-                            compile_args[28] = false; // is_dram_variant
-                            compile_args[29] = true; // is_host_variant
+                            compile_args[24] = 0; // unused: dispatch_d only
+                            compile_args[25] = 0;
+                            compile_args[26] = host_completion_queue_wr_ptr;
+                            compile_args[27] = dev_completion_queue_wr_ptr;
+                            compile_args[28] = dev_completion_queue_rd_ptr;
+                            compile_args[29] = false; // is_dram_variant
+                            compile_args[30] = true; // is_host_variant
                             dispatch_idx++;
                         }
                     }
@@ -1628,7 +1630,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 uint32_t mux_sem = mux_d_settings.consumer_semaphore_id;
                 uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
                 uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
-                uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+                constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+                constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
                 for (auto&[core, dispatch_d_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
                     auto prefetch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][dispatch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_d
                     auto dispatch_s_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_S][dispatch_d_idx]); // 1 to 1 mapping bw dispatch_s and dispatch_d
@@ -1640,7 +1643,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     dispatch_d_settings.upstream_cores.push_back(prefetch_d_settings.worker_physical_core);
                     dispatch_d_settings.downstream_cores.push_back(mux_d_settings.worker_physical_core);
                     dispatch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_physical_core);
-                    dispatch_d_settings.compile_args.resize(30);
+                    dispatch_d_settings.compile_args.resize(32);
                     auto& compile_args = dispatch_d_settings.compile_args;
                     compile_args[0] = dispatch_d_settings.cb_start_address;
                     compile_args[1] = dispatch_d_settings.cb_log_page_size;
@@ -1664,14 +1667,15 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[19] = dispatch_d_settings.num_compute_cores;
                     compile_args[20] = dispatch_s_sync_sem_base_addr;
                     compile_args[21] = max_dispatch_message_entries;
-                    compile_args[22] = tensix_worker_go_signal_addr;
-                    compile_args[23] = eth_worker_go_signal_addr;
-                    compile_args[24] = (dispatch_core_type == CoreType::ETH);
-                    compile_args[25] = host_completion_queue_wr_ptr;
-                    compile_args[26] = dev_completion_queue_wr_ptr;
-                    compile_args[27] = dev_completion_queue_rd_ptr;
-                    compile_args[28] = true; // is_dram_variant
-                    compile_args[29] = false; // is_host_variant
+                    compile_args[22] = max_num_go_signal_noc_data_entries;
+                    compile_args[23] = tensix_worker_go_signal_addr;
+                    compile_args[24] = eth_worker_go_signal_addr;
+                    compile_args[25] = (dispatch_core_type == CoreType::ETH);
+                    compile_args[26] = host_completion_queue_wr_ptr;
+                    compile_args[27] = dev_completion_queue_wr_ptr;
+                    compile_args[28] = dev_completion_queue_rd_ptr;
+                    compile_args[29] = true; // is_dram_variant
+                    compile_args[30] = false; // is_host_variant
                     dispatch_d_idx++; // move on to next dispatcher
                 }
                 break;
@@ -1690,8 +1694,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         auto dispatch_core_type = dispatch_s_settings.dispatch_core_type;
                         uint32_t dispatch_message_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
                         uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-                        uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-                        dispatch_s_settings.compile_args.resize(11);
+                        constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+                        constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+                        dispatch_s_settings.compile_args.resize(12);
                         auto& compile_args = dispatch_s_settings.compile_args;
                         compile_args[0] = dispatch_s_settings.cb_start_address;
                         compile_args[1] = dispatch_s_settings.cb_log_page_size;
@@ -1704,6 +1709,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[8] = (dispatch_core_type == CoreType::ETH);
                         compile_args[9] = dispatch_message_base_addr;
                         compile_args[10] = max_dispatch_message_entries;
+                        compile_args[11] = max_num_go_signal_noc_data_entries;
                         dispatch_s_idx++;
                     }
                 }
@@ -2203,7 +2209,8 @@ void Device::compile_command_queue_programs() {
             uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
             uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
             uint32_t dispatch_message_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-            uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+            constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+            constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
 
             const uint32_t prefetch_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type);
             const uint32_t prefetch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type);
@@ -2316,6 +2323,7 @@ void Device::compile_command_queue_programs() {
                 num_compute_cores, // max_write_packed_cores
                 dispatch_s_sync_sem_base_addr, // used to notify dispatch_s that its safe to send a go signal
                 max_dispatch_message_entries,
+                max_num_go_signal_noc_data_entries,
                 tensix_worker_go_signal_addr, // used by dispatch_d to mcast go signals when dispatch_s is not enabled
                 eth_worker_go_signal_addr, // used by dispatch_d to mcast go signals when dispatch_s is not enabled
                 dispatch_core_type == CoreType::ETH,
@@ -2354,6 +2362,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_core_type == CoreType::ETH,
                     dispatch_message_addr,
                     max_dispatch_message_entries,
+                    max_num_go_signal_noc_data_entries,
                 };
                 configure_kernel_variant(
                     *command_queue_program_ptr,
@@ -2903,12 +2912,11 @@ void Device::init_command_queue_device() {
             }
         }
     }
-    // TODO: Move this inside the command queue
+
     for (auto& hw_cq : this->hw_command_queues_) {
-        hw_cq->set_num_worker_sems_on_dispatch(this->num_sub_devices());
+        hw_cq->set_num_worker_sems_on_dispatch(this->active_sub_device_manager_->num_sub_devices());
+        hw_cq->set_go_signal_noc_data_on_dispatch(this->active_sub_device_manager_->noc_mcast_unicast_data());
     }
-    // Added this for safety while debugging hangs with FD v1.3 tunnel to R, should experiment with removing it
-    // tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::initialize_synchronous_sw_cmd_queue() {
@@ -3161,18 +3169,16 @@ const std::unique_ptr<Allocator> &Device::get_initialized_allocator(SubDeviceId 
 }
 
 void Device::reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager> &sub_device_manager) {
-    // Finish all running programs
-    Synchronize(this);
-
     auto num_sub_devices = sub_device_manager->num_sub_devices();
 
-    // Set new number of worker sems on dispatch_s
+    // TODO: This could be further optimized by combining all of these into a single prefetch entry
+    // Currently each one will be pushed into its own prefetch entry
     for (auto& hw_cq : this->hw_command_queues_) {
         // Only need to reset launch messages once, so reset on cq 0
         TT_FATAL(!hw_cq->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
         hw_cq->reset_worker_state(hw_cq->id == 0);
         hw_cq->set_num_worker_sems_on_dispatch(num_sub_devices);
-        // Reset the config buffer mgr (is this needed?)
+        hw_cq->set_go_signal_noc_data_on_dispatch(sub_device_manager->noc_mcast_unicast_data());
         hw_cq->reset_config_buffer_mgr(num_sub_devices);
     }
     // Reset the launch_message ring buffer state seen on host
@@ -3488,7 +3494,7 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
     this->MarkAllocationsSafe();
     // Create an empty trace buffer here. This will get initialized in end_trace
-    TT_FATAL(this->active_sub_device_manager_->get_trace(tid) == nullptr, "Trace already exists for tid {} on device", tid);
+    TT_FATAL(this->active_sub_device_manager_->get_trace(tid) == nullptr, "Trace already exists for tid {} on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
     auto &trace_buffer = this->active_sub_device_manager_->create_trace(tid);
     this->hw_command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
 }
@@ -3498,7 +3504,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     TracyTTMetalEndTrace(this->id(), tid);
     TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
     auto trace_buffer = this->active_sub_device_manager_->get_trace(tid);
-    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", tid);
+    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
     this->hw_command_queues_[cq_id]->record_end();
     Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
     this->MarkAllocationsUnsafe();
@@ -3509,7 +3515,7 @@ void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool bl
     TracyTTMetalReplayTrace(this->id(), tid);
     constexpr bool check = false;
     const auto &trace_buffer = this->active_sub_device_manager_->get_trace(tid);
-    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", tid);
+    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
     if constexpr (check) {
         Trace::validate_instance(*trace_buffer);
     }
@@ -3577,37 +3583,22 @@ size_t Device::get_device_kernel_defines_hash() {
     return tt::utils::DefinesHash{}(this->device_kernel_defines_);
 }
 
-const vector_memcpy_aligned<uint32_t>& Device::noc_mcast_data(SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->noc_mcast_data(sub_device_id);
+uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->num_noc_mcast_txns(sub_device_id);
 }
 
-const vector_memcpy_aligned<uint32_t>& Device::noc_unicast_data(SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->noc_unicast_data(sub_device_id);
+uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
+    return this->active_sub_device_manager_->num_noc_unicast_txns(sub_device_id);
 }
 
-const vector_memcpy_aligned<uint32_t>& Device::noc_mcast_unicast_data(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
-    // Needed for compatibility with tests that create programs with no kernels
-    static const vector_memcpy_aligned<uint32_t> empty = {};
-    if (mcast_data && unicast_data) {
-        return this->active_sub_device_manager_->noc_mcast_unicast_data(sub_device_id);
-    } else if (mcast_data) {
-        return this->active_sub_device_manager_->noc_mcast_data(sub_device_id);
+uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
+    if (mcast_data) {
+        return this->active_sub_device_manager_->noc_mcast_data_start_index(sub_device_id);
     } else if (unicast_data) {
-        return this->active_sub_device_manager_->noc_unicast_data(sub_device_id);
+        return this->active_sub_device_manager_->noc_unicast_data_start_index(sub_device_id);
     } else {
-        return empty;
+        return 0;
     }
-}
-
-uint32_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return this->noc_mcast_data(sub_device_id).size() / 2;
-}
-uint32_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return this->noc_unicast_data(sub_device_id).size();
-}
-
-uint32_t Device::num_noc_mcast_unicast_txns(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
-    return (mcast_data ? this->num_noc_mcast_txns(sub_device_id) : 0) + (unicast_data ? this->num_noc_unicast_txns(sub_device_id) : 0);
 }
 
 LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
@@ -3631,35 +3622,32 @@ SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    TT_FATAL(!this->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
     auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(sub_devices, local_l1_size, this));
     return sub_device_manager->first;
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    TT_FATAL(!this->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
     if (this->active_sub_device_manager_id_ == sub_device_manager_id) {
         return;
+    }
+    if (this->active_sub_device_manager_id_ != this->default_sub_device_manager_id_) {
+        TT_FATAL(!this->active_sub_device_manager_->has_allocations(), "Cannot switch sub device managers while sub devices still have local allocations");
     }
     auto sub_device_manager = this->sub_device_managers_.find(sub_device_manager_id);
     TT_FATAL(sub_device_manager != this->sub_device_managers_.end(), "Sub device manager does not exist");
     this->reset_sub_devices_state(sub_device_manager->second);
+    const auto& global_allocator = this->get_initialized_allocator();
+    allocator::reset_allocator_size(*global_allocator, BufferType::L1);
     // Shrink the global allocator size to make room for sub-device allocators
     auto local_l1_size = sub_device_manager->second->local_l1_size();
-    allocator::shrink_allocator_size(*this->get_initialized_allocator(), BufferType::L1, local_l1_size, true);
+    allocator::shrink_allocator_size(*global_allocator, BufferType::L1, local_l1_size, true);
     this->active_sub_device_manager_id_ = sub_device_manager_id;
     this->active_sub_device_manager_ = sub_device_manager->second.get();
 }
 
 void Device::clear_loaded_sub_device_manager() {
-    if (this->active_sub_device_manager_id_ == this->default_sub_device_manager_id_) {
-        return;
-    }
-    TT_FATAL(!this->active_sub_device_manager_->has_allocations(), "Cannot clear active sub device manager {} since it has allocations", this->active_sub_device_manager_id_);
-    auto &default_manager = this->sub_device_managers_.at(this->default_sub_device_manager_id_);
-    this->reset_sub_devices_state(default_manager);
-    allocator::reset_allocator_size(*this->get_initialized_allocator(), BufferType::L1);
-    this->active_sub_device_manager_id_ = this->default_sub_device_manager_id_;
-    this->active_sub_device_manager_ = default_manager.get();
+    this->load_sub_device_manager(this->default_sub_device_manager_id_);
 }
 
 void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
@@ -3670,6 +3658,10 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
     auto sub_device_manager = this->sub_device_managers_.find(sub_device_manager_id);
     TT_FATAL(sub_device_manager != this->sub_device_managers_.end(), "Sub device manager does not exist");
     this->sub_device_managers_.erase(sub_device_manager);
+}
+
+const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
+    return this->active_sub_device_manager_->get_sub_device_ids();
 }
 
 }  // namespace tt_metal

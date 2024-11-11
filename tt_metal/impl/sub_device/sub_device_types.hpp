@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <tuple>
 #include <type_traits>
 
 namespace tt::tt_metal {
@@ -85,7 +87,6 @@ struct SubDeviceManagerId {
 
 
 namespace std {
-
 template <>
 struct hash<tt::tt_metal::SubDeviceId> {
     std::size_t operator()(tt::tt_metal::SubDeviceId const &o) const {

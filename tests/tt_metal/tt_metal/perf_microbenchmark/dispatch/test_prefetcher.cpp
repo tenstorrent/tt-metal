@@ -1921,6 +1921,7 @@ void configure_for_single_chip(Device *device,
          num_compute_cores, // max_write_packed_cores
          0,
          dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+         dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
          0,
          0,
          0,
@@ -1941,6 +1942,7 @@ void configure_for_single_chip(Device *device,
         dispatch_compile_args[13] = dispatch_h_cb_sem;
         dispatch_compile_args[14] = dispatch_d_preamble_size;
         dispatch_compile_args[21] = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+        dispatch_compile_args[22] = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
         configure_kernel_variant<true, false>(program,
@@ -1962,6 +1964,7 @@ void configure_for_single_chip(Device *device,
         dispatch_compile_args[13] = dispatch_downstream_cb_sem;
         dispatch_compile_args[14] = 0; // preamble size
         dispatch_compile_args[21] = 1; // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
+        dispatch_compile_args[22] = 1; // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
         configure_kernel_variant<false, true>(program,
@@ -2666,6 +2669,7 @@ void configure_for_multi_chip(Device *device,
          num_compute_cores,
          0,
          dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+         dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
          0,
          0,
          0,
@@ -2686,6 +2690,7 @@ void configure_for_multi_chip(Device *device,
         dispatch_compile_args[13] = dispatch_h_cb_sem;
         dispatch_compile_args[14] = dispatch_d_preamble_size;
         dispatch_compile_args[21] = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+        dispatch_compile_args[22] = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
         configure_kernel_variant<true, false>(program_r,
@@ -2706,6 +2711,7 @@ void configure_for_multi_chip(Device *device,
         dispatch_compile_args[13] = dispatch_downstream_cb_sem;
         dispatch_compile_args[14] = 0; // preamble size
         dispatch_compile_args[21] = 1; // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
+        dispatch_compile_args[22] = 1; // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
         configure_kernel_variant<false, true>(program,

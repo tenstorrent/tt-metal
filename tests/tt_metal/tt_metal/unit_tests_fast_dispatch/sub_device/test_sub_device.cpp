@@ -15,6 +15,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
+#include "tests/tt_metal/test_utils/stimulus.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/command_queue/command_queue_test_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -104,7 +105,7 @@ std::tuple<Program, Program, Program, std::unique_ptr<GlobalSemaphore>> create_b
         waiter_program,
         "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/sub_device/kernels/persistent_remote_waiter.cpp",
         waiter_core,
-        tt_metal::EthernetConfig{
+        EthernetConfig{
             .noc = NOC::RISCV_0_default,
             .processor = DataMovementProcessor::RISCV_0});
     std::array<uint32_t, 7> waiter_rt_args = {global_sem->address(), incrementer_cores.num_cores(), syncer_core_physical.x, syncer_core_physical.y, tensix_waiter_core_physical.x, tensix_waiter_core_physical.y, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE};
@@ -197,7 +198,9 @@ TEST_F(CommandQueueSingleCardFixture, TestSubDeviceAllocations) {
         }
 
         auto buffer_2 = CreateBuffer(interleaved_config);
-
+        EXPECT_THROW(CreateBuffer(shard_config_1, SubDeviceId{1}), std::exception);
+        EXPECT_THROW(device->clear_loaded_sub_device_manager(), std::exception);
+        EXPECT_THROW(device->load_sub_device_manager(sub_device_manager_2), std::exception);
         DeallocateBuffer(*buffer_1);
         device->clear_loaded_sub_device_manager();
         device->load_sub_device_manager(sub_device_manager_2);
@@ -424,6 +427,158 @@ TEST_F(CommandQueueSingleCardTraceFixture, TestSubDeviceTraceBasicEthPrograms) {
             ReplayTrace(device, device->command_queue().id(), tid_2, false);
         }
         Synchronize(device);
+    }
+}
+
+TEST_F(CommandQueueSingleCardTraceFixture, TestSubDeviceTraceProgramsReconfigureSubDevices) {
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::array{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    SubDevice sub_device_3(std::array{CoreRangeSet(std::array{CoreRange({2, 4}, {3, 4}), CoreRange({5, 1}, {6, 3})})});
+    uint32_t num_iters = 5;
+    for (Device *device : devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id() << " does not have any active ethernet cores";
+        }
+        auto eth_core = *device->get_active_ethernet_cores(true).begin();
+        SubDevice sub_device_4(std::array{CoreRangeSet(std::array{CoreRange({2, 1}, {2, 2}), CoreRange({1, 5}, {5, 5})}), CoreRangeSet(CoreRange(eth_core, eth_core))});
+
+        auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+        auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_3, sub_device_4}, 3200);
+
+        device->load_sub_device_manager(sub_device_manager_1);
+
+        auto [waiter_program_1, syncer_program_1, incrementer_program_1, global_sem_1] = create_basic_sync_program(device, sub_device_1, sub_device_2);
+
+        // Compile the programs
+        EnqueueProgram(device->command_queue(), waiter_program_1, false);
+        EnqueueProgram(device->command_queue(), syncer_program_1, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+        Synchronize(device);
+
+        // Capture the trace
+        auto tid_1 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), waiter_program_1, false);
+        EnqueueProgram(device->command_queue(), syncer_program_1, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_1);
+
+        auto tid_2 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), syncer_program_1, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_2);
+
+        device->load_sub_device_manager(sub_device_manager_2);
+
+        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] = create_basic_eth_sync_program(device, sub_device_3, sub_device_4);
+
+        // Compile the programs
+        EnqueueProgram(device->command_queue(), waiter_program_2, false);
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        Synchronize(device);
+
+        // Capture the trace
+        auto tid_3 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), waiter_program_2, false);
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_3);
+
+        auto tid_4 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_4);
+
+        for (uint32_t i = 0; i < num_iters; i++) {
+            device->load_sub_device_manager(sub_device_manager_1);
+            // Regular program execution
+            EnqueueProgram(device->command_queue(), waiter_program_1, false);
+            // Test blocking on one sub-device
+            EnqueueProgram(device->command_queue(), syncer_program_1, false);
+            EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+
+            // Full trace execution
+            ReplayTrace(device, device->command_queue().id(), tid_1, false);
+
+            // Partial trace execution
+            EnqueueProgram(device->command_queue(), waiter_program_1, false);
+            ReplayTrace(device, device->command_queue().id(), tid_2, false);
+
+            device->load_sub_device_manager(sub_device_manager_2);
+            // Regular program execution
+            EnqueueProgram(device->command_queue(), waiter_program_2, false);
+            // Test blocking on one sub-device
+            EnqueueProgram(device->command_queue(), syncer_program_2, false);
+            EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+
+            // Full trace execution
+            ReplayTrace(device, device->command_queue().id(), tid_3, false);
+
+            // Partial trace execution
+            EnqueueProgram(device->command_queue(), waiter_program_2, false);
+            ReplayTrace(device, device->command_queue().id(), tid_4, false);
+        }
+        Synchronize(device);
+    }
+}
+
+TEST_F(CommandQueueSingleCardTraceFixture, TestSubDeviceIllegalOperations) {
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+
+    // Assert no idle eth cores specified
+    EXPECT_THROW(SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3})), CoreRangeSet(CoreRange({4, 4}, {4, 4})), CoreRangeSet(CoreRange({5, 5}, {5, 5}))}), std::exception);
+    for (Device *device : devices_) {
+        auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+        auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_2, sub_device_1}, 3200);
+        device->load_sub_device_manager(sub_device_manager_1);
+
+        auto [waiter_program_1, syncer_program_1, incrementer_program_1, global_sem_1] = create_basic_sync_program(device, sub_device_1, sub_device_2);
+
+        // Compile the programs
+        EnqueueProgram(device->command_queue(), waiter_program_1, false);
+        // Test blocking on one sub-device
+        EnqueueProgram(device->command_queue(), syncer_program_1, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+        Synchronize(device);
+
+        // Capture the trace
+        auto tid_1 = BeginTraceCapture(device, device->command_queue().id());
+        // Can not load a sub-device manager while tracing
+        EXPECT_THROW(device->load_sub_device_manager(sub_device_manager_2), std::exception);
+        EnqueueProgram(device->command_queue(), waiter_program_1, false);
+        EnqueueProgram(device->command_queue(), syncer_program_1, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_1);
+
+        device->load_sub_device_manager(sub_device_manager_2);
+        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] = create_basic_sync_program(device, sub_device_2, sub_device_1);
+
+        EnqueueProgram(device->command_queue(), waiter_program_2, false);
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        Synchronize(device);
+
+        auto tid_2 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), waiter_program_2, false);
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_2);
+
+        // Regular program execution
+        // Can not run a program on a different sub-device manager
+        EXPECT_THROW(EnqueueProgram(device->command_queue(), waiter_program_1, false), std::exception);
+
+        // Full trace execution
+        ReplayTrace(device, device->command_queue().id(), tid_2, false);
+
+        // Can not replay a trace on a different sub-device manager
+        EXPECT_THROW(ReplayTrace(device, device->command_queue().id(), tid_1, false), std::exception);
+
+        Synchronize(device);
+
+        device->remove_sub_device_manager(sub_device_manager_1);
+        EXPECT_THROW(device->load_sub_device_manager(sub_device_manager_1), std::exception);
     }
 }
 

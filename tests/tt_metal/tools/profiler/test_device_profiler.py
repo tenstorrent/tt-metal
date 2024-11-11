@@ -167,11 +167,11 @@ def test_dispatch_cores():
     REF_COUNT_DICT = {
         "grayskull": {
             "Tensix CQ Dispatch": 16,
-            "Tensix CQ Prefetch": 24,
+            "Tensix CQ Prefetch": 25,
         },
         "wormhole_b0": {
             "Tensix CQ Dispatch": 16,
-            "Tensix CQ Prefetch": 24,
+            "Tensix CQ Prefetch": 25,
         },
     }
 
