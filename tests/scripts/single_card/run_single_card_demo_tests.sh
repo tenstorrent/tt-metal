@@ -43,6 +43,9 @@ run_common_func_tests() {
   # ConvNet Mnist
   pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
 
+  # Swin
+  pytest --disable-warnings models/demos/wormhole/swin/demo/demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
