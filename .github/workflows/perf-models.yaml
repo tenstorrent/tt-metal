@@ -10,7 +10,13 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+      tracy: true
+    secrets: inherit
   models-perf:
-    needs: build-artifact
+    needs: [build-artifact, build-artifact-profiler]
     uses: ./.github/workflows/perf-models-impl.yaml
     secrets: inherit
