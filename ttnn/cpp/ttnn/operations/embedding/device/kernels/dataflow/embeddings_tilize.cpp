@@ -95,21 +95,21 @@ void kernel_main() {
             uint64_t src_noc_addr;
             uint32_t token = input_l1_ptr[k];
             #if defined PADDED
-            if (token == pad_token) {
-                src_noc_addr = pad_noc_addr;
-            } else {
-                src_noc_addr = get_noc_addr(token, weights);
-            }
-            #elif defined BINARY
-            if (token == 0) {
-                src_noc_addr = zero_noc_addr;
-            } else {
-                src_noc_addr = one_noc_addr;
-            }
+                if (token == pad_token) {
+                    src_noc_addr = pad_noc_addr;
+                } else {
+                    src_noc_addr = get_noc_addr(token, weights);
+                }
+                #elif defined BINARY
+                if (token == 0) {
+                    src_noc_addr = zero_noc_addr;
+                } else {
+                    src_noc_addr = one_noc_addr;
+                }
             #else
                 #if defined BFP16
                 union { float f; uint32_t u; } u;
-                u.u = (uint32_t)input_l1_ptr[token_idx] << 16;
+                u.u = (uint32_t)input_l1_ptr[k] << 16;
                 uint32_t token_casted = static_cast<uint32_t>(u.f);
                 src_noc_addr = get_noc_addr(token_casted, weights);
                 #else
