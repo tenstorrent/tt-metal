@@ -180,8 +180,8 @@ void kernel_main() {
                         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
                         // DPRINT << "subblock_tiles_addr_skip " << subblock_tiles_addr_skip << ENDL();
-                        // DPRINT << "out_subblock_h_ " << out_subblock_h_ << ENDL();
-                        // DPRINT << "out_subblock_w_ " << out_subblock_w_ << ENDL();
+                        DPRINT << "out_subblock_h_ " << out_subblock_h_ << ENDL();
+                        DPRINT << "out_subblock_w_ " << out_subblock_w_ << ENDL();
 
                         for (uint32_t h = 0; h < out_subblock_h_; ++h) {
                             uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;

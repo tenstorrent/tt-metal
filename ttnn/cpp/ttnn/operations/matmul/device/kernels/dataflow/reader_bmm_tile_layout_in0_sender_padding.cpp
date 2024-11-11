@@ -118,12 +118,12 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            DPRINT << "bh " << bh <<ENDL();
+            // DPRINT << "bh " << bh <<ENDL();
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT << "bw " << bw <<ENDL();
+                // DPRINT << "bw " << bw <<ENDL();
                 uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                    DPRINT << "block " << block <<ENDL();
+                    // DPRINT << "block " << block <<ENDL();
                     if constexpr (fuse_op) {
                         fused_op_receiver.update_current_block_start_tile_id(
                             block,
@@ -134,7 +134,7 @@ void kernel_main() {
 #ifndef IN0_SHARDED
                     // Operand 0
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                    DPRINT << "in0_block_num_tiles" << in0_block_num_tiles <<ENDL();
+                    // DPRINT << "in0_block_num_tiles" << in0_block_num_tiles <<ENDL();
                     uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
 #ifndef SKIP_MCAST

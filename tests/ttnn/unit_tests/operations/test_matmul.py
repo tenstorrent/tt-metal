@@ -342,7 +342,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
-@pytest.mark.parametrize("n", [512])
+@pytest.mark.parametrize("n", [256])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("grid_size", [(2, 2)])
 @pytest.mark.parametrize("tile_h", [32])
@@ -354,20 +354,23 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 def test_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    b = 1
+    b = 2
     in0_shape = [b, 1, m, k]
     in1_shape = [b, 1, k, n]
     bias_shape = [1, 1, n]
 
     num_out_block_h = 3
-    num_out_block_w = 3
+    num_out_block_w = 1
 
     in0_block_w = k // grid_size[0] // 32
     per_core_M = m // grid_size[1] // tile_h + 1
-    per_core_N = n // grid_size[0] // tile_w + 1
+    per_core_N = n // grid_size[0] // tile_w
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    out_subblock_h = 3
+    out_subblock_w = 2
 
     print(per_core_M)
     print(per_core_N)
