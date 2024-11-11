@@ -58,9 +58,28 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
-    std::vector<uint8_t> processor_types{0};
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
+    std::vector<HalJitBuildConfig> processor_types(1);
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+        DeviceAddr fw_base, local_init;
+        switch (processor_class_idx) {
+            case 0: {
+                fw_base = MEM_IERISC_FIRMWARE_BASE;
+                local_init = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+            }
+            break;
+            case 1: {
+                fw_base = MEM_SLAVE_IERISC_FIRMWARE_BASE;
+                local_init = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+            }
+            break;
+            default:
+                TT_THROW("Unexpected processor class {} for Blackhole Idle Ethernet", processor_class_idx);
+        }
+        processor_types[0] = HalJitBuildConfig{
+            .fw_base_addr = fw_base,
+            .local_init_addr = local_init
+        };
         processor_classes[processor_class_idx] = processor_types;
     }
 
