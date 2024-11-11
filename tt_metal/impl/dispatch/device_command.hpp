@@ -254,14 +254,13 @@ class DeviceCommand {
         uint32_t wait_count,
         uint32_t go_signal,
         uint32_t wait_addr,
-        uint32_t num_mcast_txns,
-        uint32_t num_unicast_txns,
-        const vector_memcpy_aligned<uint32_t> &noc_mcast_unicast_data,
+        uint8_t num_mcast_txns,
+        uint8_t num_unicast_txns,
+        uint8_t noc_data_start_index,
         DispatcherSelect dispatcher_type) {
         TT_ASSERT(num_mcast_txns <= std::numeric_limits<uint8_t>::max(), "Number of mcast destinations {} exceeds maximum {}", num_mcast_txns, std::numeric_limits<uint8_t>::max());
         TT_ASSERT(num_unicast_txns <= std::numeric_limits<uint8_t>::max(), "Number of unicast destinations {} exceeds maximum {}", num_unicast_txns, std::numeric_limits<uint8_t>::max());
-        uint32_t total_data_size = noc_mcast_unicast_data.size() * sizeof(uint32_t);
-        uint32_t lengthB = sizeof(CQDispatchCmd) + total_data_size;
+        uint32_t lengthB = sizeof(CQDispatchCmd);
         TT_ASSERT(lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE), "Data for go signal mcast must fit within one page");
         this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
         auto initialize_mcast_cmd = [&](CQDispatchCmd *mcast_cmd) {
@@ -271,6 +270,7 @@ class DeviceCommand {
             mcast_cmd->mcast.wait_count = wait_count;
             mcast_cmd->mcast.num_mcast_txns = num_mcast_txns;
             mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
+            mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
             mcast_cmd->mcast.wait_addr = wait_addr;
         };
         CQDispatchCmd *mcast_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
@@ -282,8 +282,6 @@ class DeviceCommand {
         } else {
             initialize_mcast_cmd(mcast_cmd_dst);
         }
-        uint8_t * noc_coord_dst = this->reserve_space<uint8_t *>(total_data_size);
-        this->memcpy(noc_coord_dst, noc_mcast_unicast_data.data(), total_data_size);
         this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -408,6 +406,30 @@ class DeviceCommand {
         }
         this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
+
+    void add_dispatch_set_go_signal_noc_data(const vector_memcpy_aligned<uint32_t> &noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
+        TT_ASSERT(noc_mcast_unicast_data.size() <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES, "Number of words {} exceeds maximum {}", noc_mcast_unicast_data.size(), dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+        auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
+        uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
+        TT_ASSERT(lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE), "Data for go signal mcast must fit within one page");
+        this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
+        auto initialize_set_go_signal_noc_data_cmd = [&] (CQDispatchCmd *set_go_signal_noc_data_cmd) {
+            set_go_signal_noc_data_cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA;
+            set_go_signal_noc_data_cmd->set_go_signal_noc_data.num_words = noc_mcast_unicast_data.size();
+        };
+        CQDispatchCmd *set_go_signal_noc_data_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_go_signal_noc_data_cmd;
+            initialize_set_go_signal_noc_data_cmd(&set_go_signal_noc_data_cmd);
+            this->memcpy(set_go_signal_noc_data_cmd_dst, &set_go_signal_noc_data_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_set_go_signal_noc_data_cmd(set_go_signal_noc_data_cmd_dst);
+        }
+        uint32_t * noc_mcast_unicast_data_dst = this->reserve_space<uint32_t *>(data_sizeB);
+        this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
 
     void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {
         this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));

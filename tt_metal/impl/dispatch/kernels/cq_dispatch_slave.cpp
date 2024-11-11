@@ -35,6 +35,7 @@ constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(7);
 constexpr uint32_t distributed_dispatcher = get_compile_time_arg_val(8); // dispatch_s and dispatch_d running on different cores
 constexpr uint32_t worker_sem_base_addr = get_compile_time_arg_val(9); // workers update the semaphore at this location to signal completion
 constexpr uint32_t max_num_worker_sems = get_compile_time_arg_val(10); // maximum number of worker semaphores
+constexpr uint32_t max_num_go_signal_noc_data_entries = get_compile_time_arg_val(11); // maximum number of go signal data words
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -51,6 +52,8 @@ static uint32_t cmd_ptr;
 // dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
 // To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
 static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
+
+static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries] = {0};
 
 static uint32_t num_worker_sems = 1;
 
@@ -173,19 +176,19 @@ void process_go_signal_mcast_cmd() {
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     *aligned_go_signal_storage = cmd->mcast.go_signal;
 
+    uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here
-    volatile uint32_t tt_l1_ptr *data_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr *>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
-        uint64_t dst = get_noc_addr_helper(*(data_ptr++), mcast_go_signal_addr);
+        uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
         // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
-        noc_async_write_multicast_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), *(data_ptr++));
+        noc_async_write_multicast_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), go_signal_noc_data[go_signal_noc_data_idx++]);
     }
     for (uint32_t i = 0, num_unicasts = cmd->mcast.num_unicast_txns; i < num_unicasts; ++i) {
-        uint64_t dst = get_noc_addr_helper(*(data_ptr++), unicast_go_signal_addr);
+        uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
     }
     update_worker_completion_count_on_dispatch_d();
-    cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
+    cmd_ptr += sizeof(CQDispatchCmd);
 }
 
 FORCE_INLINE
@@ -218,6 +221,18 @@ void set_num_worker_sems() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+FORCE_INLINE
+void set_go_signal_noc_data() {
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
+    ASSERT(num_words <= max_num_go_signal_noc_data_entries);
+    volatile tt_l1_ptr uint32_t *data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(cmd_ptr + sizeof(CQDispatchCmd));
+    for (uint32_t i = 0; i < num_words; ++i) {
+        go_signal_noc_data[i] = *(data_ptr++);
+    }
+    cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
+}
+
 void kernel_main() {
     DPRINT << "dispatch_s : start" << ENDL();
     // Initialize customized command buffers.
@@ -236,6 +251,9 @@ void kernel_main() {
                 break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
                 set_num_worker_sems();
+                break;
+            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
+                set_go_signal_noc_data();
                 break;
             case CQ_DISPATCH_CMD_WAIT:
                 process_dispatch_s_wait_cmd();

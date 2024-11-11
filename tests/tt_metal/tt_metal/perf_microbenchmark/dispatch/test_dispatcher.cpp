@@ -478,6 +478,7 @@ int main(int argc, char **argv) {
              num_compute_cores, // max_write_packed_cores
              0,
              dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+             dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
              0,
              0,
              0,

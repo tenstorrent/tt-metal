@@ -369,12 +369,9 @@ class Device {
     NOC dispatch_go_signal_noc() const;
     size_t get_device_kernel_defines_hash();
 
-    const vector_memcpy_aligned<uint32_t>& noc_mcast_data(SubDeviceId sub_device_id) const;
-    const vector_memcpy_aligned<uint32_t>& noc_unicast_data(SubDeviceId sub_device_id) const;
-    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
-    uint32_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint32_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint32_t num_noc_mcast_unicast_txns(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
+    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
+    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
 
     LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
 
@@ -384,6 +381,7 @@ class Device {
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
+    const std::vector<SubDeviceId> &get_sub_device_ids() const;
    private:
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap);
     SubDeviceManagerId get_next_sub_device_manager_id();

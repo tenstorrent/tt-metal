@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <climits>
 #include <magic_enum.hpp>
 #include <mutex>
 
@@ -67,8 +68,14 @@ struct dispatch_constants {
     using prefetch_q_entry_type = uint16_t;
 
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
+    // Currently arbitrary, can be adjusted as needed at the cost of more L1 memory
     static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 16;
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max();
+    static_assert(dispatch_constants::DISPATCH_MESSAGE_ENTRIES <= sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
+    // Currently arbitrary, can be adjusted as needed at the cost of more static memory
+    static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
+    static constexpr uint32_t GO_SIGNAL_BITS_PER_TXN_TYPE = 4;
+    static constexpr uint32_t GO_SIGNAL_MAX_TXNS_PER_TYPE = 1 << GO_SIGNAL_BITS_PER_TXN_TYPE - 1;
 
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
 

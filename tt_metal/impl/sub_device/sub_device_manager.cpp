@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <vector>
+
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 
 #include "tt_metal/common/assert.hpp"
@@ -27,6 +29,7 @@ SubDeviceManager::SubDeviceManager(
     device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
+    this->populate_sub_device_ids();
     this->populate_num_cores();
     this->populate_sub_allocators();
     this->populate_noc_data();
@@ -47,6 +50,7 @@ SubDeviceManager::SubDeviceManager(Device *device, std::unique_ptr<Allocator> &&
     this->sub_devices_ = {SubDevice(std::array{
         CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
         CoreRangeSet(std::move(active_eth_core_ranges))})};
+    this->populate_sub_device_ids();
     // No need to validate sub-devices since this constructs a sub-device of the entire grid
     this->populate_num_cores();
     this->sub_device_allocators_.push_back(std::move(global_allocator));
@@ -71,24 +75,37 @@ SubDeviceManager::~SubDeviceManager() {
 
 uint8_t SubDeviceManager::num_sub_devices() const { return this->sub_devices_.size(); }
 
+const std::vector<SubDeviceId> &SubDeviceManager::get_sub_device_ids() const {
+    return this->sub_device_ids_;
+}
+
 const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_devices_[sub_device_index];
 }
 
-const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_mcast_data(SubDeviceId sub_device_id) const {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return noc_mcast_data_[sub_device_index];
+const vector_memcpy_aligned<uint32_t> &SubDeviceManager::noc_mcast_unicast_data() const {
+    return noc_mcast_unicast_data_;
 }
 
-const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_unicast_data(SubDeviceId sub_device_id) const {
+uint8_t SubDeviceManager::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return noc_unicast_data_[sub_device_index];
+    return this->num_noc_mcast_txns_[sub_device_index];
 }
 
-const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data(SubDeviceId sub_device_id) const {
+uint8_t SubDeviceManager::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return noc_mcast_unicast_data_[sub_device_index];
+    return this->num_noc_unicast_txns_[sub_device_index];
+}
+
+uint8_t SubDeviceManager::noc_mcast_data_start_index(SubDeviceId sub_device_id) const {
+    auto sub_device_index = this->get_sub_device_index(sub_device_id);
+    return this->noc_mcast_data_start_index_[sub_device_index];
+}
+
+uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id) const {
+    auto sub_device_index = this->get_sub_device_index(sub_device_id);
+    return this->noc_unicast_data_start_index_[sub_device_index];
 }
 
 const std::unique_ptr<Allocator> &SubDeviceManager::get_initialized_allocator(SubDeviceId sub_device_id) const {
@@ -151,6 +168,7 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
 }
 
 void SubDeviceManager::validate_sub_devices() const {
+    TT_FATAL(this->sub_devices_.size() <= SubDeviceManager::MAX_NUM_SUB_DEVICES, "Too many sub devices specified");
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
@@ -186,6 +204,13 @@ void SubDeviceManager::validate_sub_devices() const {
                     "SubDevices specified for SubDeviceManager intersect");
             }
         }
+    }
+}
+
+void SubDeviceManager::populate_sub_device_ids() {
+    this->sub_device_ids_.resize(this->num_sub_devices());
+    for (uint8_t i = 0; i < this->num_sub_devices(); ++i) {
+        this->sub_device_ids_[i] = SubDeviceId{i};
     }
 }
 
@@ -256,42 +281,41 @@ void SubDeviceManager::populate_sub_allocators() {
 
 void SubDeviceManager::populate_noc_data() {
     uint32_t num_sub_devices = this->num_sub_devices();
-    this->noc_mcast_data_.resize(num_sub_devices);
-    this->noc_unicast_data_.resize(num_sub_devices);
-    this->noc_mcast_unicast_data_.resize(num_sub_devices);
+    this->num_noc_mcast_txns_.resize(num_sub_devices);
+    this->num_noc_unicast_txns_.resize(num_sub_devices);
+    this->noc_mcast_data_start_index_.resize(num_sub_devices);
+    this->noc_unicast_data_start_index_.resize(num_sub_devices);
 
     NOC noc_index = this->device_->dispatch_go_signal_noc();
-
+    uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = this->sub_devices_[i].cores(HalProgrammableCoreType::TENSIX);
         const auto& eth_cores = this->sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
 
-        uint32_t idx = 0;
-        auto& noc_mcast_data = this->noc_mcast_data_[i];
-        noc_mcast_data.resize(tensix_cores.size() * 2);
+        this->noc_mcast_data_start_index_[i] = idx;
+        this->num_noc_mcast_txns_[i] = tensix_cores.size();
+        this->noc_mcast_unicast_data_.resize(idx + this->num_noc_mcast_txns_[i] * 2);
         for (const auto& core_range : tensix_cores.ranges()) {
             auto physical_start =
                 this->device_->physical_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
             auto physical_end = this->device_->physical_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
             auto physical_core_range = CoreRange(physical_start, physical_end);
-            noc_mcast_data[idx++] = this->device_->get_noc_multicast_encoding(noc_index, physical_core_range);
-            noc_mcast_data[idx++] = core_range.size();
+            this->noc_mcast_unicast_data_[idx++] = this->device_->get_noc_multicast_encoding(noc_index, physical_core_range);
+            this->noc_mcast_unicast_data_[idx++] = core_range.size();
         }
+        this->noc_unicast_data_start_index_[i] = idx;
 
-        idx = 0;
-        auto& noc_unicast_data = this->noc_unicast_data_[i];
+        // TODO: Precompute number of eth cores and resize once
         for (const auto& core_range : eth_cores.ranges()) {
-            noc_unicast_data.resize(noc_unicast_data.size() + core_range.size());
+            this->noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
                 auto physical_core = this->device_->physical_core_from_logical_core(core, CoreType::ETH);
-                noc_unicast_data[idx++] = this->device_->get_noc_unicast_encoding(noc_index, physical_core);
+                this->noc_mcast_unicast_data_[idx++] = this->device_->get_noc_unicast_encoding(noc_index, physical_core);
             }
         }
-        auto& noc_mcast_unicast_data = this->noc_mcast_unicast_data_[i];
-        noc_mcast_unicast_data.resize(noc_mcast_data.size() + noc_unicast_data.size());
-        std::copy(noc_mcast_data.begin(), noc_mcast_data.end(), noc_mcast_unicast_data.begin());
-        std::copy(
-            noc_unicast_data.begin(), noc_unicast_data.end(), noc_mcast_unicast_data.begin() + noc_mcast_data.size());
+        this->num_noc_unicast_txns_[i] = idx - this->noc_unicast_data_start_index_[i];
+
+        TT_FATAL(idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES, "NOC data entries {} exceeds maximum supported size {}", idx, dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
 
