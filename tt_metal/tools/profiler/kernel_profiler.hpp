@@ -17,6 +17,7 @@
 #include "risc_attribs.h"
 
 #include "dev_msgs.h"
+#include "mailbox_base.h" // get_mailbox_base()
 
 #define DO_PRAGMA(x) _Pragma (#x)
 
@@ -43,10 +44,10 @@ namespace kernel_profiler{
     constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
     volatile tt_l1_ptr uint32_t *profiler_control_buffer =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), profiler.control_vector));
 
     volatile tt_l1_ptr uint32_t (*profiler_data_buffer)[kernel_profiler::PROFILER_L1_VECTOR_SIZE] =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t (*)[kernel_profiler::PROFILER_L1_VECTOR_SIZE]>(GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t (*)[kernel_profiler::PROFILER_L1_VECTOR_SIZE]>(GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), profiler.buffer));
 
 #if defined(COMPILE_FOR_BRISC)
     constexpr uint32_t myRiscID = 0;

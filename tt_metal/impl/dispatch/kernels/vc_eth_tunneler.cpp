@@ -4,6 +4,7 @@
 
 // clang-format off
 #include "dataflow_api.h"
+#include "mailbox_base.h" // get_mailbox_base()
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 // clang-format on
 
@@ -257,8 +258,8 @@ void kernel_main() {
                 all_outputs_finished &= output_finished;
             }
         }
-        uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-        tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
+        uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), launch_msg_rd_ptr);
+        tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), launch[launch_msg_rd_ptr]);
         if (launch_msg->kernel_config.exit_erisc_kernel) {
             return;
         }

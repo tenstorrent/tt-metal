@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "dev_msgs.h"
+#include "mailbox_base.h" // get_mailbox_base()
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>
@@ -49,7 +50,7 @@ inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t *debug_waypoint) {
 #endif
 
 #define WATCHER_WAYPOINT_MAILBOX \
-    (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[WATCHER_WAYPOINT_MAILBOX_OFFSET])
+    (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), watcher.debug_waypoint))[WATCHER_WAYPOINT_MAILBOX_OFFSET])
 
 #define WAYPOINT(x) write_debug_waypoint<helper(x)>(WATCHER_WAYPOINT_MAILBOX)
 

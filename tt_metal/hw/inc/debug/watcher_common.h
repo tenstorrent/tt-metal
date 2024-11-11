@@ -5,6 +5,7 @@
 #pragma once
 
 #include "dev_msgs.h"
+#include "mailbox_base.h" // get_mailbox_base()
 
 #if defined(WATCHER_ENABLED)
 
@@ -36,11 +37,11 @@ inline uint32_t debug_get_which_riscv()
 }
 
 void clear_previous_launch_message_entry_for_watcher() {
-    uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), launch_msg_rd_ptr);
     // Before the read pointer has been incremented, clear the watcher info 1 entries before to ensure that we don't
     // report stale data
     uint32_t prev_rd_ptr = (launch_msg_rd_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
-    launch_msg_t tt_l1_ptr *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[prev_rd_ptr]);
+    launch_msg_t tt_l1_ptr *launch_msg = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), launch[prev_rd_ptr]);
     // Clear kernel ids and NOC ID used by stale program entry, since these are queried by watcher
     for (int idx = 0; idx < DISPATCH_CLASS_MAX; idx++) {
         launch_msg->kernel_config.watcher_kernel_ids[idx] = 0;

@@ -42,7 +42,7 @@ typedef bool debug_sanitize_noc_which_core_t;
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
-    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), core_info);
 
     for (uint32_t idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         uint8_t core_x = core_info->non_worker_cores[idx].x;
@@ -102,7 +102,7 @@ inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
     if (addr + len <= addr)
         return DebugSanitizeNocAddrZeroLength;
 
-    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), core_info);
     if (addr < core_info->noc_pcie_addr_base)
         return DebugSanitizeNocAddrUnderflow;
     if (addr + len > core_info->noc_pcie_addr_end)
@@ -113,7 +113,7 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
     if (addr + len <= addr)
         return DebugSanitizeNocAddrZeroLength;
 
-    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), core_info);
     if (addr < core_info->noc_dram_addr_base)
         return DebugSanitizeNocAddrUnderflow;
     if (addr + len > core_info->noc_dram_addr_end)
@@ -146,7 +146,7 @@ inline void debug_sanitize_post_noc_addr_and_hang(
     if (return_code == DebugSanitizeNocOK)
         return;
 
-    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize_noc);
+    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), watcher.sanitize_noc);
 
     if (v[noc_id].return_code == DebugSanitizeNocOK) {
         v[noc_id].noc_addr = noc_addr;
@@ -162,7 +162,7 @@ inline void debug_sanitize_post_noc_addr_and_hang(
 #if defined(COMPILE_FOR_ERISC)
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
-    tt_l1_ptr go_msg_t *go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_message);
+    tt_l1_ptr go_msg_t *go_message_ptr = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), go_message);
     go_message_ptr->signal = RUN_MSG_DONE;
 
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
@@ -345,7 +345,7 @@ void debug_sanitize_noc_and_worker_addr(
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
-    debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(watcher.debug_insert_delays);
+    debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), watcher.debug_insert_delays);
 
     bool delay = false;
     switch (transaction_type) {

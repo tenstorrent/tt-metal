@@ -12,7 +12,7 @@
 
 void watcher_pause() {
     // Write the pause flag for this core into the memory mailbox for host to read.
-    debug_pause_msg_t tt_l1_ptr *pause_msg = GET_MAILBOX_ADDRESS_DEV(watcher.pause_status);
+    debug_pause_msg_t tt_l1_ptr *pause_msg = GET_MAILBOX_ADDRESS_DEV(get_mailbox_base(), watcher.pause_status);
     pause_msg->flags[debug_get_which_riscv()] = 1;
 
     // Wait for the pause flag to be cleared.

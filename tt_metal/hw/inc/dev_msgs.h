@@ -11,19 +11,10 @@
 #pragma once
 
 #include "core_config.h"
-#include "noc/noc_parameters.h"
-#include "dev_mem_map.h"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
-// TODO: move these to processor specific files
-#if defined(COMPILE_FOR_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
-#else
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
-#endif
+#define GET_MAILBOX_ADDRESS_DEV(mailbox_base, member) (&(((mailboxes_t tt_l1_ptr *)(mailbox_base))->member))
 
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
@@ -227,13 +218,14 @@ enum watcher_enable_msg_t {
     WatcherEnabled = 3,
 };
 
-// TODO: w/ the hal, this can come from core specific defines
+// TODO: w/ the hal, these can come from core specific defines
 constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
+constexpr static std::uint32_t NOC_COUNT = 2;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
     struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
-    struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
+    struct debug_sanitize_noc_addr_msg_t sanitize_noc[NOC_COUNT];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -310,35 +302,6 @@ struct mailboxes_t {
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
-
-// TODO: move these checks into the HAL?
-#ifndef TENSIX_FIRMWARE
-// Validate assumptions on mailbox layout on host compile
-// Constexpr definitions allow for printing of breaking values at compile time
-#ifdef NCRISC_HAS_IRAM
-// These are only used in ncrisc-halt.S
-static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.dm1) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
-static_assert(
-    MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
-#endif
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
-static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
-static_assert( MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_END);
-static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static_assert( ETH_LAUNCH_CHECK == 0);
-static_assert( ETH_PROFILER_CHECK == 0);
-static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-static_assert(MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
-#else
-static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
-static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static constexpr uint32_t TENSIX_PROFILER_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static_assert( TENSIX_LAUNCH_CHECK == 0);
-static_assert( TENSIX_PROFILER_CHECK == 0);
-static_assert( sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-#endif
-#endif
 
 struct eth_word_t {
     volatile uint32_t bytes_sent;
