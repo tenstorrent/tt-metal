@@ -230,7 +230,12 @@ void launch_op(
                             output_tensor->tensor_attributes->dynamic_storage = false;
                         }
                         insert_buffer_and_shape_for_device(target_device, *local_tensor, *output_tensor);
-                        output_tensor->tensor_attributes->num_workers_completed++;
+                        int num_workers_completed = (output_tensor->tensor_attributes->num_workers_completed)++;
+                        if (not num_workers_completed) {
+                            output_tensor->tensor_attributes->shape = local_tensor->tensor_attributes->shape;
+                            output_tensor->tensor_attributes->tensor_layout = local_tensor->tensor_attributes->tensor_layout;
+                            output_tensor->tensor_attributes->metadata_populated = true;
+                        }
                     }
                 }
             });

@@ -25,11 +25,6 @@ public:
 
     Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const {
-        return std::forward_as_tuple();
-    }
 };
 
 class TilePageConfig {

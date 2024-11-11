@@ -37,7 +37,7 @@ Tensor::TensorAttributes::TensorAttributes():
     shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), tensor_layout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig{}) {}
 
 Tensor::TensorAttributes::TensorAttributes(const Storage storage, const TensorLayout& tensor_layout, const ttnn::SimpleShape& logical_shape) :
-    storage(storage), shape(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view()), tensor_layout(tensor_layout) {
+    storage(storage), shape(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view()), tensor_layout(tensor_layout), metadata_populated(true) {
 }
 
 Tensor::TensorAttributes::TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile)
@@ -144,6 +144,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
         },
         storage);
     this->tensor_attributes->num_workers_completed = this->tensor_attributes->num_shards_to_be_populated;
+    this->tensor_attributes->metadata_populated = true;
 }
 
 Tensor::Tensor(
@@ -463,6 +464,7 @@ void Tensor::deepcopy(const Tensor& other) {
     this->tensor_attributes->storage = other.tensor_attributes->storage;
     this->tensor_attributes->tensor_layout = other.tensor_attributes->tensor_layout;
     // Set metadata populated flag for getters
+    this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
 }
 
@@ -487,6 +489,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
         },
         other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the
                                // worker thread
+    this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
 }
 
@@ -536,19 +539,24 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 
 // Getters - Spin until tensor is populated before querying tensor metadata
 const tt::tt_metal::LegacyShape& Tensor::get_legacy_shape() const {
+    this->wait_for_tensor_metadata_populated();
     return this->tensor_attributes->shape.value;
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
+    this->wait_for_tensor_metadata_populated();
     return this->tensor_attributes->shape;
 }
 DataType Tensor::get_dtype() const {
+    this->wait_for_tensor_metadata_populated();
     return this->dtype();
 }
 Layout Tensor::get_layout() const {
+    this->wait_for_tensor_metadata_populated();
     return this->layout();
 }
 std::optional<Tile> Tensor::get_tile() const {
+    this->wait_for_tensor_metadata_populated();
     return this->tile();
 }
 
@@ -872,6 +880,7 @@ Tensor allocate_tensor_on_device(
     // Top level wrapper to asynchronously create a device tensor (multi-device)
     TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape);
     Tensor device_tensor = Tensor(mesh_device->get_devices(), tensor_layout, shape.logical_shape());
+    device_tensor.tensor_attributes->metadata_populated = true;
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     const auto& workers = device_tensor.get_workers();
     uint32_t num_workers = workers.size();
