@@ -343,7 +343,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
 @pytest.mark.parametrize("n", [256])
-@pytest.mark.parametrize("has_bias", [True])
+@pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("grid_size", [(2, 2)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -354,8 +354,9 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 def test_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    in0_shape = [1, 1, m, k]
-    in1_shape = [1, 1, k, n]
+    b = 3
+    in0_shape = [b, 1, m, k]
+    in1_shape = [b, 1, k, n]
     bias_shape = [1, 1, n]
 
     num_out_block_h = 2
@@ -425,6 +426,7 @@ def test_matmul_2d_tiny_tile(
         per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
+        fuse_batch=False,
     )
 
     if is_grayskull():

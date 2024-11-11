@@ -202,10 +202,11 @@ void kernel_main() {
 #ifdef IN1_DRAM_SHARDED
         uint32_t l1_read_addr_in1_offset = 0;
 #endif
+        uint32_t in1_tensor_current_h_dim_block_tile_id = in1_tensor_start_tile_id;
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             // DPRINT << "bh " << bh <<ENDL();
-            uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_start_tile_id;
+            uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
             uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
@@ -334,8 +335,6 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in3, in1_block_w);
                     l1_write_addr_in3 = get_write_ptr(cb_id_in3);
 
-
-
                     uint64_t in3_start_address = l1_write_addr_in3;  // copy start address of block, to be used for mcasting
                     uint32_t in3_block_size_bytes = 0;               // can be optimized later, pass it to kernel
 
@@ -417,9 +416,7 @@ void kernel_main() {
 #endif // BIAS_SHARDED
                 }
 #endif // FUSE_BIAS
-                if (bcast_B == 0) {
-                    in1_tensor_start_tile_id += KtNt;
-                }
+
 
 #ifndef OUT_SHARDED
                 // WRITER
@@ -482,6 +479,9 @@ void kernel_main() {
 #endif
             }
             out_tensor_current_h_dim_block_tile_id += out_tensor_next_h_dim_block_stride;
+        }
+        if constexpr (bcast_B == 0) {
+            in1_tensor_start_tile_id += KtNt;
         }
         out_tensor_start_tile_id += MtNt;
     }
