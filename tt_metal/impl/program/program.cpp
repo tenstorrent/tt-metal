@@ -1310,6 +1310,10 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
         } else {
             std::unordered_set<SubDeviceId> used_sub_device_ids;
             auto find_sub_device_ids = [&] (HalProgrammableCoreType core_type) {
+                auto core_type_index = hal.get_programmable_core_type_index(core_type);
+                if (core_type_index == -1) {
+                    return;
+                }
                 const auto& program_kgs = this->get_kernel_groups(hal.get_programmable_core_type_index(core_type));
                 uint32_t num_intersections = 0;
                 uint32_t num_cores = 0;
@@ -1516,9 +1520,9 @@ uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_c
     // TODO: This restriction can be lifted once we have support for programs spanning multiple sub-devices
     // Semaphores across sub-devices are expected to have the same address
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
-    auto sub_device_id = sub_device_ids[0];
+    auto sub_device_index = sub_device_ids[0].to_index();
     uint32_t base_addr = device->using_fast_dispatch
-                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_id).get_last_slot_addr(
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
@@ -1538,9 +1542,9 @@ uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_co
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
-    auto sub_device_id = sub_device_ids[0];
+    auto sub_device_index = sub_device_ids[0].to_index();
     uint32_t base_addr = device->using_fast_dispatch
-                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_id).get_last_slot_addr(
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 

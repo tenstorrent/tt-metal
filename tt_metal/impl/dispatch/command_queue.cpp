@@ -76,7 +76,8 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     Buffer& buffer,
     void* dst,
     SystemMemoryManager& manager,
-    tt::stl::Span<const std::pair<uint32_t, uint32_t>> expected_num_workers_completed,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
     uint32_t src_page_index,
     std::optional<uint32_t> pages_to_read) :
     command_queue_id(command_queue_id),
@@ -85,6 +86,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     manager(manager),
     buffer(buffer),
     expected_num_workers_completed(expected_num_workers_completed),
+    sub_device_ids(sub_device_ids),
     src_page_index(src_page_index),
     pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
     TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to read an invalid buffer");
@@ -110,7 +112,7 @@ void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& 
 }
 
 void EnqueueReadBufferCommand::process() {
-    uint32_t num_worker_counters = this->expected_num_workers_completed.size();
+    uint32_t num_worker_counters = this->sub_device_ids.size();
     // accounts for padding
     uint32_t cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE * num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
@@ -126,16 +128,16 @@ void EnqueueReadBufferCommand::process() {
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd
     for (uint32_t i = 0; i < last_index; ++i) {
-        auto [offset_index, workers_completed] = this->expected_num_workers_completed[i];
+        auto offset_index = this->sub_device_ids[i].to_index();
         uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, workers_completed);
+            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index ]);
 
     }
-    auto [offset_index, workers_completed] = this->expected_num_workers_completed[last_index];
+    auto offset_index = this->sub_device_ids[last_index].to_index();
     uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
-        true, dispatch_message_addr, workers_completed);
+        true, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
 
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
@@ -160,7 +162,8 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     const void* src,
     SystemMemoryManager& manager,
     bool issue_wait,
-    tt::stl::Span<const std::pair<uint32_t, uint32_t>> expected_num_workers_completed,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
     uint32_t bank_base_address,
     uint32_t padded_page_size,
     uint32_t dst_page_index,
@@ -172,6 +175,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     src(src),
     buffer(buffer),
     expected_num_workers_completed(expected_num_workers_completed),
+    sub_device_ids(sub_device_ids),
     bank_base_address(bank_base_address),
     padded_page_size(padded_page_size),
     dst_page_index(dst_page_index),
@@ -284,7 +288,7 @@ void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& co
 }
 
 void EnqueueWriteBufferCommand::process() {
-    uint32_t num_worker_counters = this->expected_num_workers_completed.size();
+    uint32_t num_worker_counters = this->sub_device_ids.size();
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
 
     uint32_t cmd_sequence_sizeB =
@@ -302,10 +306,10 @@ void EnqueueWriteBufferCommand::process() {
     if (this->issue_wait) {
         uint32_t dispatch_message_base_addr = dispatch_constants::get(
             this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-        for (uint32_t i = 0; i < num_worker_counters; ++i) {
-            auto [offset_index, workers_completed] = this->expected_num_workers_completed[i];
+        for (const auto &sub_device_id : this->sub_device_ids) {
+            auto offset_index = sub_device_id.to_index();
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
-            command_sequence.add_dispatch_wait(false, dispatch_message_addr, workers_completed);
+            command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
         }
     }
 
@@ -1101,13 +1105,10 @@ void EnqueueProgramCommand::assemble_device_commands(
     cmd_sequence_sizeB += (this->device->dispatch_s_enabled() || program_transfer_info.num_active_cores > 0) * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
     // either dispatch_s or dispatch_d will send the go signal (go_signal_mcast command)
-    const auto& noc_mcast_unicast_data = device->noc_mcast_unicast_data(this->sub_device_id, multicast_go_signal_sub_cmds.size() > 0,  unicast_go_signal_sub_cmds.size() > 0);
+    const auto& noc_data_start_idx = device->noc_data_start_index(this->sub_device_id, multicast_go_signal_sub_cmds.size() > 0,  unicast_go_signal_sub_cmds.size() > 0);
     const auto& num_noc_mcast_txns = multicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_mcast_txns(this->sub_device_id) : 0;
     const auto& num_noc_unicast_txns = unicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_unicast_txns(this->sub_device_id) : 0;
-    cmd_sequence_sizeB += align(
-        sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
-        noc_mcast_unicast_data.size() * sizeof(uint32_t),
-        pcie_alignment);
+    cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment);
 
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
 
@@ -1286,10 +1287,11 @@ void EnqueueProgramCommand::assemble_device_commands(
     }
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
+    auto sub_device_index = this->sub_device_id.to_index();
     if (this->device->dispatch_s_enabled()) {
         // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
         uint16_t index_bitmask = 0;
-        index_bitmask |= 1 << this->sub_device_id.to_index();
+        index_bitmask |= 1 << sub_device_index;
         device_command_sequence.add_notify_dispatch_s_go_signal_cmd(program_transfer_info.num_active_cores > 0, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     } else {
@@ -1302,9 +1304,9 @@ void EnqueueProgramCommand::assemble_device_commands(
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)this->dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)this->dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(this->dispatch_core_type).get_dispatch_message_offset(this->sub_device_id.to_index());
+    run_program_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(this->dispatch_core_type).get_dispatch_message_offset(sub_device_index);
     uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
-    device_command_sequence.add_dispatch_go_signal_mcast(this->expected_num_workers_completed, *reinterpret_cast<uint32_t*>(&run_program_go_signal), this->dispatch_message_addr, num_noc_mcast_txns, num_noc_unicast_txns, noc_mcast_unicast_data, dispatcher_for_go_signal);
+    device_command_sequence.add_dispatch_go_signal_mcast(this->expected_num_workers_completed, *reinterpret_cast<uint32_t*>(&run_program_go_signal), this->dispatch_message_addr, num_noc_mcast_txns, num_noc_unicast_txns, noc_data_start_idx, dispatcher_for_go_signal);
     program_command_sequence.mcast_go_signal_cmd_ptr = &((CQDispatchCmd*) ((uint32_t*)device_command_sequence.data() + (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))->mcast;
 }
 
@@ -1601,7 +1603,8 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     NOC noc_index,
     SystemMemoryManager& manager,
     uint32_t event_id,
-    tt::stl::Span<const std::pair<uint32_t, uint32_t>> expected_num_workers_completed,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool clear_count,
     bool write_barrier) :
     command_queue_id(command_queue_id),
@@ -1610,6 +1613,7 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     manager(manager),
     event_id(event_id),
     expected_num_workers_completed(expected_num_workers_completed),
+    sub_device_ids(sub_device_ids),
     clear_count(clear_count),
     write_barrier(write_barrier) {}
 
@@ -1625,7 +1629,7 @@ void EnqueueRecordEventCommand::process() {
         align(sizeof(CQDispatchCmd) + num_hw_cqs * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
         (align(dispatch_constants::EVENT_PADDED_SIZE, l1_alignment) * num_hw_cqs);
     uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
-    uint32_t num_worker_counters = this->expected_num_workers_completed.size();
+    uint32_t num_worker_counters = this->sub_device_ids.size();
 
     uint32_t cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE * num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
@@ -1646,16 +1650,16 @@ void EnqueueRecordEventCommand::process() {
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier for the last wait cmd
     for (uint32_t i = 0; i < last_index; ++i) {
-        auto [offset_index, workers_completed] = this->expected_num_workers_completed[i];
+        auto offset_index = this->sub_device_ids[i].to_index();
         uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, workers_completed, this->clear_count);
+            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index], this->clear_count);
 
     }
-    auto [offset_index, workers_completed] = this->expected_num_workers_completed[last_index];
+    auto offset_index = this->sub_device_ids[last_index].to_index();
     uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
     command_sequence.add_dispatch_wait(
-            this->write_barrier, dispatch_message_addr, workers_completed, this->clear_count);
+            this->write_barrier, dispatch_message_addr, this->expected_num_workers_completed[offset_index], this->clear_count);
 
     CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
@@ -1759,17 +1763,9 @@ EnqueueTraceCommand::EnqueueTraceCommand(
 
 void EnqueueTraceCommand::process() {
     uint32_t num_sub_devices = descriptor->descriptors.size();
-    uint32_t go_signals_cmd_size = 0;
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    for (const auto& [index, desc] : descriptor->descriptors) {
-        uint32_t go_signal_cmd_size = sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd);
-        go_signal_cmd_size += device->noc_mcast_unicast_data(
-                                        SubDeviceId{index},
-                                        desc.num_traced_programs_needing_go_signal_multicast,
-                                        desc.num_traced_programs_needing_go_signal_unicast)
-                                        .size() * sizeof(uint32_t);
-        go_signals_cmd_size += align(go_signal_cmd_size, pcie_alignment);
-    }
+    uint32_t go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * descriptor->descriptors.size();
+
     uint32_t cmd_sequence_sizeB =
         this->device->dispatch_s_enabled() * CQ_PREFETCH_CMD_BARE_MIN_SIZE + // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +  // go signal cmd
@@ -1801,39 +1797,42 @@ void EnqueueTraceCommand::process() {
     reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->dispatch_core.x;
     reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->dispatch_core.y;
     for (const auto& [id, desc] : descriptor->descriptors) {
+        const auto& noc_data_start_idx = device->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_multicast, desc.num_traced_programs_needing_go_signal_unicast);
         const auto& num_noc_mcast_txns = desc.num_traced_programs_needing_go_signal_multicast ? device->num_noc_mcast_txns(id) : 0;
         const auto& num_noc_unicast_txns = desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
         reset_launch_message_read_ptr_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
         uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
+        auto index = id.to_index();
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
-            this->expected_num_workers_completed[id.to_index()],
+            this->expected_num_workers_completed[index],
             *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
             dispatch_message_addr,
             num_noc_mcast_txns,
             num_noc_unicast_txns,
-            device->noc_mcast_unicast_data(id, desc.num_traced_programs_needing_go_signal_multicast, desc.num_traced_programs_needing_go_signal_unicast),
+            noc_data_start_idx,
             dispatcher_for_go_signal);
         if (desc.num_traced_programs_needing_go_signal_multicast) {
-            this->expected_num_workers_completed[id.to_index()] += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
+            this->expected_num_workers_completed[index] += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            this->expected_num_workers_completed[id.to_index()] += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, id);
+            this->expected_num_workers_completed[index] += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, id);
         }
     }
     // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have completed this step, before sending kernel config data to workers
     // or notifying dispatch_s that its safe to send the go_signal.
     // Clear the dispatch <--> worker semaphore, since trace starts at 0.
     for (const auto &id : descriptor->sub_device_ids) {
-        uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
+        auto index = id.to_index();
+        uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(index);
         if (this->device->distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
-                false, dispatch_message_addr, this->expected_num_workers_completed[id.to_index()], this->clear_count, false, true, 1);
+                false, dispatch_message_addr, this->expected_num_workers_completed[index], this->clear_count, false, true, 1);
         }
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, this->expected_num_workers_completed[id.to_index()], this->clear_count);
+            false, dispatch_message_addr, this->expected_num_workers_completed[index], this->clear_count);
         if (this->clear_count) {
-            this->expected_num_workers_completed[id.to_index()] = 0;
+            this->expected_num_workers_completed[index] = 0;
         }
     }
 
@@ -1958,16 +1957,24 @@ void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id);
 }
 
+void HWCommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    uint32_t pci_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
+    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    DispatcherSelect dispatcher_for_go_signal = this->device->dispatch_s_enabled() ? DispatcherSelect::DISPATCH_SLAVE : DispatcherSelect::DISPATCH_MASTER;
+    command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id);
+    this->manager.fetch_queue_reserve_back(this->id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id);
+}
+
 void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;
     if (reset_launch_msg_state) {
         uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-        for (uint8_t i = 0; i < num_sub_devices; ++i) {
-            uint32_t go_signal_cmd_size = sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd);
-            go_signal_cmd_size += device->noc_mcast_unicast_data(SubDeviceId{i}).size() * sizeof(uint32_t);
-            go_signals_cmd_size += align(go_signal_cmd_size, pcie_alignment);
-        }
+        go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
     }
     uint32_t cmd_sequence_sizeB =
         reset_launch_msg_state * this->device->dispatch_s_enabled() * CQ_PREFETCH_CMD_BARE_MIN_SIZE + // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
@@ -2001,7 +2008,7 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
-            command_sequence.add_dispatch_go_signal_mcast(expected_num_workers_completed[i], *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal), dispatch_message_addr, device->num_noc_mcast_txns({i}), device->num_noc_unicast_txns({i}), device->noc_mcast_unicast_data({i}), dispatcher_for_go_signal);
+            command_sequence.add_dispatch_go_signal_mcast(expected_num_workers_completed[i], *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal), dispatch_message_addr, device->num_noc_mcast_txns({i}), device->num_noc_unicast_txns({i}), device->noc_data_start_index({i}), dispatcher_for_go_signal);
             expected_num_workers_completed[i] += device->num_worker_cores(HalProgrammableCoreType::TENSIX, {i});
             expected_num_workers_completed[i] += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, {i});
         }
@@ -2090,7 +2097,9 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
 
-    auto expected_workers_completed = this->get_expected_workers_completed(sub_device_ids);
+    if (sub_device_ids.empty()) {
+        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
+    }
 
     if (is_sharded(buffer.buffer_layout())) {
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
@@ -2135,7 +2144,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     buffer,
                     dst,
                     this->manager,
-                    expected_workers_completed,
+                    this->expected_num_workers_completed,
+                    sub_device_ids,
                     cores[core_id],
                     bank_base_address,
                     src_page_index,
@@ -2169,7 +2179,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             buffer,
             dst,
             this->manager,
-            expected_workers_completed,
+            this->expected_num_workers_completed,
+            sub_device_ids,
             src_page_index,
             pages_to_read);
 
@@ -2228,7 +2239,9 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
 
     uint32_t dst_page_index = 0;
 
-    auto expected_workers_completed = this->get_expected_workers_completed(sub_device_ids);
+    if (sub_device_ids.empty()) {
+        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
+    }
 
     if (is_sharded(buffer.buffer_layout())) {
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
@@ -2297,7 +2310,8 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
                         src,
                         this->manager,
                         issue_wait,
-                        expected_workers_completed,
+                        this->expected_num_workers_completed,
+                        sub_device_ids,
                         address,
                         buffer_page_mapping,
                         cores[core_id],
@@ -2388,7 +2402,8 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
                 src,
                 this->manager,
                 issue_wait,
-                expected_workers_completed,
+                this->expected_num_workers_completed,
+                sub_device_ids,
                 bank_base_address,
                 page_size_to_write,
                 dst_page_index,
@@ -2435,10 +2450,11 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 #endif
     auto sub_device_id = sub_device_ids[0];
+    auto sub_device_index = sub_device_id.to_index();
 
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->manager.get_bypass_mode() ? this->trace_ctx->descriptors[sub_device_id].num_completion_worker_cores
-                                                                          : this->expected_num_workers_completed[sub_device_id.to_index()];
+                                                                          : this->expected_num_workers_completed[sub_device_index];
     if (this->manager.get_bypass_mode()) {
         if (program.runs_on_noc_multicast_only_cores()) {
             this->trace_ctx->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
@@ -2450,10 +2466,10 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     } else {
         if (program.runs_on_noc_multicast_only_cores()) {
-            this->expected_num_workers_completed[sub_device_id.to_index()] += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            this->expected_num_workers_completed[sub_device_index] += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
-            this->expected_num_workers_completed[sub_device_id.to_index()] += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            this->expected_num_workers_completed[sub_device_index] += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
     }
 
@@ -2465,7 +2481,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         program,
         this->physical_enqueue_program_dispatch_core,
         this->manager,
-        this->get_config_buffer_mgr(sub_device_id),
+        this->get_config_buffer_mgr(sub_device_index),
         expected_workers_completed,
         // The assembled program command will encode the location of the launch messages in the ring buffer
         worker_launch_message_buffer_state.get_mcast_wptr(),
@@ -2514,7 +2530,9 @@ void HWCommandQueue::enqueue_record_event(const std::shared_ptr<Event>& event, b
     event->device = this->device;
     event->ready = true;  // what does this mean???
 
-    auto expected_workers_completed = this->get_expected_workers_completed(sub_device_ids);
+    if (sub_device_ids.empty()) {
+        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
+    }
 
     auto command = EnqueueRecordEventCommand(
         this->id,
@@ -2522,14 +2540,15 @@ void HWCommandQueue::enqueue_record_event(const std::shared_ptr<Event>& event, b
         this->noc_index,
         this->manager,
         event->event_id,
-        expected_workers_completed,
+        this->expected_num_workers_completed,
+        sub_device_ids,
         clear_count,
         true);
     this->enqueue_command(command, false, sub_device_ids);
 
     if (clear_count) {
-        for (const auto&[id, _] : expected_workers_completed) {
-            this->expected_num_workers_completed[id] = 0;
+        for (const auto& id : sub_device_ids) {
+            this->expected_num_workers_completed[id.to_index()] = 0;
         }
     }
     this->issued_completion_q_reads.push(
@@ -2558,8 +2577,9 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     this->enqueue_command(command, false, {});
 
     for (const auto& [id, desc]: trace_inst->desc->descriptors) {
-         // Increment the expected worker cores counter due to trace programs completion
-        this->expected_num_workers_completed[id.to_index()] += desc.num_completion_worker_cores;
+        auto index = id.to_index();
+        // Increment the expected worker cores counter due to trace programs completion
+        this->expected_num_workers_completed[index] += desc.num_completion_worker_cores;
         // After trace runs, the rdptr on each worker will be incremented by the number of programs in the trace
         // Update the wptr on host to match state. If the trace doesn't execute on a
         // class of worker (unicast or multicast), it doesn't reset or modify the
@@ -2574,7 +2594,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so that
         // it will force a stall and avoid stomping on in-use state.
         // TODO(jbauman): Reuse old state from the trace.
-        this->config_buffer_mgr[id.to_index()].mark_completely_full(this->expected_num_workers_completed[id.to_index()]);
+        this->config_buffer_mgr[index].mark_completely_full(this->expected_num_workers_completed[index]);
     }
     if (blocking) {
         this->finish(trace_inst->desc->sub_device_ids);
@@ -2941,10 +2961,11 @@ void HWCommandQueue::record_end() {
     // Copy the desc keys into a separate vector. When enqueuing traces, we sometimes need to pass sub-device ids separately
     this->trace_ctx->sub_device_ids.reserve(this->trace_ctx->descriptors.size());
     for (const auto& [id, _]: this->trace_ctx->descriptors) {
+        auto index = id.to_index();
         this->trace_ctx->sub_device_ids.push_back(id);
         // config_buffer_mgr reflects the state inside the trace, not on the current device, so reset it.
         // TODO(jbauman): Use a temporary WorkingBufferSetMgr when recording a trace.
-        this->get_config_buffer_mgr(id).mark_completely_full(this->expected_num_workers_completed[id.to_index()]);
+        this->get_config_buffer_mgr(index).mark_completely_full(this->expected_num_workers_completed[index]);
     }
     this->tid = std::nullopt;
     this->trace_ctx = nullptr;
@@ -2959,7 +2980,7 @@ void HWCommandQueue::terminate() {
     this->enqueue_command(command, false, {});
 }
 
-WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(SubDeviceId sub_device_id) { return config_buffer_mgr[sub_device_id.to_index()]; }
+WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr[index]; }
 
 void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
     for (uint32_t i = 0; i < num_entries; ++i) {
@@ -2976,25 +2997,6 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
     }
 }
-
-std::vector<std::pair<uint32_t, uint32_t>> HWCommandQueue::get_expected_workers_completed(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    std::vector<std::pair<uint32_t, uint32_t>> expected_workers_completed;
-    if (sub_device_ids.empty()) {
-        expected_workers_completed.reserve(this->device->num_sub_devices());
-        for (uint32_t i = 0; i < this->device->num_sub_devices(); ++i) {
-            expected_workers_completed.emplace_back(i, this->expected_num_workers_completed[i]);
-        }
-    } else {
-        expected_workers_completed.reserve(sub_device_ids.size());
-        for (uint32_t i = 0; i < sub_device_ids.size(); ++i) {
-            auto sub_device_id = sub_device_ids[i];
-            TT_FATAL(sub_device_id.to_index() < this->device->num_sub_devices(), "Invalid sub_device_id: {}", sub_device_id.to_index());
-            expected_workers_completed.emplace_back(sub_device_id.to_index(), this->expected_num_workers_completed[sub_device_id.to_index()]);
-        }
-    }
-    return expected_workers_completed;
-}
-
 
 void EnqueueAddBufferToProgramImpl(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,

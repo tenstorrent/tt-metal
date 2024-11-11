@@ -182,6 +182,10 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                 cq_file << fmt::format(
                     " (num_worker_sems={})", val(cmd->set_num_worker_sems.num_worker_sems));
                 break;
+            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
+                cq_file << fmt::format(
+                    " (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
+                break;
             // These commands don't have any additional data to dump.
             case CQ_DISPATCH_CMD_ILLEGAL: break;
             case CQ_DISPATCH_CMD_GO: break;
