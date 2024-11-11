@@ -164,6 +164,8 @@ on:
           - eltwise.unary_backward.hardswish_bw.hardswish_bw
           - eltwise.unary_backward.rpow_bw.rpow_bw
           - eltwise.unary_complex.conj
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.is_imag
           - eltwise.unary_complex.reciprocal
           - eltwise.unary_complex.reciprocal_bw
           - eltwise.binary_complex.div_bw.div_bw
@@ -193,6 +195,7 @@ on:
           - eltwise.unary_complex.angle.angle
           - eltwise.unary_complex.polar_bw.polar_bw
           - eltwise.unary_complex.angle_bw.angle_bw
+          - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
@@ -232,7 +235,6 @@ on:
           - eltwise.binary_backward.ldexp_bw
           - eltwise.binary_backward.logaddexp_bw
           - eltwise.binary_backward.logaddexp2_bw
-          - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
@@ -263,6 +265,7 @@ on:
           - eltwise.ternary_backward.addcmul_bw
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
+          - embedding_bw.embedding_bw
           - reduction.backward.prod_bw.prod_bw
           - reduction.topk.topk
           - reduction.argmax.argmax
@@ -310,6 +313,8 @@ on:
           - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
           - max_pool2d.short.max_pool2d_short_sweep
+          - max_pool2d.full.max_pool2d_params
+          - max_pool2d.full.max_pool2d_large_dims
           - transformer.concatenate_heads.concatenate_heads
           - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
           - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
