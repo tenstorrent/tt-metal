@@ -124,8 +124,8 @@ void kernel_main() {
                 }
 
 #ifdef FUSE_BIAS
-                // Only read bias on first batch
-                if (b == 0) {
+                // Only read bias on first batch, or we have multiple output blocks
+                if (b == 0 || num_blocks_w_dim > 1) {
                     // Operand 2
                     cb_reserve_back(cb_id_in3, in3_block_w);
 

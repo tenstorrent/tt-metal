@@ -207,6 +207,9 @@ void kernel_main() {
             // DPRINT << "bh " << bh <<ENDL();
             uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_start_tile_id;
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
+#ifdef FUSE_BIAS
+            uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
+#endif
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 // DPRINT << "bw " << bw <<ENDL();
                 uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
@@ -324,12 +327,14 @@ void kernel_main() {
 #endif
                 }
 #ifdef FUSE_BIAS
-                // Only read bias on first batch
-                if (b == 0) {
+                // Only read bias on first batch, or we have multiple output blocks
+                if (b == 0 || num_blocks_w_dim > 1) {
                     // Operand 1
 #ifndef BIAS_SHARDED
                     cb_reserve_back(cb_id_in3, in1_block_w);
                     l1_write_addr_in3 = get_write_ptr(cb_id_in3);
+
+
 
                     uint64_t in3_start_address = l1_write_addr_in3;  // copy start address of block, to be used for mcasting
                     uint32_t in3_block_size_bytes = 0;               // can be optimized later, pass it to kernel
@@ -363,7 +368,7 @@ void kernel_main() {
                     noc_async_read_barrier();
 #else
                     // Copy in1 block into CB, as the default kernel
-                    uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
+                    uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
                     for (uint32_t w = 0; w < in1_block_w; ++w) {
                         if (w < last_block_w) {
                             noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
@@ -472,6 +477,9 @@ void kernel_main() {
 #endif
                 in1_tensor_current_w_dim_block_tile_id += in1_tensor_next_w_dim_block_stride;
                 out_tensor_current_w_dim_block_tile_id += out_tensor_next_w_dim_block_stride;
+#ifdef FUSE_BIAS
+                in3_tensor_current_w_dim_block_tile_id += in1_block_w;
+#endif
             }
             out_tensor_current_h_dim_block_tile_id += out_tensor_next_h_dim_block_stride;
         }

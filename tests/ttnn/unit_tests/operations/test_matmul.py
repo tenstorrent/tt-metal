@@ -340,10 +340,10 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 # @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 # @pytest.mark.parametrize("transpose_tile", [True, False])
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [128])
-@pytest.mark.parametrize("k", [64])
-@pytest.mark.parametrize("n", [128])
-@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("m", [256])
+@pytest.mark.parametrize("k", [256])
+@pytest.mark.parametrize("n", [256])
+@pytest.mark.parametrize("has_bias", [True])
 @pytest.mark.parametrize("grid_size", [(2, 2)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -358,16 +358,21 @@ def test_matmul_2d_tiny_tile(
     in1_shape = [1, 1, k, n]
     bias_shape = [1, 1, n]
 
-    # in0_block_w = k // grid_size[0] // 32
-    # out_block_h = m // grid_size[1] // tile_h
-    # out_block_w = n // grid_size[0] // tile_w
-    # out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+    num_out_block_h = 2
+    num_out_block_w = 2
 
-    in0_block_w = 1
-    out_block_h = 2
-    out_block_w = 2
-    out_subblock_h = 1
-    out_subblock_w = 1
+    in0_block_w = k // grid_size[0] // 32
+    per_core_M = m // grid_size[1] // tile_h
+    per_core_N = n // grid_size[0] // tile_w
+    out_block_h = per_core_M // num_out_block_h
+    out_block_w = per_core_N // num_out_block_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    # in0_block_w = 1
+    # out_block_h = 2
+    # out_block_w = 2
+    # out_subblock_h = 1
+    # out_subblock_w = 1
 
     in0 = torch.ones(in0_shape).bfloat16()
     in1 = torch.randn(in1_shape).bfloat16()
@@ -416,8 +421,8 @@ def test_matmul_2d_tiny_tile(
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
     )

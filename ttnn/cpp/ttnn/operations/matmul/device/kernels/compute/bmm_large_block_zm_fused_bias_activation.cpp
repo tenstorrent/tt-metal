@@ -100,7 +100,7 @@ void MAIN {
         get_compile_time_arg_val(4);  // outer column block size (in inner column blocks)
     constexpr uint32_t in1_block_num_tiles =
         get_compile_time_arg_val(5);                                  // out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr uint32_t in1_per_core_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);      // outer inner dim (in inner dim blocks)
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);      // outer inner dim (in inner dim blocks)
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);      // outer inner dim (in inner dim blocks)
@@ -221,7 +221,7 @@ void MAIN {
                                     out_subblock_h,
                                     in0_block_w);
                                 in0_index++;                  // stride right by 1
-                                in1_index += in1_per_core_w;  // to stride down by 1 need to stride by in_per_core_w (should be
+                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w (should be
                                                             // called in1_block_w)
                             }
 
@@ -343,7 +343,7 @@ void MAIN {
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 add_bcast_rows_init_short();
                 // reconfigure unpacker df for src B
-                cb_wait_front(bias_cb_id, in1_per_core_w);
+                cb_wait_front(bias_cb_id, in1_block_w);
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -384,6 +384,9 @@ void MAIN {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
+                if constexpr (num_blocks_w_dim > 1) {
+                    cb_pop_front(bias_cb_id, in1_block_w);
+                }
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
@@ -406,9 +409,9 @@ void MAIN {
                     }
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
-                if constexpr (batch > 1) {
+                if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
                     // reconfigure init for matmul
-                    mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+                    mm_block_init_short(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef FUSE_BIAS
                     // reconfigure unpacker df for src A and src B
                     reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
