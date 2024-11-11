@@ -354,20 +354,26 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 def test_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    b = 2
+    b = 1
     in0_shape = [b, 1, m, k]
     in1_shape = [b, 1, k, n]
     bias_shape = [1, 1, n]
 
     num_out_block_h = 3
-    num_out_block_w = 1
+    num_out_block_w = 3
 
     in0_block_w = k // grid_size[0] // 32
     per_core_M = m // grid_size[1] // tile_h + 1
-    per_core_N = n // grid_size[0] // tile_w
+    per_core_N = n // grid_size[0] // tile_w + 1
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    print(per_core_M)
+    print(per_core_N)
+
+    print(out_block_h)
+    print(out_block_w)
 
     print(out_subblock_h)
     print(out_subblock_w)
@@ -493,7 +499,7 @@ def test_matmul_2d_tiny_tile(
     #     start = i*32
     #     end = start + 32
     #     assert_with_pcc(pt_out[0][0][2][start:end], output_tensor[0][0][2][start:end], 0.999)
-    # row_id = 320
+    row_id = 320
     # for i in range(512):
     #     print(i)
     #     row_id = i
