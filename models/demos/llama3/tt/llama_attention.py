@@ -116,7 +116,7 @@ class TtLlamaAttention(LightweightModule):
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         if self.is_multichip and self.use_fused_all_gather_matmul:
             pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
-            wo_ttnn = ttnn.as_tensor(
+            self.wo = ttnn.as_tensor(
                 pt_wo,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
@@ -125,7 +125,6 @@ class TtLlamaAttention(LightweightModule):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
                 cache_file_name=cache_name("wo_width_sharded"),
             )
-            self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
         else:  # For line topology we can't do all gather matmul for now, but we can height shard and reduce scatter
             # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
             wo_mem_config = configuration.create_dram_sharded_mem_config(
@@ -166,7 +165,7 @@ class TtLlamaAttention(LightweightModule):
             cache_k = torch.zeros(
                 (
                     self.max_batch_size,
-                    self.n_kv_heads,
+                    self.n_kv_heads // configuration.num_devices,
                     self.kv_seq_len,
                     self.head_dim,
                 )
@@ -174,7 +173,7 @@ class TtLlamaAttention(LightweightModule):
             cache_v = torch.zeros(
                 (
                     self.max_batch_size,
-                    self.n_kv_heads,
+                    self.n_kv_heads // configuration.num_devices,
                     self.kv_seq_len,
                     self.head_dim,
                 )
@@ -183,14 +182,14 @@ class TtLlamaAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
-                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 dtype=self.dtype,
+                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
                 if weight_cache_path and not configuration.dummy_weights
                 else None,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for k_or_v in [cache_k, cache_v]
         ]
