@@ -235,7 +235,6 @@ on:
           - eltwise.binary_backward.ldexp_bw
           - eltwise.binary_backward.logaddexp_bw
           - eltwise.binary_backward.logaddexp2_bw
-          - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
@@ -266,6 +265,7 @@ on:
           - eltwise.ternary_backward.addcmul_bw
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
+          - embedding_bw.embedding_bw
           - reduction.backward.prod_bw.prod_bw
           - reduction.topk.topk
           - reduction.argmax.argmax
