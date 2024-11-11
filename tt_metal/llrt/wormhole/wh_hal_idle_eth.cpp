@@ -57,9 +57,13 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
-    std::vector<uint8_t> processor_types{0};
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
+    std::vector<HalJitBuildConfig> processor_types(1);
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+        processor_types[0] = HalJitBuildConfig{
+            .fw_base_addr = MEM_IERISC_FIRMWARE_BASE,
+            .local_init = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+        };
         processor_classes[processor_class_idx] = processor_types;
     }
 

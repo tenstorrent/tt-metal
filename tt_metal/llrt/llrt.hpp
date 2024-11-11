@@ -48,7 +48,8 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0,
+ll_api::memory get_risc_binary(string const &path,
+    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
     ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
     ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
 
@@ -90,8 +91,8 @@ inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
 uint32_t generate_risc_startup_addr(bool is_eth_core, bool is_idle_eth=false);
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core, bool is_idle_eth=false);
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
+bool test_load_write_read_risc_binary(
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx);
 void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address);
 
 // subchannel hard-coded to 0 for now
