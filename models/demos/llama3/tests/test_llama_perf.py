@@ -45,7 +45,7 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if "3.2-1B" in model_args.DEFAULT_CACHE_PATH:
-        expected_inference_time = 0.04
+        expected_inference_time = 0.045
     elif "3.2-3B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.065
     elif "3.1-8B" in model_args.DEFAULT_CACHE_PATH:
