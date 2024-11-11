@@ -221,10 +221,10 @@ class Yolov4Trace2CQ:
     def initialize_yolov4_trace_2cqs_inference(
         self,
         device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
-        model_location_generator,
+        device_batch_size=1,
+        act_dtype=ttnn.bfloat16,
+        weight_dtype=ttnn.bfloat16,
+        model_location_generator=None,
     ):
         self.test_infra = create_test_infra(
             device,
