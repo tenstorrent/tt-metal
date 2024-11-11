@@ -1,0 +1,695 @@
+prefetcher_11: start
+dispatch_11: start
+dispatch_s : start
+cmd_wait
+ DISPATCH WAIT 18250 count 0
+cmd_write_paged is_dram: 1
+cmd_wait
+ DISPATCH WAIT 18250 count 0
+cmd_write_paged is_dram: 1
+cmd_wait
+ DISPATCH WAIT 18250 count 0
+cmd_write_paged is_dram: 1
+write offset: 0 28160 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 0
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH WAIT 18250 count 56
+cmd_write_paged is_dram: 1
+write offset: 0 29664 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 56
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH WAIT 18250 count 112
+cmd_write_paged is_dram: 1
+write offset: 0 36224 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 112
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH WAIT 18250 count 168
+cmd_write_paged is_dram: 1
+write offset: 0 42368 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 168
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH WAIT 18250 count 224
+cmd_write_paged is_dram: 1
+write offset: 0 43872 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 224
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH WAIT 18250 count 280
+cmd_write_paged is_dram: 1
+write offset: 0 50432 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 280
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH WAIT 18250 count 336
+cmd_write_paged is_dram: 1
+write offset: 0 56576 102096
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 336
+cmd_write_packed
+cmd_write_packed
+cmd_write_packed_large
+cmd_write_packed
+cmd_notify_dispatch_s_go_signal
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	1
+per_core_block_size	1
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	1
+per_core_block_size	1
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	1
+per_core_block_size	1
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp	INSIDE KERNEL:
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp	INSIDE UNARY KERNEL:
+per_core_block_cnt	0
+per_core_block_size	0
+ DISPATCH_S_NOTIFY BARRIER
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 392
+cmd_write_linear_h_host
+cmd_wait
+ DISPATCH BARRIER
+1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+Warning: MATH core does not support TileSlice printing, omitting print...
+
+Warning: MATH core does not support TileSlice printing, omitting print...
+
+1 0 0 0 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+ DISPATCH WAIT 18250 count 392
+cmd_write_packed
+cmd_write_linear_h_host
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 392
+cmd_write_packed
+cmd_write_linear_h_host
+cmd_wait
+ DISPATCH BARRIER
+ DISPATCH WAIT 18250 count 392
+cmd_write_packed
+cmd_write_linear_h_host
+dispatch_s : done
+prefetcher_11: out
+dispatch terminate
+dispatch_11: out

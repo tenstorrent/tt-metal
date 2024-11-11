@@ -19,7 +19,7 @@ void kernel_main() {
     uint32_t start_id   = get_arg_val<uint32_t>(13);
     uint32_t HtWt       = get_arg_val<uint32_t>(14); // HtWt of input tensor
     uint32_t Wt_skip    = get_arg_val<uint32_t>(15);
-    DPRINT << "Test reader bcast string" << "\tINSIDE KERNEL: " << ENDL();
+    DPRINT << "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_w_interleaved_input_cols_partitioned.cpp" << "\tINSIDE KERNEL: " << ENDL();
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
 

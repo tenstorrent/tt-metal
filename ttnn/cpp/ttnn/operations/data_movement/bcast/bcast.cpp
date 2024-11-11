@@ -22,6 +22,12 @@ Tensor BcastOperation::invoke(
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
 
+    const auto first_shape = input_tensor_a.get_shape();
+    const auto second_shape = input_tensor_b.get_shape();
+    std::cout<<"================= bcast.cpp --> BcastOperation::invoke ===================="<<std::endl;
+    std::cout<<"input_tensor_a : "<<first_shape<<std::endl;
+    std::cout<<"input_tensor_b : "<<second_shape<<std::endl;
+
     operation::launch_with_autoformat(
         [bcast_op, bcast_dim, output_memory_config, output_tensor, queue_id](
             const std::vector<Tensor> &input_tensors,

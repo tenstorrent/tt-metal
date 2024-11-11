@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t block_height = get_arg_val<uint32_t>(4);
     uint32_t block_width = get_arg_val<uint32_t>(5);
     uint32_t num_cores_y = get_arg_val<uint32_t>(6);
-    DPRINT << "Test reader string" << "\tINSIDE KERNEL: " << ENDL();
+    DPRINT << "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp" << "\tINSIDE KERNEL: " << ENDL();
 
 
     constexpr uint32_t cb_id_in0 = 0;

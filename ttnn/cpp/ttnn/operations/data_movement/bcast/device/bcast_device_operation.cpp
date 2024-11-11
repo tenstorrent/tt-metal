@@ -140,6 +140,12 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vec
 operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    const auto first_shape = input_tensor_a.get_shape();
+    const auto second_shape = input_tensor_b.get_shape();
+    std::cout<<"================= bcast --> create_program ===================="<<std::endl;
+    std::cout<<"input_tensor_a : "<<first_shape<<std::endl;
+    std::cout<<"input_tensor_b : "<<second_shape<<std::endl;
+
     const auto& output_tensor = this->in_place ? input_tensor_a : output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);

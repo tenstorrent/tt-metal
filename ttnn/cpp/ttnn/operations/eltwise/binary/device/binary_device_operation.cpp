@@ -29,10 +29,16 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto height_b = input_shape_b[-2];
     auto width_b = input_shape_b[-1];
 
+    std::cout<<"height_a : "<<height_a<<std::endl;
+    std::cout<<"width_a : "<<width_a<<std::endl;
+    std::cout<<"height_b : "<<height_b<<std::endl;
+    std::cout<<"width_b : "<<width_b<<std::endl;
+
     if (height_a == height_b and width_a == width_b) {
         std::cout<<"ElementWiseMultiCore"<<std::endl;
         return ElementWiseMultiCore{};
     }
+
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
             std::cout<<"BroadcastHeightAndWidthMultiCore"<<std::endl;
@@ -54,9 +60,19 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
             return BroadcastHeightMultiCore{};
         }
         if (width_b == 1) {
+            std::cout<<"================== select_program_factory ==================="<<std::endl;
+            const auto first_shape = tensor_args.input_tensor_b->get_shape();
+            std::cout<<"Shape of tensor : "<<first_shape<<std::endl;
             std::cout<<"BroadcastWidthMultiCore"<<std::endl;
             return BroadcastWidthMultiCore{};
         }
+    }
+    if (height_a == 1 and width_b == 1) {
+        std::cout<<"================== select_program_factory ==================="<<std::endl;
+        const auto first_shape = tensor_args.input_tensor_a.get_shape();
+        std::cout<<"Shape of tensor : "<<first_shape<<std::endl;
+        std::cout<<"BroadcastHeightMultiCore"<<std::endl;
+        return BroadcastHeightMultiCore{};
     }
     TT_THROW("ttnn::operations::binary::BinaryDeviceOperation: unsupported broadcast");
 }
@@ -162,6 +178,11 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
     const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
     const auto& tensor_b = tensor_args.input_tensor_b;
     const auto input_shape_b = tensor_b.has_value() ? tensor_b->tensor_attributes->shape : ttnn::Shape{1, 1};
+
+    // const auto& input_shape_a = input_tensor_a.get_logical_shape();
+    std::cout<<"============== compute_output_shapes ======================="<<std::endl;
+    std::cout<<"first_shape : "<<input_shape_a<<std::endl;
+    std::cout<<"second_shape : "<<input_shape_b<<std::endl;
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -322,7 +343,11 @@ BinaryDeviceOperation::invoke(
             output_dtype.value() == optional_output_tensor.value().get_dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
-
+    const auto first_shape = input_tensor_a_arg.get_shape();
+    const auto second_shape = input_tensor_b_arg.get_shape();
+    std::cout<<"=================== invoke =================="<<std::endl;
+    std::cout<<"first_shape : "<<first_shape<<std::endl;
+    std::cout<<"second_shape : "<<second_shape<<std::endl;
     return {
         operation_attributes_t{
             binary_op_type,

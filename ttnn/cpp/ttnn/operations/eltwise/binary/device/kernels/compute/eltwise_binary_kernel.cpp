@@ -14,7 +14,7 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
-    DPRINT << "Test string" << "\tINSIDE UNARY KERNEL: " << ENDL();
+    DPRINT << "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp" << "\tINSIDE UNARY KERNEL: " << ENDL();
     const uint32_t a = per_core_block_cnt;
     const uint32_t b = per_core_block_size;
     DPRINT << "per_core_block_cnt\t" << a << ENDL();

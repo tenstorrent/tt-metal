@@ -15,6 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "shapes",
     [
         [[1, 10], [10, 1]],
+        # [[1, 32], [32, 1]],
         # [[1, 15], [15, 1]],
         # [[16, 1, 49], [16, 49, 1]],
         # [[1, 2], [2, 1]],
@@ -39,12 +40,18 @@ def test_sub_pcc_fails_bcast(device, shapes):
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    print("\nTT Input a: \n", input_tensor_a)
+    # input_tensor_a = ttnn.from_torch(
+    #     torch_input_tensor_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    # )
+    # print("\nTT Input a: \n", input_tensor_a)
     # print("\nTT Input a: \n",  ttnn.to_torch(input_tensor_a))
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    print("\nTT Input b: \n", input_tensor_b)
+    # input_tensor_b = ttnn.from_torch(
+    #     torch_input_tensor_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    # )
+    # print("\nTT Input b: \n", input_tensor_b)
     # print("\nTT Input b: \n",  ttnn.to_torch(input_tensor_b))
     output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)

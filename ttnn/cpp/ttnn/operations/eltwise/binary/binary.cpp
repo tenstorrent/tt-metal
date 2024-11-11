@@ -103,22 +103,36 @@ auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_ten
     Tensor input_tensor_a = input_tensor_a_arg;
     Tensor input_tensor_b = input_tensor_b_arg;
 
+    std::cout<<"==================== rank calculation ================="<<std::endl;
+    auto rank_a = input_tensor_a.get_shape().rank();
+    auto rank_b = input_tensor_b.get_shape().rank();
+    int diff = std::abs((int)rank_a - (int)rank_b);
+    std::cout<<"first_shape rank_a: "<<rank_a<<std::endl;
+    std::cout<<"first_shape rank_b: "<<rank_b<<std::endl;
+    std::cout<<"diff : "<<diff<<std::endl;
+
     // TODO: #7731 (Remove calls to repeat )
     auto repeat_smaller = [](const auto &first, auto &second) {
         const auto first_shape = first.get_shape();
         const auto second_shape = second.get_shape();
-        std::cout<<"====================================="<<std::endl;
+
+        std::cout<<"==================== preprocess_inputs ================="<<std::endl;
         std::cout<<"first_shape : "<<first_shape<<std::endl;
-        std::cout<<"second_shape : "<<second_shape<<std::endl;
+        std::cout<<"second_shape : "<<first_shape<<std::endl;
+
+
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
+            std::cout<<"come here 1 "<<std::endl;
             TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
             Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
             second = ttnn::repeat(second, repeats);
         }
 
+        std::cout<<"come here 2 "<<std::endl;
         // repeats second if it is smaller
         if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
+            std::cout<<"come here 3 "<<std::endl;
             TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
             int rank_a = first_shape.rank();
             std::vector<uint32_t> repeat_dim(rank_a, 1);
@@ -127,13 +141,88 @@ auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_ten
             second = ttnn::repeat(second, repeats);
         }
     };
+
+    std::cout<<"come here 4 "<<std::endl;
     repeat_smaller(input_tensor_a, input_tensor_b);
+
+
+
+    std::cout<<"come here 5 "<<std::endl;
     repeat_smaller(input_tensor_b, input_tensor_a);
+
+        const auto first_shape = input_tensor_a.get_shape();
+    const auto second_shape = input_tensor_b.get_shape();
+
+    if (first_shape.rank() == second_shape.rank()) {
+        if (second_shape[-1]==1 and first_shape[-2]==1) {
+            int rank_a = first_shape.rank();
+            std::vector<uint32_t> repeat_dim(rank_a, 1);
+            // Print the vector contents
+            std::cout << "repeat_dim = [";
+            for (size_t i = 0; i < repeat_dim.size(); ++i) {
+                std::cout << repeat_dim[i];
+                if (i != repeat_dim.size() - 1) {
+                    std::cout << ", "; // Print a comma between elements, except after the last one
+                }
+            }
+            std::cout << "]" << std::endl;
+            repeat_dim[rank_a - 2] = first_shape[-1];  // Match the last dim of second tensor alomg heigjt
+            // Print the vector contents
+            std::cout << " first repeat_dim = [";
+            for (size_t i = 0; i < repeat_dim.size(); ++i) {
+                std::cout << repeat_dim[i];
+                if (i != repeat_dim.size() - 1) {
+                    std::cout << ", "; // Print a comma between elements, except after the last one
+                }
+            }
+            std::cout << "]" << std::endl;
+            Shape repeats(repeat_dim);
+            input_tensor_a = ttnn::repeat(input_tensor_a, repeats);
+
+
+        }
+    }
+    const auto first_shape_2 = input_tensor_a.get_shape();
+    const auto second_shape_2 = input_tensor_b.get_shape();
+    std::cout<<"first_shape_2 : "<<first_shape_2<<std::endl;
+    std::cout<<"second_shape_2 : "<<second_shape_2<<std::endl;
+
+    if (first_shape.rank() == second_shape_2.rank()) {
+        if (second_shape_2[-1]==1 and second_shape_2[-2] == first_shape_2[-2]) {
+            int rank_a = first_shape.rank();
+
+
+            std::vector<uint32_t> repeat_dim_2(rank_a, 1);
+            // Print the vector contents
+            std::cout << "repeat_dim_2 = [";
+            for (size_t i = 0; i < repeat_dim_2.size(); ++i) {
+                std::cout << repeat_dim_2[i];
+                if (i != repeat_dim_2.size() - 1) {
+                    std::cout << ", "; // Print a comma between elements, except after the last one
+                }
+            }
+            std::cout << "]" << std::endl;
+            repeat_dim_2[rank_a - 1] = second_shape_2[-2];  // Match the last dim of second tensor alomg width
+            // Print the vector contents
+            std::cout << " second repeat_dim_2 = [";
+            for (size_t i = 0; i < repeat_dim_2.size(); ++i) {
+                std::cout << repeat_dim_2[i];
+                if (i != repeat_dim_2.size() - 1) {
+                    std::cout << ", "; // Print a comma between elements, except after the last one
+                }
+            }
+            std::cout << "]" << std::endl;
+            Shape repeats_2(repeat_dim_2);
+            input_tensor_b = ttnn::repeat(input_tensor_b, repeats_2);
+        }
+    }
 
     return [](const auto &input_tensor_a, const auto &input_tensor_b) {
         if constexpr (detail::is_associative(binary_op_type)) {
+            std::cout<<"come here 6 "<<std::endl;
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
             if (input_tensor_a.get_logical_volume() < input_tensor_b.get_logical_volume()) {
+                std::cout<<"come here 7 "<<std::endl;
                 return std::make_tuple(input_tensor_b, input_tensor_a);
             }
         }

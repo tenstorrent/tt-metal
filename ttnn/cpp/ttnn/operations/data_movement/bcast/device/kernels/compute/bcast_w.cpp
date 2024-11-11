@@ -14,7 +14,7 @@ void MAIN {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    DPRINT << "Test bcast string" << "\tINSIDE KERNEL: " << ENDL();
+    DPRINT << "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_w.cpp" << "\tINSIDE KERNEL: " << ENDL();
 
     init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CB::c_in0, tt::CB::c_in1);
 
