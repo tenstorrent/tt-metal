@@ -34,6 +34,7 @@ void kernel_main() {
     const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_last_num_nonzero_subblocks_w = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(rt_args_idx++);
@@ -205,14 +206,14 @@ void kernel_main() {
         uint32_t in1_tensor_current_h_dim_block_tile_id = in1_tensor_start_tile_id;
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            // DPRINT << "bh " << bh <<ENDL();
+            DPRINT << "bh " << bh <<ENDL();
             uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
             uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
 #endif
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                // DPRINT << "bw " << bw <<ENDL();
+                DPRINT << "bw " << bw <<ENDL();
                 uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
@@ -420,10 +421,17 @@ void kernel_main() {
 
 #ifndef OUT_SHARDED
                 // WRITER
+                uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
+                uint32_t out_num_nonzero_subblocks_w_ = out_num_nonzero_subblocks_w;
+                if (bw == num_blocks_w_dim - 1) {
+                    out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
+                }
+                DPRINT << "out_num_nonzero_subblocks_h_ " << out_num_nonzero_subblocks_h_ << ENDL();
+                DPRINT << "out_num_nonzero_subblocks_w_ " << out_num_nonzero_subblocks_w_ << ENDL();
                 uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
-                for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; ++sbh) {
+                for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
                     uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
-                    for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w; ++sbw) {
+                    for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
                         uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                         uint32_t out_subblock_h_ = out_subblock_h;
@@ -436,6 +444,9 @@ void kernel_main() {
                             out_subblock_w_ = out_last_subblock_w;
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
+
+                        DPRINT << "out_subblock_h_ " << out_subblock_h_ << ENDL();
+                        DPRINT << "out_subblock_w_ " << out_subblock_w_ << ENDL();
 
                         cb_wait_front(cb_id_out0, out_subblock_tile_count);
                         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
@@ -467,6 +478,7 @@ void kernel_main() {
                 }
                 // Pop row(s) of fully padded subblocks
                 if (bh == num_blocks_h_dim - 1) {
+                    DPRINT << "padded_block_tiles_h_skip " << padded_block_tiles_h_skip << ENDL();
                     cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
                     cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
                 }

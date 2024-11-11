@@ -139,7 +139,7 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    // UNPACK(( DPRINT << "in1_block_num_tiles " << in1_block_num_tiles <<ENDL() ));
+    // UNPACK(( DPRINT << "in0_block_num_tiles " << in0_block_num_tiles <<ENDL() ));
     // UNPACK(( DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL() ));
     // UNPACK(( DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL() ));
     // UNPACK(( DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL() ));
@@ -181,6 +181,8 @@ void MAIN {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     // UNPACK(( DPRINT  << "block"  << (uint)block<<ENDL() ));
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+
+                    // UNPACK(( DPRINT   << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
 
 
                     int in0_index_subblock_offset = 0;
@@ -260,16 +262,23 @@ void MAIN {
                                 uint32_t start_dst_index = 0;
                                 matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
+                                // uint32_t cb_write_addr = cb_get_write_ptr(mm_out_cb_id);
+                                // PACK(( DPRINT << "cb_write_addr " <<cb_write_addr * 16 <<ENDL() ));
+                                // PACK(( DPRINT   << TSLICE(mm_out_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
+
+
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
                                 // cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
-                                // UNPACK(( DPRINT  << "out_subblock_num_tiles " << out_subblock_num_tiles<<ENDL() ));
+
+
 
                             } else {
                                 tile_regs_commit();
                                 // Wait for tiles in output buffer to be written out since interm and output share memory
                                 if (block == 0) {
+                                    // UNPACK(( DPRINT  << "out_num_tiles_to_wait"  << (uint)out_num_tiles_to_wait<<ENDL() ));
                                     cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
                                     out_num_tiles_to_wait += out_subblock_num_tiles;
                                 }

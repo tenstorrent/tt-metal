@@ -1020,6 +1020,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_sender_writer_args.push_back(out_subblock_h);
                     mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
                     mm_in1_sender_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
@@ -1032,6 +1033,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_sender_writer_args.push_back(out_subblock_h);
                     mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
                     mm_in1_sender_writer_args.push_back(0);
@@ -1106,7 +1108,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             worker_core_stride = stride;
                         }
                     }
-                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 19, num_iter);
+                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 20, num_iter);
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
@@ -1130,18 +1132,22 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {
                     // padding args (WRITER)
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else if (in0_idx == in0_end_idx) {
                     // padding args (WRITER)
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
@@ -1149,8 +1155,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 } else if (in1_idx == in1_end_idx) {
                     // padding args (WRITER)
                     mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
@@ -1158,8 +1166,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 } else {
                     // padding args (WRITER)
                     mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);

@@ -35,12 +35,19 @@ void kernel_main() {
     const uint64_t in0_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
+    // DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL();
+    // DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
+    // DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL();
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+            // DPRINT << "bh " << bh <<ENDL();
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                // DPRINT << "bw " << bw <<ENDL();
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    // DPRINT << "block " << block <<ENDL();
                     // Operand 0
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+
                     // DPRINT << "comm core: " << (uint)my_x[0] << " " << (uint)my_y[0] << " in0_block_num_tiles " << in0_block_num_tiles <<ENDL();
 
                     // Set in0 semaphore value to INVALID

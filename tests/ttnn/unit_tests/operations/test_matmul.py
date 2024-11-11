@@ -349,25 +349,28 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in0_sharded", [False])
 @pytest.mark.parametrize("out_sharded", [False])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    b = 3
+    b = 2
     in0_shape = [b, 1, m, k]
     in1_shape = [b, 1, k, n]
     bias_shape = [1, 1, n]
 
-    num_out_block_h = 4
-    num_out_block_w = 4
+    num_out_block_h = 3
+    num_out_block_w = 1
 
     in0_block_w = k // grid_size[0] // 32
-    per_core_M = m // grid_size[1] // tile_h
+    per_core_M = m // grid_size[1] // tile_h + 1
     per_core_N = n // grid_size[0] // tile_w
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    print(out_subblock_h)
+    print(out_subblock_w)
 
     # in0_block_w = 1
     # out_block_h = 2
@@ -375,8 +378,10 @@ def test_matmul_2d_tiny_tile(
     # out_subblock_h = 1
     # out_subblock_w = 1
 
-    in0 = torch.ones(in0_shape).bfloat16()
+    in0 = torch.randn(in0_shape).bfloat16()
     in1 = torch.randn(in1_shape).bfloat16()
+    # in1 = torch.arange(torch.prod(torch.tensor(in1_shape)), dtype=torch.bfloat16).reshape(in1_shape)
+    # print(in1)
 
     if in0_sharded:
         in0_memory_config = ttnn.create_sharded_memory_config(
@@ -481,6 +486,21 @@ def test_matmul_2d_tiny_tile(
         pt_out += bias
 
     assert_with_pcc(pt_out, output_tensor, 0.999)
+    # print(pt_out[0][0][0][0:32])
+    # print(output_tensor[0][0][0][0:32])
+    # for i in range(16):
+    #     print(i)
+    #     start = i*32
+    #     end = start + 32
+    #     assert_with_pcc(pt_out[0][0][2][start:end], output_tensor[0][0][2][start:end], 0.999)
+    # row_id = 320
+    # for i in range(512):
+    #     print(i)
+    #     row_id = i
+    #     assert_with_pcc(pt_out[0][0][i], output_tensor[0][0][i], 0.999)
+    # print(pt_out[0][0][row_id][0:32])
+    # print(output_tensor[0][0][row_id][0:32])
+    # assert_with_pcc(pt_out[0][0][row_id], output_tensor[0][0][row_id], 0.999)
 
 
 @run_for_wormhole_b0()
