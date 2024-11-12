@@ -1658,26 +1658,18 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer,
     tt_metal::Buffer* in1_buffer,
-    tt_metal::Buffer* bias_buffer,
     tt_metal::Buffer* out_buffer,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
-    const tt::tt_metal::Tile& bias_tile,
     const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
-    tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
     bool in1_is_sharded,
-    bool bias_is_sharded,
     bool output_is_sharded,
-    bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler
+    bool untilize_out
 ) {
-
-    bool fuse_op = fused_op_signaler.has_value();
-
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -1691,7 +1683,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -1729,11 +1720,11 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* Compile time args */
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        (std::uint32_t)(in0_shard_width_in_tiles),
-        (std::uint32_t)(per_core_M), // in0_shard_height_in_tiles
-        (std::uint32_t)B,  // batch
-        (std::uint32_t)(num_cores), // ring_size
-        (std::uint32_t)(in0_signal_semaphore_id)
+        (std::uint32_t) in0_shard_width_in_tiles,
+        (std::uint32_t) per_core_M, // in0_shard_height_in_tiles
+        (std::uint32_t) B,  // batch
+        (std::uint32_t) num_cores, // ring_size
+        (std::uint32_t) in0_signal_semaphore_id,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -1790,7 +1781,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     }
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
-    /* TODO: Update to work with arbitrary cores */
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
@@ -2074,6 +2064,15 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         num_blocks_total,
         num_cores_x * num_cores_y);
 
+    if (gather_in0) {
+        TT_FATAL(
+            num_blocks_total == num_cores_x * num_cores_y,
+            "Number of blocks must equal number of cores for gather_in0 mode: {} blocks != {} cores",
+            num_blocks_total,
+            num_cores_x * num_cores_y
+        );
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -2107,22 +2106,17 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             fused_activation,
             in0_buffer,
             in1_buffer,
-            bias_buffer,
             out_buffer,
             in0_tile,
             in1_tile,
-            bias.has_value() ? bias->get_tile() : output_tile,
             output_tile,
             in0_data_format,
             in1_data_format,
-            bias_data_format,
             output_data_format,
             a.memory_config().is_sharded(),
             b.memory_config().is_sharded(),
-            bias.has_value() ? bias->memory_config().is_sharded() : false,
             output.memory_config().is_sharded(),
-            untilize_out,
-            fused_op_signaler);
+            untilize_out);
     }
 
     if (mcast_in0) {

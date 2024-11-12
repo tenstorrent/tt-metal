@@ -23,45 +23,12 @@ random.seed(10)
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "out_sharded, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode",
+    "out_sharded, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
         # 32, 2304, 3840
-        (
-            True,
-            32,
-            2304,
-            3840,
-            None,
-            ttnn.bfloat16,
-            ttnn.bfloat4_b,
-            ttnn.MathFidelity.LoFi,
-            True,
-            True,
-        ),
+        (True, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
         # 256, 8192, 8192
-        (
-            True,
-            256,
-            1024,
-            8192,
-            None,
-            ttnn.bfloat16,
-            ttnn.bfloat4_b,
-            ttnn.MathFidelity.HiFi4,
-            True,
-            True,
-        ),
-    ],
-)
-@pytest.mark.parametrize(
-    "grid",
-    [
-        # (3, 1),
-        # (8, 1),
-        # (8, 2),
-        (8, 3),
-        (8, 4),
-        # (8, 8)
+        (True, 256, 1024, 8192, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
     ],
 )
 @pytest.mark.parametrize(
@@ -85,9 +52,10 @@ def test_multi_core_matmul_1d_wh(
     use_arbitrary_cores,
     function_level_defaults,
 ):
+    assert not has_bias, "Bias not supported for gather_in0 mode."
+
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
-    bias_shape = [1, 1, N]
     num_cores = grid[0] * grid[1]
 
     in0_block_h = M // ttnn.TILE_SIZE
@@ -103,7 +71,8 @@ def test_multi_core_matmul_1d_wh(
         pytest.skip(f"num_blocks_total {num_blocks_total} != num_cores {num_cores}")
 
     out_subblock_h = 1
-    out_subblock_w = 8 if (out_block_h == 1 and out_block_w <= 8) else 4
+    MAX_TILES = 8
+    out_subblock_w = MAX_TILES if (out_block_h == 1 and out_block_w <= MAX_TILES) else 4
     while out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
 
@@ -171,7 +140,6 @@ def test_multi_core_matmul_1d_wh(
 
     in0 = torch.randn(in0_shape)
     in1 = torch.randn(in1_shape)
-    bias = torch.randn(bias_shape)
 
     in0_t = ttnn.from_torch(
         in0,
@@ -218,8 +186,6 @@ def test_multi_core_matmul_1d_wh(
     tt_out = ttnn.to_torch(output_t)
 
     pt_out = in0 @ in1
-    if has_bias:
-        pt_out += bias
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
