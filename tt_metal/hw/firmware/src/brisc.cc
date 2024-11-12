@@ -383,7 +383,14 @@ int main() {
 
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+        // kernel_configs.enable is last in the launch message. so other data is
+        // valid by the time it's set. All multicast data from the dispatcher is
+        // written in order, so it will arrive in order. We also have a barrier
+        // before mcasting the launch message (as a hang workaround), which
+        // ensures that the unicast data will also have been received.
+        while (
+            ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) &&
+            !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.enables & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -418,7 +425,9 @@ int main() {
             DeviceZoneScopedMainN("BRISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)(
+                launch_msg_address->kernel_config.enables & ~DISPATCH_ENABLE_FLAG_PRELOAD);
+            DeviceValidateProfiler(enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
@@ -431,8 +440,6 @@ int main() {
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
-
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
             run_triscs(enables);
 
@@ -483,12 +490,13 @@ int main() {
 #endif
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
-                if (launch_msg_address->kernel_config.enables) {
+                if (enables) {
                     cb_l1_base =
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
                 }
+                wait_for_go_message();
             }
             WAYPOINT("D");
 
