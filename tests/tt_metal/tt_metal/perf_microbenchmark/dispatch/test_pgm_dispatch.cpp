@@ -46,6 +46,7 @@ bool time_just_finish_g;
 bool use_global_g;
 bool use_trace_g;
 bool dispatch_from_eth_g;
+bool slow_fast_alternate_g;
 
 void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -80,6 +81,8 @@ void init(int argc, char** argv) {
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, " -tr: enable trace (default disabled)");
         log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
+        log_info(LogTest, "  -tr: enable trace (default disabled)");
+        log_info(LogTest, "  -sfa: Alternate slow and fast kernels between kernel groups.");
         exit(0);
     }
 
@@ -101,6 +104,7 @@ void init(int argc, char** argv) {
     nfast_kernels_g = test_args::get_command_option_uint32(input_args, "-nf", 0);
     use_trace_g = test_args::has_command_option(input_args, "-tr");
     dispatch_from_eth_g = test_args::has_command_option(input_args, "-de");
+    slow_fast_alternate_g = test_args::has_command_option(input_args, "-sfa");
     if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -153,13 +157,10 @@ void set_runtime_args(
     }
 }
 
-void initialize_program(tt_metal::Device* device, tt_metal::Program& program, uint32_t run_cycles) {
+void initialize_program(tt_metal::Device* device, tt_metal::Program& program, std::vector<uint32_t> run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size_g)}};
-    if (run_cycles != 0) {
-        defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
-    }
     if (use_global_g) {
         defines.insert(std::pair<string, string>("KERNEL_GLOBAL", "1"));
     }
@@ -182,6 +183,12 @@ void initialize_program(tt_metal::Device* device, tt_metal::Program& program, ui
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
     CoreRange kg = {workers_g.start_coord, {workers_g.end_coord.x - n_kgs_g + 1, workers_g.end_coord.y}};
     for (uint32_t i = 0; i < n_kgs_g; i++) {
+        uint32_t group_run_cycles =  run_cycles[i % run_cycles.size()];
+        if (group_run_cycles > 0) {
+            defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(group_run_cycles)));
+        } else {
+            defines.erase("KERNEL_RUN_TIME");
+        }
         defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
 
         if (brisc_enabled_g) {
@@ -264,8 +271,13 @@ int main(int argc, char** argv) {
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
-        initialize_program(device, program[0], slow_kernel_cycles_g);
-        initialize_program(device, program[1], fast_kernel_cycles_g);
+        if (!slow_fast_alternate_g) {
+            initialize_program(device, program[0], {slow_kernel_cycles_g});
+            initialize_program(device, program[1], {fast_kernel_cycles_g});
+        } else {
+            initialize_program(device, program[0], {slow_kernel_cycles_g, fast_kernel_cycles_g});
+            initialize_program(device, program[1], {fast_kernel_cycles_g, slow_kernel_cycles_g});
+        }
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
