@@ -377,8 +377,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)(num_cores_c - 1),  // in0_mcast_num_dests
-            (std::uint32_t)(num_cores_c - 1),  // in0_mcast_num_cores
+            (std::uint32_t)(num_blocks_x - 1),  // in0_mcast_num_dests
+            (std::uint32_t)(num_blocks_x - 1),  // in0_mcast_num_cores
             // batch args
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B       // batch
@@ -408,8 +408,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
-        (std::uint32_t)(num_cores_r - 1),  // in1_mcast_num_dests
-        (std::uint32_t)(num_cores_r - 1),  // in1_mcast_num_cores
+        (std::uint32_t)(num_blocks_y - 1),  // in1_mcast_num_dests
+        (std::uint32_t)(num_blocks_y - 1),  // in1_mcast_num_cores
         // batch args
         (std::uint32_t)K * N,        // KtNt
         (std::uint32_t)B,            // batch

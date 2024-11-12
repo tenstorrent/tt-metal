@@ -333,13 +333,25 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
 @pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("grid_size", [(4, 4)])
+@pytest.mark.parametrize("grid_size", [(8, 4)])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("num_out_block_h", [1, 2])
 @pytest.mark.parametrize("num_out_block_w", [1, 2])
+@pytest.mark.parametrize("transpose_mcast", [True, False])
+# @pytest.mark.parametrize("b", [1])
+# @pytest.mark.parametrize("m", [1024])
+# @pytest.mark.parametrize("k", [1024])
+# @pytest.mark.parametrize("n", [1024])
+# @pytest.mark.parametrize("has_bias", [True])
+# @pytest.mark.parametrize("grid_size", [(8, 4)])
+# @pytest.mark.parametrize("in0_sharded", [True])
+# @pytest.mark.parametrize("out_sharded", [True])
+# @pytest.mark.parametrize("num_out_block_h", [1, 2])
+# @pytest.mark.parametrize("num_out_block_w", [1, 2])
+# @pytest.mark.parametrize("transpose_mcast", [True])
 def test_matmul_2d_multiple_output_blocks_per_core(
-    device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w
+    device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast
 ):
     if in0_sharded or out_sharded:
         fuse_batch = True
@@ -359,9 +371,15 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     in1_shape = [b, 1, k, n]
     bias_shape = [1, 1, n]
 
-    in0_block_w = k // grid_size[0] // 32
-    per_core_M = m // grid_size[1] // 32
-    per_core_N = n // grid_size[0] // 32
+    if transpose_mcast:
+        in0_block_w = k // grid_size[1] // 32
+        per_core_M = m // grid_size[0] // 32
+        per_core_N = n // grid_size[1] // 32
+    else:
+        in0_block_w = k // grid_size[0] // 32
+        per_core_M = m // grid_size[1] // 32
+        per_core_N = n // grid_size[0] // 32
+
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
@@ -374,7 +392,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             (b, 1, m, k),
             core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_mcast else ttnn.ShardOrientation.COL_MAJOR,
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -414,7 +432,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
         out_block_w=out_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        transpose_mcast=False,
+        transpose_mcast=transpose_mcast,
         fused_activation=None,
         fuse_batch=fuse_batch,
     )
