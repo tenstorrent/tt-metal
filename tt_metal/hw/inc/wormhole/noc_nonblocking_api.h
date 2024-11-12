@@ -296,6 +296,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(uint32_t noc
 
   uint32_t be32 = be;
   uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES-1));
+  // If we're given a misaligned address, don't write to the bytes in the word below the address
   be32 = (be32 << be_shift);
 
   while (!noc_cmd_buf_ready(noc, cmd_buf));
