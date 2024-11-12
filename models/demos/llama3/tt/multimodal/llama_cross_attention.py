@@ -51,6 +51,7 @@ class TtLlamaCrossAttention(LightweightModule):
         self.configuration = configuration
 
         self.model_config = configuration.get_model_config()
+        self.is_multichip = configuration.is_multichip
 
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -66,6 +67,7 @@ class TtLlamaCrossAttention(LightweightModule):
         assert self.n_heads % configuration.num_devices == 0
         assert self.n_kv_heads % configuration.num_devices == 0
 
+        # TODO DRAM Shard the weights (see llama3 text)
         self.wq = ttnn.as_tensor(
             self.state_dict[wq_str].transpose(-2, -1),
             device=self.mesh_device,
@@ -114,7 +116,6 @@ class TtLlamaCrossAttention(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-            weight_dtype=dtype,
             weight_key="q_norm",
             eps=self.norm_eps,
         )
@@ -125,7 +126,6 @@ class TtLlamaCrossAttention(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-            weight_dtype=dtype,
             weight_key="k_norm",
             eps=self.norm_eps,
         )
@@ -178,7 +178,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 transpose_k_heads=False,
             )
 
-        xk = self.k_norm(xk)
+        xk = self.k_norm(xk, mode="decode")
 
         # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
         xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
@@ -207,6 +207,8 @@ class TtLlamaCrossAttention(LightweightModule):
     def forward_decode(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
         batch = xattn_cache[0].shape[0]
 
+        x_11SH = ttnn.sharded_to_interleaved(x_11SH, ttnn.L1_MEMORY_CONFIG)  # TODO support sharded input
+
         xq = ttnn.linear(
             x_11SH,
             self.wq,
@@ -230,7 +232,7 @@ class TtLlamaCrossAttention(LightweightModule):
         xq = ttnn.slice(xq, (0, 0, 0, 0), (batch, self.n_local_heads, 1, self.head_dim))
         xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
 
-        xq = self.q_norm(xq)
+        xq = self.q_norm(xq, mode="decode")
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
@@ -279,10 +281,13 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         # All reduce
-        if self.num_devices > 1:
-            dense_out_gathered = ttnn.all_gather(output, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        if self.is_multichip:  # TODO use_fused_all_gather_matmul
+            dense_out_reduced = ttnn.reduce_scatter(
+                output,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             return dense_out_reduced
         else:
@@ -313,7 +318,7 @@ class TtLlamaCrossAttention(LightweightModule):
             xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
 
-        xq = self.q_norm(xq)
+        xq = self.q_norm(xq, mode="prefill")
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
@@ -359,11 +364,14 @@ class TtLlamaCrossAttention(LightweightModule):
         if seq_len > 1024:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
-        # All reduce
-        if self.num_devices > 1:
-            dense_out_gathered = ttnn.all_gather(output, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        # Reduce-scatter
+        if self.is_multichip:  # TODO use_fused_all_gather_matmul
+            dense_out_reduced = ttnn.reduce_scatter(
+                output,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             return dense_out_reduced
         else:

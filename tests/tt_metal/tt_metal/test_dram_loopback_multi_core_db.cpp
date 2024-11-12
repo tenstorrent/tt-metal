@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
 
         uint32_t seed_from_systime = std::chrono::system_clock::now().time_since_epoch().count();
         Tensor<bfloat16> tensor = initialize_tensor<bfloat16>(
-            shape, Initialize::RANDOM, 100, seed_from_systime);  // TODO: make randomized!
+            shape, Initialize::RANDOM, 0, 100, seed_from_systime);  // TODO: make randomized!
         auto golden = tensor.get_values();
         auto src_vec = pack_bfloat16_vec_into_uint32_vec(golden);
 

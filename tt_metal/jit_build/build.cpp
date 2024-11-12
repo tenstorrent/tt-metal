@@ -41,7 +41,7 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
 
 JitBuildEnv::JitBuildEnv() {}
 
-void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
+void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string> &device_kernel_defines) {
     // Paths
     this->root_ = llrt::OptionsG.get_root_dir();
     this->out_root_ = this->root_ + "built/";
@@ -83,6 +83,9 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
         case ARCH::WORMHOLE_B0: this->defines_ = "-DARCH_WORMHOLE "; break;
         case ARCH::BLACKHOLE: this->defines_ = "-DARCH_BLACKHOLE "; break;
         default: break;
+    }
+    for (auto it = device_kernel_defines.begin(); it != device_kernel_defines.end(); ++it) {
+        this->defines_ += "-D" + it->first + "=" + it->second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 

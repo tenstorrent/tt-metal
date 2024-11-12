@@ -35,6 +35,7 @@ class TtLlamaAttention(LightweightModule):
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = configuration.paged_attention_config
+        self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
 
         self.n_local_heads = self.n_heads // configuration.num_devices
         self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
@@ -49,6 +50,8 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.model_config = configuration.get_model_config()
+        self.ccl_topology = configuration.ccl_topology()
+        self.is_multichip = configuration.is_multichip
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -106,23 +109,38 @@ class TtLlamaAttention(LightweightModule):
             cache_file_name=cache_name("wqkv_sharded"),
         )
 
-        # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
-        wo_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim // configuration.num_devices, configuration.dim
-        )
-        self.wo = ttnn.as_tensor(
-            torch.transpose(
-                self.state_dict[wo_str],
-                -2,
-                -1,
-            ),
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
-            memory_config=wo_mem_config,
-            dtype=self.dtype,
-            layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-            cache_file_name=cache_name("wo_sharded"),
-        )
+        # For ring topology we can use all gather matmul for wo
+        self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
+        if self.is_multichip and self.use_fused_all_gather_matmul:
+            pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+            wo_ttnn = ttnn.as_tensor(
+                pt_wo,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                cache_file_name=cache_name("wo_width_sharded"),
+            )
+            self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
+        else:  # For line topology we can't do all gather matmul for now, but we can height shard and reduce scatter
+            # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
+            wo_mem_config = configuration.create_dram_sharded_mem_config(
+                configuration.dim // configuration.num_devices, configuration.dim
+            )
+            self.wo = ttnn.as_tensor(
+                torch.transpose(
+                    self.state_dict[wo_str],
+                    -2,
+                    -1,
+                ),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
+                memory_config=wo_mem_config,
+                dtype=self.dtype,
+                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                cache_file_name=cache_name("wo_height_sharded"),
+            )
 
         if self.paged_attention_config:
             cache_k = torch.zeros(
@@ -184,7 +202,7 @@ class TtLlamaAttention(LightweightModule):
         page_table=None,
     ) -> ttnn.Tensor:
         """
-        x: (seq_len, 1, batch, hidden_dim)
+        x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
         assert self.max_batch_size * self.n_kv_heads < 64
@@ -192,16 +210,15 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_ATTN_INPUT_MEMCFG"])
         xqkv_fused_sharded = ttnn.linear(
-            x_sharded,
+            x,
             self.wqkv,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
         )
-        ttnn.deallocate(x_sharded)
+        ttnn.deallocate(x)
 
         xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(xqkv_fused_sharded)
@@ -308,28 +325,44 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
-        dense_out_sharded = ttnn.linear(
-            attn_output_cat,
-            self.wo,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )  # seqlen, 1, batch, hidden_size
+        if self.is_multichip and self.use_fused_all_gather_matmul:
+            _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+                attn_output_cat,
+                self.wo,
+                dim=3,
+                all_gather_core_grid_offset=(0, 4),
+                num_links=1,
+                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"],
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+        else:
+            dense_out_sharded = ttnn.linear(
+                attn_output_cat,
+                self.wo,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )  # seqlen, 1, batch, hidden_size
 
         ttnn.deallocate(attn_output_cat)
-        dense_out = ttnn.sharded_to_interleaved(dense_out_sharded, ttnn.L1_MEMORY_CONFIG)
+        dense_out = ttnn.sharded_to_interleaved(
+            dense_out_sharded, ttnn.L1_MEMORY_CONFIG
+        )  # TODO: remove as soon as we have sharded support in for all CCL
 
-        ttnn.deallocate(attn_output_cat)
         ttnn.deallocate(dense_out_sharded)
 
         # All reduce
-        if self.num_devices > 1:
-            dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        if self.is_multichip and not self.use_fused_all_gather_matmul:
+            dense_out_reduced = ttnn.reduce_scatter(
+                dense_out,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(dense_out)
-            ttnn.deallocate(dense_out_gathered)
             return dense_out_reduced
         else:
             return dense_out
@@ -394,7 +427,7 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(k_heads_1KSD)
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len > 256:
+        if seq_len >= self.min_kv_prefill_shard_seqlen:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -403,7 +436,7 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(v_heads_1VSD)
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len > 256:
+        if seq_len >= self.min_kv_prefill_shard_seqlen:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
@@ -423,7 +456,7 @@ class TtLlamaAttention(LightweightModule):
                 user_id,
             )
 
-        if seq_len > 256:
+        if seq_len >= self.min_kv_prefill_shard_seqlen:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -471,6 +504,16 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
 
+        # Non fused All Gather Matmul
+        if self.is_multichip and self.use_fused_all_gather_matmul:
+            attn_output_11SH = ttnn.all_gather(
+                attn_output_11SH,
+                dim=3,
+                num_links=1,
+                topology=self.ccl_topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -483,14 +526,16 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # All reduce
-        if self.num_devices > 1:
-            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        # Reduce-scatter
+        if self.is_multichip and not self.use_fused_all_gather_matmul:
+            dense_out_reduced = ttnn.reduce_scatter(
+                output_11SH,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(output_11SH)
-            ttnn.deallocate(dense_out_gathered)
             return dense_out_reduced
         else:
             return output_11SH

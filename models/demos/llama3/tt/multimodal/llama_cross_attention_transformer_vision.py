@@ -56,7 +56,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         )
         torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
-        cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f".{name}.{suffix}")
+        cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")
 
         def shuffle_weight(weight):
             orig_shape = weight.shape

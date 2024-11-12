@@ -32,7 +32,7 @@ Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const std::optional<
 
 // xlogy(x,y)=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_nan = ttnn::full_like(input_b, std::nanf(" "));
+    float t_nan = std::nanf(" ");
     Tensor result = ttnn::multiply(input_a, ttnn::log(input_b, output_mem_config), std::nullopt, output_mem_config);
     result = ttnn::where(
         ttnn::logical_or(
@@ -254,7 +254,7 @@ Tensor ExecuteDiv::invoke(const Tensor& input_a, const Tensor& input_b, bool acc
 
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
     if (value == 0)
-        return ttnn::full_like(input_a, 0.0f);
+        return ttnn::zeros_like(input_a);
     else
         return ttnn::multiply(input_a, (1.0f/value));
 }
@@ -274,7 +274,7 @@ Tensor ExecuteBinaryRemainder::invoke(const Tensor& input_a, const Tensor& input
     Tensor result = ttnn::subtract(a, ttnn::multiply(b, ttnn::div(input_a, input_b, true, "floor", output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
     result = ttnn::where(ttnn::ltz(b), ttnn::add(result, b), result);
-    result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
+    result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), 0.0f, result);
     return typecast(result, input_dtype);
 }
 
@@ -291,7 +291,7 @@ Tensor ExecuteBinaryFmod::invoke(const Tensor& input_a, const Tensor& input_b, c
     Tensor b = typecast(input_b, DataType::FLOAT32);
     Tensor div_res = typecast(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), DataType::FLOAT32);
     Tensor result = ttnn::subtract(a, ttnn::multiply(div_res, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
+    result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), 0.0f, result);
     return typecast(result, input_dtype);
 }
 
@@ -303,12 +303,12 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     if (value == 0) {
-        Tensor t_inf = ttnn::full_like(input_a, std::numeric_limits<float>::infinity());
-        Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
+        float t_inf = std::numeric_limits<float>::infinity();
+        float t_nan = std::nanf("");
         return ttnn::where(
             ttnn::eqz(input_a, output_mem_config),
             t_nan,
-            ttnn::multiply(t_inf, ttnn::sign(input_a, output_mem_config), std::nullopt, output_mem_config));
+            ttnn::multiply(ttnn::sign(input_a, output_mem_config), t_inf, std::nullopt, output_mem_config));
     }
     Tensor temp = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
     return ttnn::floor(temp);
