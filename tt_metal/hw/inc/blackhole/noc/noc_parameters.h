@@ -342,13 +342,6 @@
    (((uint32_t)(y_end  )) << (1*NOC_ADDR_NODE_ID_BITS)) |   \
     ((uint32_t)(x_end  )))
 
-
-#define PCIE_NOC_X 11
-#define PCIE_NOC_Y 0
-
-#define PCIE_NOC1_X 5
-#define PCIE_NOC1_Y 11
-
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used (36 bits of address followed by coordinates)
 // This means that lo and mid registers need to have the address portion while the coordinates go into hi register
 #define NOC_COORD_REG_OFFSET 0 // offset (from LSB) in register holding x-y coordinate

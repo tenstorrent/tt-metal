@@ -667,19 +667,4 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     file_stream_siec.close();
 }
 
-static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {
-    stringstream ss;
-
-    string end_of_line = " \\\n    ( \\";
-    for (const auto& core : cores) {
-        ss << end_of_line << endl;
-        ss << "    ((x) == NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << core.x
-           << ") && (y) == NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << core.y << "))";
-        end_of_line = " || \\";
-    }
-    ss << ")" << endl;
-
-    return ss.str();
-}
-
 }  // namespace tt::tt_metal
