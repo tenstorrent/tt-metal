@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.16)
-cmake_policy(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
+cmake_policy(VERSION 3.18)
 include(cmake/compilers.cmake)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
