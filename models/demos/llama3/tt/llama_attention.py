@@ -351,7 +351,6 @@ class TtLlamaAttention(LightweightModule):
             dense_out_sharded, ttnn.L1_MEMORY_CONFIG
         )  # TODO: remove as soon as we have sharded support in for all CCL
 
-        ttnn.deallocate(attn_output_cat)
         ttnn.deallocate(dense_out_sharded)
 
         # All reduce
