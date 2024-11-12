@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from models.utility_functions import is_wormhole_b0
 import copy
-import pytest
 
+import pytest
+import torch
+
+import ttnn
+from models.utility_functions import is_wormhole_b0
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -197,3 +198,7 @@ def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
         ttnn.int32: torch.int32,
     }
     return dtype_map.get(ttnn_dtype, None)
+
+
+def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan")):
+    return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)

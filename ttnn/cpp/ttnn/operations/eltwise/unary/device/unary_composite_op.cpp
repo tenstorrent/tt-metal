@@ -173,8 +173,7 @@ Tensor _cosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
    Tensor nr_term = ttnn::add(e_pos_x, e_neg_x, std::nullopt, output_mem_config);
    e_pos_x.deallocate();
    e_neg_x.deallocate();
-   Tensor scalar = ttnn::full_like(input_a, 0.5f);
-   return ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
+   return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
 }
 
 // TODO: In future will uplift the op once the floor and tan has supported.
@@ -294,12 +293,10 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
             {
-                Tensor t_one = ttnn::full_like(x, 1.0f);
-                result = ttnn::where(ttnn::eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result);
+                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
             }
             {
-                Tensor t_two = ttnn::full_like(x, 2.0f);
-                result = ttnn::where(ttnn::eq(x, t_two, std::nullopt, output_mem_config), 0.0f, result);
+                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
             }
         }
     }
@@ -309,8 +306,7 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
 // log1p 1
 // use transformation y = log(1.0 + x) by broadcast
 Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_one = ttnn::full_like(x, 1.0f);
-    Tensor x_1 = ttnn::add(t_one, x, std::nullopt, output_mem_config);
+    Tensor x_1 = ttnn::add(x, 1.0f, std::nullopt, output_mem_config);
     Tensor result_log1p = ttnn::log(x_1, output_mem_config);
     return result_log1p;
 }
@@ -350,8 +346,7 @@ Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
     Tensor nr_term = ttnn::subtract(e_pos_x, e_neg_x, std::nullopt, output_mem_config);
     e_pos_x.deallocate();
     e_neg_x.deallocate();
-    Tensor scalar = ttnn::full_like(input_a, 0.5f);
-    return ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
+    return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
 }
 
 // Function: softsign
@@ -372,8 +367,8 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 
 Tensor ExecuteTrunc::invoke(uint8_t queue_id, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     auto arch = input.device()->arch();
-    output_tensor = output_tensor.value_or(ttnn::empty_like(input));
     TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
+    output_tensor = output_tensor.value_or(ttnn::empty_like(input));
     Tensor floor_res = ttnn::floor(queue_id, input, output_mem_config);
     ttnn::where(queue_id, ttnn::ne(queue_id, input, floor_res), ttnn::add(queue_id, floor_res, 1.0f, std::nullopt, output_mem_config), floor_res, output_mem_config, output_tensor);
     ttnn::where(queue_id, ttnn::gtz(queue_id, input, output_mem_config), floor_res, output_tensor.value(), output_mem_config, output_tensor);
@@ -449,9 +444,7 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
 // PyTorch version:
 // hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
 Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-   Tensor a_t = ttnn::full_like(a,value_1);
-   Tensor b_t = ttnn::full_like(a,value_2);
-   Tensor a_mac = ttnn::mac(a, a_t, b_t);  // multiply and add.
+   Tensor a_mac = ttnn::mac(a, value_1, value_2);  // multiply and add.
    Tensor a_clip = relu_max(a_mac, 1.0f);
    return a_clip;
 }
