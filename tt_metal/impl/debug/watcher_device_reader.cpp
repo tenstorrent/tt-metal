@@ -659,7 +659,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
     fprintf(f, "|");
     if (launch_msg->kernel_config.enables &
         ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 | DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
-          DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+          DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE | DISPATCH_ENABLE_FLAG_PRELOAD)) {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",

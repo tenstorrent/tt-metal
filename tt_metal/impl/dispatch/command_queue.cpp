@@ -1092,6 +1092,7 @@ void EnqueueProgramCommand::assemble_device_commands(
     uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
         kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+        kernel_group.launch_msg.kernel_config.enables |= DISPATCH_ENABLE_FLAG_PRELOAD;
         for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
             kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
         }
@@ -1122,6 +1123,7 @@ void EnqueueProgramCommand::assemble_device_commands(
     if (programmable_core_index != -1) {
         for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+            kernel_group.launch_msg.kernel_config.enables |= DISPATCH_ENABLE_FLAG_PRELOAD;
             for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
                 kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
             }
