@@ -37,19 +37,8 @@ async def shutdown():
     model.release_yolov4_trace_2cqs_inference()
 
 
-# @app.post("/objdetection_v2")
-# async def objdetection_v2(file: UploadFile = File(...)):
-#    contents = await file.read()
-#    response = model.run_traced_inference(Image.open(BytesIO(contents)))
-#    return json.dumps(response, indent=4)
-#
-#
-#
-
-
 def process_request(output):
     # Convert all tensors to lists for JSON serialization
-    # output_serializable = {'output': [tensor.tolist() for tensor in output['output']]}
     output_serializable = {"output": [tensor.tolist() for tensor in output]}
     return output_serializable
 
@@ -61,21 +50,13 @@ async def objdetection_v2(file: UploadFile = File(...)):
     # Load and convert the image to RGB
     image = Image.open(BytesIO(contents)).convert("RGB")
     image = np.array(image)
-    print("\n\n\n\n the shape of numpy image is: ", image.shape)
     if type(image) == np.ndarray and len(image.shape) == 3:  # cv2 image
-        print("we are inside len image = 3")
-        # image = torch.from_numpy(image.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
         image = torch.from_numpy(image).float().div(255.0).unsqueeze(0)
     elif type(image) == np.ndarray and len(image.shape) == 4:
-        print("we are inside len image = 4")
-        # image = torch.from_numpy(image.transpose(0, 3, 1, 2)).float().div(255.0)
         image = torch.from_numpy(image).float().div(255.0)
     else:
         print("unknow image type")
         exit(-1)
-    # image = torch.from_numpy(image)
-    # Perform object detection
-    # response = model.do_detect(image)
     t1 = time.time()
     response = model.run_traced_inference(image)
     t2 = time.time()
