@@ -8,6 +8,7 @@ import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 import torch
 import numpy as np
+import av
 
 
 from torch import nn
@@ -261,7 +262,8 @@ class VideoProcessor(VideoProcessorBase):
         print(f" IMG-IN | WH | Post | Total time: ")
         print(f" {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} ")
 
-        return image_final
+        # return image_final
+        return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
 st.sidebar.image("TT.png", use_column_width=True)
