@@ -8,13 +8,13 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
-    get_single_rot_mat,
     sample,
     encode_prompt_llama_instruct,
     HostEmbedding,
 )
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -37,6 +37,11 @@ from models.utility_functions import skip_for_grayskull
     ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
+    "paged_attention",
+    (True, False),
+    ids=("paged_attention", "non_paged_attention"),
+)
+@pytest.mark.parametrize(
     "optimizations",
     [
         pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
@@ -52,9 +57,9 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_program_cache, reset_seeds, ensure_gc):
-    mesh_device.enable_async(True)
-
+def test_llama_model_inference(
+    mesh_device, weights, layers, paged_attention, optimizations, use_program_cache, reset_seeds, ensure_gc
+):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
@@ -127,7 +132,9 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
-        encoded_prompts = [[128000, 2028, 374, 264, 1296]]  # "This is a test" encoded prompt
+        encoded_prompts = [
+            [128000, 2028, 374, 264, 1296]
+        ] * model_args.max_batch_size  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
         tokenizer = Tokenizer(model_args.tokenizer_path)
@@ -147,13 +154,33 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
     generation_start_pos = 0
     generation_length = iterations
 
-    # pre-compute the rotational embedding matrix and send to device
-    current_rot_mat, rot_matrix = get_single_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        model_args.num_devices,
-        start_pos=0,
+    # Setup RoPE transformation matrices
+    rope_setup = TtLlamaRotarySetup(
+        mesh_device, model_args.head_dim, model_args.max_seq_len, model_args.rope_theta, model_args.use_scaled_rope
     )
+    transformation_mats = rope_setup.get_trans_mats()
+    transformation_mats = {"decode": transformation_mats}
+
+    # Prepare page table for paged attention
+    page_table_tt = None
+    paged_attention_config = None
+    if paged_attention:
+        paged_attention_config = model_args.paged_attention_config if paged_attention else None
+
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     # Load TTNN model
     tt_model = TtTransformer(
@@ -162,6 +189,8 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        transformation_mats=transformation_mats,
+        paged_attention_config=paged_attention_config,
     )
     logger.info("Model and caches loaded.")
 
@@ -176,7 +205,6 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-
     tt_decode_input = pt_decode_input
 
     # Keep track of generated outputs to print out later
@@ -184,42 +212,59 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
     if run_ref_pt:
         all_outputs_ref = []
 
+    # Initial positions
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos_tensor = ttnn.from_torch(
+        current_pos,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
     for i in range(generation_length):
-        current_pos = generation_start_pos + i
+        logger.info(f"[Llama3 Model] Generating token {i}")
 
         decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
-        current_pos_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+
+        # Get cos/sin matrices for the current position of each user
+        rot_mats = rope_setup.get_rot_mats(current_pos)
 
         # Run TT model
-        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
+        tt_out = tt_model(
+            decode_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
             .permute(2, 1, 0, 3)
             .squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
-
         ttnn.deallocate(tt_out)
 
-        # Update rotation matrix for next iteration
-        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
-
         if run_ref_pt:  # Run reference model
-            # freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
-            # positions = torch.tensor([current_pos])
-            # mask = ttnn.to_torch(attn_mask[0])
-            ref_output = reference_model(pt_decode_input, current_pos)
+            # In this test all users have the same position
+            ref_output = reference_model(pt_decode_input, current_pos[0])
 
-        # While in "prefill" mode, use the prompt tokens as the output
+        # Increment position
+        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos_tensor = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        # Append the generated token to the list of outputs
         if i in range(len(encoded_prompts[0])):
+            # While in "prefill" mode, use the prompt tokens as the output
             all_outputs.append(encoded_prompts[0][i])  # Update list of TT outputs
             if run_ref_pt:
                 all_outputs_ref.append(encoded_prompts[0][i])  # Update list of ref outputs
@@ -238,7 +283,6 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
                 all_outputs_ref.append(
                     pt_out_tok.squeeze(1).tolist()[0]
                 )  # Update generated token to list of ref outputs
-
         # Measure PCC if also running reference model
         if run_ref_pt:
             if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
@@ -271,10 +315,48 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
                     ]
 
                     tt_layer_present = []
-                    for layer_past in tt_model.layers[l].attention.layer_past:
-                        tt_layer_present.append(
-                            ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
-                        )
+                    if paged_attention:
+                        for layer_past in tt_model.layers[l].attention.layer_past:
+                            tt_layer_present.append(
+                                ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
+                                    reverse_permutation
+                                ]
+                                .reshape(
+                                    model_args.max_batch_size,
+                                    paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                                    model_args.n_kv_heads,
+                                    paged_attention_config.block_size,
+                                    model_args.head_dim,
+                                )
+                                .transpose(1, 2)
+                                .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                                    :batch, ...
+                                ]
+                            )
+                        tt_layer_present = [
+                            (
+                                ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
+                                    reverse_permutation
+                                ]
+                                .reshape(
+                                    model_args.max_batch_size,
+                                    paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                                    model_args.n_kv_heads,
+                                    paged_attention_config.block_size,
+                                    model_args.head_dim,
+                                )
+                                .transpose(1, 2)
+                                .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                                    :batch, ...
+                                ]
+                            )
+                            for cache in tt_model.layer_past
+                        ]
+                    else:
+                        for layer_past in tt_model.layers[l].attention.layer_past:
+                            tt_layer_present.append(
+                                ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                            )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                         cache_length_to_check = min(
