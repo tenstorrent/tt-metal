@@ -272,13 +272,11 @@ webrtc_streamer(
     video_transformer_factory=VideoProcessor,
     media_stream_constraints={
         "video": {
-            #            "width": {"min": 640, "ideal": 800, "max": 1920},
-            #            "height": {"min": 360, "ideal": 450, "max": 900},
             "width": {"min": 320, "ideal": 400, "max": 960},
-            "height": {"min": 180, "ideal": 225, "max": 450},
-            # "frameRate": {"min": 0.01, "ideal": 0.2, "max": 0.4},
-            # "frameRate": {"ideal": 5, "max": 10},
+            # "height": {"min": 180, "ideal": 225, "max": 450},
+            "height": {"min": 320, "ideal": 400, "max": 960},
+            "frameRate": {"min": 1, "ideal": 50, "max": 60},
         }
     },
-    async_processing=True,  # Use asynchronous processing for long tasks
+    # async_processing=True  # Use asynchronous processing for long tasks
 )
