@@ -303,6 +303,7 @@ const DataFormat get_single_pack_src_format(
     DataFormat output_format,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
+    bool bfp8_pack_precise,
     bool int_fpu_en,
     tt::ARCH arch) {
 
@@ -334,7 +335,7 @@ const DataFormat get_single_pack_src_format(
         TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Dest Fp32 mode is not supported for arch grayskull");
 
         if (is_bfp_format(output_format)) {
-            pack_src_format = is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16;
+            pack_src_format = bfp8_pack_precise ? DataFormat::Float32 : (is_exp_b_format(output_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8);
         } else if(is_exp_b_format(output_format) || (output_format == DataFormat::Float32)) {
             pack_src_format = output_format;
         } else if(output_format == DataFormat::Float16){
@@ -374,7 +375,7 @@ const DataFormat get_single_pack_src_format(
             }
             pack_src_format = unpack_conditional_dst_format;
         } else if (is_bfp_format(output_format)) {
-            pack_src_format = is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16;
+            pack_src_format = bfp8_pack_precise ? (is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16) : (is_exp_b_format(output_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8);
         } else {
             pack_src_format = output_format;
         }
@@ -390,7 +391,7 @@ const DataFormat get_single_pack_src_format(
         DataFormat pack_src_format_tmp = output_format;
 
         if (is_bfp_format(output_format)) {
-            pack_src_format_tmp = is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16;
+            pack_src_format_tmp = bfp8_pack_precise ? (is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16) : (is_exp_b_format(output_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8);
         }
 
         if (pack_src_format_tmp != DataFormat::Float32) {
@@ -413,6 +414,7 @@ std::vector<DataFormat> get_pack_src_formats(
     DataFormat output_formats[NUM_OPERANDS],
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
+    bool bfp8_pack_precise,
     bool int_fpu_en,
     tt::ARCH arch
 ) {
@@ -421,14 +423,14 @@ std::vector<DataFormat> get_pack_src_formats(
     std::vector<DataFormat> pack_src_formats;
     DataFormat pack_src_format;
     for (int i = 0; i < NUM_OPERANDS; i++) {
-        pack_src_format = get_single_pack_src_format(input_formats[i], pack_output_format, unpack_conditional_dst_format, fp32_dest_acc_en, int_fpu_en, arch);
+        pack_src_format = get_single_pack_src_format(input_formats[i], pack_output_format, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
     }
 
     // Intermediates
     for (int i = 0; i < NUM_OPERANDS; i++) {
         //Intermediates can be inputs & outputs to same op, provide same format per operand id
-        pack_src_format = get_single_pack_src_format(intermed_formats[i], intermed_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, int_fpu_en, arch);
+        pack_src_format = get_single_pack_src_format(intermed_formats[i], intermed_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
     }
     return pack_src_formats;
