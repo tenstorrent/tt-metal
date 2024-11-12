@@ -33,12 +33,14 @@ inline void do_crt1(uint32_t tt_l1_ptr *data_image) {
 #pragma GCC unroll 0
     while (len >= 3) {
         auto v0 = src[0], v1 = src[1], v2 = src[2];
-        // Make sure optimizer does not think this is memcpy. The
-        // scheduler doesn't know the above loads have 6 cycle
-        // latency, so emit the 3 adds as a single block the optimizer
-        // will not be able to move. We don't need early clobbers here
-        // because of the +r constraint -- early clobbers would
-        // pessimize.
+        // 1) Make sure the optimizer does not think this is memcpy by
+        // hiding the pointer bookkeeping in an asm.
+        // 2) The scheduler doesn't know the above loads have 6 cycle
+        // latency. We emit the 3 bookkeeping adds as a single block
+        // in the load shadow before the stores. The optimizer will
+        // not be able to move these.
+        // 3) We don't need early clobbers here because of the +r
+        // constraint -- early clobbers would pessimize.
         asm inline(
             "addi %0,%0,3*%3\n\t"
             "addi %1,%1,3*%3\n\t"
