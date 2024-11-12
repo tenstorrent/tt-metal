@@ -113,7 +113,7 @@ bool CloseDevice(Device *device);
 // ==================================================
 
 /**
- * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ * Creates a Program object containing bundles kernels, circular buffers, and/or semaphores for execution on a device.
  *
  * Return value: Program
  */
@@ -138,7 +138,7 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
 
 /**
- * Creates a compute or data movement kernel with the given compile time arguments and adds it to the program.
+ * Creates a compute or data movement kernel with given compile time arguments and adds it to the program.
  *
  * Return value: Kernel ID (uintptr_t)
  *
@@ -234,7 +234,7 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
- * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
+ * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore.
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -251,9 +251,10 @@ uint32_t CreateSemaphore(
 
 /**
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ *
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::unique_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -267,9 +268,10 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 
 /**
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ *
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::unique_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -282,7 +284,9 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 /**
-*  Allocates an interleaved DRAM or L1 buffer on device
+* Memory allocated for data movement. Can be accessed by data movement kernels to perform read and write operations. Can be allocated in off-chip DRAM or local SRAM memory.
+*
+* Allocates an interleaved DRAM or L1 buffer on device.
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -293,7 +297,9 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 
 /**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer on device
+* Memory allocated for data movement. Can be accessed by data movement kernels to perform read and write operations. Can be allocated in off-chip DRAM or local SRAM memory.
+*
+* Creates a pre-allocated interleaved DRAM or L1 buffer on device.
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -305,7 +311,9 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
 
 /**
-*  Allocates a sharded DRAM or L1 buffer on device
+* Memory allocated for data movement. Can be accessed by data movement kernels to perform read and write operations. Can be allocated in off-chip DRAM or local SRAM memory.
+*
+* Allocates a sharded DRAM or L1 buffer on device.
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -316,7 +324,9 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, Devi
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
 
 /**
-*  Creates a pre-allocated sharded DRAM or L1 buffer on device
+* Memory allocated for data movement. Can be accessed by data movement kernels to perform read and write operations. Can be allocated in off-chip DRAM or local SRAM memory.
+*
+*  Creates a pre-allocated sharded DRAM or L1 buffer on device.
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -328,7 +338,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
 /**
-*  Deallocates buffer from device by marking its memory as free.
+*  Deallocates a previously created buffer. Memory used by the deallocated buffer is available for reallocation.
 *
 *  Return value: void
 *
@@ -339,7 +349,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAd
 void DeallocateBuffer(Buffer &buffer);
 
 /**
-*  Gives the specified program ownership of the buffer: the buffer will remain on device at least until the program is enqueued. This is required for asynchronous Command Queues.
+*  Common memory is allocated for a global buffer. Assign the global buffer to a program for exclusive access. Gives the specified program ownership of the buffer: the buffer will remain on device at least until the program is enqueued. This is required for asynchronous Command Queues.
 *
 *  Return value: void
 *
@@ -355,8 +365,9 @@ void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& progra
 // ==================================================
 using RuntimeArgs = std::vector<std::variant<Buffer *, uint32_t>>;
 /**
- * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Set runtime args for a kernel sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
+ *
+ * Maximum of 255 unique and common runtime args per core are allowed.
  *
  * Return value: void
  *
@@ -374,8 +385,9 @@ void SetRuntimeArgs(
     stl::Span<const uint32_t> runtime_args);
 
 /**
- * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Set multiple runtime arguments for a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ *
+ * Maximum of 255 unique and common runtime args per core are allowed.
  *
  * Return value: void
  *
@@ -394,7 +406,8 @@ void SetRuntimeArgs(
 
 /**
  * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Maximum of 255 unique and common runtime args per core are allowed.
  *
  * Return value: void
  *
@@ -413,7 +426,8 @@ void SetRuntimeArgs(
 
 /**
  * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Maximum of 255 unique and common runtime args per core are allowed.
  *
  * Return value: void
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
@@ -431,7 +445,8 @@ void SetRuntimeArgs(
 
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Maximum of 255 unique and common runtime args per core are allowed.
  *
  * Return value: void
  *
@@ -481,7 +496,7 @@ std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const Program &program
 RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
- * Reads a buffer from the device
+ * Gets data from a device buffer and stores it in a vector or specific memory address.
  *
  * Return value: void
  *
@@ -499,7 +514,7 @@ void EnqueueReadBuffer(
     bool blocking);
 
 /**
- * Reads a buffer from the device
+ * Gets data from a device buffer and stores it in a vector or specific memory address.
  *
  * Return value: void
  *
@@ -517,7 +532,7 @@ void EnqueueReadBuffer(
     bool blocking);
 
 /**
- * Writes a buffer to the device
+ * Sends data through a vector or memory address to be written to a device buffer.
  *
  * Return value: void
  *
@@ -535,7 +550,7 @@ void EnqueueWriteBuffer(
     bool blocking);
 
 /**
- * Writes a buffer to the device
+ * Sends data through a vector or memory address to be written to a device buffer.
  *
  * Return value: void
  *
@@ -553,7 +568,7 @@ void EnqueueWriteBuffer(
     bool blocking);
 
 /**
- * Writes a program to the device and launches it
+ * Sends a program to the device to load and execute.
  *
  * Return value: void
  *
@@ -566,7 +581,7 @@ void EnqueueWriteBuffer(
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 /**
- * Blocks until all previously dispatched commands on the device have completed
+ * Blocks dispatched commands to the device until all previous commands are complete.
  *
  * Return value: void
  *
@@ -577,8 +592,10 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 void Finish(CommandQueue &cq);
 
 /**
- * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
+ * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue, execution is delayed until the trace is instantiated and enqueued.
+ *
  * The capture must be later ended via EndTraceCapture, and finally scheduled to be executed via ReplayTrace.
+ *
  * Beginning a trace capture enabled buffer allocations until capture has ended.
  *
  * Return value: Trace ID
@@ -591,10 +608,11 @@ void Finish(CommandQueue &cq);
 uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id);
 
 /**
- * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
+ * Completes capture on a trace, if captured commands do not conform to the rules of the trace, it will be invalidated.
+ *
  * This trace can be enqueued for execution via ReplayTrace on the same device command queue.
- * After ending a trace capture, buffer allocations on device are disabled until either a new trace begins capture,
- * or all traces on the device are released
+ *
+ * After ending a trace capture, buffer allocations on device are disabled until either a new trace begins capture, or all traces on the device are released.
  *
  * Return value: void
  *
@@ -621,9 +639,11 @@ void EndTraceCapture(Device *device, const uint8_t cq_id, const uint32_t tid);
 void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const bool blocking);
 
 /**
- * Release a previously instantiated trace, deallocating the associated trace buffers on device
- * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
- * If this releases the last trace on a device, then buffer allocations are re-enabled
+ * Release a previously instantiated trace, deallocating the associated trace buffers on device.
+ *
+ * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads.
+ *
+ * If this releases the last trace on a device, buffer allocations are re-enabled.
  *
  * Return value: void
  *
@@ -664,7 +684,9 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
 
 /**
  * Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user.
+ *
  * Return value: void
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
@@ -674,7 +696,9 @@ void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
 
 /**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
+ *
  * Return value: void
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
@@ -685,7 +709,9 @@ void EnqueueWaitForEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
 
 /**
  * Blocking function for host to synchronize (wait) on an event completion on device.
+ *
  * Return value: void
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
@@ -694,7 +720,9 @@ void EventSynchronize(const std::shared_ptr<Event> &event);
 
 /**
  * Host will query an event for completion status on device.
- * Return value: bool.  True if event is completed, false otherwise.
+ *
+ * Return value: bool. True if event is completed, false otherwise.
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
@@ -703,8 +731,8 @@ bool EventQuery(const std::shared_ptr<Event> &event);
 
 /**
  * Synchronize the device with host by waiting for all operations to complete.
- * If cq_id is provided then only the operations associated with that cq_id are waited for,
- * otherwise operations for all command queues are waited on.
+ *
+ * If cq_id is provided then only the operations associated with that cq_id are waited for, otherwise operations for all command queues are waited on.
  *
  * Return value: void
  *
