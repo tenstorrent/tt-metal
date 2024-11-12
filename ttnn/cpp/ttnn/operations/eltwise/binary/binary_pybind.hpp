@@ -705,7 +705,6 @@ void bind_binary_overload_operation(
         operation,
         doc,
 
-
         //tensor and scalar
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
@@ -1052,14 +1051,6 @@ void py_module(py::module& module) {
 
     detail::bind_binary_composite(
         module,
-        ttnn::prelu,
-        R"doc(Perform an eltwise-prelu operation. Formula : a - a.div(b, rounding_mode=trunc) * b .
-        PReLU supports the case where the size of input_tensor_b matches the number of channels in input_tensor_a.)doc",
-        R"doc(\mathrm{{output\_tensor}} = \verb|PReLU|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    detail::bind_binary_composite(
-        module,
         ttnn::xlogy,
         R"doc(Computes xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
@@ -1173,6 +1164,11 @@ void py_module(py::module& module) {
         ttnn::maximum,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    detail::bind_binary_composite_overload(
+        module,
+        ttnn::prelu,
+        R"doc(Perform an eltwise-prelu operation. PReLU supports the case where the size of input_tensor_b matches the number of channels in input_tensor_a.)doc");
 
     detail::bind_binary_composite(
         module,

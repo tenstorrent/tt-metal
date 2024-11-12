@@ -249,6 +249,12 @@ struct ExecutePrelu
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
 };
 
 } // namespace binary

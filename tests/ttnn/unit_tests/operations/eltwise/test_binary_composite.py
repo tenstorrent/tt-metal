@@ -1015,3 +1015,26 @@ def test_binary_prelu_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 3, 32, 32])),
+        (torch.Size([1, 6, 32, 32])),
+        (torch.Size([1, 7, 320, 384])),
+        (torch.Size([1, 4, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "scalar",
+    {-0.25, -2.7, 0.45, 6.4},
+)
+def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.prelu(input_tensor1, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    golden_tensor = golden_function(in_data1, scalar)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

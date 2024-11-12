@@ -264,10 +264,14 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0, div_result);
 }
 
+Tensor ExecutePrelu::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::prelu_sfpu(input, scalar);
+}
+
 Tensor ExecutePrelu::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const tt::tt_metal::LegacyShape s_a = input_a.get_legacy_shape();
     auto volume = input_b.get_logical_volume();
-    // If volume = 1 Support for a single-value tensor yet to be handled. #14933
+    // If volume = 1 Support for a single-value tensor yet to be handled. TODO(#14933)
     TT_FATAL(s_a[1] == volume, "Mismatch of parameter numbers and input channel size");
     Tensor b = ttnn::reshape(input_b, ttnn::SimpleShape{std::array<uint32_t, 4>{1, s_a[1], 1, 1}});
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);

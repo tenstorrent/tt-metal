@@ -455,4 +455,16 @@ def _golden_function_lcm(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.lcm, golden_function=_golden_function_lcm)
 
 
+def _golden_function_prelu(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    if not torch.is_tensor(input_tensor_b):
+        input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype)
+
+    return torch.nn.functional.prelu(input_tensor_a, weight=input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.prelu, golden_function=_golden_function_prelu)
+
+
 __all__ = []
