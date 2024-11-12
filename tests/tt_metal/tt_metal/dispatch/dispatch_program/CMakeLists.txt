@@ -1,4 +1,5 @@
 set(UNIT_TESTS_DISPATCH_PROGRAM_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatch_program_with_kernel_created_from_string.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueProgram.cpp
 <<<<<<< HEAD:tests/tt_metal/tt_metal/dispatch_program/CMakeLists.txt
