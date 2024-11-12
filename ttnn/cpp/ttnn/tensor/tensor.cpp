@@ -37,7 +37,7 @@ Tensor::TensorAttributes::TensorAttributes():
     shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), tensor_layout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig{}) {}
 
 Tensor::TensorAttributes::TensorAttributes(const Storage storage, const TensorLayout& tensor_layout, const ttnn::SimpleShape& logical_shape) :
-    storage(storage), shape(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view()), tensor_layout(tensor_layout), metadata_populated(true) {
+    storage(storage), shape(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view()), tensor_layout(tensor_layout) {
 }
 
 Tensor::TensorAttributes::TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile)
@@ -498,7 +498,11 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
     // Initialize an empty worker vector (remains empty for host side storage)
     std::vector<Device*> workers = {};
 
-    this->wait_for_tensor_data_populated();
+    if (this->tensor_attributes->dynamic_storage) {
+        // Tensor is populated by launch_with_autoformat
+        // Storage type can change based on op behaviour, wait until tensor populated.
+        this->wait_for_tensor_metadata_populated();
+    }
 
     std::visit(
         [this, blocking, &workers](auto&& storage) {
@@ -511,6 +515,8 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                     blocking or (this->workers.size() == 1),
                     "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
                 if (this->workers.size() != 1) {
+                    // Not populated - sync.
+                    this->wait_for_tensor_data_populated();
                     workers = std::vector<Device*>{this->device()};
                 } else {
                     // Already populated.
@@ -523,6 +529,8 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                     blocking or (this->workers.size()),
                     "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
                 if (not this->workers.size()) {
+                    // Not populated - sync.
+                    this->wait_for_tensor_data_populated();
                     workers.reserve(storage.num_buffers());
                     for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
                         auto device_id = storage.ordered_device_ids[i];
@@ -878,20 +886,24 @@ Tensor allocate_tensor_on_device(
     const std::optional<Tile>& tile
     ) {
     // Top level wrapper to asynchronously create a device tensor (multi-device)
+    Tensor device_tensor = Tensor(mesh_device->get_devices());
     TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape);
-    Tensor device_tensor = Tensor(mesh_device->get_devices(), tensor_layout, shape.logical_shape());
-    device_tensor.tensor_attributes->metadata_populated = true;
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     const auto& workers = device_tensor.get_workers();
     uint32_t num_workers = workers.size();
 
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
         auto& worker = workers[worker_index];
-        worker->push_work([shape, data_type, layout, worker, memory_config, tile, device_tensor, worker_index]() mutable {
+        worker->push_work([shape, data_type, layout, worker, memory_config, tile, device_tensor, tensor_layout, worker_index]() mutable {
             auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config, tile);
             insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
 
-            device_tensor.tensor_attributes->num_workers_completed++;
+            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
+            if (not num_workers_completed) {
+                device_tensor.tensor_attributes->shape = ttnn::Shape(shape);
+                device_tensor.tensor_attributes->tensor_layout = tensor_layout;
+                device_tensor.tensor_attributes->metadata_populated = true;
+            }
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);

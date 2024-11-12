@@ -79,7 +79,10 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
                 shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, std::nullopt);
             }
             insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-            device_tensor.tensor_attributes->num_workers_completed++;
+            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
+            if (not num_workers_completed) {
+                device_tensor.tensor_attributes->metadata_populated = true;
+            }
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
@@ -114,7 +117,10 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
             auto shard = get_shard_for_device(input_tensor, target_device);
             shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
             insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-            host_tensor.tensor_attributes->num_workers_completed++;
+            uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
+            if (not num_workers_completed) {
+                host_tensor.tensor_attributes->metadata_populated = true;
+            }
         });
     }
 
@@ -196,7 +202,10 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
                 auto shard = get_shard_for_device(input_tensor, worker, worker_index);
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
                 insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
-                tensor_modified_layout.tensor_attributes->num_workers_completed++;
+                uint32_t num_workers_completed = (tensor_modified_layout.tensor_attributes->num_workers_completed)++;
+                if (not num_workers_completed) {
+                    tensor_modified_layout.tensor_attributes->metadata_populated = true;
+                }
             });
         }
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
