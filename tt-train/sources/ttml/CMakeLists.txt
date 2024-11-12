@@ -26,7 +26,6 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
-        pthread
         Python::Python
         fmt::fmt-header-only
         magic_enum
