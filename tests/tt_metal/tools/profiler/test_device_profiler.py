@@ -200,6 +200,7 @@ def test_dispatch_cores():
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
 
 
+@skip_for_grayskull()
 def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
