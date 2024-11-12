@@ -1104,6 +1104,7 @@ void assemble_device_commands(
     uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
         kernel_group->launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+        kernel_group->launch_msg.kernel_config.preload = DISPATCH_ENABLE_FLAG_PRELOAD;
         for (uint32_t i = 0; i < NUM_PROGRAMMABLE_CORE_TYPES; i++) {
             kernel_group->launch_msg.kernel_config.kernel_config_base[i] = 0;
         }
@@ -1135,6 +1136,7 @@ void assemble_device_commands(
     if (programmable_core_index != -1) {
         for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
             kernel_group->launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+            kernel_group->launch_msg.kernel_config.preload = DISPATCH_ENABLE_FLAG_PRELOAD;
             // Set the kernel_config_base addrs to 0 when generating the dispatch commands for the program
             // Will be resolved at runtime
             for (uint32_t i = 0; i < NUM_PROGRAMMABLE_CORE_TYPES; i++) {
