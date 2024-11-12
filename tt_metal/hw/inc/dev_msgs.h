@@ -100,6 +100,9 @@ struct rta_offset_t {
 // Maximums across all archs
 constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
 constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
+enum dispatchenable_flags : uint8_t {
+    DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
+};
 
 struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
@@ -122,7 +125,8 @@ struct kernel_config_msg_t {
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
-    volatile uint8_t pad2[9];
+    volatile uint8_t preload;
+    volatile uint8_t pad2[8];
 } __attribute__((packed));
 
 struct go_msg_t {

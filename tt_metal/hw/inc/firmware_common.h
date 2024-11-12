@@ -72,3 +72,14 @@ uint32_t firmware_config_init(
 
     return kernel_config_base[core_type_index];
 }
+
+FORCE_INLINE
+void wait_for_go_message() {
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+    while (mailboxes->go_message.signal != RUN_MSG_GO) {
+#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
+        asm("fence");
+#endif
+    }
+}

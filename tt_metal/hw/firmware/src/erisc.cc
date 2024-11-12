@@ -72,7 +72,8 @@ void __attribute__((noinline)) Application(void) {
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         uint8_t go_message_signal = mailboxes->go_message.signal;
-        if (go_message_signal == RUN_MSG_GO) {
+        if ((go_message_signal == RUN_MSG_GO) ||
+            (mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
             // they're running a kernel or not. We don't want to profile "invalid" iterations.
             DeviceZoneScopedMainN("ERISC-FW");
@@ -80,18 +81,28 @@ void __attribute__((noinline)) Application(void) {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
                 kernel_init(0);
                 WAYPOINT("D");
+            } else {
+                tt_l1_ptr mailboxes_t* const mailboxes =
+                    (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+
+                while (mailboxes->go_message.signal != RUN_MSG_GO) {
+                    internal_::risc_context_switch();
+                    invalidate_l1_cache();
+                }
             }
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
+                launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = NOC_XY_ADDR(
                     NOC_X(mailboxes->go_message.master_x),
                     NOC_Y(mailboxes->go_message.master_y),
