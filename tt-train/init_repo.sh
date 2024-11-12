@@ -10,7 +10,6 @@ sudo ln -sf /usr/bin/clang-tidy-17 /usr/bin/clang-tidy
 sudo ln -sf /usr/bin/clang-format-17 /usr/bin/clang-format
 sudo apt install pre-commit
 pre-commit install
-sudo apt  install direnv=2.21.2-1
 chmod +x init_tt_metal.sh
 source ./init_tt_metal.sh
 
