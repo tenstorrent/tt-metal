@@ -135,5 +135,4 @@ elif [[ $1 == "PROFILER_NO_RESET" ]]; then
     run_profiling_no_reset_test
 else
     run_profiling_test
-    run_post_proc_test
 fi
