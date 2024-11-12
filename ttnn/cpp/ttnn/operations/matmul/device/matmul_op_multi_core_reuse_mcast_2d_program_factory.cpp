@@ -329,6 +329,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
+            (std::uint32_t)out_num_blocks_x,
+            (std::uint32_t)out_num_blocks_y,
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -340,6 +342,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_shard_width_in_tiles,
             (std::uint32_t)in0_shard_height_in_tiles,
             (std::uint32_t)in0_block_w,
+            (std::uint32_t)in0_block_h,
             // batch args
             (std::uint32_t)B  // batch
         };

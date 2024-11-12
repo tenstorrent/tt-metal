@@ -182,7 +182,7 @@ void MAIN {
                     // UNPACK(( DPRINT  << "block"  << (uint)block<<ENDL() ));
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
-                    // UNPACK(( DPRINT   << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
+                    // UNPACK(( DPRINT   << TSLICE(in0_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
 
 
                     int in0_index_subblock_offset = 0;

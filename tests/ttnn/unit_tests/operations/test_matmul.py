@@ -342,35 +342,32 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
-@pytest.mark.parametrize("n", [256])
+@pytest.mark.parametrize("n", [512])
 @pytest.mark.parametrize("has_bias", [False])
-@pytest.mark.parametrize("grid_size", [(2, 2)])
+@pytest.mark.parametrize("grid_size", [(4, 4)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in0_sharded", [False])
+@pytest.mark.parametrize("in0_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [False])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    b = 2
+    b = 1
     in0_shape = [b, 1, m, k]
     in1_shape = [b, 1, k, n]
     bias_shape = [1, 1, n]
 
-    num_out_block_h = 3
-    num_out_block_w = 1
+    num_out_block_h = 2
+    num_out_block_w = 2
 
     in0_block_w = k // grid_size[0] // 32
-    per_core_M = m // grid_size[1] // tile_h + 1
+    per_core_M = m // grid_size[1] // tile_h
     per_core_N = n // grid_size[0] // tile_w
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
-
-    out_subblock_h = 3
-    out_subblock_w = 2
 
     print(per_core_M)
     print(per_core_N)
@@ -394,7 +391,7 @@ def test_matmul_2d_tiny_tile(
 
     if in0_sharded:
         in0_memory_config = ttnn.create_sharded_memory_config(
-            (1, 1, m, k),
+            (b, 1, m, k),
             core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -442,7 +439,7 @@ def test_matmul_2d_tiny_tile(
         per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
-        fuse_batch=False,
+        # fuse_batch=False,
     )
 
     if is_grayskull():
