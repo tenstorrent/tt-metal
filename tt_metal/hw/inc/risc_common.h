@@ -10,7 +10,6 @@
 #include <cstdint>
 
 #include "eth_l1_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "limits.h"
 #include "mod_div_lib.h"
 #include "noc_overlay_parameters.h"

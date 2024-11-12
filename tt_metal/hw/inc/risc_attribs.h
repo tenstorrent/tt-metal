@@ -18,7 +18,6 @@ union tt_uint64_t {
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr __attribute__((rvtt_reg_ptr))
 
-
 inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr *p)
 {
     tt_uint64_t v;

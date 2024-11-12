@@ -24,6 +24,8 @@
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
 
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
+
 namespace tt {
 
 namespace tt_metal {

@@ -29,6 +29,8 @@
 #include "tt_metal/program.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // L1_KERNEL_CONFIG_SIZE
+
 namespace tt::tt_metal {
 
 namespace {

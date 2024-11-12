@@ -13,6 +13,8 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "noc/noc_parameters.h"
 
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
+
 extern bool debug_g;
 extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;

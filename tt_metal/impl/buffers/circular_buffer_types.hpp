@@ -12,9 +12,10 @@
 
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NUM_CIRCULAR_BUFFERS
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
+
+#include "tt_metal/hw/inc/circular_buffer.h"
 
 namespace tt::tt_metal {
 inline namespace v0 {
