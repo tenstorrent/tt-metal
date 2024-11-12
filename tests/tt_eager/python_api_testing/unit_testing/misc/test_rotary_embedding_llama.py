@@ -11,7 +11,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, nearest_32
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
 
@@ -33,22 +33,20 @@ class TtLlamaRotary(torch.nn.Module):
         head_dim: int,
         mode: str,
         datatype=ttnn.bfloat16,
+        fuse_qk=False,
     ):
         super().__init__()
 
         self.head_dim = head_dim
         self.device = device
         self.mode = mode
+        self.fuse_qk = fuse_qk
 
         self.transformation_mat = ttnn.from_torch(
             get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
         )
 
-    def apply_rotary(self, x, cos, sin):
-        # n_head = 8 for Q
-        # n_head = 1 for K
-
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             # math_fidelity=ttnn.MathFidelity.LoFi,
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
@@ -56,20 +54,41 @@ class TtLlamaRotary(torch.nn.Module):
             packer_l1_acc=True,
         )
 
+    def apply_rotary(self, x, cos, sin):
+        # n_head = 8 for Q
+        # n_head = 1 for K
+
         rotary_output = ttnn.experimental.rotary_embedding_llama(
             x,
             cos,
             sin,
             self.transformation_mat,
             is_decode_mode=self.mode == "decode",
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         return rotary_output
 
+    def apply_fused_rotary(self, q, k, cos, sin):
+        # n_head = 8 for Q
+        # n_head = 1 for K
+        rotary_output_q, rotary_output_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q,
+            k,
+            cos,
+            sin,
+            self.transformation_mat,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        return rotary_output_q, rotary_output_k
+
     def forward(self, xq, xk, cos, sin):
-        xq = self.apply_rotary(xq, cos, sin)
-        xk = self.apply_rotary(xk, cos, sin)
+        if self.fuse_qk:
+            xq, xk = self.apply_fused_rotary(xq, xk, cos, sin)
+        else:
+            xq = self.apply_rotary(xq, cos, sin)
+            xk = self.apply_rotary(xk, cos, sin)
         return xq, xk
 
 
@@ -118,6 +137,7 @@ def run_test_rotary_embedding_llama(
     head_dim,
     max_seq_len,
     datatype=ttnn.bfloat16,
+    fuse_qk=False,
 ):
     # Prepare input
     torch.manual_seed(0)
@@ -162,30 +182,75 @@ def run_test_rotary_embedding_llama(
     pytorch_out = (torch_xq, torch_xk)
 
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
-    tt_model = TtLlamaRotary(device, head_dim, mode, datatype)
+    tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk)
 
     if mode == "decode":
         rope_setup_decode = TtLlamaRotarySetup(device, head_dim, max_seq_len)
-        cos, sin = rope_setup_decode.get_rot_mats(position_ids)
         tt_model.transformation_mat = rope_setup_decode.transformation_mat
 
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
         inp = [x.transpose(1, 2) for x in inp]
         # inp: [seq_len, batch, n_heads, head_dim]
 
-        grid = (
-            ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True).bounding_box().grid_size()
-        )
-        input_mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, batch, ttnn.TILE_SIZE, head_dim),
-            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        if fuse_qk:
+            # For fused_qk, repeat the position_ids for q and k
+            position_ids = torch.concat([position_ids, position_ids])
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
+            assert (
+                batch % 8 == 0 or batch == 1
+            ), "Batch size must be a multiple of 8 or less than 8 for fused_qk rotary embedding"
+            if batch == 1:
+                q_core_grid_start = (0, 0)
+                q_core_grid_end = (0, 0)
+                k_core_grid_start = (1, 0)
+                k_core_grid_end = (1, 0)
+            else:
+                q_core_grid_start = (0, 0)
+                q_core_grid_end = ((batch - 1) % 8, (batch // 8) - 1)
+                k_core_grid_start = (0, (batch // 8))
+                k_core_grid_end = ((batch - 1) % 8, (batch // 8) * 2 - 1)
+            q_input_mem_config = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(n_heads), head_dim),
+                core_grid=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(*q_core_grid_start), ttnn.CoreCoord(*q_core_grid_end))}
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            k_input_mem_config = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(n_kv_heads), head_dim),
+                core_grid=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(*k_core_grid_start), ttnn.CoreCoord(*k_core_grid_end))}
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            input_mem_configs = [q_input_mem_config, k_input_mem_config]
+
+        else:
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
+            grid = (
+                ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True)
+                .bounding_box()
+                .grid_size()
+            )
+            input_mem_configs = [
+                ttnn.create_sharded_memory_config(
+                    shape=(1, batch, ttnn.TILE_SIZE, head_dim),
+                    core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                for _ in range(len(inp))
+            ]
 
         tt_inp = [
-            ttnn.from_torch(i, device=device, dtype=datatype, memory_config=input_mem_config, layout=ttnn.TILE_LAYOUT)
-            for i in inp
+            ttnn.from_torch(
+                x, device=device, dtype=datatype, memory_config=input_mem_configs[i], layout=ttnn.TILE_LAYOUT
+            )
+            for i, x in enumerate(inp)
         ]
         tt_inp += [cos, sin]  # Append cos and sin to the input list
     else:

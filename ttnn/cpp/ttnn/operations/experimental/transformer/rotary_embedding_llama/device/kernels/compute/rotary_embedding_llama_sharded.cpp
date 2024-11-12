@@ -29,7 +29,7 @@ void MAIN {
     constexpr uint32_t Ht = get_compile_time_arg_val(9); // How many rows (tiles) in n_heads dimension
 
     mm_init();
-    binary_op_init_common(rotated_in_interm_cb, cos_cb); // General Init for all binary ops
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb); // General Init for all binary ops
 
     // Get the trans_mat
     cb_reserve_back(trans_mat_cb, onetile);
