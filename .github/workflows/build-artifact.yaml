@@ -124,6 +124,7 @@ jobs:
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
             -e ARCH_NAME=${{ matrix.arch }}
+            -e CARGO_HOME=${{ github.workspace }}/.cargo
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
