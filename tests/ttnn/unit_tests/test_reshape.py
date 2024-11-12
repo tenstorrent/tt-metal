@@ -344,7 +344,6 @@ def test_reshape_int(input_shape, output_shape, device):
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
