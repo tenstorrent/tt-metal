@@ -11,10 +11,12 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/common_runtime_address_map.h" // NOC_0_X
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
+
+#include "tt_metal/hw/inc/circular_buffer.h"
 
 namespace fs = std::filesystem;
 
