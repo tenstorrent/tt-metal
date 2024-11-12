@@ -155,8 +155,8 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32),
-    ids=["bfloat16", "float"],
+    (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b),
+    ids=["bfloat16", "float", "bfloat8_b"],
 )
 def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     if is_grayskull() and dtype == ttnn.float32:
@@ -189,8 +189,8 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat8_b, ttnn.float32),
-    ids=["bfloat8_b", "float"],
+    (ttnn.bfloat8_b, ttnn.float32, ttnn.bfloat16),
+    ids=["bfloat8_b", "float", "bfloat16"],
 )
 def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     if is_grayskull() and dtype == ttnn.float32:
