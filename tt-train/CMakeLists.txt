@@ -19,13 +19,6 @@ endif()
 project(ml-framework-cpp)
 CHECK_COMPILERS()
 
-if("$ENV{TT_METAL_HOME}" STREQUAL "")
-    message(FATAL_ERROR "TT_METAL_HOME is not set")
-endif()
-if("$ENV{ARCH_NAME}" STREQUAL "")
-    message(FATAL_ERROR "ARCH_NAME is not set")
-endif()
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
@@ -53,12 +46,6 @@ endif()
 message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
 
 include(cmake/dependencies.cmake)
-
-message($ENV{TT_METAL_HOME})
-
-message(STATUS "TT_METAL_HOME: $ENV{TT_METAL_HOME}")
-
-message($ENV{TT_METAL_HOME}/tt_metal/third_party/src/firmware/riscv/$ENV{ARCH_NAME})
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 

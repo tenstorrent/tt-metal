@@ -9,29 +9,8 @@ file(
 
 add_library(ttml STATIC ${SOURCES})
 
-target_include_directories(
-    ttml
-    SYSTEM
-    PUBLIC
-        # Metalium
-        $ENV{TT_METAL_HOME}
-        $ENV{TT_METAL_HOME}/tt_metal
-        $ENV{TT_METAL_HOME}/tt_metal/third_party/umd
-        $ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole
-        $ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
-        $ENV{TT_METAL_HOME}/tt_metal/hw/inc/
-        $ENV{TT_METAL_HOME}/tt_metal/third_party/umd/src/firmware/riscv/wormhole
-        $ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device
-        # TTNN
-        $ENV{TT_METAL_HOME}/ttnn/cpp
-        $ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated
-        $ENV{TT_METAL_HOME}/tt_metal/third_party/magic_enum
-        ${reflect_SOURCE_DIR}
-        ${flatbuffers_include_dir}
-        ${nng_include_dir}
-)
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
-target_link_directories(ttml PUBLIC $ENV{TT_METAL_HOME}/build/lib)
+
 find_package(Python REQUIRED Development)
 
 foreach(lib ${BoostPackages})
