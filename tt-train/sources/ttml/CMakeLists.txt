@@ -50,10 +50,10 @@ target_link_libraries(
 target_link_libraries(
     ttml
     PUBLIC
-        tt_metal
+        Metalium::Metal
+        Metalium::TTNN
         pthread
         Python::Python
-        $ENV{TT_METAL_HOME}/build/lib/_ttnn.so
         fmt
         magic_enum
 )
