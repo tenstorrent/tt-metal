@@ -348,7 +348,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in0_sharded", [True])
-@pytest.mark.parametrize("out_sharded", [False])
+@pytest.mark.parametrize("out_sharded", [True])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_2d_tiny_tile(
@@ -360,7 +360,7 @@ def test_matmul_2d_tiny_tile(
     bias_shape = [1, 1, n]
 
     num_out_block_h = 2
-    num_out_block_w = 2
+    num_out_block_w = 1
 
     in0_block_w = k // grid_size[0] // 32
     per_core_M = m // grid_size[1] // tile_h
@@ -491,6 +491,8 @@ def test_matmul_2d_tiny_tile(
     if has_bias:
         pt_out += bias
 
+    # print(pt_out[0][0][0][0:32])
+    # print(output_tensor[0][0][0][0:32])
     assert_with_pcc(pt_out, output_tensor, 0.999)
     # print(pt_out[0][0][0][0:32])
     # print(output_tensor[0][0][0][0:32])
@@ -499,13 +501,14 @@ def test_matmul_2d_tiny_tile(
     #     start = i*32
     #     end = start + 32
     #     assert_with_pcc(pt_out[0][0][2][start:end], output_tensor[0][0][2][start:end], 0.999)
-    row_id = 320
+    # row_id = 0
     # for i in range(512):
     #     print(i)
     #     row_id = i
     #     assert_with_pcc(pt_out[0][0][i], output_tensor[0][0][i], 0.999)
     # print(pt_out[0][0][row_id][0:32])
     # print(output_tensor[0][0][row_id][0:32])
+
     # assert_with_pcc(pt_out[0][0][row_id], output_tensor[0][0][row_id], 0.999)
 
 

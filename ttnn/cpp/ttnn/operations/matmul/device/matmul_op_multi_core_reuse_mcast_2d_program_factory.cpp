@@ -91,6 +91,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+
     // hardcode testing, testing multiple blocks on height for now
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -113,9 +115,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
+    uint32_t out_shard_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    if (output_is_sharded) {
+        out_CB_tiles = out_shard_tiles;
+    }
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
-    uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
+    uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -770,7 +777,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
-    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+    if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // output
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format},
