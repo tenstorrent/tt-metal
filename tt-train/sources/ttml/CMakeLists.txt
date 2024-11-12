@@ -33,7 +33,7 @@ target_link_libraries(
         Metalium::TTNN
         pthread
         Python::Python
-        fmt
+        fmt::fmt-header-only
         magic_enum
 )
 
