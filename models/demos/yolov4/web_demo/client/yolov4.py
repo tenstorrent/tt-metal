@@ -1,24 +1,23 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import time
 import io
+import math
 import json
+import random
 import argparse
 import cv2
 import requests
-import streamlit as st
-from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 import torch
-import numpy as np
 import av
+import streamlit as st
+import numpy as np
 
 
 from torch import nn
-import cv2
-import time
-import numpy as np
-import math
+from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 
 class VideoProcessor(VideoProcessorBase):
@@ -231,12 +230,11 @@ class VideoProcessor(VideoProcessorBase):
         boxes = self.post_processing(bgr_image, conf_thresh, nms_thresh, output)
         namesfile = "coco.names"
         class_names = self.load_class_names(namesfile)
-        import random
 
-        random_number = random.randint(1, 100)
+        # random_number = random.randint(1, 100)
+        # save_name = "ttnn_prediction_demo" + str(random_number) + ".jpg"
+        save_name = None
 
-        save_name = "ttnn_prediction_demo" + str(random_number) + ".jpg"
-        # save_name = None
         image_final = self.plot_boxes_cv2(bgr_image, boxes[0], save_name, class_names)
         t4 = time.time()
         print()
