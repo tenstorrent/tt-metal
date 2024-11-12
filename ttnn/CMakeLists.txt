@@ -654,6 +654,7 @@ if(WITH_PYTHON_BINDINGS)
 endif()
 
 add_library(ttnn SHARED ${TTNN_FINAL_SRC})
+add_library(Metalium::TTNN ALIAS ttnn)
 target_compile_options(
     ttnn
     PUBLIC
