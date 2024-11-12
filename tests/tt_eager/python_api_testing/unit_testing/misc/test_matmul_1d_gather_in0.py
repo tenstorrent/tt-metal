@@ -23,26 +23,37 @@ random.seed(10)
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "B, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
         # 32, 2304, 3840
-        (1, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
         # 256, 8192, 8192
-        (1, 256, 1024, 8192, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
+        (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
+        # 32, 64, 64
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
+        # 32, 64, 64
+        (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
+    ],
+)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+        ttnn.UnaryOpType.SILU,
     ],
 )
 @pytest.mark.parametrize(
@@ -180,7 +191,7 @@ def test_multi_core_matmul_1d_wh(
         per_core_M=out_block_h,
         per_core_N=out_block_w,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=activation,
         mcast_in0=False,
         gather_in0=True,
     )
@@ -202,6 +213,8 @@ def test_multi_core_matmul_1d_wh(
     tt_out = ttnn.to_torch(output_t)
 
     pt_out = in0 @ in1
+    if activation:
+        pt_out = torch.nn.SiLU()(pt_out)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
