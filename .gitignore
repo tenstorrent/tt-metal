@@ -23,6 +23,7 @@ coremodel/model/release/
 
 pipegen.yaml
 device_desc.yaml
+cluster_descriptor.yaml
 .umd/
 /clean
 *coverage.txt
