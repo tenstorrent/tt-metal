@@ -61,7 +61,6 @@ async def objdetection_v2(file: UploadFile = File(...)):
     response = model.run_traced_inference(image)
     t2 = time.time()
     print("the inference on the sever side took: ", t2 - t1)
-    print("response in fastapi is:", response)
 
     # Convert response tensors to JSON-serializable format
     output = process_request(response)
