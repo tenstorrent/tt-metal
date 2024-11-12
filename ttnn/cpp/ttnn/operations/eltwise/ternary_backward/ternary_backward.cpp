@@ -41,8 +41,8 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
-    Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
+    float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
     grad_tensor.emplace_back(where(
         ttnn::eqz(tensor2, output_mem_config),
@@ -55,7 +55,7 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
         ttnn::multiply(tmp, ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(where(
         ttnn::eqz(tensor2, output_mem_config),
-        where(ttnn::eqz(grad, output_mem_config), t_nan, ttnn::neg(t_inf, output_mem_config), output_mem_config),
+        where(ttnn::eqz(grad, output_mem_config), t_nan, -t_inf, output_mem_config),
         grad_b,
         output_mem_config));
     return grad_tensor;
@@ -99,7 +99,7 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
 std::vector<Tensor> LerpBackwardOperation::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& end, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result_1 = ttnn::multiply(grad, ttnn::subtract(ttnn::operations::creation::full_like(weight, 1.0), weight, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result_1 = ttnn::multiply(grad, ttnn::rsub(weight, 1.0, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_1);
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_2);

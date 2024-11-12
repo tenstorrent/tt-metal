@@ -17,7 +17,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::FLOAT32, "Error");
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
