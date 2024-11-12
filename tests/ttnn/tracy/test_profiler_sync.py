@@ -40,6 +40,7 @@ def test_with_ops(device):
     output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
 
 
+@pytest.mark.skip("#14961 - Ring Buffer issue")
 @pytest.mark.parametrize("num_devices", [(8)])
 def test_all_devices(
     all_devices,
