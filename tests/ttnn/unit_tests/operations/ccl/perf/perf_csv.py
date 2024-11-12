@@ -5,6 +5,7 @@
 import pandas as pd
 import os
 import re
+import time
 
 
 def perf_report(file_path):
@@ -214,10 +215,12 @@ def perf_report(file_path):
 
     averages_df = pd.DataFrame(averages_data)
 
-    averages_file_path = file_path.replace(".csv", "_averages.csv")
+    today = time.strftime("%Y_%m_%d")
+    ccl_perf_file_path = f"CCL_Perf_{today}.csv"
+    os.rename(file_path, ccl_perf_file_path)
 
-    averages_df.to_csv(averages_file_path, index=False)
+    averages_df.to_csv(ccl_perf_file_path, index=False)
 
-    print(f"Averages CSV saved to: {averages_file_path}")
+    print(f"CCL Perf report CSV saved to: {ccl_perf_file_path}")
 
     return averages_df
