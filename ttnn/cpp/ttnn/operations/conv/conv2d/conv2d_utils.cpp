@@ -315,8 +315,6 @@ static TensorMemoryLayout select_shard_spec(
     uint32_t weights_width,
     uint32_t input_width,
     ShardOrientation shard_orientation,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size) {
     auto get_core_count_for_sharding = [&](TensorMemoryLayout shard_layout) {
         return determine_parallel_config(
@@ -331,11 +329,6 @@ static TensorMemoryLayout select_shard_spec(
             .grid.num_cores();
     };
 
-    // Block sharding supports very few kernel dims.
-    const bool is_block_sharding_valid =
-        (kernel_size[0] == 3 && kernel_size[1] == 3 && (stride[0] == 1 || stride[0] == 2)) ||
-        (kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 2);
-
     // 1d convs support only height sharding
     const bool is_conv1d = weights_width == 1 && input_width == 1;
 
@@ -343,8 +336,7 @@ static TensorMemoryLayout select_shard_spec(
     // matmul doesn't support width sharding
     const uint32_t cc_width =
         !is_mm_conv && !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::WIDTH_SHARDED) : 0;
-    const uint32_t cc_block =
-        (is_block_sharding_valid || is_mm_conv) && !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::BLOCK_SHARDED) : 0;
+    const uint32_t cc_block = !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::BLOCK_SHARDED) : 0;
 
     uint32_t max_cc = cc_block;
     TensorMemoryLayout shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
@@ -655,10 +647,9 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     uint32_t output_width,
     uint32_t weights_width,
     uint32_t input_width,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size,
     Conv2dConfig& conv_config,
+    Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config) {
 
     // If the input tensor is already sharded, or the conv_config has a specified shard layout, we don't need to do anything.
@@ -678,16 +669,15 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
         weights_width,
         input_width,
         shard_orientation,
-        kernel_size,
-        stride,
         compute_grid_size);
 
     if (conv_config.act_block_h_override == 0 && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         if (in_channels <= constants::TILE_WIDTH / 2 && conv_config.input_channels_alignment == constants::TILE_WIDTH &&
-            !is_mm_conv && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            !is_mm_conv && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED && input_tensor_layout == Layout::ROW_MAJOR) {
             log_debug(LogOp, "Auto shard, enable shallow conv");
             // height sharded, non matmul conv, with input channels <= 16, and default setting for
             // input_channels_alignment
+            // Currently data-movement ops have too many restrictions to support shallow convs with tiled input.
             conv_config.input_channels_alignment = constants::TILE_WIDTH / 2;
         }
 

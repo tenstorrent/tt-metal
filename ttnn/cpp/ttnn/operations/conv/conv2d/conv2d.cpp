@@ -57,7 +57,6 @@ Result conv2d(
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    // In this case we deduce the shard layout.
     adjust_conv_op_config_for_auto_shard_if_necessary(
         mm_conv,
         batch_size,
@@ -67,10 +66,9 @@ Result conv2d(
         output_width,
         weight_tensor.get_shape()[3],
         input_width,
-        kernel_size,
-        stride,
         device->compute_with_storage_grid_size(),
         conv_config,
+        input_tensor.layout(),
         ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt);
 
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
@@ -111,6 +109,7 @@ Result conv2d(
         weight_tensor_on_device = prepare_conv_weights(
             weight_tensor,
             input_tensor_post_tm.memory_config(),
+            input_tensor_post_tm.layout(),
             "OIHW",
             in_channels,
             out_channels,
@@ -133,6 +132,7 @@ Result conv2d(
             bias_tensor_on_device = prepare_conv_bias(
                 bias_tensor.value(),
                 input_tensor_post_tm.memory_config(),
+                input_tensor_post_tm.layout(),
                 in_channels,
                 out_channels,
                 batch_size,

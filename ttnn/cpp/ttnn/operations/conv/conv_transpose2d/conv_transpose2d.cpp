@@ -258,6 +258,7 @@ Result conv_transpose2d(
             weight_tensor_on_device = prepare_conv_weights(
                 transform_weights_for_conv_transpose2d(weight_tensor),
                 input_tensor_post_tm.memory_config(),
+                input_tensor_post_tm.layout(),
                 "OIHW",
                 in_channels,
                 out_channels,
@@ -279,6 +280,7 @@ Result conv_transpose2d(
             bias_tensor_on_device = prepare_conv_bias(
                 bias_tensor.value(),
                 input_tensor_post_tm.memory_config(),
+                input_tensor_post_tm.layout(),
                 in_channels,
                 out_channels,
                 batch_size,

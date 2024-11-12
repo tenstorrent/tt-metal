@@ -179,10 +179,9 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     uint32_t output_width,
     uint32_t weights_width,
     uint32_t input_width,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size,
     Conv2dConfig& conv_config,
+    Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config);
 
 template <typename T>
@@ -228,6 +227,7 @@ OptimizedConvBlockConfig get_opt_block_config(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     T *device,
+    Layout input_tensor_layout,
     Conv2dConfig& conv_config);
 
 } // namespace operations::conv

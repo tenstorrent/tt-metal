@@ -49,6 +49,7 @@ OptimizedConvBlockConfig get_opt_block_config(
     std::array<uint32_t, 2> stride,
     T *device,
     Conv2dConfig& conv_config,
+    Layout input_tensor_layout,
     const MemoryConfig& input_memory_config) {
 
 
@@ -61,10 +62,9 @@ OptimizedConvBlockConfig get_opt_block_config(
         output_width,
         kernel_size[1],
         input_width,
-        kernel_size,
-        stride,
         device->compute_with_storage_grid_size(),
         conv_config,
+        input_tensor_layout,
         input_memory_config);
 
     ShardOrientation shard_orientation =
@@ -110,6 +110,7 @@ template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig &input_memory_config,
+    Layout input_tensor_layout,
     std::string weights_format,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -144,6 +145,7 @@ ttnn::Tensor prepare_conv_weights(
         stride,
         device,
         conv_config,
+        input_tensor_layout,
         input_memory_config
     );
 
@@ -228,6 +230,7 @@ template <typename T>
 ttnn::Tensor prepare_conv_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_tensor_layout,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -261,6 +264,7 @@ ttnn::Tensor prepare_conv_bias(
         stride,
         device,
         conv_config,
+        input_tensor_layout,
         input_memory_config
     );
 
@@ -294,6 +298,7 @@ template OptimizedConvBlockConfig get_opt_block_config<Device>(
     std::array<uint32_t, 2> stride,
     Device *device,
     Conv2dConfig& conv_config,
+    Layout input_tensor_layout,
     const ttnn::MemoryConfig& input_memory_config);
 
 template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
@@ -308,11 +313,13 @@ template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     std::array<uint32_t, 2> stride,
     MeshDevice *device,
     Conv2dConfig& conv_config,
+    Layout input_tensor_layout,
     const ttnn::MemoryConfig& input_memory_config);
 
 template ttnn::Tensor prepare_conv_weights<Device>(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_tensor_layout,
     std::string weights_format,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -330,6 +337,7 @@ template ttnn::Tensor prepare_conv_weights<Device>(
 template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_tensor_layout,
     std::string weights_format,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -347,6 +355,7 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
 template ttnn::Tensor prepare_conv_bias<Device>(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_tensor_layout,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -363,6 +372,7 @@ template ttnn::Tensor prepare_conv_bias<Device>(
 template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_tensor_layout,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
