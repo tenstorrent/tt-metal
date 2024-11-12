@@ -77,7 +77,7 @@ std::vector<CoreRange> Kernel::logical_coreranges() const {
 }
 
 bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
-    return this->core_range_set_.core_coord_in_core_ranges(logical_core);
+    return this->core_range_set_.contains(logical_core);
 }
 
 CoreType Kernel::get_kernel_core_type() const {
@@ -175,7 +175,7 @@ std::string Kernel::compute_hash() const {
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        KernelDefinesHash{}(this->defines_),
+        tt::utils::DefinesHash{}(this->defines_),
         this->config_hash());
 }
 
@@ -213,6 +213,8 @@ RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
+    auto arch = hal.get_arch();
+    uint32_t idle_eth_max_runtime_args = (arch == tt::ARCH::GRAYSKULL) ? 0 : hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
@@ -474,13 +476,6 @@ std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processo
         default: TT_THROW("Unknown data movement processor");
     }
     return os;
-}
-
-size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
-    size_t hash_value = 0;
-    for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
-        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
-    return hash_value;
 }
 
 }  // namespace tt_metal

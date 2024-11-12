@@ -13,11 +13,11 @@ from ttnn.model_preprocessing import (
 from transformers import SegformerModel
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_segformer.tt.ttnn_segformer_efficient_selfattention import (
+from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import (
     TtSegformerEfficientSelfAttention,
 )
 from models.utility_functions import skip_for_grayskull
-from models.experimental.functional_segformer.reference.segformer_efficient_selfattention import (
+from models.demos.segformer.reference.segformer_efficient_selfattention import (
     SegformerEfficientSelfAttention,
 )
 
@@ -48,10 +48,10 @@ def create_custom_preprocessor(device):
 
                 parameters["layer_norm"] = {}
                 parameters["layer_norm"]["weight"] = preprocess_layernorm_parameter(
-                    model.layer_norm.weight, dtype=ttnn.bfloat16
+                    model.layer_norm.weight, dtype=ttnn.bfloat8_b
                 )
                 parameters["layer_norm"]["bias"] = preprocess_layernorm_parameter(
-                    model.layer_norm.bias, dtype=ttnn.bfloat16
+                    model.layer_norm.bias, dtype=ttnn.bfloat8_b
                 )
 
         return parameters
@@ -64,13 +64,13 @@ def create_custom_preprocessor(device):
     "batch_size, seq_len, hidden_size, height, width, num_attention_heads, sequence_reduction_ratio, block_i, efficient_self_attention_i",
     [
         (1, 16384, 32, 128, 128, 1, 8, 0, 0),
-        # (1, 16384, 32, 128, 128, 1, 8, 0, 1),
+        (1, 16384, 32, 128, 128, 1, 8, 0, 1),
         (1, 4096, 64, 64, 64, 2, 4, 1, 0),
-        # (1, 4096, 64, 64, 64, 2, 4, 1, 1),
+        (1, 4096, 64, 64, 64, 2, 4, 1, 1),
         (1, 1024, 160, 32, 32, 5, 2, 2, 0),
-        # (1, 1024, 160, 32, 32, 5, 2, 2, 1),
+        (1, 1024, 160, 32, 32, 5, 2, 2, 1),
         (1, 256, 256, 16, 16, 8, 1, 3, 0),
-        # (1, 256, 256, 16, 16, 8, 1, 3, 1),
+        (1, 256, 256, 16, 16, 8, 1, 3, 1),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -91,7 +91,7 @@ def test_segformer_efficient_selfattention(
     if is_ci_env:
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
-    torch_input_tensor = torch.randn(batch_size, seq_len, hidden_size)
+    torch_input_tensor = torch.randn(batch_size, 1, seq_len, hidden_size)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat8_b,
@@ -114,6 +114,7 @@ def test_segformer_efficient_selfattention(
     reference_model.load_state_dict(sd)
     reference_model.eval()
 
+    torch_input_tensor = torch.reshape(torch_input_tensor, (batch_size, seq_len, hidden_size))
     torch_output = reference_model(torch_input_tensor, height, width)
 
     parameters = preprocess_model_parameters(
@@ -133,6 +134,4 @@ def test_segformer_efficient_selfattention(
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
     if len(ttnn_final_output.shape) == 4:
         ttnn_final_output = ttnn_final_output[0]
-    assert_with_pcc(
-        torch_output[0], ttnn_final_output, pcc=0.96
-    )  # 0.98 to 0.96 due to adding parameters for linear and layernorm
+    assert_with_pcc(torch_output[0], ttnn_final_output, pcc=0.98)

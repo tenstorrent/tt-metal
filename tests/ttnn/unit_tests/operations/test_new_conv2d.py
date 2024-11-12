@@ -427,12 +427,15 @@ def test_conv_features(
         (128, 256, 8, 8, 3, 3, 1, 1, 1),
         (576, 576, 8, 8, 3, 3, 0, 0, 1),
         (960, 960, 4, 4, 3, 3, 0, 0, 1),
-        (256, 2048, 8, 8, 3, 3, 1, 1, 8),
-        (512, 2048, 16, 16, 3, 3, 1, 1, 4),
+        (256, 2048, 8, 8, 3, 3, 1, 1, 1),
+        (512, 2048, 16, 16, 3, 3, 1, 1, 1),
         (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
         (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
+        (768, 32, 8, 8, 3, 3, 1, 1, 1),
+        (64, 128, 8, 8, 3, 3, 1, 1, 1),
+        (32, 128, 8, 8, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -447,7 +450,7 @@ def test_conv_features(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,
@@ -466,6 +469,9 @@ def test_conv_ws(
     activations_dtype,
     auto_shard,
 ):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
+
     stride_h = stride
     stride_w = stride
     batch_size = 2
@@ -2518,3 +2524,64 @@ def test_non_tile_multiple_height_conv_wh(
         has_bias=has_bias,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_shallow_conv_with_tiled_input(device):
+    out_channels, in_channels, kernel_h, kernel_w = 7, 3, 3, 3
+    kernel_shape = (out_channels, in_channels, kernel_h, kernel_w)
+    batch_size = 1
+    img_h, img_w = 100, 100
+    input_shape = (batch_size, in_channels, img_h, img_w)
+
+    stride = (1, 1)
+    dilation = (1, 1)
+    pad = (1, 1)
+
+    torch_kernel = torch.randn(kernel_shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    tt_kernel = ttnn.from_torch(torch_kernel)
+    tt_input = ttnn.to_device(ttnn.from_torch(torch_input), device)
+
+    tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
+
+    tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
+
+    tt_out, out_height, out_width, _, _ = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_kernel,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=(kernel_h, kernel_w),
+        stride=stride,
+        padding=pad,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_height=img_h,
+        input_width=img_w,
+        groups=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_out)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    # torch_output_tensor is in row major layout and NHWC shape
+    # NHWC to NCHW
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor[:, :, :, :out_channels]
+
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input, torch_kernel, bias=None, stride=stride, padding=pad, dilation=dilation, groups=1
+    )
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
+    logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
+    assert passing

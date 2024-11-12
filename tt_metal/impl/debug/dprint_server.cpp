@@ -17,13 +17,11 @@
 
 #include "dprint_server.hpp"
 #include "debug_helpers.hpp"
-#include "llrt/tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 #include "common/bfloat8.hpp"
 
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
-#include "tensix_types.h"
 
 using std::uint32_t;
 using std::int32_t;
@@ -203,12 +201,6 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     switch (ts->return_code) {
         case DPrintOK:
             break; // Continue to print the tile slice
-        case DPrintErrorBadTileIdx:
-            {
-            uint32_t page_size = ts->cb_ptr;
-            stream << fmt::format("Tried printing {}: unexpected tile size ({})\n", cb, page_size);
-            return;
-            }
         case DPrintErrorBadPointer:
             {
             uint32_t ptr = ts->cb_ptr;

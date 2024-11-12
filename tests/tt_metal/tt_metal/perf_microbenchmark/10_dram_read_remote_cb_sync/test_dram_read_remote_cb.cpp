@@ -178,7 +178,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/kernels/reader_dram.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernels/reader_dram.cpp",
         dram_reader_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -196,7 +196,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/kernels/writer_l1.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernels/writer_l1.cpp",
         dram_reader_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -461,6 +461,10 @@ bool validation_mixed_df(
     // compare with the result tilized with tilized
     auto values_fp16 = tt::test_utils::tilize(input_tensor_fp16.get_values(), kt*32, nt*32);
 
+    uint32_t block_h = kt / num_blocks;
+    uint32_t block_w = nt;
+    uint32_t block_num_tiles = block_h * block_w;
+
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
     int start_index = 0;
     int fifo_size = kt*32 / num_blocks * cb_num_blocks * nt*32 * 2 / num_receivers;
@@ -472,17 +476,19 @@ bool validation_mixed_df(
             page_size = 1088;
         }
         layer_transfer_size = page_size * kt * nt / num_receivers;
-        num_pages = fifo_size / page_size;
-        fifo_size_page_aligned = page_size * num_pages;
 
-        bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > fifo_size_page_aligned;
-        uint32_t num_pages_till_fifo_limit = (fifo_size_page_aligned - fifo_wr_ptr) / page_size;
+        uint32_t block_size = block_num_tiles * tt::constants::TILE_HW * datum_size(tt::DataFormat::Float16_b); // fp16
+        uint32_t num_blocks = fifo_size / block_size;
+        uint32_t cb_size_block_aligned = num_blocks * block_size;
+
+        bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > cb_size_block_aligned;
+        uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
-        fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : fifo_size_page_aligned - num_pages_till_fifo_limit * page_size;
+        fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
         // start index to read, fifo_wr_ptr / 2 because fp16 format
-        start_index = fifo_wr_ptr == fifo_size_page_aligned ? 0 : fifo_wr_ptr / 2;
+        start_index = fifo_wr_ptr == cb_size_block_aligned ? 0 : fifo_wr_ptr / 2;
         // end pointer addr of current layer
-        fifo_wr_ptr = (fifo_wr_ptr + layer_transfer_size) % fifo_size_page_aligned;
+        fifo_wr_ptr = (fifo_wr_ptr + layer_transfer_size) % cb_size_block_aligned;
     }
 
     std::vector<std::vector<float> > values_fp16_split(num_receivers, std::vector<float>(values_fp16.size() / num_receivers));
@@ -719,8 +725,8 @@ int main(int argc, char **argv) {
         std::vector<std::shared_ptr<tt::tt_metal::Buffer> > input_buffers(num_mixed_df_layers);
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         auto input_shape = SHAPE{1, 1, k, n};
-        tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::INCREMENT, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::INCREMENT, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::INCREMENT, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::INCREMENT, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
         if (tile_format == tt::DataFormat::Bfp8_b) {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i%2 == 0) { // even layers

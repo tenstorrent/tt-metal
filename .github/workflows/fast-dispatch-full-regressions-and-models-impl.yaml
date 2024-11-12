@@ -86,11 +86,9 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+          arch: ${{ matrix.test-group.arch }}
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -112,7 +110,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, mamba, mistral7b, mistral7b_eth, resnet50]
+        model: [common_models, functional_unet, llama3.2-1B, mamba, mistral7b, mistral7b_eth, resnet50, yolov4]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     env:
       ARCH_NAME: wormhole_b0
@@ -134,11 +132,9 @@ jobs:
         if: ${{ matrix.model != 'mistral7b' }}
         run: |
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_wormhole_b0
-      - name: Extract files
-        run: tar -xvf ttm_wormhole_b0.tar
+          arch: wormhole_b0
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: 50

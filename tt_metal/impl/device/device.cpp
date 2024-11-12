@@ -21,6 +21,7 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt {
@@ -270,10 +271,37 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
     this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
+void Device::initialize_device_kernel_defines()
+{
+    // Clear previously stored defines, in case we are running with different configuration this time.
+    // This is needed to handle the case where the number of L1 banks on GS can be changed in each run.
+    this->device_kernel_defines_.clear();
+    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
+    const size_t num_l1_banks = this->num_banks(BufferType::L1);
+
+    bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
+    bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
+
+    this->device_kernel_defines_.emplace("NUM_DRAM_BANKS", std::to_string(num_dram_banks));
+    this->device_kernel_defines_.emplace("NUM_L1_BANKS", std::to_string(num_l1_banks));
+
+    if (is_dram_pow2) {
+        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(num_dram_banks))));
+    } else {
+        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
+    }
+    if (is_l1_pow2) {
+        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(num_l1_banks))));
+    } else {
+        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
+    }
+}
+
 void Device::initialize_build() {
     ZoneScoped;
 
-    this->build_env_.init(this->build_key(), this->arch());
+    this->initialize_device_kernel_defines();
+    this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
     uint32_t dispatch_message_addr =
@@ -3299,6 +3327,8 @@ bool Device::using_slow_dispatch() const {
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
+    ZoneScoped;
+    TracyTTMetalBeginTrace(this->id(), tid);
     TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
     this->MarkAllocationsSafe();
@@ -3308,13 +3338,16 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
+    ZoneScoped;
+    TracyTTMetalEndTrace(this->id(), tid);
     TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
     TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {} must exist on device", tid);
     this->hw_command_queues_[cq_id]->record_end();
     auto &trace_data = this->trace_buffer_pool_[tid]->desc->data;
     trace_data = std::move(this->sysmem_manager().get_bypass_data());
     // Add command to terminate the trace buffer
-    DeviceCommand command_sequence(CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+    uint32_t cq_prefetch_cmd_bare_min_size = hal.get_alignment(HalMemType::HOST);
+    DeviceCommand command_sequence(cq_prefetch_cmd_bare_min_size);
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);
@@ -3324,6 +3357,8 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
 }
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+    ZoneScoped;
+    TracyTTMetalReplayTrace(this->id(), tid);
     constexpr bool check = false;
     TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {}  must exist on device" , tid);
     if constexpr (check) {
@@ -3337,6 +3372,8 @@ void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool bl
 }
 
 void Device::release_trace(const uint32_t tid) {
+    ZoneScoped;
+    TracyTTMetalReleaseTrace(this->id(), tid);
     uint32_t erased = this->trace_buffer_pool_.erase(tid);
     // Only enable allocations once all captured traces are released
     if (this->trace_buffer_pool_.empty()) {
@@ -3393,6 +3430,10 @@ void Device::generate_device_headers(const std::string &path) const
         l1_offset_per_bank,
         this->allocator_->config.alignment
     );
+}
+
+size_t Device::get_device_kernel_defines_hash() {
+    return tt::utils::DefinesHash{}(this->device_kernel_defines_);
 }
 
 }  // namespace tt_metal

@@ -178,9 +178,9 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_units_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
@@ -216,9 +216,9 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         // compute
         const std::vector<uint32_t> compute_runtime_args{step};
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             tt_metal::SetRuntimeArgs(program, compute_kernel_ids[0], core, compute_runtime_args);
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             tt_metal::SetRuntimeArgs(program, compute_kernel_ids[1], core, compute_runtime_args);
         } else {
             TT_THROW("Core not in specified core ranges.");
@@ -299,10 +299,10 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
         }
 
         {
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 auto& runtime_args = GetRuntimeArgs(program, compute_kernel_1_id, core);
                 runtime_args[0] = operation_attributes.step;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 auto& runtime_args = GetRuntimeArgs(program, compute_kernel_2_id, core);
                 runtime_args[0] = operation_attributes.step;
             } else {

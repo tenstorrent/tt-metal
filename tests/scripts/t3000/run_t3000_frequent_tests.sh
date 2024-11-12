@@ -21,6 +21,7 @@ run_t3000_ethernet_tests() {
   fi
 }
 
+# TODO [Deprecation notice] - Llama2-70B will be deprecated soon for the new Llama3-70B. The CI tests will be deprecated with it.
 run_t3000_llama2_70b_tests() {
   # Record the start time
   fail=0
@@ -50,19 +51,19 @@ run_t3000_llama3_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_tests"
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-1B
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  # Run all Llama3 tests for 8B, 1B, and 3B weights
+  # Run test model for llama3 - 1B, 3B, 8B and 11B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
+    # LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?  # FIXME Issue #14843
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -70,6 +71,26 @@ run_t3000_llama3_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_70b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
+
+  # Run test_model (decode and prefill) for llama3 70B
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -247,8 +268,20 @@ run_t3000_tests() {
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
+  # Run llama3 small (1B, 3B, 8B, 11B) tests
+  run_t3000_llama3_tests
+
   # Run llama2-70b tests
   run_t3000_llama2_70b_tests
+
+  # Run llama3-70b tests
+  run_t3000_llama3_70b_tests
+
+  # Run Llama3.2-11B Vision tests
+  run_t3000_llama3.2-11b-vision_freq_tests
+
+  # Run Llama3.2-11B Vision tests on spoofed N300
+  run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests

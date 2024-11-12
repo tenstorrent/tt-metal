@@ -29,9 +29,6 @@ CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBu
     core_ranges_(core_ranges),
     config_(config),
     locally_allocated_address_(std::nullopt) {
-    if (this->config_.total_size() == 0) {
-        TT_THROW("Circular Buffer Config Error: Circular buffer size cannot be 0 B");
-    }
 
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
         std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
@@ -60,7 +57,7 @@ bool CircularBuffer::is_on_logical_corerange(const CoreRange &logical_cr) const 
 }
 
 bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
-    return this->core_ranges_.core_coord_in_core_ranges(logical_core);
+    return this->core_ranges_.contains(logical_core);
 }
 
 bool CircularBuffer::uses_buffer_index(uint32_t buffer_index) const {

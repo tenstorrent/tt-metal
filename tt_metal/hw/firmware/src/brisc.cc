@@ -468,6 +468,10 @@ int main() {
                     NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
                         NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
+                // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
+                // message is no longer owned by us.
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 noc_fast_atomic_increment(
                     noc_index,
                     NCRISC_AT_CMD_BUF,
@@ -477,8 +481,6 @@ int main() {
                     31 /*wrap*/,
                     false /*linked*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch messages in the ring buffer
-                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
             }
         }
     }
