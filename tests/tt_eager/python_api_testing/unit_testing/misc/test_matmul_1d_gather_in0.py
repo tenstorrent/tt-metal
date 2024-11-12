@@ -14,29 +14,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 import random
 import math
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
+
 
 random.seed(10)
-
-
-def find_max_subblock(out_block_h, out_block_w):
-    max_product = 0
-    best_h = 1
-    best_w = 1
-
-    for h in range(1, out_block_h + 1):
-        if out_block_h % h == 0:  # h is a divisor of out_block_h
-            for w in range(1, out_block_w + 1):
-                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
-                    if h * w > max_product:
-                        max_product = h * w
-                        best_h = h
-                        best_w = w
-    if out_block_w > best_w:
-        best_h = 1
-    return best_h, best_w, max_product
-
-
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")

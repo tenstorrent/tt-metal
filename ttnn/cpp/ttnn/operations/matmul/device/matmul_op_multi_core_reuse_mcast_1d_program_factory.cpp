@@ -23,6 +23,20 @@ using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_1d_optimized_helpers {
 
+uint32_t get_preferred_noc(const uint32_t src_x, const uint32_t dst_x, const tt_metal::Device* device) {
+    /*
+        NOC0: Preferred +x -> +y
+        NOC1: Preferred -y -> -x
+    */
+    uint32_t MAX_X = device->grid_size().x;
+
+    // Get the wrapped distances
+    uint32_t dist_right = src_x < dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
+    uint32_t dist_left =  src_x < dst_x ? src_x + MAX_X - dst_x : src_x - dst_x;
+
+    return dist_right < dist_left ? 0 : 1;
+}
+
 operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program& program,
     const Tensor& a,
@@ -1789,6 +1803,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = in0_sender_compile_time_args});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1877,16 +1892,19 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
+        const auto& core_noc = device->worker_core_from_logical_core(core);
 
         /* in0 */
         uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
         const auto& next_core = cores[next_i % num_cores];
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        uint32_t noc = get_preferred_noc(core_noc.x, next_core_noc.x, device);
 
         std::vector<uint32_t> mm_in0_args = {
             i, // ring_index
             next_core_noc.x, // next_core_noc_x
             next_core_noc.y, // next_core_noc_y
+            noc,
         };
         tt_metal::SetRuntimeArgs(
             program,
