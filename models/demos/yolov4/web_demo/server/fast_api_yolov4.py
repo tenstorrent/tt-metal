@@ -5,7 +5,7 @@ import json
 from fastapi import FastAPI, File, UploadFile
 from io import BytesIO
 from PIL import Image
-from models.demos.yolov4.tests.yolov4_perfomant import Yolov4Trace2CQ
+from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
 import ttnn
 
 import cv2
