@@ -9,6 +9,7 @@ adamw = ttnn._ttnn.operations.moreh.moreh_adamw
 arange = ttnn._ttnn.operations.moreh.moreh_arange
 bmm = ttnn._ttnn.operations.moreh.moreh_bmm
 bmm_backward = ttnn._ttnn.operations.moreh.moreh_bmm_backward
+clip_grad_norm = ttnn._ttnn.operations.moreh.moreh_clip_grad_norm
 cumsum = ttnn._ttnn.operations.moreh.moreh_cumsum
 cumsum_backward = ttnn._ttnn.operations.moreh.moreh_cumsum_backward
 dot = ttnn._ttnn.operations.moreh.moreh_dot
