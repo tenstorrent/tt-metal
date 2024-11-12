@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+
 #include "risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"
@@ -28,8 +30,9 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
 void kernel_launch(uint32_t kernel_base_addr) {
-    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    wait_for_go_message();
+    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < KERNEL_RUN_TIME);
@@ -46,6 +49,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
+    wait_for_go_message();
+    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
     kernel_main();
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");
