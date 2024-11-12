@@ -121,7 +121,7 @@ void init(int argc, char **argv) {
     brisc_enabled_g = !test_args::has_command_option(input_args, "-b");
     ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
     trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
-    erisc_enabled_g = !test_args::has_command_option(input_args, "+e");
+    erisc_enabled_g = test_args::has_command_option(input_args, "+e");
     erisc_count_g = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
     workers_g = CoreRange({0, 0}, {core_x, core_y});
