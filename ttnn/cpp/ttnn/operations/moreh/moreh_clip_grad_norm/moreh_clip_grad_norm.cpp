@@ -42,7 +42,7 @@ Tensor MorehClipGradNorm::invoke(
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
 
-    const auto &tmp_pow_sum = create_device_tensor(
+    auto tmp_pow_sum = create_device_tensor(
         SimpleShape{tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH * static_cast<uint32_t>(inputs.size())},
         inputs.at(0).get_dtype(),
         Layout::TILE,
@@ -72,7 +72,7 @@ Tensor MorehClipGradNorm::invoke(
 
     // Run Step 2
     // Sum[Sum[|e|^p]]^(1/p)
-    const auto &output_total_norm = ttnn::prim::moreh_clip_grad_norm_step2(
+    auto output_total_norm = ttnn::prim::moreh_clip_grad_norm_step2(
         tmp_pow_sum,
         norm_type,
         total_norm,
@@ -91,10 +91,10 @@ Tensor MorehClipGradNorm::invoke(
     }
 
     // max_norm / (total_norm + 1e-6)
-    const auto &clip_coef = ttnn::multiply(ttnn::add(output_total_norm, 1e-6f), (1 / max_norm));
+    auto clip_coef = ttnn::multiply(ttnn::add(output_total_norm, 1e-6f), (1 / max_norm));
     // min(clip_coef, 1.0f)
     Tensor scalar = creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
-    const auto &clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
+    auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
 
     // Run Step 3
