@@ -24,27 +24,19 @@ target_link_libraries(
         z
         pthread
         atomic
-)
-
-target_link_libraries(
-    ttml
-    PUBLIC
         Metalium::Metal
         Metalium::TTNN
         pthread
         Python::Python
         fmt::fmt-header-only
         magic_enum
-)
-
-target_link_libraries(ttml PUBLIC yaml-cpp::yaml-cpp)
-
-
-target_link_libraries(
-    ttml
-    PUBLIC
+        yaml-cpp::yaml-cpp
         xtensor
         xtl
+        tokenizers_cpp
+        wandbcpp
+        Boost::core
+        Boost::container
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
@@ -72,18 +64,5 @@ target_link_libraries(
         ${LIBC++ABI}
 )
 target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
-
-target_link_libraries(
-    ttml
-    PUBLIC
-        tokenizers_cpp
-        wandbcpp
-)
-target_link_libraries(
-    ttml
-    PUBLIC
-        Boost::core
-        Boost::container
-)
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/tokenizers")
