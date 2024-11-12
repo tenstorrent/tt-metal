@@ -23,17 +23,7 @@ class VideoProcessor(VideoProcessorBase):
         self.frame_count = 0
 
     def post_processing(self, img, conf_thresh, nms_thresh, output):
-        # anchors = [12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401]
-        # num_anchors = 9
-        # anchor_masks = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-        # strides = [8, 16, 32]
-        # anchor_step = len(anchors) // num_anchors
-
-        print("in post_processing the output type is: ", type(output))
-        print("in post_processing some of the output[1] is: ", output[1][:5])
-        # [batch, num, 1, 4]
         box_array = output[0]
-        # [batch, num, num_classes]
         confs = output[1].float()
 
         t1 = time.time()
@@ -202,11 +192,7 @@ class VideoProcessor(VideoProcessorBase):
             cv2.imwrite(savename, img)
         return img
 
-    # def transform(self, frame):
     def recv(self, frame):
-        #        self.frame_count += 1
-        #        if self.frame_count % 999 != 0:
-        #            return frame # Skip frame processing
         t0 = time.time()
         pil_image = frame.to_image()
         # resize on the client side
@@ -230,19 +216,11 @@ class VideoProcessor(VideoProcessorBase):
                 # Get the JSON response as a dictionary
                 response_dict = r.json()
                 output = [torch.tensor(tensor_data) for tensor_data in response_dict["output"]]
-                print("\n\n\n")
-                # print("response_dict: ", response_dict)
-                print("\n\n\n")
-                # st.write(response_dict)  # Display the dictionary response in Streamlit
             except ValueError:
                 st.error("Failed to parse JSON. The response is not in JSON format.")
         else:
             st.error(f"Request failed with status code {r.status_code}")
 
-        # print("\n\n\n\n\n content in r is: ", r.content)
-        # r = json.loads(r.content).replace("\n", " ").replace("  ", "")
-        # output = json.loads(r.content)
-        # output = response_dict["output"]
         t3 = time.time()
         bgr_image = frame.to_ndarray(format="bgr24")
         conf_thresh = 0.6
