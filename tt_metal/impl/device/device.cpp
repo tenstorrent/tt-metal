@@ -24,6 +24,8 @@
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
 
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
+
 namespace tt {
 
 namespace tt_metal {
@@ -271,10 +273,37 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
     this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
+void Device::initialize_device_kernel_defines()
+{
+    // Clear previously stored defines, in case we are running with different configuration this time.
+    // This is needed to handle the case where the number of L1 banks on GS can be changed in each run.
+    this->device_kernel_defines_.clear();
+    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
+    const size_t num_l1_banks = this->num_banks(BufferType::L1);
+
+    bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
+    bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
+
+    this->device_kernel_defines_.emplace("NUM_DRAM_BANKS", std::to_string(num_dram_banks));
+    this->device_kernel_defines_.emplace("NUM_L1_BANKS", std::to_string(num_l1_banks));
+
+    if (is_dram_pow2) {
+        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(num_dram_banks))));
+    } else {
+        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
+    }
+    if (is_l1_pow2) {
+        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(num_l1_banks))));
+    } else {
+        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
+    }
+}
+
 void Device::initialize_build() {
     ZoneScoped;
 
-    this->build_env_.init(this->build_key(), this->arch());
+    this->initialize_device_kernel_defines();
+    this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
     uint32_t dispatch_message_addr =
@@ -3403,6 +3432,10 @@ void Device::generate_device_headers(const std::string &path) const
         l1_offset_per_bank,
         this->allocator_->config.alignment
     );
+}
+
+size_t Device::get_device_kernel_defines_hash() {
+    return tt::utils::DefinesHash{}(this->device_kernel_defines_);
 }
 
 }  // namespace tt_metal

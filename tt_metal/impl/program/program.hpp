@@ -42,6 +42,8 @@ namespace detail{
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
     void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+
+    class Internal_;
 }
 
 typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
@@ -145,6 +147,7 @@ class Program {
     uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
    private:
     std::unique_ptr<detail::Program_> pimpl_;
@@ -166,9 +169,11 @@ class Program {
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
+    bool kernel_binary_always_stored_in_ringbuffer();
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
+    friend detail::Internal_;
 
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
     const std::shared_ptr<Buffer> &get_kernels_buffer() const noexcept;

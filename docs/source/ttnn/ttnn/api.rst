@@ -194,16 +194,15 @@ Pointwise Unary
    ttnn.threshold
    ttnn.trunc
    ttnn.clamp_bw
+   ttnn.clip_bw
    ttnn.hardtanh_bw
    ttnn.threshold_bw
    ttnn.softplus_bw
    ttnn.rdiv_bw
-   ttnn.bias_gelu_bw
    ttnn.pow_bw
    ttnn.exp_bw
    ttnn.tanh_bw
    ttnn.sqrt_bw
-   ttnn.assign_bw
    ttnn.multigammaln_bw
    ttnn.lgamma_bw
    ttnn.fill_bw
@@ -255,8 +254,6 @@ Pointwise Unary
    ttnn.logiteps_bw
    ttnn.log2_bw
    ttnn.sign_bw
-   ttnn.fmod_bw
-   ttnn.remainder_bw
    ttnn.div_no_nan_bw
    ttnn.exp2_bw
    ttnn.expm1_bw
@@ -341,9 +338,13 @@ Pointwise Binary
    ttnn.scatter
    ttnn.atan2
    ttnn.add_bw
+   ttnn.assign_bw
    ttnn.atan2_bw
+   ttnn.bias_gelu_bw
    ttnn.div_bw
    ttnn.embedding_bw
+   ttnn.fmod_bw
+   ttnn.remainder_bw
    ttnn.addalpha_bw
    ttnn.subalpha_bw
    ttnn.xlogy_bw

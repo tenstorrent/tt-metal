@@ -42,7 +42,7 @@ parameters = {
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Inputs to eltwise binary must be tilized"
+        return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None

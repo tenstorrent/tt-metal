@@ -19,6 +19,8 @@ namespace ttnn::graph {
     constexpr auto kSize = "size";
     constexpr auto kLayout= "layout";
     constexpr auto kShape = "shape";
+    constexpr auto kNumCores = "num_cores";
+    constexpr auto kPageSize = "page_size";
 
     // node names
     constexpr auto kNodeBuffer = "buffer";

@@ -92,7 +92,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
         tensor_attributes = std::make_shared<TensorAttributes>(storage, shape, dtype, layout, tile.value());
 
         if (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT) {
-            tt::log_warning("only matmul op currently support the customized tile shape: {}", tile->get_tile_shape());
+            tt::log_warning("only matmul op and ccl all-gather currently supports the customized tile shape: {}", tile->get_tile_shape());
         }
     } else {
         tensor_attributes = std::make_shared<TensorAttributes>(storage, shape, dtype, layout);

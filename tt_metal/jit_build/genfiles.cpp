@@ -11,10 +11,12 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/common_runtime_address_map.h" // NOC_0_X
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
+
+#include "tt_metal/hw/inc/circular_buffer.h"
 
 namespace fs = std::filesystem;
 
@@ -549,8 +551,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& l1_bank_offset_map,
     uint32_t allocator_alignment) {
     stringstream ss;
-    bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
-    bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
 
     ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
     ss << "//" << endl;
@@ -567,21 +567,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#pragma once" << endl;
     ss << endl;
     ss << "#include <noc/noc_parameters.h>" << endl;
-    ss << endl;
-
-    ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
-    ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
-
-    if (is_dram_pow2) {
-        ss << "#define LOG_BASE_2_OF_NUM_DRAM_BANKS " << log2(dram_bank_map.size()) << endl;
-    } else {
-        ss << "#define IS_NOT_POW2_NUM_DRAM_BANKS 1" << endl;
-    }
-    if (is_l1_pow2) {
-        ss << "#define LOG_BASE_2_OF_NUM_L1_BANKS " << log2(l1_bank_map.size()) << endl;
-    } else {
-        ss << "#define IS_NOT_POW2_NUM_L1_BANKS 1" << endl;
-    }
     ss << endl;
 
     ss << "static_assert(NUM_NOCS == 2);" << endl;

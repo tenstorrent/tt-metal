@@ -11,10 +11,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def torch_mac(input, tensor1, tensor2):
-    return torch.add(torch.mul(input, tensor1), tensor2)
-
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_mac_all_tensors(device, h, w):
@@ -23,7 +19,9 @@ def test_mac_all_tensors(device, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch_mac(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
+
+    golden_fn = ttnn.get_golden_function(ttnn.mac)
+    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.to_device(input_tensor, device)
@@ -49,9 +47,9 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor1 = scalar1
     torch_input_tensor2 = scalar2
-    torch_output_tensor = torch.unsqueeze(
-        torch.unsqueeze(torch_mac(torch_input_tensor, torch_input_tensor1, torch_input_tensor2), 0), 0
-    )
+
+    golden_fn = ttnn.get_golden_function(ttnn.mac)
+    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.to_device(input_tensor, device)

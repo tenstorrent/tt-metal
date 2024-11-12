@@ -62,6 +62,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     num_all_gather_instances: int = 1,
     num_iters: int = 1,
     cluster_axis: int = 0,
+    tile=(32, 32),
 ):
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
@@ -109,6 +110,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     output_mem_config = ttnn.MemoryConfig(tensor_memory_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
     ttnn_tensor = ttnn.from_torch(
         full_input_tensor_unfractured,
+        tile=ttnn.Tile(tile),
         dtype=input_dtype,
         device=mesh_device,
         layout=layout,

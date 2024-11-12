@@ -37,7 +37,7 @@ Tensor _addcdiv(
     Tensor t_factor = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
     t_div.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
-    Tensor t_inf = ttnn::full_like(input_a, std::numeric_limits<float>::infinity());
+    float t_inf = std::numeric_limits<float>::infinity();
     Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
     return ttnn::where(
         ttnn::eqz(input_c, output_mem_config),
@@ -45,7 +45,7 @@ Tensor _addcdiv(
                      : ttnn::where(
                            ttnn::eqz(input_b, output_mem_config),
                            t_nan,
-                           ttnn::multiply(t_inf, ttnn::sign(input_b, output_mem_config), std::nullopt, output_mem_config)),
+                           ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf, std::nullopt, output_mem_config)),
         result,
         output_mem_config);
 }
@@ -106,13 +106,9 @@ Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::option
     return ttnn::add(ttnn::multiply(a, b), c);
 }
 
+// y = a * b + c
 Tensor _mac_overload(const Tensor& a, float b, float c, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_b = ttnn::operations::creation::create_scalar(b, a.get_dtype(), Layout::TILE, a.device());
-    Tensor t_c = ttnn::operations::creation::create_scalar(c, a.get_dtype(), Layout::TILE, a.device());
-    Tensor return_tensor = _mac(a, t_b, t_c, output_mem_config);
-    t_b.deallocate();
-    t_c.deallocate();
-    return return_tensor;
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
 }
 
 } // namespace ttnn::operations::ternary

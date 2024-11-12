@@ -7,16 +7,19 @@ set(COMMON_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/work_split.cpp
 )
 
-add_library(common OBJECT ${COMMON_SRCS})
+add_library(common STATIC ${COMMON_SRCS}) # FIXME(14541): Should be OBJECT, but can't handle circular deps between Object libs
+add_library(Metalium::Metal::Common ALIAS common)
+
 target_link_libraries(common PRIVATE yaml-cpp::yaml-cpp)
 target_link_libraries(
     common
     PUBLIC
-        metal_header_directories
         magic_enum
         fmt::fmt-header-only
         span
         Metalium::Metal::STL
+        Metalium::Metal::LLRT
+        umd::Firmware
 )
 
 target_include_directories(

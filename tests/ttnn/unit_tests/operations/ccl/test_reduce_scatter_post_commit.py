@@ -32,9 +32,10 @@ def run_with_trace(
     num_links,
     math_op,
     output_mem_config,
-    n_worker,
-    n_buffer,
-    num_iters,
+    n_worker=None,
+    n_buffer=None,
+    num_iters=40,
+    topology=ttnn.Topology.Ring,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -46,6 +47,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         num_workers=n_worker,
         num_buffers_per_channel=n_buffer,
+        topology=topology,
     )
     for device_id in t3k_mesh_device.get_device_ids():
         ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
@@ -62,6 +64,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             num_workers=n_worker,
             num_buffers_per_channel=n_buffer,
+            topology=topology,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
     for device_id in t3k_mesh_device.get_device_ids():
@@ -92,6 +95,7 @@ def run_reduce_scatter_test(
     enable_async=True,
     num_iters=1,
     topology=ttnn.Topology.Ring,
+    trace_mode=False,
 ):
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
@@ -135,19 +139,31 @@ def run_reduce_scatter_test(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     # Run the op
-    for i in range(num_iters):
-        output_tensor_mesh = ttnn.reduce_scatter(
+    if trace_mode:
+        output_tensor_mesh = run_with_trace(
+            mesh_device,
             input_tensor_mesh,
-            scatter_dim=scatter_dim,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=mem_config,
+            scatter_dim,
+            num_links,
+            math_op,
+            mem_config,
+            num_iters=num_iters,
             topology=topology,
         )
+    else:
+        for i in range(num_iters):
+            output_tensor_mesh = ttnn.reduce_scatter(
+                input_tensor_mesh,
+                scatter_dim=scatter_dim,
+                math_op=math_op,
+                num_links=num_links,
+                memory_config=mem_config,
+                topology=topology,
+            )
 
-        for device_id in mesh_device.get_device_ids():
-            ttnn.synchronize_device(mesh_device.get_device(device_id))
-        logger.info(f"Done iteration {i}")
+            for device_id in mesh_device.get_device_ids():
+                ttnn.synchronize_device(mesh_device.get_device(device_id))
+            logger.info(f"Done iteration {i}")
 
     # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
     # Compute golden
