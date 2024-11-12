@@ -37,6 +37,7 @@ def prepare_conv_weights(
     *,
     weight_tensor,
     input_memory_config,
+    input_layout,
     weights_format,
     in_channels,
     out_channels,
@@ -54,6 +55,7 @@ def prepare_conv_weights(
     return ttnn._ttnn.operations.conv2d.prepare_conv_weights(
         weight_tensor=weight_tensor,
         input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
         weights_format=weights_format,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -74,6 +76,7 @@ def prepare_conv_bias(
     *,
     bias_tensor,
     input_memory_config,
+    input_layout,
     in_channels,
     out_channels,
     batch_size,
@@ -90,6 +93,7 @@ def prepare_conv_bias(
     return ttnn._ttnn.operations.conv2d.prepare_conv_bias(
         bias_tensor=bias_tensor,
         input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
         in_channels=in_channels,
         out_channels=out_channels,
         batch_size=batch_size,

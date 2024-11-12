@@ -185,7 +185,7 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     std::optional<const MemoryConfig> input_memory_config);
 
 template <typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,

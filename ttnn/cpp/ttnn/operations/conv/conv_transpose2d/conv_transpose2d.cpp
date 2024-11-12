@@ -176,7 +176,7 @@ Result conv_transpose2d(
         const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
 
         //Call Halo Transpose
-        auto [input_tensor_post_tm, parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
+        auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
             device,
             input_tensor,
             conv_config,

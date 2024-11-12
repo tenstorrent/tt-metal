@@ -139,6 +139,7 @@ def test_prepare_conv_weights(
             print("Setting num_cores_nhw to 98")
 
     conv_kwargs = {
+        "input_layout": ttnn.ROW_MAJOR_LAYOUT,
         "in_channels": input_channels,
         "out_channels": output_channels,
         "batch_size": batch_size,
