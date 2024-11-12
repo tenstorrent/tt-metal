@@ -82,8 +82,8 @@ Tensor to_layout_impl(
             return true;
         } else if (
             auto tile = tensor.tile();
-            layout == ttnn::TILE_LAYOUT and (padded_shape.rank() < 2 or padded_shape[-1] % tile->get_tile_shape()[1] != 0 or
-                                             padded_shape[-2] % tile->get_tile_shape()[0] != 0)) {
+            layout == ttnn::TILE_LAYOUT and (padded_shape.rank() < 2 or padded_shape[-1] % tile.get_tile_shape()[1] != 0 or
+                                             padded_shape[-2] % tile.get_tile_shape()[0] != 0)) {
             return true;
         } else {
             return false;
@@ -113,7 +113,7 @@ Tensor to_layout_impl(
         padded_output_shape[index] =
             ttnn::pad_to_multiple_of_tile_size(
                 padded_output_shape[index],
-                (index == output_shape.size() - 2) ? tile->get_tile_shape()[0] : tile->get_tile_shape()[1]);
+                (index == output_shape.size() - 2) ? tile.get_tile_shape()[0] : tile.get_tile_shape()[1]);
     }
 
     auto output_memory_config =
@@ -164,7 +164,7 @@ Tensor to_layout_impl(
                 uint32_t second_last_rank = tensor.get_shape().rank() - 2; // h dim
                 uint32_t padded_value = index < second_last_rank ?
                                             tensor.get_shape()[index] : ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index],
-                                            index == second_last_rank ? tile->get_tile_shape()[0] : tile->get_tile_shape()[1]);
+                                            index == second_last_rank ? tile.get_tile_shape()[0] : tile.get_tile_shape()[1]);
                 padded_output_shape.push_back(padded_value);
             }
             if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -215,7 +215,7 @@ Tensor to_layout_impl(
                 uint32_t second_last_rank = tensor.get_shape().rank() - 2; // h dim
                 uint32_t padded_value = index < second_last_rank ?
                         tensor.get_shape()[index] : ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index],
-                        index == second_last_rank ? tile->get_tile_shape()[0] : tile->get_tile_shape()[1]);
+                        index == second_last_rank ? tile.get_tile_shape()[0] : tile.get_tile_shape()[1]);
                 padded_output_shape.push_back(padded_value);
                 padded_input_start.push_back(0);
             }

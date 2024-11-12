@@ -294,8 +294,8 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     uint32_t K = input_tensor_a.get_legacy_shape()[-1];
     uint32_t N = input_tensor_b.get_legacy_shape()[-1];
     uint32_t per_core_M, per_core_N;
-    auto in0_tile_shape = input_tensor_a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = input_tensor_b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
+    auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
     if (mcast_in0) {
         per_core_M = M / in0_tile_shape[0];
         per_core_N = div_up(div_up(N, grid_size.x * grid_size.y), in1_tile_shape[1]);
@@ -338,8 +338,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     uint32_t batch_size_a = get_batch_size(ashape);
     uint32_t num_output_tiles = batch_size_a * ashape[-2] * bshape[-1] / TILE_HW;  // Output M x N
 
-    auto in0_tile_shape = input_tensor_a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = input_tensor_b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
+    auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
 
     // Parameters for large matmul with reuse
     uint32_t B = batch_size_a;
@@ -578,8 +578,8 @@ MatmulProgramConfig get_matmul_program_config(
     // generic sharded output tensor creation
     auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
 
-    auto in0_tile_shape = input_tensor_a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = input_tensor_b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
+    auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
 
     // MCAST matmuls only support input_b in INTERLEAVED
     if (matmul) {
@@ -920,8 +920,8 @@ Matmul create_matmul_struct(
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
-    auto in0_tile = *input_tensor_a.get_tile();
-    auto in1_tile = *input_tensor_b.get_tile();
+    auto in0_tile = input_tensor_a.get_tile();
+    auto in1_tile = input_tensor_b.get_tile();
     tt::tt_metal::Tile output_tile = get_output_tile(
             parameters.output_mem_config, in0_tile, in1_tile, parameters.output_tile);
 
@@ -986,20 +986,20 @@ void Matmul::validate(
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& a_shape = input_tensor_a.get_shape();
     const auto& b_shape = input_tensor_b.get_shape();
-    auto in0_tile_shape = input_tensor_a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = input_tensor_b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
+    auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
 
     if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
         TT_FATAL(
-            (input_tensor_a.get_tile()->get_tile_shape()[1] == TILE_WIDTH && input_tensor_a.get_tile()->get_tile_shape()[0] == TILE_HEIGHT),
+            (input_tensor_a.get_tile().get_tile_shape()[1] == TILE_WIDTH && input_tensor_a.get_tile().get_tile_shape()[0] == TILE_HEIGHT),
             "Grayskull does not support tiny tile");
         TT_FATAL(
-            (input_tensor_b.get_tile()->get_tile_shape()[1] == TILE_WIDTH && input_tensor_b.get_tile()->get_tile_shape()[0] == TILE_HEIGHT),
+            (input_tensor_b.get_tile().get_tile_shape()[1] == TILE_WIDTH && input_tensor_b.get_tile().get_tile_shape()[0] == TILE_HEIGHT),
             "Grayskull does not support tiny tile");
     }
 
     TT_FATAL(
-        (input_tensor_a.get_tile()->get_tile_shape()[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_WIDTH),
+        (input_tensor_a.get_tile().get_tile_shape()[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_WIDTH),
         "Input tile dims must have inner dim equal to 32 due to llk constraints");
 
     TT_FATAL(
@@ -1042,8 +1042,8 @@ void Matmul::validate(
     const auto& optional_bias = optional_input_tensors.at(0);
     if (optional_bias.has_value()) {
         TT_FATAL(
-            (optional_bias->get_tile()->get_tile_shape()[0] == input_tensor_a.get_tile()->get_tile_shape()[0] &&
-            optional_bias->get_tile()->get_tile_shape()[1] == in1_tile_shape[1]),
+            (optional_bias->get_tile().get_tile_shape()[0] == input_tensor_a.get_tile().get_tile_shape()[0] &&
+            optional_bias->get_tile().get_tile_shape()[1] == in1_tile_shape[1]),
             "Input tile dims must have inner dim equal to 32 due to llk constraints");
         const auto& bias = optional_bias.value();
         TT_FATAL(bias.get_layout() == Layout::TILE, "Unsupported input layout");
@@ -1354,8 +1354,8 @@ std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<T
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    auto in0_tile_shape = input_tensor_a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = input_tensor_b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
+    auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
     auto output_tile = this->output_tile.value();
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;

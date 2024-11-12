@@ -188,7 +188,7 @@ struct Tensor {
     const ttnn::Shape &get_shape() const;
     DataType get_dtype() const;
     Layout get_layout() const;
-    std::optional<Tile> get_tile() const;
+    Tile get_tile() const;
 
     ttnn::SimpleShape get_logical_shape() const;
     ttnn::SimpleShape get_padded_shape() const;
@@ -202,7 +202,7 @@ struct Tensor {
     inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
     inline DataType dtype() const { return this->tensor_attributes->tensor_layout.get_data_type(); };
     inline Layout layout() const { return this->tensor_attributes->tensor_layout.get_layout(); };
-    inline std::optional<Tile> tile() const { return this->tensor_attributes->tensor_layout.get_page_config().get_tile(); };
+    inline Tile tile() const { return this->tensor_attributes->tensor_layout.get_page_config().get_tile(); };
     inline const TensorLayout& tensor_layout() const { return this->tensor_attributes->tensor_layout; }
 
     // ======================================================================================

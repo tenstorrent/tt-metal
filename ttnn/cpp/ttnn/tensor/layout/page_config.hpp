@@ -62,7 +62,7 @@ public:
     Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
 
-    std::optional<Tile> get_tile() const;
+    Tile get_tile() const;
 
     bool is_row_major() const;
 

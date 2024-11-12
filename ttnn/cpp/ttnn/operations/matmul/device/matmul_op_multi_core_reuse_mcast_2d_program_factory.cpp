@@ -1257,12 +1257,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
-    auto in0_tile = *a.get_tile();
-    auto in1_tile = *b.get_tile();
+    auto in0_tile = a.get_tile();
+    auto in1_tile = b.get_tile();
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
-    auto in0_tile_shape = a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = a.get_tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1375,7 +1375,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         out_buffer,
         in0_tile,
         in1_tile,
-        bias.has_value() ? *bias->get_tile() : output_tile,
+        bias.has_value() ? bias->get_tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,

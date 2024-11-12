@@ -835,14 +835,14 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 if (target_layout == Layout::TILE) {
-                    return convert_layout_row_major_to_tile(shape, *tile, input_data);
+                    return convert_layout_row_major_to_tile(shape, tile, input_data);
                 } else {
                     TT_THROW("Unsupported layout conversion");
                 }
                 break;
             case Layout::TILE:
                 if (target_layout == Layout::ROW_MAJOR) {
-                    return convert_layout_tile_to_row_major(shape, *tile, input_data);
+                    return convert_layout_tile_to_row_major(shape, tile, input_data);
                 } else {
                     TT_THROW("Unsupported layout conversion");
                 }

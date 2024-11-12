@@ -1247,12 +1247,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     bool skip_in0_mcast,
     bool skip_write_back) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
-    auto in0_tile = *a.get_tile();
-    auto in1_tile = *b.get_tile();
+    auto in0_tile = a.get_tile();
+    auto in1_tile = b.get_tile();
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
-    auto in0_tile_shape = a.get_tile()->get_tile_shape();
-    auto in1_tile_shape = b.get_tile()->get_tile_shape();
+    auto in0_tile_shape = a.get_tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1277,8 +1277,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
 
-    uint32_t in0_single_tile_size = a.get_tile()->get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = b.get_tile()->get_tile_size(in1_data_format);
+    uint32_t in0_single_tile_size = a.get_tile().get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = b.get_tile().get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
@@ -1337,7 +1337,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         out_buffer,
         in0_tile,
         in1_tile,
-        bias.has_value() ? *bias->get_tile() : output_tile,
+        bias.has_value() ? bias->get_tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,

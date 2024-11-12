@@ -563,7 +563,7 @@ Layout Tensor::get_layout() const {
     this->wait_for_tensor_metadata_populated();
     return this->layout();
 }
-std::optional<Tile> Tensor::get_tile() const {
+Tile Tensor::get_tile() const {
     this->wait_for_tensor_metadata_populated();
     return this->tile();
 }

@@ -64,7 +64,7 @@ bool PageConfig::is_row_major() const {
     return std::holds_alternative<RowMajorPageConfig>(config_);
 }
 
-std::optional<Tile> PageConfig::get_tile() const
+Tile PageConfig::get_tile() const
 {
     if(std::holds_alternative<TilePageConfig>(config_)) {
         return std::get<TilePageConfig>(config_).get_tile();
