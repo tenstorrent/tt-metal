@@ -1,9 +1,21 @@
+# Copyright
+#
+# © 2023 Tenstorrent Inc.
+# © 2024 Tactical Computing Labs, LLC
+#
+
 cmake_minimum_required(VERSION 3.16..3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+    set (X86 TRUE)
+else ()
+    set (X86 FALSE)
+endif ()
 
 ############################################
 # Project setup
@@ -183,6 +195,11 @@ if(NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
+find_package(umd)
+find_package(nng)
+find_package(flatbuffers)
+find_package(libuv)
+
 # Bring in UMD and all it's dependencies
 add_subdirectory(tt_metal/third_party/umd)
 
@@ -205,6 +222,9 @@ target_link_libraries(
 
 string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
 add_compile_definitions(ARCH_${ARCH_NAME_DEF})
+
+if(X86)
+
 add_compile_options(
     -Werror
     -Wdelete-non-virtual-dtor
@@ -242,6 +262,48 @@ add_compile_options(
     "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
     "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
+
+else()
+
+add_compile_options(
+    -Werror
+    -Wdelete-non-virtual-dtor
+    -Wreturn-type
+    -Wswitch
+    -Wuninitialized
+    -Wno-unused-parameter
+    -fPIC
+    -fvisibility-inlines-hidden
+    -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.
+    "$<$<CXX_COMPILER_ID:Clang>:-Wsometimes-uninitialized>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-error=local-type-template-args>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-delete-non-abstract-non-virtual-dtor>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c99-designator>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-shift-op-parentheses>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-non-c-typedef-for-linkage>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-builtins>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-declarations>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated-declarations>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-missing-requires>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-error=non-template-friend>"
+    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
+    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
+    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
+    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
+)
+
+endif()
+
 add_link_options(
     "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
     "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"

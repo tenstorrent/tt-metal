@@ -1,12 +1,21 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_cluster.hpp"
 
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 #include <filesystem>
 #include <iostream>
 #include <map>

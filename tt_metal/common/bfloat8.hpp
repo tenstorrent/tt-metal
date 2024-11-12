@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +8,9 @@
 #include <iostream>
 #include <random>
 #include <vector>
+#if defined(__x86_64__)
 #include <immintrin.h>
+#endif
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
@@ -206,12 +209,22 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
     int subtile_c;
     const std::vector<uint32_t> mask_vec = {0xff, 0xff00, 0xff0000, 0xff000000};
     const std::vector<uint32_t> shift_vec = {0, 8, 16, 24};
+#if defined(__x86_64__)
     const __m128i mask = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec.data()));
     const __m128i shift = _mm_loadu_si128(reinterpret_cast<const __m128i*>(shift_vec.data()));
     __m256i rebias_offset = _mm256_setzero_si256();
     if (is_exp_a) {
         rebias_offset = _mm256_set1_epi32(-112); // This rebias offset must be added if we are working with BFP8 format.
     }
+#else
+    std::vector<std::uint32_t> mask(mask_vec);
+    std::vector<std::uint32_t> shift(shift_vec);
+    std::vector<std::uint32_t> rebias_offset(8, 0);
+
+    if (is_exp_a) {
+        std::fill(rebias_offset.begin(), rebias_offset.end(), -112);
+    }
+#endif
     uint32_t exp_word, sub_word_index;
 
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
@@ -233,12 +246,17 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) & 0x3; // Extract the byte in which the shared exponent is stored. Each byte is shared amongst 16 datums.
+#if defined(__x86_64__)
                         __m256i exp_vector = _mm256_set1_epi32(get_byte(exp_word, sub_word_index)); // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values
                         __m128i first = _mm_set1_epi32(bfp8_tiles.at(num_exp_words + tile_and_data_index)); // Replicate first uint32_t 4 times (one for each BFP8 value)
                         __m128i second = _mm_set1_epi32(bfp8_tiles.at(num_exp_words + tile_and_data_index + 1)); //  Replicate second uint32_t 4 times
                         first = _mm_srlv_epi32(_mm_and_si128(first, mask), shift); // Extract each BFP8 from the first uint32_t
                         second = _mm_srlv_epi32(_mm_and_si128(second, mask), shift); // Extract each BFP8 from the second uint32_t
+
+
+                        // Take 2 uint32_t values. These are 8 BFP8 values
+			//
                         __m256i combined = _mm256_set_m128i(second, first); // Concatenate 2 128 vectors to 1 256
                         // Extract sign and mantissa (expo extracted above)
                         __m256i sign = _mm256_srl_epi32(combined,  _mm_set_epi64x(0, 7));
@@ -272,6 +290,116 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
                             fp32_element_index += 8;
                         }
                         _mm256_storeu_ps(&float_vec[float_data_index],  _mm256_castsi256_ps(man));
+#else
+			std::vector<std::uint32_t> exp_vector(8, get_byte(exp_word, sub_word_index));
+                        std::vector<std::uint32_t> first(4, bfp8_tiles.at(16 + tile_and_data_index));
+                        std::vector<std::uint32_t> second(4, 16 + tile_and_data_index + 1);
+                        std::vector<std::uint32_t> combined(8, 0);
+
+                        for(std::size_t j = 0; j < 4; ++j) {
+			   if(shift[j] < 32) {
+   			      first[j] = first[j] & mask[j] >> shift[j];
+			   }
+			   else {
+   			      first[j] = 0;
+			   }
+			}
+
+                        for(std::size_t j = 0; j < 4; ++j) {
+			   if(shift[j] < 32) {
+   			      second[j] = second[j] & mask[j] >> shift[j];
+			   }
+			   else {
+   			      second[j] = 0;
+			   }
+			}
+
+			std::copy(first.begin(), first.end(), combined.begin());
+			std::copy(second.begin(), second.end(), combined.begin()+4);
+
+			std::vector<std::uint32_t> sign(8, 0);
+			std::vector<std::uint32_t> man(8, 0);
+
+			{
+                           std::uint64_t count[2] = { 0, 7 };
+                           for(std::size_t i = 0; i < 8; ++i) {
+                              if(31 < count[0]) {
+                                 sign[i] = 0;
+                              }
+                              else {
+                                 sign[i] = combined[i] >> count[0];
+                              }
+                           }
+                        }
+
+                        for(std::size_t j = 0; j < 8; ++j) {
+                           man[j] = combined[j] & 0x7f; 
+                        }
+
+			std::vector<std::uint32_t> shift_cnt(8, 0);
+			std::vector<std::uint32_t> select_mask(8, 0);
+			for(std::size_t j = 0; j < 8; ++j) {
+                           select_mask[j] = man[j] == shift_cnt[j] ? 0xFFFFFFFF : 0;
+			}
+			std::vector<std::uint32_t> man_shifted(man);
+
+                        for (int shift_val = 0; shift_val < 7; shift_val++) {
+			    std::vector<std::uint32_t> shift_mask(8, 0);
+			    for(std::size_t j = 0; j < 8; ++i) {
+			       shift_mask[j] = ((man_shifted[j] > 0x40) ? 0xFFFFFFFF : 0) | ((man_shifted[j] == 0x40) ? 0xFFFFFFFF : 0);
+			    }
+			    {
+		               std::vector<std::uint32_t> data = {0, 1};
+   			       for(std::size_t j = 0; j < 8; ++i) {
+			          man_shifted[j] = ( shift_mask[j] ? ( 31 < data[0] ? man_shifted[j] << data[0] : 0 ) : man_shifted[j] );
+			          shift_cnt[j] = ( shift_mask[j] ? (shift_val + 1) : shift_cnt[j] );
+			       }
+			    }
+                        }
+
+			{
+		           std::vector<std::uint32_t> data = {0, 1};
+			   for(std::size_t j = 0; j < 8; ++j) {
+			      man_shifted[j] = ( 31 < data[0] ? (man_shifted[j] << data[0]) : 0 ) & 0x7f;
+			   }
+			}
+
+			{
+		           std::vector<std::uint32_t> data = {0, 31};
+
+			   for(std::size_t j = 0; j < 8; ++j) {
+		              man[j] = select_mask[j] ? man_shifted[j] : man[j];
+   			      exp_vector[j] = select_mask[j] ? exp_vector[j] - ( rebias_offset[j] + shift_cnt[j] ) : 0;
+			      sign[j] = (32 < data[0]) ? sign[j] : 0;
+			   }
+			}
+
+			{
+		           std::vector<std::uint32_t> data = {0, 23};
+
+			   for(std::size_t j = 0; j < 8; ++j) {
+   			      exp_vector[j] = ( 31 < data[0] ) ? exp_vector[j] << data[0] : 0;
+			   }
+			}
+
+			{
+		           std::vector<std::uint32_t> data = {0, 16};
+
+			   for(std::size_t j = 0; j < 8; ++j) {
+		              man[j] = sign[j] | exp_vector[j] | (( 31 < data[0] ) ? man[j] << data[0] : 0);
+			   }
+			}
+
+                        uint32_t float_data_index;
+                        if (row_major_output) {
+                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                        } else {
+                            float_data_index = fp32_element_index;
+                            fp32_element_index += 8;
+                        }
+
+			std::copy(man.begin(), man.end(), float_vec.begin() + float_data_index);
+#endif
                     }
                 }
             }

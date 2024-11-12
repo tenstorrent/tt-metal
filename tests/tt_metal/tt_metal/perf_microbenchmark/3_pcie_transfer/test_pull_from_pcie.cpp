@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,6 +48,13 @@ void *align(void *ptr, std::size_t max_alignment) {
 
 template <bool stream_load, bool aligned_load>
 void nt_memcpy_128b(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t n) {
+
+#if !defined(__x86_64__)
+
+    memcpy(dst, src, n);
+    tt_driver_atomics::sfence();
+
+#else
     size_t num_lines = n / (INNER_LOOP * sizeof(__m128i));
     constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m128i);
     size_t i;
@@ -74,10 +82,19 @@ void nt_memcpy_128b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
 
     if (num_lines > 0)
         tt_driver_atomics::sfence();
+#endif
 }
 
 template <bool stream_load, bool aligned_load>
 void nt_memcpy_256b(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t n) {
+
+#if !defined(__x86_64__)
+
+    memcpy(dst, src, n);
+    tt_driver_atomics::sfence();
+
+#else
+
     size_t num_lines = n / (INNER_LOOP * sizeof(__m256i));
     constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m256i);
     size_t i;
@@ -106,6 +123,8 @@ void nt_memcpy_256b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
 
     if (num_lines > 0)
         tt_driver_atomics::sfence();
+
+#endif
 }
 
 int main(int argc, char **argv) {
@@ -118,7 +137,11 @@ int main(int argc, char **argv) {
     bool simulate_write_ptr_update = false;
     uint32_t write_ptr_readback_interval = 0;
     uint32_t copy_mode = 0;
+#if !defined(__x86_64__)
+    constexpr uint32_t memcpy_alignment = sizeof(sizeof(float)*8);
+#else
     constexpr uint32_t memcpy_alignment = sizeof(__m256i);
+#endif
     std::size_t addr_align = memcpy_alignment;
 
     try {
@@ -189,6 +212,26 @@ int main(int argc, char **argv) {
             copy_mode <= 8,
             "Invalid --copy-mode arg! Only eight modes to copy data data from host into hugepages support!");
         if (copy_mode >= 2 && copy_mode <= 7) {
+#if !defined(__x86_64__)
+            if (copy_mode == 2 || copy_mode == 3) {
+                TT_ASSERT(
+                    addr_align % sizeof(sizeof(float)*4) == 0,
+                    "Address alignment must be a multiple of 16 when using nt_memcpy");
+            } else if (copy_mode == 5 || copy_mode == 6) {
+                TT_ASSERT(
+                    addr_align % sizeof(sizeof(float)*8) == 0,
+                    "Address alignment must be a multiple of 32 when using nt_memcpy");
+            }
+            if (copy_mode >= 2 && copy_mode <= 4) {
+                TT_ASSERT(
+                    transfer_size % (INNER_LOOP * sizeof(sizeof(float)*4)) == 0,
+                    "Each copy to hugepage must be mod32==0 when using nt_memcpy");
+            } else if (copy_mode >= 5 && copy_mode <= 7) {
+                TT_ASSERT(
+                    transfer_size % (INNER_LOOP * sizeof(sizeof(float)*8)) == 0,
+                    "Each copy to hugepage must be mod64==0 when using nt_memcpy");
+            }
+#else
             if (copy_mode == 2 || copy_mode == 3) {
                 TT_ASSERT(
                     addr_align % sizeof(__m128) == 0,
@@ -207,6 +250,7 @@ int main(int argc, char **argv) {
                     transfer_size % (INNER_LOOP * sizeof(__m256)) == 0,
                     "Each copy to hugepage must be mod64==0 when using nt_memcpy");
             }
+#endif
         }
 
         // Device setup

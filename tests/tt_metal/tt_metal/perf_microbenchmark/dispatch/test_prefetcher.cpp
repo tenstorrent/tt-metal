@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1333,8 +1334,15 @@ void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
 }
 
 // Ideally would work by cachelines, but the min size is less than that
+
 void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n)
 {
+#if !defined(__x86_64__)
+
+   memcpy(dst, src, n);
+   tt_driver_atomics::sfence();
+
+#else
     size_t num_lines = n / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
     size_t i;
@@ -1353,6 +1361,7 @@ void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n
 
     if (num_lines > 0)
         tt_driver_atomics::sfence();
+#endif
 }
 
 void write_prefetcher_cmd(Device *device,

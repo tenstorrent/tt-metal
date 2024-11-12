@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +14,10 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 
+#if !(defined(__x86_64__) || defined(__i386__))
+#include <string.h>
+#endif
+
 using namespace tt::tt_metal;
 
 // todo consider moving these to dispatch_addr_map
@@ -20,7 +25,15 @@ static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
 static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28; // 256 MB;
 static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE; // 256 MB;
 
+#if defined(__x86_64__) || defined(__i386__)
 static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
+using sizeof_m128i = std::integral_constant<std::size_t, MEMCPY_ALIGNMENT>;
+using sizeof_m256i = std::integral_constant<std::size_t, sizeof(__m256i)>;
+#else
+static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(std::uint16_t)*8;
+using sizeof_m128i = std::integral_constant<std::size_t, MEMCPY_ALIGNMENT>;
+using sizeof_m256i = std::integral_constant<std::size_t, sizeof(std::uint16_t)*8*2>;
+#endif
 
 enum class CommandQueueDeviceAddrType : uint8_t {
     PREFETCH_Q_RD = 0,
@@ -317,7 +330,11 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
     TT_ASSERT(n % sizeof(uint32_t) == 0);
 
     static constexpr uint32_t inner_loop = 8;
+#if defined(__x86_64__) || defined(__i386__)
     static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);
+#else
+    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(std::uint32_t);
+#endif
 
     uint8_t *src8 = (uint8_t *)src;
     uint8_t *dst8 = (uint8_t *)dst;
@@ -325,16 +342,23 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
     if (size_t num_lines = n / inner_blk_size) {
         for (size_t i = 0; i < num_lines; ++i) {
             for (size_t j = 0; j < inner_loop; ++j) {
+#if defined(__x86_64__) || defined(__i386__)
                 __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
                 _mm256_stream_si256((__m256i *)dst8, blk);
                 src8 += sizeof(__m256i);
                 dst8 += sizeof(__m256i);
+#else
+		memcpy(dst8, src8, sizeof(std::uint32_t));
+                src8 += sizeof(std::uint32_t)*8;
+                dst8 += sizeof(std::uint32_t)*8;
+#endif
             }
             n -= inner_blk_size;
         }
     }
 
     if (n > 0) {
+#if defined(__x86_64__) || defined(__i386__)
         if (size_t num_lines = n / sizeof(__m256i)) {
             for (size_t i = 0; i < num_lines; ++i) {
                 __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
@@ -344,6 +368,18 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
             }
             n -= num_lines * sizeof(__m256i);
         }
+#else
+        if (size_t num_lines = n / sizeof(std::uint32_t)) {
+            for (size_t i = 0; i < num_lines; ++i) {
+                memcpy(dst8, src8, sizeof(std::uint32_t));
+                src8 += sizeof(std::uint32_t)*8;
+                dst8 += sizeof(std::uint32_t)*8;
+            }
+	    n -= num_lines * sizeof(std::uint32_t)*8;
+        }
+#endif
+
+#if defined(__x86_64__) || defined(__i386__)
         if (size_t num_lines = n / sizeof(__m128i)) {
             for (size_t i = 0; i < num_lines; ++i) {
                 __m128i blk = _mm_loadu_si128((const __m128i *)src8);
@@ -351,11 +387,25 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
                 src8 += sizeof(__m128i);
                 dst8 += sizeof(__m128i);
             }
-            n -= n / sizeof(__m128i) * sizeof(__m128i);
+            n -= n / sizeof(std::uint16_t) * sizeof(std::uint16_t);
         }
+#else
+        if (size_t num_lines = n / sizeof(std::uint16_t)) {
+            for (size_t i = 0; i < num_lines; ++i) {
+                memcpy(dst8, src8, sizeof(std::uint16_t));
+                src8 += sizeof(std::uint16_t)*8;
+                dst8 += sizeof(std::uint16_t)*8;
+            }
+            n -= n / sizeof(std::uint16_t) * sizeof(std::uint16_t);
+        }
+#endif
         if (n > 0) {
             for (size_t i = 0; i < n / sizeof(int32_t); ++i) {
+#if defined(__x86_64__) || defined(__i386__)
                 _mm_stream_si32((int32_t *)dst8, *(int32_t *)src8);
+#else
+		memcpy((int32_t *)dst8, (int32_t *)src8, sizeof(std::int32_t));
+#endif
                 src8 += sizeof(int32_t);
                 dst8 += sizeof(int32_t);
             }

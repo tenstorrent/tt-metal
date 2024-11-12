@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +8,9 @@
 #include <iostream>
 #include <random>
 #include <vector>
+#if defined(__x86_64__)
 #include <immintrin.h>
+#endif
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"

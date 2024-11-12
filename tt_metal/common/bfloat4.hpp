@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// © 2024 Tactical Computing Labs, LLC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +8,12 @@
 #include <iostream>
 #include <random>
 #include <vector>
+
+#if defined(__x86_64__)
 #include <immintrin.h>
+#else
+#include <algorithm>
+#endif
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
@@ -61,6 +67,8 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
     const std::vector<uint32_t> mask_vec1 = {0xf0000, 0xf00000, 0xf000000, 0xf0000000};
     const std::vector<uint32_t> shift_vec0 = {0, 4, 8, 12};
     const std::vector<uint32_t> shift_vec1 = {16, 20, 24, 28};
+
+#if defined(__x86_64__)
     const __m128i mask0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec0.data()));
     const __m128i mask1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec1.data()));
     const __m128i shift0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(shift_vec0.data()));
@@ -69,6 +77,16 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
     if (is_exp_a) {
         rebias_offset = _mm256_set1_epi32(-112); // This rebias offset must be added if we are working with BFP8 format.
     }
+#else
+    const std::vector<std::uint32_t> mask0(mask_vec0);
+    const std::vector<std::uint32_t> mask1(mask_vec1);
+    const std::vector<std::uint32_t> shift0(shift_vec0);
+    const std::vector<std::uint32_t> shift1(shift_vec1);
+    std::vector<std::uint32_t> rebias_offset(8, 0);
+    if (is_exp_a) {
+        std::fill(rebias_offset.begin(), rebias_offset.end(), -112);
+    }
+#endif
     uint32_t exp_word, sub_word_index;
 
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
@@ -96,7 +114,9 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) & 0x3; // Extract the byte in which the shared exponent is stored. Each byte is shared amongst 16 datums.
-                        __m256i exp_vector0 = _mm256_set1_epi32(get_byte(exp_word, sub_word_index)); // Replicate exp scalar in a vector
+                        
+#if defined(__x86_64__)
+			__m256i exp_vector0 = _mm256_set1_epi32(get_byte(exp_word, sub_word_index)); // Replicate exp scalar in a vector
                         __m256i exp_vector1 = exp_vector0;
 
                         // Take 2 uint32_t values. These are 16 BFP4 values
@@ -164,6 +184,203 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
                         }
                         _mm256_storeu_ps(&float_vec[float_data_index],  _mm256_castsi256_ps(man0));
                         _mm256_storeu_ps(&float_vec[float_data_index+num_elements_in_dword],  _mm256_castsi256_ps(man1));
+#else
+                        std::vector<std::uint32_t> exp_vector0(8, get_byte(exp_word, sub_word_index));
+                        std::vector<std::uint32_t> exp_vector1(exp_vector0);
+
+                        uint32_t first_val = bfp_tiles.at(16 + tile_and_data_index);
+                        std::vector<std::uint32_t> first0(4, first_val);
+                        std::vector<std::uint32_t> first1(4, first_val);
+                        uint32_t second_val = bfp_tiles.at(16 + tile_and_data_index + 1);
+                        std::vector<std::uint32_t> second0(4, second_val);
+                        std::vector<std::uint32_t> second1(4, second_val);
+
+			for(std::size_t i = 0; i < 4; ++i) {
+			   std::uint32_t dst  = first0[i] & mask0[i];
+		           for(std::size_t j = 0; j < 3; ++j) {
+                              dst = (j < 2) ? dst >> shift0[j] : 0;
+			   }
+			   first0[i] = dst;
+		        }
+
+			for(std::size_t i = 0; i < 4; ++i) {
+			   std::uint32_t dst  = first1[i] & mask1[i];
+		           for(std::size_t j = 0; j < 3; ++j) {
+                              dst = (j < 2) ? dst >> shift1[j] : 0;
+			   }
+			   first1[i] = dst;
+		        }
+
+			for(std::size_t i = 0; i < 4; ++i) {
+			   std::uint32_t dst  = second0[i] & mask0[i];
+		           for(std::size_t j = 0; j < 3; ++j) {
+                              dst = (j < 2) ? dst >> shift0[j] : 0;
+			   }
+			   second0[i] = dst;
+		        }
+
+			for(std::size_t i = 0; i < 4; ++i) {
+			   std::uint32_t dst  = second1[i] & mask1[i];
+		           for(std::size_t j = 0; j < 3; ++j) {
+                              dst = (j < 2) ? dst >> shift1[j] : 0;
+			   }
+			   second1[i] = dst;
+		        }
+
+			std::vector<std::uint32_t> combined0(8, 0);
+			std::copy(first1.begin(), first1.end(), combined0.begin());
+			std::copy(first0.begin(), first0.end(), combined0.begin()+first1.size());
+
+			std::vector<std::uint32_t> combined1(8, 0);
+			std::copy(second1.begin(), second1.end(), combined1.begin());
+			std::copy(second0.begin(), second0.end(), combined1.begin()+second1.size());
+
+			std::vector<std::uint32_t> sign0(8, 0);
+			std::vector<std::uint32_t> man0(8, 0);
+			std::vector<std::uint32_t> sign1(8, 0);
+			std::vector<std::uint32_t> man1(8, 0);
+
+                        // Extract sign and mantissa (expo extracted above)
+			{
+			   std::uint64_t count[2] = { 3,  0 };
+		           for(std::size_t i = 0; i < 8; ++i) {
+			      if(31 < count[0]) {
+		                 sign0[i] = 0;
+		              }
+			      else {
+			         sign0[i] = combined0[i] >> count[0];
+			      }
+			   }	
+			}
+
+		        for(std::size_t i = 0; i < 8; ++i) {
+		           man0[i] = combined0[0] & 0x7;
+			}	
+
+			{
+			   std::uint64_t count[2] = { 3,  0 };
+   		           for(std::size_t i = 0; i < 8; ++i) {
+			      if(31 < count[0]) {
+		                 sign1[i] = 0;
+		              }
+			      else {
+			         sign1[i] = combined1[i] >> count[0];
+			      }
+			   }	
+			}	
+
+		        for(std::size_t i = 0; i < 8; ++i) {
+		           man1[i] = combined1[0] & 0x7;
+			}	
+
+                        for (int i=0; i<2; i++) {
+                            std::vector<std::uint32_t> shift_cnt(8, 0);
+			    std::vector<std::uint32_t> man_shifted(i == 0 ? man0 : man1);
+			    std::vector<std::uint32_t> select_mask(8, 0);
+
+			    for(std::size_t j = 0; j < 8; ++i) {
+			       select_mask[j] = (man_shifted[j] == shift_cnt[j]) ? 0xFFFFFFFF : 0;
+			    }
+
+                            for (int shift_val = 0; shift_val < 3; shift_val++) {
+                               std::vector<std::uint32_t> shift_mask(8, 0);
+
+			       for(std::size_t j = 0; j < 8; ++j) {
+			          shift_mask[j] = (man_shifted[j] >= (std::uint32_t)0x4) | (man_shifted[j] == (std::uint32_t)0x4);
+			       }
+
+			       {
+			          std::uint64_t data[2] = { 1,  0 };
+		                  for(std::size_t i = 0; i < 8; ++i) {
+    			             if(31 < data[0]) {
+  		                        man_shifted[i] = 0;
+		                     }
+			             else {
+			                man_shifted[i] = combined0[i] << data[0];
+			             }
+			          }
+			       }	
+
+			       {
+			          std::uint64_t data[2] = { 1,  0 };
+                                  for(std::size_t j = 0; j < 8; ++j) {
+			             man_shifted[j] = shift_mask[j] ? man_shifted[j] << data[0] : man_shifted[j];
+   				     shift_cnt[j] = shift_mask[j] ? (shift_val + 1)  : shift_cnt[j];
+			          }
+			       }
+			    }
+
+			    {
+			       std::uint64_t data[2] = { 1,  0 };
+			       for(std::size_t j = 0; j < 8; ++j) {
+			          man_shifted[j] = (man_shifted[j] << data[0]) & (std::uint32_t)0x7;
+			       }
+			    }
+
+                            if (i==0) {
+			        for(std::size_t j = 0; j < 8; ++j) {
+                                   man_shifted[j] = select_mask[j] ? man_shifted[j] : man0[j];
+				   exp_vector0[j] = select_mask[j] ? (exp_vector0[j] - (rebias_offset[j] + shift_cnt[j])) : 0;
+				}
+                            }
+			    else {
+			        for(std::size_t j = 0; j < 8; ++j) {
+                                   man1[j] = select_mask[j] ? man_shifted[j] : man1[j];
+				   exp_vector1[j] = select_mask[j] ? (exp_vector1[j] - (rebias_offset[j] + shift_cnt[j])) : 0;
+				}
+                            }
+                        }
+
+			{
+   			   std::uint64_t data[2] = { 31,  0 };
+   			   for(std::size_t j = 0; j < 8; ++j) {
+			      sign0[j] = sign0[j] << data[0];
+			   }
+			   for(std::size_t j = 0; j < 8; ++j) {
+			      sign1[j] = sign1[j] << data[0];
+			   }
+			}
+			{
+   			   std::uint64_t data[2] = { 23,  0 };
+   			   for(std::size_t j = 0; j < 8; ++j) {
+			      exp_vector0[j] = exp_vector0[j] << data[0];
+			   }
+			   for(std::size_t j = 0; j < 8; ++j) {
+			      exp_vector1[j] = exp_vector1[j] << data[0];
+			   }
+			}
+			{
+   			   std::uint64_t data[2] = { 23,  0 };
+   			   for(std::size_t j = 0; j < 8; ++j) {
+			      exp_vector0[j] = exp_vector0[j] << data[0];
+			   }
+			   for(std::size_t j = 0; j < 8; ++j) {
+			      exp_vector1[j] = exp_vector1[j] << data[0];
+			   }
+			}
+			{
+   			   std::uint64_t data[2] = { 20,  0 };
+   			   for(std::size_t j = 0; j < 8; ++j) {
+			      man0[j] = man0[j] << data[0];
+			      man0[j] = sign0[j] | (exp_vector0[j] | man0[j]);
+			   }
+			   for(std::size_t j = 0; j < 8; ++j) {
+			      man1[j] = man1[j] << data[0];
+			      man1[j] = sign1[j] | (exp_vector1[j] | man1[j]);
+			   }
+			}
+
+                        uint32_t float_data_index;
+                        if (row_major_output) {
+                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                        } else {
+                            float_data_index = fp32_element_index;
+                            fp32_element_index += 2*num_elements_in_dword;
+                        }
+
+			std::copy(man0.begin(), man0.end(), float_vec.begin()+float_data_index);
+			std::copy(man1.begin(), man1.end(), float_vec.begin()+float_data_index+num_elements_in_dword);
+#endif
                     }
                 }
             }
