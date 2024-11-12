@@ -39,7 +39,6 @@ target_link_libraries(
 
 target_link_libraries(ttml PUBLIC yaml-cpp::yaml-cpp)
 
-target_compile_definitions(ttml PUBLIC FMT_HEADER_ONLY)
 
 target_link_libraries(
     ttml
