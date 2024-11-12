@@ -23,12 +23,26 @@ random.seed(10)
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "out_sharded, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    "B, M, K, N, activation, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
         # 32, 2304, 3840
-        (True, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (1, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
+        # 32, 2304, 3840
+        (3, 32, 2304, 3840, None, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
         # 256, 8192, 8192
-        (True, 256, 1024, 8192, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
+        (1, 256, 1024, 8192, None, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
     ],
 )
 @pytest.mark.parametrize(
@@ -40,10 +54,10 @@ def test_multi_core_matmul_1d_wh(
     in0_dtype,
     in1_dtype,
     fidelity,
-    out_sharded,
     has_bias,
     fp32_acc_mode,
     packer_l1_acc,
+    B,
     M,
     K,
     N,
@@ -54,9 +68,11 @@ def test_multi_core_matmul_1d_wh(
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
 
-    in0_shape = [1, 1, M, K]
+    in0_shape = [1, B, M, K]
     in1_shape = [1, 1, K, N]
     num_cores = grid[0] * grid[1]
+
+    M *= B  # Fuse batch always enabled
 
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE

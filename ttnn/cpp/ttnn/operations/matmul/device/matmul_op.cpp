@@ -1566,20 +1566,17 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
 
-                    TT_FATAL(
-                        per_core_N % tile_width_ratio == 0,
-                        "per_core_N must be divisible by override output tile width");
-
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
-                    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-                    uint32_t num_cores = num_blocks_x * num_blocks_y;
-                    CoreRangeSet all_cores =
-                        num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
-                    ShardSpec shard_spec = ShardSpec{
-                        all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, ShardOrientation::ROW_MAJOR};
+                    TT_FATAL(per_core_N % tile_width_ratio == 0, "per_core_N must be divisible by override output tile width");
                     auto mem_config = this->output_mem_config;
-                    if (!program_config.gather_in0) { // When gather_in0, output shard spec must be provided
+                    if (!program_config.gather_in0) {
+                        uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
+                        uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                        uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+                        uint32_t num_cores = num_blocks_x * num_blocks_y;
+                        CoreRangeSet all_cores =
+                            num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
+                        ShardSpec shard_spec = ShardSpec{
+                            all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, ShardOrientation::ROW_MAJOR};
                         mem_config.shard_spec = shard_spec;
                     }
                     return {create_device_tensor(
