@@ -47,3 +47,5 @@ venv/
 wandb/
 
 cluster_descriptor.yaml
+
+!data/
