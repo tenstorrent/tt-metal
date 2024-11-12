@@ -31,7 +31,7 @@ void py_bind_rotary_embedding_llama_fused_qk(pybind11::module& module) {
                 trans_mat (ttnn.Tensor): Transformation matrix tensor, with shape [1, 2 * batch, 32, 32].
 
             Keyword args:
-                compute_kernel_config (Optional[DeviceComputeKernelConfig]): Optional configuration for the device compute kernel. Defaults to None.
+                compute_kernel_config (DeviceComputeKernelConfig, optional): Optional configuration for the device compute kernel. Defaults to None.
 
             Returns:
                 ttnn.Tensor, ttnn.Tensor: q and k output tensors with rotary embeddings applied.
