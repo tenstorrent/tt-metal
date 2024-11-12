@@ -343,12 +343,12 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [512])
-@pytest.mark.parametrize("has_bias", [False])
-@pytest.mark.parametrize("grid_size", [(4, 4)])
+@pytest.mark.parametrize("has_bias", [True])
+@pytest.mark.parametrize("grid_size", [(2, 2)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in0_sharded", [True])
-@pytest.mark.parametrize("out_sharded", [True])
+@pytest.mark.parametrize("in0_sharded", [False])
+@pytest.mark.parametrize("out_sharded", [False])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_2d_tiny_tile(
@@ -360,7 +360,7 @@ def test_matmul_2d_tiny_tile(
     bias_shape = [1, 1, n]
 
     num_out_block_h = 2
-    num_out_block_w = 1
+    num_out_block_w = 2
 
     in0_block_w = k // grid_size[0] // 32
     per_core_M = m // grid_size[1] // tile_h
@@ -439,7 +439,7 @@ def test_matmul_2d_tiny_tile(
         per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
-        # fuse_batch=False,
+        fuse_batch=False,
     )
 
     if is_grayskull():

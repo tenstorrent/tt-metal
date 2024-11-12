@@ -140,12 +140,12 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    UNPACK(( DPRINT << "out_block_num_tiles " << out_block_num_tiles <<ENDL() ));
-    UNPACK(( DPRINT << "out_subblock_h " << out_subblock_h <<ENDL() ));
-    UNPACK(( DPRINT << "out_subblock_w " << out_subblock_w <<ENDL() ));
-    UNPACK(( DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL() ));
-    UNPACK(( DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL() ));
-    UNPACK(( DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL() ));
+    // UNPACK(( DPRINT << "out_block_num_tiles " << out_block_num_tiles <<ENDL() ));
+    // UNPACK(( DPRINT << "out_subblock_h " << out_subblock_h <<ENDL() ));
+    // UNPACK(( DPRINT << "out_subblock_w " << out_subblock_w <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL() ));
     // UNPACK(( DPRINT << "in0_num_subblocks " << in0_num_subblocks <<ENDL() ));
     // UNPACK(( DPRINT << "in1_num_subblocks " << in1_num_subblocks <<ENDL() ));
 
@@ -153,9 +153,9 @@ void MAIN {
     mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            UNPACK(( DPRINT  << "bh"  << (uint)bh<<ENDL() ));
+            // UNPACK(( DPRINT  << "bh"  << (uint)bh<<ENDL() ));
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                UNPACK(( DPRINT  << "bw"  << (uint)bw<<ENDL() ));
+                // UNPACK(( DPRINT  << "bw"  << (uint)bw<<ENDL() ));
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -171,7 +171,6 @@ void MAIN {
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
-                    // UNPACK(( DPRINT  << "in1_block_num_tiles "  << (uint)in1_block_num_tiles<<ENDL() ));
                     bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -182,11 +181,7 @@ void MAIN {
 #endif
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
-                    // UNPACK(( DPRINT  << "block"  << (uint)block<<ENDL() ));
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
-
-                    // UNPACK(( DPRINT   << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
-
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -194,7 +189,6 @@ void MAIN {
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                             tile_regs_acquire();
                             if (enable_reload) {
-                                // UNPACK ((DPRINT  << "enable_reload"  <<ENDL() ));
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -234,14 +228,12 @@ void MAIN {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-                                // UNPACK(( DPRINT  << "last_out"  << (uint)last_out<<ENDL() ));
 // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
 #if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
                                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                     SFPU_OP_FUNC_ACTIVATION
                                 }
 #endif
-                                // dprint_tensix_dest_reg(0);
                                 tile_regs_commit();
                                 // Pack out to output buffer
                                 cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -268,9 +260,6 @@ void MAIN {
 
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
-
-                                cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
-                                UNPACK(( DPRINT   << TSLICE(mm_out_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
 
                             } else {
                                 tile_regs_commit();

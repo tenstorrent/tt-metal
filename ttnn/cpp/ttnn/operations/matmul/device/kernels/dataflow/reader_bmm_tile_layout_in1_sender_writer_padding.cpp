@@ -86,7 +86,7 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     // DPRINT << "padded_block_tiles_h_skip " << padded_block_tiles_h_skip <<ENDL();
-    // DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
+    DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
     // DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL();
     // DPRINT << "out_tensor_next_w_dim_block_stride " << out_tensor_next_w_dim_block_stride <<ENDL();
     // DPRINT << "out_tensor_next_h_dim_block_stride " << out_tensor_next_h_dim_block_stride <<ENDL();
@@ -332,7 +332,7 @@ void kernel_main() {
                 }
 #ifdef FUSE_BIAS
                 // Only read bias on first batch, or we have multiple output blocks
-                if (b == 0 || num_blocks_w_dim > 1) {
+                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 1
 #ifndef BIAS_SHARDED
                     cb_reserve_back(cb_id_in3, in1_block_w);
