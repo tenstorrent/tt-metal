@@ -333,7 +333,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
         new_padded_shape.volume());
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
-            new_padded_shape[-2] % tile->get_tile_shape()[0] == 0 && new_padded_shape[-1] % tile->get_tile_shape()[1] == 0 &&
+            new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 && new_padded_shape[-1] % tile.get_tile_shape()[1] == 0 &&
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
     auto output = std::visit(
