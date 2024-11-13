@@ -219,13 +219,13 @@ void generate_sender_worker_kernels(
         num_pages_per_edm_buffer};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
-    log_info(tt::LogTest, "\tSenderReader CT Args");
+    log_trace(tt::LogTest, "\tSenderReader CT Args");
     for (auto const& arg : sender_worker_reader_compile_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        log_trace(tt::LogTest, "\t\t{}", arg);
     }
-    log_info(tt::LogTest, "\tSenderReader RT Args");
+    log_trace(tt::LogTest, "\tSenderReader RT Args");
     for (auto const& arg : sender_worker_reader_runtime_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        log_trace(tt::LogTest, "\t\t{}", arg);
     }
 
     std::vector<uint32_t> sender_worker_writer_compile_args{
@@ -235,10 +235,10 @@ void generate_sender_worker_kernels(
         worker_fabric_connection.num_buffers_per_channel,
         dest_is_dram,
         std::holds_alternative<mcast_send>(mode) ? 1 : 0};
-    log_info(tt::LogTest, "worker_fabric_connection.edm_l1_sem_addr: {}", worker_fabric_connection.edm_l1_sem_addr);
-    log_info(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
-    log_info(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
-    log_info(
+    log_trace(tt::LogTest, "worker_fabric_connection.edm_l1_sem_addr: {}", worker_fabric_connection.edm_l1_sem_addr);
+    log_trace(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
+    log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
+    log_trace(
         tt::LogTest,
         "Sender communicating with EDM: x={}, y={}",
         (uint32_t)edm_noc_core.x,
@@ -272,7 +272,7 @@ void generate_sender_worker_kernels(
         sender_worker_writer_runtime_args.push_back(info.edm_noc_y);
         sender_worker_writer_runtime_args.push_back(info.distance);
         sender_worker_writer_runtime_args.push_back(info.termination_addr);
-        log_info(
+        log_trace(
             tt::LogTest,
             "EDM termination info: x={}, y={}, distance={}, termination_addr={}",
             info.edm_noc_x,
@@ -282,13 +282,13 @@ void generate_sender_worker_kernels(
     }
 
     uint32_t src0_cb_index = CB::c_in0;
-    log_info(tt::LogTest, "\tSenderWriter CT Args");
+    log_trace(tt::LogTest, "\tSenderWriter CT Args");
     for (auto const& arg : sender_worker_writer_compile_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        log_trace(tt::LogTest, "\t\t{}", arg);
     }
-    log_info(tt::LogTest, "\tSenderWriter RT Args");
+    log_trace(tt::LogTest, "\tSenderWriter RT Args");
     for (auto const& arg : sender_worker_writer_runtime_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        log_trace(tt::LogTest, "\t\t{}", arg);
     }
 
     // Just want a dummy DF
@@ -375,7 +375,7 @@ bool RunLoopbackTest(
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
     auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
-    auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build_builder(
+    auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
         sender_device,
         sender_program,
         eth_sender_core,
@@ -383,7 +383,7 @@ bool RunLoopbackTest(
         remote_chip_id,
         edm_config);
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
-    auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build_builder(
+    auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
         receiver_device,
         receiver_program,
         eth_receiver_core,
@@ -396,11 +396,11 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
-    log_info(tt::LogTest, "Generating local_sender -> remote_receiver workers");
+    log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     const std::size_t pages_per_send =
         (chip0_worker_fabric_connection.buffer_size_bytes - PACKET_HEADER_SIZE_BYTES) / page_size;
     auto const& worker_core = worker_cores.at(0);
-    log_info(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
+    log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
     std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos = {
         {1,
@@ -527,11 +527,11 @@ bool RunLineFabricTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
-    log_info(tt::LogTest, "Generating local_sender -> remote_receiver workers");
+    log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     auto const& worker_core = worker_cores.at(0);
-    log_info(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
+    log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    auto const& edm_termination_infos = line_fabric.generate_ordered_termination_info_farthest_to_nearest();
+    const auto edm_termination_infos = line_fabric.generate_ordered_termination_info_farthest_to_nearest();
 
     auto chip0_worker_fabric_connection = line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
 

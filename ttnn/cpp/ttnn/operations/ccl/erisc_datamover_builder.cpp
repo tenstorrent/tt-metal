@@ -34,7 +34,8 @@ namespace ttnn::ccl {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) {
-    TT_ASSERT(channel_buffer_size_bytes > sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size);
+    const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
+    TT_FATAL(channel_buffer_size_bytes >= min_buffer_size, "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum size of {}", min_buffer_size);
     const std::size_t channel_buffer_size_with_channel_sync =
         channel_buffer_size_bytes + sizeof(tt::fabric::PacketHeader); // + 16 // sizeof(tt::fabric::PacketHeader);
 
@@ -62,12 +63,18 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     log_trace(tt::LogOp, "Sender 1 channel_start: {}", this->sender_1_channel_base_address);
     log_trace(tt::LogOp, "Receiver channel_start: {}", this->receiver_channel_base_address);
 
-    TT_ASSERT(
+    static constexpr size_t total_num_channels = 3; // sender0, sender1, receiver
+    const size_t max_channel_buffer_size = (available_channel_buffering_space / total_num_channels) - FabricEriscDatamoverConfig::eth_channel_sync_size - sizeof(tt::fabric::PacketHeader);
+    TT_FATAL(channel_buffer_size_bytes <= max_channel_buffer_size, "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B", max_channel_buffer_size);
+    TT_FATAL(this->sender_0_channel_size_bytes > 0, "Internal error when computing `sender_0_channel_size_bytes` which was computed to be size 0");
+    TT_FATAL(this->sender_1_channel_size_bytes > 0, "Internal error when computing `sender_1_channel_size_bytes` which was computed to be size 0");
+    TT_FATAL(this->receiver_channel_size_bytes > 0, "Internal error when computing `receiver_channel_size_bytes` which was computed to be size 0");
+    TT_FATAL(
         this->sender_0_channel_size_bytes + this->sender_1_channel_size_bytes + this->receiver_channel_size_bytes <=
-        this->available_channel_buffering_space);
-    TT_ASSERT(
+        this->available_channel_buffering_space, "Internal error when computing channel sizes. Total channel size exceeds available space");
+    TT_FATAL(
         this->receiver_channel_base_address + this->receiver_channel_size_bytes <
-        eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
+        eth_l1_mem::address_map::MAX_L1_LOADING_SIZE, "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
@@ -119,7 +126,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     termination_signal_ptr(FabricEriscDatamoverConfig::termination_signal_address) {}
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::emit_compile_time_args() const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
@@ -152,7 +159,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::emit_compile_time_args() cons
         this->termination_signal_ptr};
 }
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::emit_runtime_args() const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     return std::vector<uint32_t>{
         this->sender_channel_0_connection_semaphore_id,
         this->sender_channel_1_connection_semaphore_id,
@@ -173,7 +180,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::emit_runtime_args() const {
     };
 }
 
-FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build_builder(
+FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     Device* device,
     Program& program,
     CoreCoord const& ethernet_core,
@@ -242,7 +249,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
 }
 
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder const& downstream_edm) {
-    auto const& adapter_spec = downstream_edm.build_connection_to_fabric_channel();
+    auto const adapter_spec = downstream_edm.build_connection_to_fabric_channel();
 
     log_trace(tt::LogTest, "Connecting to downstream EDM at x={}, y={}", adapter_spec.edm_noc_x, adapter_spec.edm_noc_y);
 
@@ -265,7 +272,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface (std::vector<Device*> const& 
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
     for (size_t i = 0; i < device_sequence.size(); i++) {
-        log_info(tt::LogOp, "device[{}] id={}",  i, device_sequence[i]->id());
+        log_trace(tt::LogOp, "device[{}] id={}",  i, device_sequence[i]->id());
     }
 
 
@@ -288,8 +295,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface (std::vector<Device*> const& 
         edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
         edm_builders_forward_direction[dest_device->id()].reserve(local_link_cores.size());
         for (size_t l = 0; l < this->num_links; l++) {
-            log_info(tt::LogOp, "Building forward direction EDM on chip {} on link {}", src_device->id(), edm_builders_forward_direction[src_device->id()].size());
-            edm_builders_forward_direction[src_device->id()].push_back(FabricEriscDatamoverBuilder::build_builder(
+            log_trace(tt::LogOp, "Building forward direction EDM on chip {} on link {}", src_device->id(), edm_builders_forward_direction[src_device->id()].size());
+            edm_builders_forward_direction[src_device->id()].push_back(FabricEriscDatamoverBuilder::build(
                 device_sequence[hop],
                 *programs[hop],
                 local_link_cores[l],
@@ -297,8 +304,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface (std::vector<Device*> const& 
                 dest_device->id(),
                 config));
 
-            log_info(tt::LogOp, "Building backward direction EDM on chip {} on link {}", dest_device->id(), edm_builders_backward_direction[dest_device->id()].size());
-            edm_builders_backward_direction[dest_device->id()].push_back(FabricEriscDatamoverBuilder::build_builder(
+            log_trace(tt::LogOp, "Building backward direction EDM on chip {} on link {}", dest_device->id(), edm_builders_backward_direction[dest_device->id()].size());
+            edm_builders_backward_direction[dest_device->id()].push_back(FabricEriscDatamoverBuilder::build(
                 device_sequence[hop + 1],
                 *programs[hop + 1],
                 remote_link_cores[l],
@@ -338,30 +345,26 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
+    auto generate_kernels_in_direction = [this](Device *device, Program *program, Direction direction) {
+        auto &edm_builders = direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
+        if (edm_builders.find(device->id()) != edm_builders.end()) {
+            for (auto& edm_builder : edm_builders.at(device->id())) {
+                auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+                    *program,
+                    device,
+                    edm_builder,
+                    edm_builder.my_eth_core_logical,
+                    NOC::NOC_0);
+            }
+        }
+    };
+
     TT_ASSERT(device_sequence.size() == programs.size());
     for (size_t i = 0; i < device_sequence.size(); i++) {
         Program* program = programs[i];
         Device* device = device_sequence[i];
-        if (edm_builders_forward_direction.find(device_sequence[i]->id()) != edm_builders_forward_direction.end()) {
-            for (auto& edm_builder : edm_builders_forward_direction.at(device_sequence[i]->id())) {
-                auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-                    *program,                             // sender_program,
-                    device,                              // sender_device,
-                    edm_builder,  // chip_0_edm_builder,
-                    edm_builder.my_eth_core_logical,         // eth_sender_core,
-                    NOC::NOC_0);
-            }
-        }
-        if (edm_builders_backward_direction.find(device_sequence[i]->id()) != edm_builders_backward_direction.end()) {
-            for (auto& edm_builder : edm_builders_backward_direction.at(device_sequence[i]->id())) {
-                auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-                    *program,                             // sender_program,
-                    device,                              // sender_device,
-                    edm_builder,  // chip_0_edm_builder,
-                    edm_builder.my_eth_core_logical,         // eth_sender_core,
-                    NOC::NOC_0);
-            }
-        }
+        generate_kernels_in_direction(device, program, Direction::FORWARD);
+        generate_kernels_in_direction(device, program, Direction::BACKWARD);
     }
 }
 
@@ -374,7 +377,7 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
     std::vector<edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(num_hops * 2 * this->num_links);
     for (int i = num_hops - 1; i >= 0; i--) {
-        log_info(tt::LogOp, "Generating termination info for hop {}", i);
+        log_trace(tt::LogOp, "Generating termination info for hop {}", i);
         TT_ASSERT(i + 1 != 0);
         TT_ASSERT(i + 1 < device_sequence.size());
         TT_ASSERT(edm_builders_backward_direction.find(device_sequence[i+1]->id()) != edm_builders_backward_direction.end(), "Device {} at index {} not found in `edm_builders_backward_direction` but it was expected there", i + 1, device_sequence[i+1]->id());
@@ -403,7 +406,7 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
                 ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address});
         }
     }
-    log_info(tt::LogOp, "Done Generating termination infos");
+    log_trace(tt::LogOp, "Done Generating termination infos");
     return edm_termination_infos;
 }
 

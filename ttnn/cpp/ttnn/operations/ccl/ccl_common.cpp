@@ -209,9 +209,9 @@ KernelHandle generate_edm_kernel_impl(
     NOC noc_id) {
     edm_builder.dump_to_log();
 
-    std::vector<uint32_t> const& edm_kernel_rt_args = edm_builder.emit_runtime_args();
+    std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
-    std::vector<uint32_t> eth_sender_ct_args = edm_builder.emit_compile_time_args();
+    std::vector<uint32_t> const eth_sender_ct_args = edm_builder.get_compile_time_args();
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
     for (auto const& s : eth_sender_ct_args) {

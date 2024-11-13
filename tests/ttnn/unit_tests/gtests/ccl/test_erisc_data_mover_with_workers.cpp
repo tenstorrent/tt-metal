@@ -41,7 +41,7 @@ void set_edm_runtime_args(
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core
 ) {
-    std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.emit_runtime_args();
+    std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.get_runtime_args();
     tt_metal::SetRuntimeArgs(program, edm_kernel_handle, eth_core, edm_clockwise_kernel_rt_args);
 
     std::stringstream ss;

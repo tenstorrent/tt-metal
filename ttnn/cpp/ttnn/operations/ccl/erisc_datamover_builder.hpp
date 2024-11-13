@@ -62,30 +62,30 @@ struct FabricEriscDatamoverConfig {
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size);
 
-    std::size_t channel_buffer_size_bytes;
-    std::size_t channel_buffer_size_bytes_with_channel_sync;
-    std::size_t sender_0_channel_size_bytes;
-    std::size_t sender_0_num_buffers;
-    std::size_t sender_1_channel_size_bytes;
-    std::size_t sender_1_num_buffers;
-    std::size_t receiver_channel_size_bytes;
-    std::size_t receiver_num_buffers;
+    std::size_t channel_buffer_size_bytes = 0;
+    std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
+    std::size_t sender_0_channel_size_bytes = 0;
+    std::size_t sender_0_num_buffers = 0;
+    std::size_t sender_1_channel_size_bytes = 0;
+    std::size_t sender_1_num_buffers = 0;
+    std::size_t receiver_channel_size_bytes = 0;
+    std::size_t receiver_num_buffers = 0;
 
-    std::size_t sender_0_channel_base_address;
-    std::size_t sender_1_channel_base_address;
-    std::size_t receiver_channel_base_address;
+    std::size_t sender_0_channel_base_address = 0;
+    std::size_t sender_1_channel_base_address = 0;
+    std::size_t receiver_channel_base_address = 0;
 };
 
 struct SenderWorkerAdapterSpec {
-    size_t edm_noc_x;
-    size_t edm_noc_y;
-    size_t edm_buffer_base_addr;
-    size_t num_buffers_per_channel;
-    size_t edm_l1_sem_addr;
-    size_t edm_connection_handshake_addr;
-    size_t edm_worker_location_info_addr;  // The EDM's location for `EDMChannelWorkerLocationInfo`
-    size_t buffer_size_bytes;
-    size_t buffer_index_semaphore_id; // the semaphore ID on the EDM, not the worker
+    size_t edm_noc_x = 0;
+    size_t edm_noc_y = 0;
+    size_t edm_buffer_base_addr = 0;
+    size_t num_buffers_per_channel = 0;
+    size_t edm_l1_sem_addr = 0;
+    size_t edm_connection_handshake_addr = 0;
+    size_t edm_worker_location_info_addr = 0;  // The EDM's location for `EDMChannelWorkerLocationInfo`
+    size_t buffer_size_bytes = 0;
+    size_t buffer_index_semaphore_id = 0; // the semaphore ID on the EDM, not the worker
 };
 class FabricEriscDatamoverBuilder {
    public:
@@ -106,7 +106,7 @@ class FabricEriscDatamoverBuilder {
 
         FabricEriscDatamoverConfig const& config);
 
-    static FabricEriscDatamoverBuilder build_builder(
+    static FabricEriscDatamoverBuilder build(
         Device* device,
         Program& program,
         CoreCoord const& ethernet_core,
@@ -117,9 +117,9 @@ class FabricEriscDatamoverBuilder {
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel() const;
 
-    [[nodiscard]] std::vector<uint32_t> emit_compile_time_args() const;
+    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
 
-    [[nodiscard]] std::vector<uint32_t> emit_runtime_args() const;
+    [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
     void connect_to_downstream_edm(FabricEriscDatamoverBuilder const& downstream_edm);
 
@@ -130,38 +130,38 @@ class FabricEriscDatamoverBuilder {
    private:
    friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
-    size_t my_noc_x;
-    size_t my_noc_y;
+    size_t my_noc_x = 0;
+    size_t my_noc_y = 0;
 
     FabricEriscDatamoverConfig config;
 
-    size_t my_chip_id;
-    size_t peer_chip_id;
-    size_t handshake_address;
-    size_t channel_buffer_size;
+    size_t my_chip_id = 0;
+    size_t peer_chip_id = 0;
+    size_t handshake_address = 0;
+    size_t channel_buffer_size = 0;
 
-    size_t sender_0_num_buffers;
-    size_t sender_1_num_buffers;
-    size_t receiver_num_buffers;
+    size_t sender_0_num_buffers = 0;
+    size_t sender_1_num_buffers = 0;
+    size_t receiver_num_buffers = 0;
 
-    size_t local_sender_channel_0_buffer_address;
-    size_t local_sender_channel_0_connection_info_addr;
-    size_t local_sender_channel_1_buffer_address;
-    size_t local_sender_channel_1_connection_info_addr;
-    size_t local_receiver_channel_buffer_address;
+    size_t local_sender_channel_0_buffer_address = 0;
+    size_t local_sender_channel_0_connection_info_addr = 0;
+    size_t local_sender_channel_1_buffer_address = 0;
+    size_t local_sender_channel_1_connection_info_addr = 0;
+    size_t local_receiver_channel_buffer_address = 0;
 
-    size_t termination_signal_ptr;
+    size_t termination_signal_ptr = 0;
 
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id;
-    size_t sender_channel_0_flow_control_semaphore_id;
-    size_t sender_channel_1_flow_control_semaphore_id;
-    size_t sender_channel_0_connection_semaphore_id;
-    size_t sender_channel_1_connection_semaphore_id;
-    size_t sender_channel_0_buffer_index_semaphore_id;
-    size_t sender_channel_1_buffer_index_semaphore_id;
-    size_t receiver_channel_local_buffer_index_addr;
+    size_t sender_channel_0_flow_control_semaphore_id = 0;
+    size_t sender_channel_1_flow_control_semaphore_id = 0;
+    size_t sender_channel_0_connection_semaphore_id = 0;
+    size_t sender_channel_1_connection_semaphore_id = 0;
+    size_t sender_channel_0_buffer_index_semaphore_id = 0;
+    size_t sender_channel_1_buffer_index_semaphore_id = 0;
+    size_t receiver_channel_local_buffer_index_addr = 0;
 
     std::optional<size_t> downstream_edm_noc_x;
     std::optional<size_t> downstream_edm_noc_y;
@@ -174,10 +174,10 @@ class FabricEriscDatamoverBuilder {
 
 
 struct edm_termination_info_t {
-    uint32_t distance;
-    uint32_t edm_noc_x;
-    uint32_t edm_noc_y;
-    uint32_t termination_addr;
+    uint32_t distance = 0;
+    uint32_t edm_noc_x = 0;
+    uint32_t edm_noc_y = 0;
+    uint32_t termination_addr = 0;
 };
 
 struct EdmLineFabricOpInterface {
@@ -200,7 +200,7 @@ struct EdmLineFabricOpInterface {
     std::vector<Device*> device_sequence;
     std::vector<Program*> programs;
 
-    size_t num_links;
+    size_t num_links = 0;
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
     EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, std::optional<size_t> desired_num_links = std::nullopt);
@@ -214,14 +214,13 @@ struct EdmLineFabricOpInterface {
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;
 
-    // Generates a list of target cores (for now assumed from chip 0 in the line) from nearest
-    // to farthest for the sake of sending teardown/termination signals on workload completion.
+    // Generates a list of target cores (for now assumed from chip 0 in the line) from farthest
+    // to nearest for the sake of sending teardown/termination signals on workload completion.
     // Returns: A list of termination infos which can be passed to a terminate kernel
     // Note there is currently a small bug in that with multiple links, we don't currently know
     // who will be sending the termination signals (and which link(s) they are connected to)
     // and so a termination signal may be sent to our link first before the other eth core links
-    // on the chip
-    // so multi-link isn't officially supported yet
+    // on the chip so multi-link isn't officially supported yet
     std::vector<edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
 };
 
