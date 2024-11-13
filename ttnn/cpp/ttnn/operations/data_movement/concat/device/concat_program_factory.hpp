@@ -4,11 +4,10 @@
 
 #pragma once
 
-// What if we touch the header file that rotted, instead?
-
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/cpp/ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -23,7 +22,7 @@ struct CorePageRange {
     PageRange range;
 };
 
-tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core( // Look ma! a bug!
+tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups = 1);
 
 tt::tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
