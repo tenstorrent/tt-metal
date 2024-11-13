@@ -69,7 +69,10 @@ jobs:
           NEW_PATH=$(pwd)
           find ./build -type f -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${NEW_PATH}/build|g" {} +
           cd $TT_METAL_HOME/build/tt-train
+          echo "tests/ttml_tests"
+          file tests/ttml_tests
           ldd tests/ttml_tests
+          ls -lart tests
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
