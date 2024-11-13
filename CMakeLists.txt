@@ -331,3 +331,7 @@ add_custom_target(
 )
 
 include(packaging)
+
+if(BUILD_TT_TRAIN)
+    add_subdirectory(tt-train)
+endif()
