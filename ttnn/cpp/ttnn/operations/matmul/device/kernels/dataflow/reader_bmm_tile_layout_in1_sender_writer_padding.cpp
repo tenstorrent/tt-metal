@@ -8,7 +8,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
-#include "debug/dprint.h"
 
 void kernel_main() {
     // READER
@@ -84,12 +83,6 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
     // Don't need batch; same as batch from READER args
-
-    // DPRINT << "padded_block_tiles_h_skip " << padded_block_tiles_h_skip <<ENDL();
-    DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL();
-    // DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL();
-    // DPRINT << "out_tensor_next_w_dim_block_stride " << out_tensor_next_w_dim_block_stride <<ENDL();
-    // DPRINT << "out_tensor_next_h_dim_block_stride " << out_tensor_next_h_dim_block_stride <<ENDL();
 
 
 #ifdef FUSE_BIAS
@@ -206,14 +199,12 @@ void kernel_main() {
         uint32_t in1_tensor_current_h_dim_block_tile_id = in1_tensor_start_tile_id;
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            // DPRINT << "bh " << bh <<ENDL();
             uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
             uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
 #endif
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                // DPRINT << "bw " << bw <<ENDL();
                 uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
@@ -268,13 +259,8 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                     // Operand 1
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-
-                    // DPRINT << "block " << block <<ENDL();
                     l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-
                     uint64_t in1_start_address = l1_write_addr_in1;  // copy start address of block, to be used for mcasting
-
-                    // DPRINT << "last_block_w " << last_block_w <<ENDL();
 
                     // Copy in1 block into CB, as the default kernel
                     uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
@@ -297,7 +283,6 @@ void kernel_main() {
 #endif  // IN1_DRAM_SHARDED
 
 #ifndef SKIP_MCAST
-                    // DPRINT << "in1_block_size_bytes " << in1_block_size_bytes <<ENDL();
                     // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value
                     // should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next block
                     noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
@@ -428,8 +413,6 @@ void kernel_main() {
                 if (bw == num_blocks_w_dim - 1) {
                     out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
                 }
-                // DPRINT << "out_num_nonzero_subblocks_h_ " << out_num_nonzero_subblocks_h_ << ENDL();
-                // DPRINT << "out_num_nonzero_subblocks_w_ " << out_num_nonzero_subblocks_w_ << ENDL();
                 uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
                 for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
                     uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
@@ -447,9 +430,6 @@ void kernel_main() {
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
 
-                        // DPRINT << "out_subblock_h_ " << out_subblock_h_ << ENDL();
-                        // DPRINT << "out_subblock_w_ " << out_subblock_w_ << ENDL();
-
                         cb_wait_front(cb_id_out0, out_subblock_tile_count);
                         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
@@ -457,8 +437,6 @@ void kernel_main() {
                             uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                             for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                 noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
-
-                                // DPRINT << "out_tensor_tile_id " << out_tensor_tile_id << ENDL();
 
                                 l1_read_addr += output_single_tile_size_bytes;
 
@@ -482,7 +460,6 @@ void kernel_main() {
                 }
                 // Pop row(s) of fully padded subblocks
                 if (bh == num_blocks_h_dim - 1) {
-                    // DPRINT << "padded_block_tiles_h_skip " << padded_block_tiles_h_skip << ENDL();
                     cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
                     cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
                 }

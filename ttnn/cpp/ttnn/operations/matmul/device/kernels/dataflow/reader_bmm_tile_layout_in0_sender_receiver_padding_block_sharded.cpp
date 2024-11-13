@@ -8,7 +8,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
-#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -32,8 +31,6 @@ void kernel_main() {
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(16);
     constexpr uint32_t in0_block_h = get_compile_time_arg_val(17);
-
-    DPRINT << "in0_block_h " << in0_block_h <<ENDL();
 
     constexpr uint32_t batch = get_compile_time_arg_val(18);
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(19);

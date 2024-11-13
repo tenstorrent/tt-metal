@@ -14,8 +14,6 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tensix.h"
 
 
 // Please update
@@ -140,22 +138,10 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    // UNPACK(( DPRINT << "out_block_num_tiles " << out_block_num_tiles <<ENDL() ));
-    // UNPACK(( DPRINT << "out_subblock_h " << out_subblock_h <<ENDL() ));
-    // UNPACK(( DPRINT << "out_subblock_w " << out_subblock_w <<ENDL() ));
-    // UNPACK(( DPRINT << "num_blocks_w_dim " << num_blocks_w_dim <<ENDL() ));
-    // UNPACK(( DPRINT << "num_blocks_h_dim " << num_blocks_h_dim <<ENDL() ));
-    // UNPACK(( DPRINT << "num_blocks_inner_dim " << num_blocks_inner_dim <<ENDL() ));
-    // UNPACK(( DPRINT << "in0_num_subblocks " << in0_num_subblocks <<ENDL() ));
-    // UNPACK(( DPRINT << "in1_num_subblocks " << in1_num_subblocks <<ENDL() ));
-
-
     mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            // UNPACK(( DPRINT  << "bh"  << (uint)bh<<ENDL() ));
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                // UNPACK(( DPRINT  << "bw"  << (uint)bw<<ENDL() ));
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -265,7 +251,6 @@ void MAIN {
                                 tile_regs_commit();
                                 // Wait for tiles in output buffer to be written out since interm and output share memory
                                 if (block == 0) {
-                                    // UNPACK(( DPRINT  << "out_num_tiles_to_wait"  << (uint)out_num_tiles_to_wait<<ENDL() ));
                                     cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
                                     out_num_tiles_to_wait += out_subblock_num_tiles;
                                 }
@@ -321,7 +306,6 @@ void MAIN {
 
                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
-                    // UNPACK(( DPRINT << "in0_block_num_tiles " << in0_block_num_tiles <<ENDL() ));
                 }
 
 #ifdef FUSE_BIAS
