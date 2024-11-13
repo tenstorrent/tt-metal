@@ -241,6 +241,12 @@ model_perf_tg_device() {
 
     ./tests/scripts/tg/run_tg_model_perf_tests.sh --pipeline-type "$pipeline_type"
 }
+
+# Run ccl model perf tests
+ccl_perf_tg_device() {
+
+    ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
+}
 ##########################TG##########################
 
 ##########################TGG##########################

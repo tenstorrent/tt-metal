@@ -53,9 +53,11 @@ jobs:
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
       - name: Extract files
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         timeout-minutes: 60
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
@@ -64,7 +66,7 @@ jobs:
           ${{ matrix.test-group.cmd }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy) }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
