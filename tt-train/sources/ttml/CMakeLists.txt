@@ -27,7 +27,7 @@ if(NOT TARGET Metalium::Metal)
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/magic_enum"
+        "${reflect_SOURCE_DIR}"
     )
 
     message(STATUS "Metalium not found, attempting to locate")
