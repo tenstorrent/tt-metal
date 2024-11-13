@@ -138,7 +138,7 @@ jobs:
             ccache -z
 
             # Disable Unity builds to detect any bitrot from not building each TU independently
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache --disable-unity-builds"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache"
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
