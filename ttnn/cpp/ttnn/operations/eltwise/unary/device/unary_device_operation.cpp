@@ -192,6 +192,7 @@ UnaryDeviceOperation::invoke(
     const MemoryConfig& output_memory_config,
     bool fp32_dest_acc_en,
     bool preserve_fp32_precision,
+    bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output) {
     return {
         operation_attributes_t{
@@ -200,6 +201,7 @@ UnaryDeviceOperation::invoke(
             .output_memory_config = output_memory_config,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .preserve_fp32_precision = preserve_fp32_precision,
+            .bfp8_pack_precise = bfp8_pack_precise,
         },
         tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
 }
