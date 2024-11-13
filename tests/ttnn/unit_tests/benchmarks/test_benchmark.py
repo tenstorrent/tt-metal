@@ -100,6 +100,21 @@ def find_max_subblock(out_block_h, out_block_w):
 #   - num_out_blocks_h: A parameter to divide an output block into multiple chunks on height dim, helping to reduce L1 cache usage.
 #   - num_out_blocks_w: A parameter to divide an output block into multiple chunks on width dim, helping to reduce L1 cache usage.
 
+from tt_metal.tools.profiler.process_device_log import import_log_run_stats
+import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+
+profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+
+
+def get_device_freq():
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = profiler_log_path
+    deviceData = import_log_run_stats(setup)
+    freq = deviceData["deviceInfo"]["freq"]
+    return freq
+
+
 matmul_shapes_bfloat16 = [
     (512, 512, 512, True, True, 1, 1, 1),
     (512, 1024, 1024, True, True, 1, 1, 1),
@@ -164,6 +179,11 @@ def test_matmul_2d_host_perf(
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
 
+    LoFi_cycle = 16
+    HiFi2_cycle = LoFi_cycle * 2
+    HiFi3_cycle = LoFi_cycle * 3
+    HiFi4_cycle = LoFi_cycle * 4
+
     with open(FILE_NAME, mode="w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(
@@ -171,12 +191,18 @@ def test_matmul_2d_host_perf(
                 "m",
                 "k",
                 "n",
+                "grid_size",
                 "in0_sharded",
                 "out_sharded",
+                "in0_storage_type",
+                "in1_storage_type",
+                "out_storage_type",
                 "dtype",
                 "math_fidelity",
                 "inference_time_avg (ns)",
                 "TFLOPs (avg)",
+                "Utilization (vs user grid)",
+                "Utilization (vs 8x8 full grid)",
             ]
         )
 
@@ -200,6 +226,16 @@ def test_matmul_2d_host_perf(
 
                 in0 = torch.ones(in0_shape).bfloat16()
                 in1 = torch.randn(in1_shape).bfloat16()
+
+                if in0_sharded:
+                    in0_storage_type = "L1"
+                else:
+                    in0_storage_type = "DRAM"
+                in1_storage_type = "DRAM"
+                if out_sharded:
+                    out_storage_type = "L1"
+                else:
+                    out_storage_type = "DRAM"
 
                 if in0_sharded:
                     in0_memory_config = ttnn.create_sharded_memory_config(
@@ -297,12 +333,48 @@ def test_matmul_2d_host_perf(
                 ttnn.DumpDeviceProfiler(device)
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
+                if math_fidelity == ttnn.MathFidelity.LoFi:
+                    cycle_per_tile = LoFi_cycle
+                elif math_fidelity == ttnn.MathFidelity.HiFi2:
+                    cycle_per_tile = HiFi2_cycle
+                elif math_fidelity == ttnn.MathFidelity.HiFi3:
+                    cycle_per_tile = HiFi3_cycle
+                elif math_fidelity == ttnn.MathFidelity.HiFi4:
+                    cycle_per_tile = HiFi4_cycle
+                num_cores_user_grid = grid_size[0] * grid_size[1]
+                compute_grid_size = device.compute_with_storage_grid_size()
+                num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
+                ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
+                ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
+                inference_cycle = inference_time_avg * get_device_freq() * 1e6
+                utilization_full_grid = ideal_cycle_full_grid / inference_cycle
+                utilization_user_grid = ideal_cycle_user_grid / inference_cycle
+                utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
+                utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
                 ttnn.deallocate(output_t)
                 ttnn.deallocate(in0_t)
                 ttnn.deallocate(in1_t)
-                writer.writerow([m, k, n, in0_sharded, out_sharded, dtype, math_fidelity, inference_time_avg, tflops])
+                writer.writerow(
+                    [
+                        m,
+                        k,
+                        n,
+                        grid_size,
+                        in0_sharded,
+                        out_sharded,
+                        in0_storage_type,
+                        in1_storage_type,
+                        out_storage_type,
+                        dtype,
+                        math_fidelity,
+                        f"{inference_time_avg * 1e9:.2f}",
+                        f"{tflops:.2f}",
+                        utilization_user_grid_percentage,
+                        utilization_full_grid_percentage,
+                    ]
+                )
