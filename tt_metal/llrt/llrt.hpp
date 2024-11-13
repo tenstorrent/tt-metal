@@ -48,7 +48,8 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0,
+ll_api::memory get_risc_binary(string const &path,
+    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
     ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
     ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
 
@@ -71,7 +72,7 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical
 
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, go_msg_t * go_msg, uint64_t addr, bool send_go = true);
 
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
+void launch_erisc_fw_on_core(chip_id_t chip, CoreCoord core, bool is_idle_eth, bool is_idle_fw);
 
 void print_worker_cores(chip_id_t chip_id = 0);
 
@@ -87,11 +88,11 @@ inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
            soc_desc.physical_ethernet_cores.end();
 }
 
-uint32_t generate_risc_startup_addr(bool is_eth_core);
+uint32_t generate_tensix_risc_startup_addr();
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
+bool test_load_write_read_risc_binary(
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx);
 void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address);
 
 // subchannel hard-coded to 0 for now

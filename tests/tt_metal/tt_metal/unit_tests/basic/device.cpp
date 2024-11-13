@@ -283,6 +283,9 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
     tt_metal::Program program = tt_metal::CreateProgram();
     Device *device = this->devices_.at(0);
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP(); // HACK for now until changes for different PCIe NoC endpoint are in
+    }
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 

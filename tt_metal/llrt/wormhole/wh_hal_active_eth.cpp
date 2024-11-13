@@ -58,9 +58,13 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::FW_VERSION_ADDR)] = sizeof(std::uint32_t);
 
-    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
-    std::vector<uint8_t> processor_types{0};
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
+    std::vector<HalJitBuildConfig> processor_types(1);
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+        processor_types[0] = HalJitBuildConfig{
+            .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+            .local_init = eth_l1_mem::address_map::FIRMWARE_BASE,
+        };
         processor_classes[processor_class_idx] = processor_types;
     }
 

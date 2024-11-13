@@ -418,7 +418,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
     finish_init();
 }
 
-JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config, bool enable_slaves) : JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
@@ -443,6 +443,9 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DCOMPILE_FOR_IDLE_ERISC=0 "
                 "-DERISC "
                 "-DRISC_B0_HW ";    // do we need this for BH?
+            if (enable_slaves) {
+                this->defines_ += "-DENABLE_SLAVES=" + std::to_string(enable_slaves) + " ";
+            }
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 

@@ -44,21 +44,9 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
+ll_api::memory get_risc_binary(string const &path,
+    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
     ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
-
-    static const uint32_t processor_to_fw_base_addr[] = {
-        MEM_BRISC_FIRMWARE_BASE,
-        MEM_NCRISC_FIRMWARE_BASE,
-        MEM_TRISC0_FIRMWARE_BASE,
-        MEM_TRISC1_FIRMWARE_BASE,
-        MEM_TRISC2_FIRMWARE_BASE,
-        eth_l1_mem::address_map::FIRMWARE_BASE,
-        MEM_IERISC_FIRMWARE_BASE,
-#ifdef ARCH_BLACKHOLE
-        MEM_SLAVE_IERISC_FIRMWARE_BASE,
-#endif
-    };
 
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
@@ -79,7 +67,7 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
           uint64_t data_start = MEM_LOCAL_BASE;
           uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
               0 :
-              processor_to_fw_base_addr[riscv_id];
+              tt::tt_metal::hal.get_base_firmware_addr(core_type_idx, processor_class_idx, processor_type_idx);
           ptr->pack_data_into_text(text_start, data_start);
       }
 
@@ -133,8 +121,15 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
-    llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+void launch_erisc_fw_on_core(chip_id_t chip, CoreCoord core, bool is_idle_eth, bool is_idle_fw) {
+    if (is_idle_fw) {
+        // pull out base FW address from HAL and the PC
+        uint32_t pc_addr = (is_idle_eth) ? 0xFFB14000 : 0xFFB14008;
+        uint32_t fw_base = (is_idle_eth) ? MEM_IERISC_FIRMWARE_BASE : eth_l1_mem::address_map::FIRMWARE_BASE;
+        llrt::write_hex_vec_to_core(chip, core, {fw_base}, pc_addr);
+    } else {
+        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+    }
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -156,7 +151,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 }
 
 
-uint32_t generate_risc_startup_addr(bool is_eth_core) {
+uint32_t generate_tensix_risc_startup_addr() {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
@@ -166,7 +161,7 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
     constexpr uint32_t jal_opcode = 0x6f;
     constexpr uint32_t jal_max_offset = 0x0007ffff;
     uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_eth_core ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
+    uint32_t firmware_base = MEM_BRISC_FIRMWARE_BASE;
     assert(firmware_base < jal_max_offset);
     // See riscv spec for offset encoding below
     uint32_t jal_offset_bit_20 = 0;
@@ -184,26 +179,15 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
 
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     std::vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
+    jump_to_fw.push_back(generate_tensix_risc_startup_addr());
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
+bool test_load_write_read_risc_binary(
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx) {
     assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr;
-    switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
-        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-#ifdef ARCH_BLACKHOLE
-        case 7: local_init_addr = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-#endif
-    }
+    uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
@@ -222,12 +206,6 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
     }
 
     return true;
-}
-
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
-
-    assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
 }
 
 void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
