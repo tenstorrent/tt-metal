@@ -154,7 +154,6 @@ def get_single_rot_mat(
     rot_matrix[..., torch.arange(emb_dim, dhead), torch.arange(emb_dim, dhead)] = cos_freqs.clone()
     rot_matrix[..., torch.arange(emb_dim, dhead), torch.arange(0, emb_dim)] = -sin_freqs.clone()
     rot_matrix[..., torch.arange(0, emb_dim), torch.arange(emb_dim, dhead)] = sin_freqs.clone()
-    # rot_matrix = rot_matrix.transpose(-1, -2)
 
     # Support for start_pos different than 0
     freqs = start_pos * freqs
@@ -164,6 +163,10 @@ def get_single_rot_mat(
     current_rot_mat[..., torch.arange(emb_dim, dhead), torch.arange(emb_dim, dhead)] = cos_freqs.clone()
     current_rot_mat[..., torch.arange(emb_dim, dhead), torch.arange(0, emb_dim)] = -sin_freqs.clone()
     current_rot_mat[..., torch.arange(0, emb_dim), torch.arange(emb_dim, dhead)] = sin_freqs.clone()
+    # current_rot_mat[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    # current_rot_mat[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    # current_rot_mat[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    # current_rot_mat[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
     return ttnn.from_torch(
         current_rot_mat.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device if not on_host else None,

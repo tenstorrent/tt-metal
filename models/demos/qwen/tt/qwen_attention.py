@@ -12,6 +12,35 @@ from models.utility_functions import (
 from models.common.lightweightmodule import LightweightModule
 
 
+def fall_back_rope(xq, xk, rot_mats, mesh_device):
+    from models.demos.qwen.reference.model import apply_rotary_emb, _reshape_for_broadcast
+
+    xq = ttnn.to_torch(xq)
+    xk = ttnn.to_torch(xk)
+    xq = xq.transpose(1, 2)
+    xk = xk.transpose(1, 2)
+    xq, xk = apply_rotary_emb(xq, xk, freqs_cis=rot_mats)
+    xq = xq.transpose(1, 2)
+    xk = xk.transpose(1, 2)
+    xq = ttnn.from_torch(
+        xq,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    xk = ttnn.from_torch(
+        xk,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return xq, xk
+
+
 class TtQwenAttention(LightweightModule):
     def __init__(
         self,
@@ -130,9 +159,9 @@ class TtQwenAttention(LightweightModule):
             cache_file_name=cache_name("bias_qkv"),
         )
 
-        self.bias_qkv = ttnn.reshape(
-            self.bias_qkv, ttnn.Shape([1, 1, 1, self.bias_qkv.shape[-1]], [1, 1, 32, self.bias_qkv.shape[-1]])
-        )
+        # self.bias_qkv = ttnn.reshape(
+        #     self.bias_qkv, ttnn.Shape([1, 1, 1, self.bias_qkv.shape[-1]], [1, 1, 32, self.bias_qkv.shape[-1]])
+        # )
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
@@ -416,8 +445,7 @@ class TtQwenAttention(LightweightModule):
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
             # bias = self.bias_qkv,
         )
-        print("xqkv_fused", xqkv_fused.shape)
-        print("bias_qkv", self.bias_qkv.shape)
+
         xqkv_fused = xqkv_fused + self.bias_qkv
 
         if seq_len > 2048:
@@ -444,8 +472,9 @@ class TtQwenAttention(LightweightModule):
         # Rotary embeddings
         ###
 
-        q_heads_1QSD = q_heads_1QSD_pre_rot
-        k_heads_1KSD = k_heads_1KSD_pre_rot
+        q_heads_1QSD, k_heads_1KSD = fall_back_rope(
+            q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats, self.mesh_device
+        )
         # q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
         #     q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         # )
@@ -510,10 +539,10 @@ class TtQwenAttention(LightweightModule):
             q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
 
-        self.k = ttnn.to_torch(k_heads_K1SD_8b).view(1, 4, 128, 128)
-        self.v = ttnn.to_torch(v_heads_V1SD_8b).view(1, 4, 128, 128)
-        self.q = ttnn.to_torch(q_heads_84SD_8b).view(1, 28, 128, 128)
-        print(self.scale)
+        # self.k = ttnn.to_torch(k_heads_K1SD_8b).view(1, 4, 128, 128)
+        # self.v = ttnn.to_torch(v_heads_V1SD_8b).view(1, 4, 128, 128)
+        # self.q = ttnn.to_torch(q_heads_84SD_8b).view(1, 28, 128, 128)
+        # print(self.scale)
         attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD_8b,
             k_heads_K1SD_8b,
@@ -535,7 +564,7 @@ class TtQwenAttention(LightweightModule):
         ttnn.deallocate(v_heads_V1SD_8b)
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
         # print("attn_output_1QSD", attn_output_1QSD.shape, ttnn.to_torch(attn_output_1QSD))
-        self.o = ttnn.to_torch(attn_output_1QSD).view(1, 28, 128, 128)
+        # self.o = ttnn.to_torch(attn_output_1QSD).view(1, 28, 128, 128)
         ###
         # Output matmul
         ###
@@ -545,7 +574,7 @@ class TtQwenAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        self.o2 = ttnn.to_torch(attn_output_11SH).view(1, 128, -1)
+        # self.o2 = ttnn.to_torch(attn_output_11SH).view(1, 128, -1)
         # print("attn_output_11SH", attn_output_11SH.shape, ttnn.to_torch(attn_output_11SH))
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:

@@ -87,22 +87,18 @@ def test_qwen_attention_inference(seq_len, mesh_device, use_program_cache, reset
         tt_attention_input,
         force_replicated=True,
     )
-
-    tt_out = tt_model(attention_input, 0, rot_mats, transformation_mats, user_id=0, mode="prefill")
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-        0, :, :, : model_args.dim
-    ].view(
-        batch, seq_len, -1
-    )  # [ batch, seq, dim]
-
     positions = torch.LongTensor(range(seq_len))
     freqs = precompute_freqs(model_args.head_dim, seq_len)
     cos, sin = freqs[0], freqs[1]
     freqs_cis = torch.complex(cos, sin)
     freqs_cis_i = freqs_cis[:seq_len, :]
-    # cos_gathered, sin_gathered = gather_cos_sin(torch.arange(0, seq_len), cos, sin)
 
-    # freqs_cis_i = freqs_to_rotation_matrix(cos_gathered, sin_gathered)
+    tt_out = tt_model(attention_input, 0, freqs_cis_i, transformation_mats, user_id=0, mode="prefill")
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+        0, :, :, : model_args.dim
+    ].view(
+        batch, seq_len, -1
+    )  # [ batch, seq, dim]
 
     attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)

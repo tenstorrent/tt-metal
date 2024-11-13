@@ -57,7 +57,6 @@ def apply_rotary_emb(
     xq_ = torch.complex(xq.float()[..., : xq.shape[-1] // 2], xq.float()[..., xq.shape[-1] // 2 :])
     xk_ = torch.complex(xk.float()[..., : xk.shape[-1] // 2], xk.float()[..., xk.shape[-1] // 2 :])
     freqs_cis = _reshape_for_broadcast(freqs_cis, xq_)
-    print("freqs_cis", freqs_cis)
     xq_ = xq_ * freqs_cis
     xk_ = xk_ * freqs_cis
     xq_out = torch.cat((torch.real(xq_), torch.imag(xq_)), dim=-1)
@@ -118,7 +117,7 @@ class Attention(nn.Module):
         xq = xq.view(bsz, seqlen, self.n_heads, self.args.head_dim)
         xk = xk.view(bsz, seqlen, self.n_kv_heads, self.args.head_dim)
         xv = xv.view(bsz, seqlen, self.n_kv_heads, self.args.head_dim)
-        # xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
         # The cache is a rotating buffer
         scatter_pos = (positions[-self.sliding_window :] % self.sliding_window)[None, :, None, None]
         scatter_pos = scatter_pos.repeat(bsz, 1, self.n_kv_heads, self.args.head_dim)
@@ -141,11 +140,11 @@ class Attention(nn.Module):
         self.q = query
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
-        self.k = xk.transpose(1, 2).view(1, 4, 128, 128)
-        self.v = xv.transpose(1, 2).view(1, 4, 128, 128)
+        # self.k = xk.transpose(1, 2).view(1, 4, 128, 128)
+        # self.v = xv.transpose(1, 2).view(1, 4, 128, 128)
         # scores : [bsz, n_heads, seqlen | 1, seqlen]
         scores = torch.matmul(query, key.transpose(2, 3)) * self.scale
-        print(self.scale)
+        # print(self.scale)
         if mask is not None:
             scores += mask[None, None, ...]
 

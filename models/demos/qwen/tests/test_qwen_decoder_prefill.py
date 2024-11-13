@@ -98,7 +98,7 @@ def test_qwen_decoder_inference(mesh_device, seq_len, use_program_cache, reset_s
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, freqs_cis_i, positions, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
+        tt_out = tt_model(decode_input, None, freqs_cis_i, transformation_mats, user_id=0, mode="prefill")
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
             0, :, :, : model_args.dim
         ].view(

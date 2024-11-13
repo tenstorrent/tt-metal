@@ -19,6 +19,7 @@ from models.demos.qwen.tt.qwen_common import (
     get_single_rot_mat,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
+    precompute_freqs,
     HostEmbedding,
 )
 from models.demos.qwen.tt.qwen_model import TtTransformer
@@ -27,6 +28,7 @@ from models.demos.qwen.reference.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from transformers import AutoTokenizer
 
 
 def load_and_cache_context(context_url, cache_dir):
@@ -89,7 +91,22 @@ def preprocess_inputs_prefill(
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
     if instruct:
-        encoded_prompts = [tokenizer.encode("[INST] " + prompt + " [/INST]") for prompt in input_prompts]
+        messages = [
+            [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ]
+            for prompt in input_prompts
+        ]
+        input_prompts = [
+            tokenizer.apply_chat_template(
+                message,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            for message in messages
+        ]
+        encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
     else:
         encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
 
@@ -189,8 +206,12 @@ def run_qwen_demo(
 
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(mesh_device, instruct=instruct_mode)
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    # tokenizer = Tokenizer(model_args.tokenizer_path)
 
+    if instruct_mode:
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-7B-Instruct")  # Tokenizer(model_args.tokenizer_path)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-7B")
     if single_layer:
         model_args.n_layers = 1
 
@@ -275,56 +296,85 @@ def run_qwen_demo(
         profiler.start(f"inference_prefill", iteration=batch_idx)
         for batch_id in range(batch_size):
             prefill_seq_len = prefill_lens[batch_id]
-            rot_mats_prefill = get_prefill_rot_mat(
-                model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
-            )
-            if decoding_pos[batch_id] < prefill_seq_len:
-                pt_prefill_input[batch_id][
-                    :, decoding_pos[batch_id] :, :
-                ] = 0  # Zero out the tokens after the prefill length
+            # # rot_mats_prefill = get_prefill_rot_mat(
+            # #     model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
+            # # )
 
-            prefill_input = model_args.prepare_inputs_ttnn_prefill(
-                pt_prefill_input[batch_id],
-            )
+            # #FIXME: Remove thsi workaroun when device RoPE is fixed
+            # freqs = precompute_freqs(model_args.head_dim, prefill_seq_len)
+            # cos, sin = freqs[0], freqs[1]
+            # freqs_cis = torch.complex(cos, sin)
+            # rot_mats_prefill = freqs_cis[:prefill_seq_len, :]
 
-            if batch_id == 0:  # First user prefill accounts for compile time
-                profiler.start(f"compile_prefill", iteration=batch_idx)
+            # if decoding_pos[batch_id] < prefill_seq_len:
+            #     pt_prefill_input[batch_id][
+            #         :, decoding_pos[batch_id] :, :
+            #     ] = 0  # Zero out the tokens after the prefill length
 
-            tt_out = tt_model(
-                prefill_input,
-                None,  # Current position
-                rot_mats_prefill,
-                transformation_mats,
-                user_id=batch_id,
-                mode="prefill",
-                get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
-            )
+            # prefill_input = model_args.prepare_inputs_ttnn_prefill(
+            #     pt_prefill_input[batch_id],
+            # )
+            # if batch_id == 0:  # First user prefill accounts for compile time
+            #     profiler.start(f"compile_prefill", iteration=batch_idx)
 
-            if (
-                batch_id == 0
-            ):  # First user prefill accounts for compile time (which will be removed from the full prefill inference time)
-                profiler.end(f"compile_prefill", iteration=batch_idx)
+            # tt_out = tt_model(
+            #     prefill_input,
+            #     None,  # Current position
+            #     rot_mats_prefill,
+            #     transformation_mats,
+            #     user_id=batch_id,
+            #     mode="prefill",
+            #     get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+            # )
 
-            # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
-            if batch_size == 1:
-                ttnn.deallocate(tt_out)
-                tt_out = tt_model(
-                    prefill_input,
-                    None,  # Current position
-                    rot_mats_prefill,
-                    transformation_mats,
-                    user_id=batch_id,
-                    mode="prefill",
-                    get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+            # if (
+            #     batch_id == 0
+            # ):  # First user prefill accounts for compile time (which will be removed from the full prefill inference time)
+            #     profiler.end(f"compile_prefill", iteration=batch_idx)
+
+            # # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
+            # if batch_size == 1:
+            #     ttnn.deallocate(tt_out)
+            #     tt_out = tt_model(
+            #         prefill_input,
+            #         None,  # Current position
+            #         rot_mats_prefill,
+            #         transformation_mats,
+            #         user_id=batch_id,
+            #         mode="prefill",
+            #         get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+            #     )
+
+            # pt_out.append(
+            #     ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+            #         0, 0, (decoding_pos[batch_id] - 1) % 32, :
+            #     ]
+            # )
+            # ttnn.deallocate(tt_out)
+
+            for i in range(decoding_pos[0]):
+                start_pos = i
+                pt_decode_input = embd(input_tokens_prefill_pt[batch_id][:, i]).view(model_args.max_batch_size, 1, -1)
+                current_rot_mat, rot_matrix = get_single_rot_mat(
+                    model_args.head_dim,
+                    mesh_device,
+                    model_args.num_devices,
+                    start_pos=start_pos,
                 )
+                pt_decode_input = model_args.prepare_inputs_ttnn_decode(
+                    pt_decode_input,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+                current_pos_tensor = ttnn.from_torch(
+                    torch.tensor([start_pos]),
+                    device=mesh_device,
+                    dtype=ttnn.int32,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                tt_out = tt_model(pt_decode_input, current_pos_tensor, rot_mat=current_rot_mat)
 
-            pt_out.append(
-                ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-                    0, 0, (decoding_pos[batch_id] - 1) % 32, :
-                ]
-            )
+            pt_out.append(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, 0, 0, :])
             ttnn.deallocate(tt_out)
-
         # Synchronize devices to ensure the profile captures the correct timing of all devices
         for i in range(model_args.num_devices):
             ttnn.synchronize_device(mesh_device.get_devices()[i])
@@ -505,7 +555,7 @@ def run_qwen_demo(
 
             # Reset rotation matrix every 100 iterations
             profiler.start(f"reset_rot_mat_{iteration-1}", iteration=batch_idx)
-            if iteration % 100 == 0:
+            if iteration % 1 == 0:
                 current_rot_mat_reset, rot_matrix_reset = get_single_rot_mat(
                     model_args.head_dim,
                     mesh_device,
@@ -562,7 +612,7 @@ def run_qwen_demo(
     profiler.end("run")
 
     # Prepare profile benchmark metrics for batch 0
-    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_prefill_time = profiler.get_duration("compile_decode")  # FIXME: fix this when prefill works
     compile_decode_time = profiler.get_duration("compile_decode")
     inference_prefill_time = profiler.get_duration("inference_prefill")
     inference_decode_time = profiler.get_duration("inference_decode")
@@ -615,101 +665,22 @@ def run_qwen_demo(
     logger.info(
         f"Average speed: {round(inference_decode_time / num_tokens_generated_decode[0] * 1000, 2)}ms @ {round(measurements['decode_t/s/u'], 2)} tok/s/user ({round(measurements['decode_t/s'], 2)} tok/s throughput)"
     )
-    logger.info("")
-
-    supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
-    supported_devices = ["N150", "N300", "T3K"]
-
-    # TODO update targets based on the qwen model and the target device
-    qwen_model_name = model_args.model_name
-    tt_device_name = model_args.device_name
-
-    assert qwen_model_name in supported_models, f"Model {qwen_model_name} not supported"
-    assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "N150_3.2-1B": 1050,  # TODO Update target
-        "N300_3.2-1B": 1050,  # TODO Update target
-        "T3K_3.2-1B": 1050,  # TODO Update target
-        #
-        "N150_3.2-3B": 1050,  # TODO Update target
-        "N300_3.2-3B": 1050,  # TODO Update target
-        "T3K_3.2-3B": 1050,  # TODO Update target
-        #
-        "N150_3.1-8B": 1050,
-        "N300_3.1-8B": 1050,
-        "T3K_3.1-8B": 1050,
-        #
-        "N150_3.2-11B": 1050,  # TODO Update target
-        "N300_3.2-11B": 1050,  # TODO Update target
-        "T3K_3.2-11B": 1050,  # TODO Update target
-        #
-        "N150_3.1-70B": 1050,  # TODO Update target
-        "N300_3.1-70B": 1050,  # TODO Update target
-        "T3K_3.1-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{qwen_model_name}"]
-
-    # Set the target decode timesfor every combination of device and model
-    target_decode_tok_s_u = {
-        "N150_3.2-1B": 160,  # TODO Update target
-        "N300_3.2-1B": 250,  # TODO Update target
-        "T3K_3.2-1B": 300,  # TODO Update target
-        #
-        "N150_3.2-3B": 60,  # TODO Update target
-        "N300_3.2-3B": 100,  # TODO Update target
-        "T3K_3.2-3B": 150,  # TODO Update target
-        #
-        "N150_3.1-8B": 23,  # TODO Update target
-        "N300_3.1-8B": 38,
-        "T3K_3.1-8B": 45,
-        #
-        "N150_3.2-11B": 23,
-        "N300_3.2-11B": 38,  # TODO Update target
-        "T3K_3.2-11B": 45,  # TODO Update target
-        #
-        "T3K_3.1-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{qwen_model_name}"]
-
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
-    }
-
-    # Save benchmark data for CI dashboard
-    # if is_ci_env:
-    if True:
-        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.prep_csvs(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=qwen_model_name,
-            ml_model_type="llm",
-            num_layers=model_args.n_layers,
-            batch_size=batch_size,
-            input_sequence_length=prefill_seq_len,
-            output_sequence_length=1,
-            # config_params=,
-            # precision=,
-        )
 
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches, single_layer",
     [
-        ("models/demos/qwen/demo/input_data_prefill_128.json", False, 1, False),
+        # ("models/demos/qwen/demo/input_data_prefill_128.json", False, 1, False),
         # ("models/demos/qwen/demo/input_data_prefill_128.json", False, 2, False),
-        # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, False),
+        ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, False),
         # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 2, False),
         # ("models/demos/qwen/demo/input_data_long.json", True, 1, False),
         # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, True),
     ],
     ids=[
-        "general_weights-1_batch",
+        # "general_weights-1_batch",
         # "general_weights-2_batch",
-        # "instruct_weights-1_batch",
+        "instruct_weights-1_batch",
         # "instruct_weights-2_batch",
         # "instruct_weights-long",
         # "single_layer",

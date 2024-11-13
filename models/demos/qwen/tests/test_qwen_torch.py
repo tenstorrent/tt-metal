@@ -14,15 +14,31 @@ from loguru import logger
 
 @torch.no_grad()
 def test_qwen_torch_inference(ensure_gc):
-    iterations = 20
+    iterations = 200
 
     model_args = TtModelArgs(mesh_device=None)
     state_dict = model_args.load_state_dict()
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    from transformers import AutoTokenizer
 
-    prompts = ["What is this?"] * model_args.max_batch_size
-    encoded_prompts = [tokenizer.encode("[INST] " + prompt + " [/INST]") for prompt in prompts]
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-7B-Instruct")
 
+    prompts = ["What is life?"] * model_args.max_batch_size
+    messages = [
+        [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ]
+        for prompt in prompts
+    ]
+    input_prompts = [
+        tokenizer.apply_chat_template(
+            message,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        for message in messages
+    ]
+    encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
 
     reference_state_dict = {
@@ -71,14 +87,9 @@ def test_qwen_torch_inference(ensure_gc):
             all_outputs_ref.append(encoded_prompts[0][i])  # Update list of ref outputs
             pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(model_args.max_batch_size, seqlen, -1)
         else:
-            # pt_out_tok = torch.argmax(torch.nn.functional.log_softmax(ref_output, dim=-1), dim=-1)
             pt_out_tok = torch.argmax(ref_output, dim=-1)
-            # pt_out_tok_logscores = top_k_top_p_filtering(ref_output.squeeze(1), top_k=0, top_p=0.9)
-            # probs = torch.nn.functional.softmax(pt_out_tok_logscores, dim=-1)
-            # pt_out_tok = torch.multinomial(probs, num_samples=1)#.squeeze(1)
-
             pt_decode_input = embd(pt_out_tok)
 
             all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of ref outputs
         # TODO print all 32 users
-        logger.info("[User 0] Ref generation: ", tokenizer.decode(all_outputs_ref))
+        logger.info("[User 0] Ref generation: " + tokenizer.decode(all_outputs_ref))
