@@ -136,9 +136,8 @@ void MAIN {
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_beta2_exponent = pow(beta2, step); Calculated from host
 
-        // cb_tmp1 = 1 / (1 - cb_tmp1);
+        // cb_tmp1 = 1 / (1 - cb_beta2_exponent);
         tile_regs_acquire();
-        // cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
         sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
         sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
@@ -216,7 +215,7 @@ void MAIN {
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_beta1_exponent = pow(beta1, step); Calculated from host
 
-        // cb_tmp2 = 1 / (1 - cb_tmp2);
+        // cb_tmp2 = 1 / (1 - cb_beta1_exponent);
         tile_regs_acquire();
         cb_reserve_back(cb_tmp2, onetile);
         sub_tiles_init_with_dt(cb_one, cb_beta1_exponent);
