@@ -6,7 +6,7 @@
 
 #include <random>
 
-#include "core/device.hpp"
+#include "core/mesh_device.hpp"
 #include "graph.hpp"
 
 namespace ttml::autograd {
@@ -39,7 +39,7 @@ public:
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
-    tt::tt_metal::Device& get_device();
+    ttnn::distributed::Device& get_device();
 
 private:
     AutoContext();
@@ -50,7 +50,7 @@ private:
 
     Graph m_graph;
 
-    core::Device device{0};
+    core::MeshDevice device{0};
 };
 
 inline auto& ctx() {
