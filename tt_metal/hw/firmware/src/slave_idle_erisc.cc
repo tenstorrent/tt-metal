@@ -54,7 +54,7 @@ int main(int argc, char *argv[]) {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
-    do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t *)MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     risc_init();
 
