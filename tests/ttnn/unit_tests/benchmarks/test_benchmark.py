@@ -136,20 +136,18 @@ matmul_shapes_bfloat8_b = [
     (16384, 16384, 16384, False, False, 8, 8, 8),
 ]
 
+matmul_configs = [
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+]
+
 
 @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize(
-    "dtype, math_fidelity",
-    [
-        (ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
-        (ttnn.bfloat16, ttnn.MathFidelity.HiFi4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-    ],
-)
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
@@ -157,8 +155,6 @@ def test_matmul_2d_host_perf(
     grid_size,
     tile_h,
     tile_w,
-    dtype,
-    math_fidelity,
     num_warmup_iterations,
     num_measurement_iterations,
     use_program_cache,
@@ -184,126 +180,129 @@ def test_matmul_2d_host_perf(
             ]
         )
 
-        if dtype == ttnn.bfloat16:
-            matmul_shapes = matmul_shapes_bfloat16
-        else:
-            matmul_shapes = matmul_shapes_bfloat8_b
-        for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
-            profiler.clear()
-
-            in0_shape = [1, 1, m, k]
-            in1_shape = [1, 1, k, n]
-
-            in0_block_w = k // grid_size[0] // 32 // in0_block_w_div
-            per_core_M = m // grid_size[1] // tile_h
-            per_core_N = n // grid_size[0] // tile_w
-            out_block_h = per_core_M // num_out_blocks_h
-            out_block_w = per_core_N // num_out_blocks_w
-            out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
-
-            in0 = torch.ones(in0_shape).bfloat16()
-            in1 = torch.randn(in1_shape).bfloat16()
-
-            if in0_sharded:
-                in0_memory_config = ttnn.create_sharded_memory_config(
-                    (1, 1, m, k),
-                    core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-                    strategy=ttnn.ShardStrategy.BLOCK,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                )
+        for dtype, math_fidelity in matmul_configs:
+            if dtype == ttnn.bfloat16:
+                matmul_shapes = matmul_shapes_bfloat16
             else:
-                in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
-            in0_t = ttnn.from_torch(
-                in0,
-                tile=ttnn.Tile((tile_h, 32)),
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=in0_memory_config,
-            )
-            in1_t = ttnn.from_torch(
-                in1,
-                tile=ttnn.Tile((32, tile_w)),
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+                matmul_shapes = matmul_shapes_bfloat8_b
+            for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
+                profiler.clear()
 
-            program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
-                in0_block_w=in0_block_w,
-                out_subblock_h=out_subblock_h,
-                out_subblock_w=out_subblock_w,
-                out_block_h=out_block_h,
-                out_block_w=out_block_w,
-                per_core_M=per_core_M,
-                per_core_N=per_core_N,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
+                in0_shape = [1, 1, m, k]
+                in1_shape = [1, 1, k, n]
 
-            if is_grayskull():
-                compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                    math_fidelity=math_fidelity,
-                    math_approx_mode=True,
+                in0_block_w = k // grid_size[0] // 32 // in0_block_w_div
+                per_core_M = m // grid_size[1] // tile_h
+                per_core_N = n // grid_size[0] // tile_w
+                out_block_h = per_core_M // num_out_blocks_h
+                out_block_w = per_core_N // num_out_blocks_w
+                out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+                in0 = torch.ones(in0_shape).bfloat16()
+                in1 = torch.randn(in1_shape).bfloat16()
+
+                if in0_sharded:
+                    in0_memory_config = ttnn.create_sharded_memory_config(
+                        (1, 1, m, k),
+                        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                else:
+                    in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
+                in0_t = ttnn.from_torch(
+                    in0,
+                    tile=ttnn.Tile((tile_h, 32)),
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=in0_memory_config,
                 )
-            else:
-                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=math_fidelity,
-                    math_approx_mode=True,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
+                in1_t = ttnn.from_torch(
+                    in1,
+                    tile=ttnn.Tile((32, tile_w)),
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-            if out_sharded:
-                out_mem_config = ttnn.MemoryConfig(
-                    memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    buffer_type=ttnn.BufferType.L1,
+
+                program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=grid_size,
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=out_subblock_h,
+                    out_subblock_w=out_subblock_w,
+                    out_block_h=out_block_h,
+                    out_block_w=out_block_w,
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    transpose_mcast=False,
+                    fused_activation=None,
                 )
-            else:
-                out_mem_config = ttnn.DRAM_MEMORY_CONFIG
-            if out_sharded:
-                output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
-            else:
-                output_tile = ttnn.Tile([tile_h, tile_w])
 
-            output_t = ttnn.matmul(
-                in0_t,
-                in1_t,
-                program_config=program_config,
-                memory_config=out_mem_config,
-                dtype=dtype,
-                compute_kernel_config=compute_kernel_config,
-                output_tile=output_tile,
-            )
+                if is_grayskull():
+                    compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                        math_fidelity=math_fidelity,
+                        math_approx_mode=True,
+                    )
+                else:
+                    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                        math_fidelity=math_fidelity,
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=False,
+                        packer_l1_acc=True,
+                    )
+                if out_sharded:
+                    out_mem_config = ttnn.MemoryConfig(
+                        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                        buffer_type=ttnn.BufferType.L1,
+                    )
+                else:
+                    out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+                if out_sharded:
+                    output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
+                else:
+                    output_tile = ttnn.Tile([tile_h, tile_w])
 
-            tid = ttnn.begin_trace_capture(device, cq_id=0)
-            output_t = ttnn.matmul(
-                in0_t,
-                in1_t,
-                program_config=program_config,
-                memory_config=out_mem_config,
-                dtype=dtype,
-                compute_kernel_config=compute_kernel_config,
-                output_tile=output_tile,
-            )
-            ttnn.end_trace_capture(device, tid, cq_id=0)
+                output_t = ttnn.matmul(
+                    in0_t,
+                    in1_t,
+                    program_config=program_config,
+                    memory_config=out_mem_config,
+                    dtype=dtype,
+                    compute_kernel_config=compute_kernel_config,
+                    output_tile=output_tile,
+                )
 
-            for iter in range(0, num_warmup_iterations):
-                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                output_t = ttnn.matmul(
+                    in0_t,
+                    in1_t,
+                    program_config=program_config,
+                    memory_config=out_mem_config,
+                    dtype=dtype,
+                    compute_kernel_config=compute_kernel_config,
+                    output_tile=output_tile,
+                )
+                ttnn.end_trace_capture(device, tid, cq_id=0)
 
-            profiler.start(f"run")
-            for iter in range(0, num_measurement_iterations):
-                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-            ttnn.synchronize_device(device)
-            profiler.end(f"run")
-            ttnn.DumpDeviceProfiler(device)
-            inference_time_avg = profiler.get("run") / num_measurement_iterations
-            tflops = 2 * m * k * n / 1e12 / inference_time_avg
-            logger.info(f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}")
+                for iter in range(0, num_warmup_iterations):
+                    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 
-            output_tensor = ttnn.to_torch(output_t)
-            ttnn.deallocate(output_t)
-            ttnn.deallocate(in0_t)
-            ttnn.deallocate(in1_t)
-            writer.writerow([m, k, n, in0_sharded, out_sharded, dtype, math_fidelity, inference_time_avg, tflops])
+                profiler.start(f"run")
+                for iter in range(0, num_measurement_iterations):
+                    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(device)
+                profiler.end(f"run")
+                ttnn.DumpDeviceProfiler(device)
+                inference_time_avg = profiler.get("run") / num_measurement_iterations
+                tflops = 2 * m * k * n / 1e12 / inference_time_avg
+                logger.info(
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}"
+                )
+
+                output_tensor = ttnn.to_torch(output_t)
+                ttnn.deallocate(output_t)
+                ttnn.deallocate(in0_t)
+                ttnn.deallocate(in1_t)
+                writer.writerow([m, k, n, in0_sharded, out_sharded, dtype, math_fidelity, inference_time_avg, tflops])
