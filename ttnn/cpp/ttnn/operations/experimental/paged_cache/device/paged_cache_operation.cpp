@@ -5,6 +5,7 @@
 #include "paged_cache_operation.hpp"
 
 #include "paged_update_cache_program_factory.hpp"
+#include "paged_fused_update_cache_program_factory.hpp"
 #include "paged_fill_cache_program_factory.hpp"
 
 namespace ttnn::operations::experimental::paged_cache {
@@ -38,7 +39,7 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Only interleaved cache is supported");
         TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1], "Last dim of input tensor must match last dim of cache tensor");
 
-        if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
+        if (this->op_type == PagedUpdateCacheOpType::UPDATE || this->op_type == PagedUpdateCacheOpType::FUSED_UPDATE) {
             TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16, got {}", input_tensor.get_dtype());
             const bool paged_cache = optional_input_tensors.at(1).has_value();
             uint32_t batch_size;
@@ -130,18 +131,27 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    const auto& cache_tensor = input_tensors.at(0);
-    const auto& input_tensor = input_tensors.at(1);
-
 
     switch(this->get_parallelization_strategy(input_tensors)) {
         case PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE:
         default:
             if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
+                const auto& cache_tensor = input_tensors.at(0);
+                const auto& input_tensor = input_tensors.at(1);
                 const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
                 const auto page_table = optional_input_tensors.at(1);
                 return detail::paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config, this->share_cache);
+            } else if (this->op_type == PagedUpdateCacheOpType::FUSED_UPDATE) {
+                const auto& cache_tensor1 = input_tensors.at(0);
+                const auto& input_tensor1 = input_tensors.at(1);
+                const auto& cache_tensor2 = input_tensors.at(2);
+                const auto& input_tensor2 = input_tensors.at(3);
+                const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
+                const auto page_table = optional_input_tensors.at(1);
+                return detail::paged_fused_update_cache_multi_core(cache_tensor1, input_tensor1, cache_tensor2, input_tensor2, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config, this->share_cache);
             } else {
+                const auto& cache_tensor = input_tensors.at(0);
+                const auto& input_tensor = input_tensors.at(1);
                 const auto& page_table = input_tensors.at(2);
                 return detail::paged_fill_cache_multi_core(cache_tensor, input_tensor, page_table, this->batch_idx);
             }
