@@ -672,15 +672,17 @@ def forward(
   - how to combine prefill and decode,
   - slicing prefill to fit in L1
 ### 3.3 Multi-Device
-There are two ways to scale to multiple devices: data parallel and tensor parallel.
+There are two main approaches for scaling across multiple devices: data parallel and tensor parallel.
 
-In data parallel scaling there are multiple instances of the model running in parallel so that multiple batches of users are processed at the same time. This mode is used to increase throughput.
+In data parallel scaling there are _multiple independent_ instances of the model running in parallel so that multiple batches of users are processed at the same time. This mode is used to increase throughput.
 
-In tensor parallel scaling there is one instance of the model on multiple devices, where a single operation is performed distributed and thus in parallel on multiple devices. This mode is used to run larger models that wouldn't fit on a single device, but also to increase latency.
+In tensor parallel scaling there is _one_ instance of the model executed on multiple devices, where a single operation is performed distributed and thus in parallel on multiple devices. This mode allows larger models, that would not fit on a single device, to run on multiple devices, and typically also reduces latency.
 
-There is also hybrid forms of those two modes where a cluster of devices runs multiple instances of the model, but each of those model instances uses multiple chips.
+There is also hybrid forms of those two modes where a cluster of devices runs multiple independent instances of the model, but each of those model instances uses multiple chips in a tensor parallel fashion.
 
-In chapter [Programming Mesh of Devices with TT-NN](../Programming Mesh of Devices/Programming Mesh of Devices with TT-NN.md) there is a good introduction to using TTNN's key concepts for scaling to muliple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices. The tensor handle is used analogously to single device tensors, with the only difference that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data. This tech report also shows how data parallel and a hybrid form of data and tensor parallelism can be used with TTNN.
+In chapter [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) there is a good introduction to using TTNN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices. The tensor handle is used analogously to single device tensors, with the only difference that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data. This tech report also shows how data parallel and a hybrid form of data and tensor parallelism can be used with TTNN.
+
+Multiple devices can be connected with each other in different topologies. The most important ones for us are Ring, where all devices are connected in a ring shape with each other, and Line, where a (sub-) group of devices is connected in a line with each other. Line topology could be a 1D or 2D grid of devices, where each row and column is connected in a line.
 
 Here is a summary and example code of the most important concepts for mapping a tensor to a mesh of devices in TTNN:
 
@@ -688,7 +690,7 @@ Here is a summary and example code of the most important concepts for mapping a 
 ```py
 import ttnn
 
-# 2x4 MeshDevice, Topology Ring: devices are connected in a ring
+# 2x4 mesh_device, Topology Ring: devices are connected in a ring
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
 
 # Construct test tensor of data; 8 chunks of 32x32
@@ -733,7 +735,7 @@ The AllGather operation collects data from all devices, concatenating each chunk
   - cluster_axis: cluster axis to gather along
   - mesh_device: mesh device the tensor is mapped to
 
-*Figure: Example usage of Ring All-Gather on 2x4 MeshDevice*
+*Figure: Example usage of Ring All-Gather on 2x4 mesh_device*
 
 ```py
 # Execute All-Gather on the sharded tensor
@@ -741,7 +743,7 @@ The AllGather operation collects data from all devices, concatenating each chunk
 output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=1)
 ```
 
-*Figure: Example usage of Linear All-Gather on 2x4 MeshDevice*
+*Figure: Example usage of Linear All-Gather on 2x4 mesh_device*
 
 ```py
 # Execute All-Gather on the sharded tensor
@@ -760,7 +762,7 @@ The ReduceScatter operation reduces the data across all devices and shards the r
   - num_links: number of ethernet links to be used
   - topology: topology configuration ttnn.Ring or ttn.Linear
 
-*Figure: Example usage of Ring Reduce-Scatter on 2x4 MeshDevice*
+*Figure: Example usage of Ring Reduce-Scatter on 2x4 mesh_device*
 
 ```py
 # Execute Reduce-Scatter on the sharded tensor
@@ -768,7 +770,7 @@ The ReduceScatter operation reduces the data across all devices and shards the r
 output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1)
 ```
 
-*Figure: Example usage of Linear Reduce-Scatter on 2x4 MeshDevice*
+*Figure: Example usage of Linear Reduce-Scatter on 2x4 mesh_device*
 
 ```py
 # Execute Reduce-Scatter on the sharded tensor
@@ -781,24 +783,23 @@ The AllReduce operation reduces data across all devices and stores the entire te
   - A fused version of AllReduce is planned, but currently only the composite of AllGather+ReduceScatter is supported
 
 #### Sharding schemes for decode
+In decode mode, activations are generally stored in L1 memory, while weights, which are too large, need to be stored in DRAM. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
 
-In decode mode, activations are typically stored in L1 memory while the weights are too big to be stored in L1 and thus need to be read from DRAM memory. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
+The activations in decode mode are so small because they contain the batch size (=users) in the height dimension while sequence length is 1 - with the only exception being the attention operations computing softmax(Q*KˆT)*V. The activation width is the current dim, e.g. model dim = 8k for llama 70b. Activations are not sharded in the height dimension; however, depending on the operation, they may be sharded in the width dimension.
 
-The activations in decode mode are so small because they contain the batch size (=users) in the height dimension while sequence length is 1 - with the only exception being the attention operations computing softmax(Q*KˆT)*V. The activation width is the current dim, e.g. model dim = 8k for llama 70b. Thus, for decode mode, we don't shard the activations in height, but dependent on the operations the activations may be sharded in the width.
-
-Matmul weights on the other hand can be sharded in width, height, or both. By sharding the weights over multiple devices we drastically reduce DRAM pressure per device and thus see great latency improvements with this technique. Below is a summary of useful sharding schemes for sharding weights in decode mode.
+Matmul weights on the other hand can be sharded in width, height, or both. Sharding weights across multiple devices significantly reduces DRAM pressure per device, resulting in notable latency improvements. Below is a summary of useful sharding schemes for sharding weights in decode mode.
 
 ##### 1D Column parallel
 When to use: 1D cluster topologies
 
-Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations need to be gatherd beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. To gather the activations (=replicate) an AllGather operation is used on dim=3.
+Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations need to be gatherd beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. An AllGather operation is used on dim=3 to gather (i.e., replicate) activations.
 
 <img src="images/column_parallel.png" style="width:500px;"/>
 
 ##### 1D Row parallel
 When to use: 1D cluster topologies
 
-Weights are sharded in height, such that each device contains a veritical slice of the weights. For this scheme the activations need to be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials, each device containing a parital result, with the final result's output dimentions. To reduce the activations, i.e. compute the final outout, a ReduceScatter operation is used on to compute the reduced result and shard the result over all devices. Additionally an AllGahter operation is used (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
+Weights are sharded in height, such that each device contains a vertical slice of the weights. For this scheme the activations need to be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final outout, a ReduceScatter operation is used to compute the reduced result across all devices and shard the result along a specified dimension. Additionally an AllGahter operation is used (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
 
 <img src="images/row_parallel.png" style="width:500px;"/>
 
@@ -808,7 +809,7 @@ When to use: 1D cluster topologies
 
 1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus spped up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width sharded outputs. The row parallel matmul consumes those sharded activations and produces parial outputs. We need an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs. Optimization potential in this scheme depends highly on the input dimensions to CCL operations. We can use this scheme for the MLP, and any sequence of matmuls that expands and then narrows the output dimension again, becuase it moves the CCL operation to a more beneficial location in the computational graph and thus reduces the CCL data volume.
 
-Let's look at the MLP as concrete example: in Llama 70b we have FF1 and FF3 with dimentions [32, 8k] x [8k, 28k] and then the FF2 with [32, 28k] x [28k, 8k]. If we gather after FF1 and FF3 we have to gather activations of size [32, 28k/num_devices] -> [32, 28k] for each of FF1 and FF3; after the FF2 we'd need to gather again [32, 8k/num_devices] -> [32, 8k]. If we instead use this scheme and thus move the CCL operation after the FF2, we only have to (1.) ReduceScatter num_devices partials of size [32, 8k] -> [32, 8k/num_devices] and then optionally AllGather to obtain the [32, 8k] gathered outputs.
+Let's look at the MLP as concrete example: in Llama 70b we have _FF1_ and _FF3_ with dimensions [32, 8k] x [8k, 28k] and then the _FF2_ with [32, 28k] x [28k, 8k]. If we gather after _FF1_ and _FF3_ we have to gather activations of size [32, 28k/num_devices] -> [32, 28k] for each of _FF1_ and _FF3_; after the _FF2_ we'd need to gather again [32, 8k/num_devices] -> [32, 8k]. If we instead use this scheme and thus move the CCL operation after the _FF2_, we only have to (1.) ReduceScatter num_devices partials of size [32, 8k] -> [32, 8k/num_devices] and then optionally AllGather to obtain the [32, 8k] gathered outputs.
 
 <img src="images/column_parallel_then_row_parallel.png" style="width:700px;"/>
 
@@ -820,7 +821,21 @@ The result after the matmul is width sharded along cluster_axis=0 and contain pa
 
 <img src="images/block_sharded.png" style="width:1000px;"/>
 
-Note, that this secion referres to sharding schemes across devices and not on a core level. On a core level we use 1D matmuls that are width sharded for decode workloads. See the [matmul configuration section](#44-op-configs) for details about different matmul versions and sharding on a core level.
+Note, that this section referres to sharding schemes across devices and not on a core level. On a core level we use 1D matmuls that are width sharded for decode workloads. See the [matmul configuration section](#44-op-configs) for details about different matmul versions and sharding on a core level.
+
+##### Examplary scheme: llama
+
+For our llama family of models we are using the following sharding schemes:
+
+| Matmul            | N300            | T3000           | TG              |
+|-------------------|-----------------|-----------------|-----------------|
+| _QKV projection_  | Column parallel | Column parallel | 2D              |
+| _Dense out_       | Row parallel    | Row parallel    | 2D              |
+| _FF1_             | Column parallel | Column parallel | 2D              |
+| _FF3_             | Column parallel | Column parallel | 2D              |
+| _FF2_             | Row parallel    | Row parallel    | 2D              |
+
+
 
 ### 3.4 Continuous Batching
   - quick intro and how it is implemented in demos.
