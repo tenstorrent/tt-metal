@@ -75,9 +75,9 @@ jobs:
           echo "tests/ttml_tests"
           ldd tests/ttml_tests || true
           ls -lart tests || true
-          sleep 600
           llvm-readelf-17 -h tests/ttml_tests
           ${{ matrix.test-group.cmd }}
+          sleep 600
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
