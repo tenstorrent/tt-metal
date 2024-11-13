@@ -75,7 +75,7 @@ TEST(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
 }
 
-TEST(EmbeddingOpTest, EmbeddingBadShapes1_BROKEN) {
+TEST(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -92,7 +92,7 @@ TEST(EmbeddingOpTest, EmbeddingBadShapes1_BROKEN) {
         input_data, core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
-    EXPECT_ANY_THROW(ops::embedding_op(input, weight));
+    EXPECT_NO_THROW(ops::embedding_op(input, weight));
 }
 
 // This test was previously throwing an exception, but now it just freezes

@@ -54,9 +54,9 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
 
 CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.6)
 
-CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS Off")
+CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
 
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS Off")
+CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_msgpack.cmake)
 
