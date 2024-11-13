@@ -201,7 +201,7 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
 
     auto to_device_odd_slow = [&]() {
         if (layout == Layout::TILE) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, /* device*/, nullptr);
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
         }
 
         output = ttnn::to_device(output, device, output_mem_config);
@@ -268,7 +268,7 @@ tt::tt_metal::Tensor from_vector<uint32_t, DataType::UINT32>(
     auto output = ttml_create_owned_tensor(std::move(buffer_copy), logical_shape, DataType::UINT32, Layout::ROW_MAJOR);
     if (device != nullptr) {
         if (layout != Layout::ROW_MAJOR) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, /* device */ nullptr);
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
         }
         output = ttnn::to_device(output, device->get_devices()[0], output_mem_config);
     }
