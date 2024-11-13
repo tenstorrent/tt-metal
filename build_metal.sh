@@ -30,8 +30,6 @@ show_help() {
     echo "  --development                    Set the build type as RelWithDebInfo."
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
-    echo "  --cxx-compiler-path              Set path to C++ compiler."
-    echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --cxx-compiler-path              Set path to C++ compiler."
