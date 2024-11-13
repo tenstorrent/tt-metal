@@ -316,6 +316,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
+    build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
