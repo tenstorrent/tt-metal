@@ -257,12 +257,6 @@
    (((uint64_t)(y_end))   << (NOC_ADDR_LOCAL_BITS+NOC_ADDR_NODE_ID_BITS)) |     \
    ((uint64_t)(addr)))
 
-#define PCIE_NOC_X 0
-#define PCIE_NOC_Y 3
-
-#define PCIE_NOC1_X 9
-#define PCIE_NOC1_Y 8
-
 // 36 bits of address followed by coordinate. First 32 bits of address go into lo register, remaining address bits and coordinates are in the mid register
 #define NOC_COORD_REG_OFFSET 4 // offset (from LSB) in register holding x-y coordinate
 

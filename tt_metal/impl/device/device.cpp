@@ -24,6 +24,8 @@
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
 
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
+
 namespace tt {
 
 namespace tt_metal {
@@ -295,6 +297,16 @@ void Device::initialize_device_kernel_defines()
     } else {
         this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
     }
+
+    // TODO (abhullar): Until we switch to virtual coordinates, we need to pass physical PCIe coordinates to device
+    //  because Blackhole PCIe endpoint is dependent on board type
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
+    auto pcie_cores = soc_d.get_pcie_cores();
+    auto grid_size = this->grid_size();
+    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
+    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(NOC_0_X(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(NOC_0_X(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
 }
 
 void Device::initialize_build() {
@@ -3399,8 +3411,6 @@ void Device::MarkAllocationsSafe() {
 
 void Device::generate_device_headers(const std::string &path) const
 {
-
-    // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
     const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
     const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
     std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
@@ -3409,7 +3419,7 @@ void Device::generate_device_headers(const std::string &path) const
         dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
         dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
     }
-    const size_t num_l1_banks = this->num_banks(BufferType::L1); // 128
+    const size_t num_l1_banks = this->num_banks(BufferType::L1);
     const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
     std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
