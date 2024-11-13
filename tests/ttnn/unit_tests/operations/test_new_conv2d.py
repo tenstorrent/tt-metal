@@ -2680,3 +2680,82 @@ def test_shallow_conv_with_tiled_input(device):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels,input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        # CP_FPN Module
+        (6, 256, 768, 20, 50, 1, 1, 1, 1, 0, 0, True, None, False),
+        (6, 256, 1024, 10, 25, 1, 1, 1, 1, 0, 0, True, None, False),
+        (6, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, True, None, False),
+        # petr_head Module
+        # input_proj
+        (6, 256, 256, 20, 50, 1, 1, 1, 1, 0, 0, True, None, False),
+        # adapt_pos3d
+        (6, 1024, 384, 20, 50, 1, 1, 1, 1, 0, 0, True, None, False),
+        (6, 256, 1024, 20, 50, 1, 1, 1, 1, 0, 0, True, None, False),
+        # position_encoder
+        (6, 1024, 192, 20, 50, 1, 1, 1, 1, 0, 0, True, None, False),
+        (6, 256, 1024, 20, 50, 1, 1, 1, 1, 0, 0, True, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_petr(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    output_layout,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=1,
+        output_layout=output_layout,
+        has_bias=True,
+    )
