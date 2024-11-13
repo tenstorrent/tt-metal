@@ -31,9 +31,10 @@ inline Tensor unary_impl(
                             output_dtype == DataType::FLOAT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::INT32;
+    bool bfp8_pack_precise = (op_chain[0].op_type == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
     auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, optional_output_tensor);
+    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, optional_output_tensor);
 }
 
 }  // namespace detail
