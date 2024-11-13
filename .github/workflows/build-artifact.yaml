@@ -144,7 +144,6 @@ jobs:
             fi
             nice -n 19 $build_command
             ccache -s > build/ccache.stats
-            sleep 600
       - name: Publish Ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY

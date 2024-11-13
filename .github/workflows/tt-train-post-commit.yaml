@@ -67,7 +67,7 @@ jobs:
           cd $TT_METAL_HOME
           ctest --version
           NEW_PATH=$(pwd)
-          find ./build -type f -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${NEW_PATH}/build|g" {} +
+          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${NEW_PATH}/build|g" {} +
           cd $TT_METAL_HOME/build/tt-train
           echo "tests/ttml_tests"
           file tests/ttml_tests || true
