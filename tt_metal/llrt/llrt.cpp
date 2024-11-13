@@ -121,12 +121,11 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core, bool is_idle_eth, bool is_idle_fw) {
+void launch_erisc_fw_on_core(chip_id_t chip, CoreCoord core, bool is_idle_eth, bool is_idle_fw) {
     if (is_idle_fw) {
         // pull out base FW address from HAL and the PC
         uint32_t pc_addr = (is_idle_eth) ? 0xFFB14000 : 0xFFB14008;
         uint32_t fw_base = (is_idle_eth) ? MEM_IERISC_FIRMWARE_BASE : eth_l1_mem::address_map::FIRMWARE_BASE;
-        std::cout << "Eth core " << core.str() << " pc addr " << std::hex << pc_addr << " fw base " << fw_base << std::dec << std::endl;
         llrt::write_hex_vec_to_core(chip, core, {fw_base}, pc_addr);
     } else {
         llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
@@ -152,7 +151,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 }
 
 
-uint32_t generate_risc_startup_addr(bool is_eth_core, bool is_idle_eth) {
+uint32_t generate_tensix_risc_startup_addr() {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
@@ -162,8 +161,7 @@ uint32_t generate_risc_startup_addr(bool is_eth_core, bool is_idle_eth) {
     constexpr uint32_t jal_opcode = 0x6f;
     constexpr uint32_t jal_max_offset = 0x0007ffff;
     uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_eth_core ?
-        (is_idle_eth ? MEM_IERISC_FIRMWARE_BASE : eth_l1_mem::address_map::FIRMWARE_BASE) : MEM_BRISC_FIRMWARE_BASE;
+    uint32_t firmware_base = MEM_BRISC_FIRMWARE_BASE;
     assert(firmware_base < jal_max_offset);
     // See riscv spec for offset encoding below
     uint32_t jal_offset_bit_20 = 0;
@@ -179,9 +177,9 @@ uint32_t generate_risc_startup_addr(bool is_eth_core, bool is_idle_eth) {
     return jal_offset | opcode;
 }
 
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core, bool is_idle_eth) {
+void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     std::vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id), is_idle_eth));
+    jump_to_fw.push_back(generate_tensix_risc_startup_addr());
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 

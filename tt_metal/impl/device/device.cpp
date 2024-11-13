@@ -448,12 +448,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                 }
             }
-            if (is_idle_eth or this->arch() == ARCH::BLACKHOLE) {
-                llrt::program_risc_startup_addr(this->id(), phys_core, is_idle_eth);
-            } else {
-                llrt::launch_erisc_app_fw_on_core(this->id(), phys_core, is_idle_eth, (is_idle_eth or this->arch() == ARCH::BLACKHOLE));
-            }
-            // llrt::launch_erisc_app_fw_on_core(this->id(), phys_core, is_idle_eth, (is_idle_eth or this->arch() == ARCH::BLACKHOLE));
+            llrt::launch_erisc_fw_on_core(this->id(), phys_core, is_idle_eth, (is_idle_eth or this->arch() == ARCH::BLACKHOLE));
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
             launch_msg->kernel_config.mode = (this->using_slow_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST :  DISPATCH_MODE_DEV;
