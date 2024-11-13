@@ -208,6 +208,12 @@ class TtModelArgs:
             )
 
             # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
+            self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
             self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
@@ -228,6 +234,18 @@ class TtModelArgs:
             )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+
+            residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+            self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (
+                    self.tile_padded_batch_rows,
+                    self.dim // residual_grid.num_cores // self.num_devices,
+                ),
+                residual_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(

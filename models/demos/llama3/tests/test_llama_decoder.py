@@ -34,7 +34,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
+    mesh_device.enable_async(False)  # NOCOMMIT
 
     model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
@@ -92,7 +92,8 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
 
         decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            ttnn.DRAM_MEMORY_CONFIG,
+            # ttnn.DRAM_MEMORY_CONFIG,
+            model_args.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
         )
 
         # Run TT model

@@ -332,40 +332,41 @@ class TtLlamaAttention(LightweightModule):
                 dim=3,
                 all_gather_core_grid_offset=(0, 4),
                 num_links=1,
-                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                memory_config_mm=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
             )
+            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
         else:
             dense_out_sharded = ttnn.linear(
                 attn_output_cat,
                 self.wo,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
+            if not self.is_multichip:
+                # FIXME: this should not be necessary but is for 3B/N150 - linear ignores output shard spec
+                dense_out_sharded = ttnn.to_memory_config(
+                    dense_out_sharded, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
+                )
 
         ttnn.deallocate(attn_output_cat)
-        dense_out = ttnn.sharded_to_interleaved(
-            dense_out_sharded, ttnn.L1_MEMORY_CONFIG
-        )  # TODO: remove as soon as we have sharded support in for all CCL
-
-        ttnn.deallocate(dense_out_sharded)
 
         # All reduce
         if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
-                dense_out,
+                dense_out_sharded,
                 scatter_dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
             )
-            ttnn.deallocate(dense_out)
+            ttnn.deallocate(dense_out_sharded)
             return dense_out_reduced
         else:
-            return dense_out
+            return dense_out_sharded
 
     def forward_prefill(self, x_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):
         seq_len = x_11SH.shape[-2]

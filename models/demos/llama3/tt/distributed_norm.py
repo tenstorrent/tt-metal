@@ -39,7 +39,7 @@ class DistributedNorm(LightweightModule):
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             if mode == "decode":
-                x = ttnn.interleaved_to_sharded(x, self.gather_in_mem_cfg)
+                assert x.memory_config() == self.gather_in_mem_cfg, f"{x.memory_config()} != {self.gather_in_mem_cfg}"
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
                 )
@@ -49,7 +49,9 @@ class DistributedNorm(LightweightModule):
                 )
         elif mode == "decode":
             # Gathered norms will be sharded for decode mode, so single-chip should be too
-            x = ttnn.interleaved_to_sharded(x, input_mem_cfg)
+            # x = ttnn.interleaved_to_sharded(x, input_mem_cfg)
+            # a no-op unless something is different, e.g. sometimesß residual and lm-head have different core grids
+            x = ttnn.to_memory_config(x, input_mem_cfg)
 
         # x sharded in decode mode here
         x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
