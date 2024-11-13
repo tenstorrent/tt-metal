@@ -77,10 +77,7 @@ int main(int argc, char *argv[]) {
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
-    uint tt_l1_ptr *local_l1_start_addr =
-        (uint tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH);
-    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    l1_to_local_mem_copy((uint *)__ldm_data_start, local_l1_start_addr, num_words);
+    do_crt1((uint32_t tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH));
 
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
