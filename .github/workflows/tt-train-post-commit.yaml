@@ -39,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest --no-tests=error --output-on-failure},
+          {name: tt-train, cmd: ctest --test-dir ./build/tt-train --no-tests=error --output-on-failure},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
@@ -65,9 +65,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           export PYTHONPATH=$TT_METAL_HOME
           cd $TT_METAL_HOME
-          ls build/
-          ls build/tt-train/
-          cd ./build/tt-train
+          find ./build -type f -exec sed -i 's|/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build_Release|/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build|g' {} +
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
