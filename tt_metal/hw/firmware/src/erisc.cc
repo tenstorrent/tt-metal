@@ -33,6 +33,11 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS]  __attribute__((used));
+
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
 
@@ -41,6 +46,8 @@ void __attribute__((noinline)) Application(void) {
     // TODO: need to find free space that routing FW is not using
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+
+    noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
