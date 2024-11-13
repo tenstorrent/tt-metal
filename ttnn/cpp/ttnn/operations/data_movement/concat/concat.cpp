@@ -32,18 +32,18 @@ inline void concat_db_print(bool condition, const std::string& msg) {
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-using ConcatArgs = std::tuple<const std::vector<ttnn::Tensor>&, int>;
-using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int>;
+using ConcatArgs = std::tuple<const std::vector<ttnn::Tensor>&, int, unsigned int>;
+using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
-using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int>;
-using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int>;
+using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
+using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
 
 // FIXME: this papers over an issue in pad, so we should probably move the
 // fix there.
 MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output_memory_config) {
     return MassagedConcat(
         MassagedConcatParams {
-            .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+            .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
                 bool inputs_are_device_tensors = std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
                     return tensor.storage_type() != ttnn::StorageType::BORROWED && tensor.storage_type() != ttnn::StorageType::OWNED;
                 });
@@ -51,7 +51,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output
                 concat_db_print(res, "unsqueeze to 4D required");
                 return res;
             },
-            .pre_transform = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim) -> OwnedConcatArgs {
+            .pre_transform = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
                 std::vector<ttnn::Tensor> itensors;
                 itensors.reserve(tensors.size());
                 std::transform(
@@ -62,7 +62,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output
                         return ttnn::unsqueeze_to_4D(input_tensor);
                     }
                 );
-                return std::make_tuple(itensors, dim + 4 - input_rank);
+                return std::make_tuple(itensors, dim + 4 - input_rank, groups);
             },
             .post_transform = [input_rank](const ttnn::Tensor& output) -> ttnn::Tensor {
                 ttnn::Tensor res = output;
@@ -79,9 +79,9 @@ MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output
                 }
                 return res;
             },
-            .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
+            .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
                 std::vector<ttnn::Tensor> itensors(tensors);
-                return concat_impl(itensors, dim, output_memory_config);
+                return concat_impl(itensors, dim, groups, output_memory_config);
             }
         }
     );
@@ -90,7 +90,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output
 MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig &output_memory_config) {
     return MassagedConcat(
         MassagedConcatParams {
-            .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+            .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
                 // untilize_rm_retilize if the concat dim is padded for tilized tensors
                 bool res = std::any_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
                     return tensor.get_layout() == ttnn::TILE_LAYOUT and tensor.get_logical_shape()[dim] != tensor.get_padded_shape()[dim];
@@ -98,7 +98,7 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
                 concat_db_print(res, "untilize_rm_retilize required");
                 return res;
             },
-            .pre_transform = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> OwnedConcatArgs {
+            .pre_transform = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
                 std::vector<ttnn::Tensor> itensors;
                 itensors.reserve(tensors.size());
                 std::transform(
@@ -114,7 +114,7 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
                         return untilized_tensor;
                     }
                 );
-                return std::make_tuple(itensors, dim);
+                return std::make_tuple(itensors, dim, groups);
             },
             .post_transform = [queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
                 // now we have a rm tensor, so we need ensure its's padded to tile size and re-tilize it
@@ -132,9 +132,9 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
                 concat_db_print(true, "[DEBUG] already tilized");
                 return output;
             },
-            .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
+            .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
                 std::vector<ttnn::Tensor> itensors(tensors);
-                auto res = concat_impl(itensors, dim, output_memory_config);
+                auto res = concat_impl(itensors, dim, groups, output_memory_config);
                 for (auto& tensor : itensors) {
                     tensor.deallocate();
                 }
@@ -147,13 +147,13 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
 MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, MemoryConfig &output_memory_config, int dim1, int dim2) {
     return MassagedConcat(
         MassagedConcatParams {
-            .predicate = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+            .predicate = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
                 bool res = dim1 != dim2;
                 concat_db_print(res, "[DEBUG] pre-post transpose required");
                 concat_db_print(!res, "[DEBUG] pre-post transpose not required");
                 return res;
             },
-            .pre_transform = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim) -> OwnedConcatArgs {
+            .pre_transform = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
                 std::vector<ttnn::Tensor> itensors;
                 itensors.reserve(tensors.size());
                 std::transform(
@@ -174,14 +174,14 @@ MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, MemoryConfig &ou
                 } else {
                     swapped_dim = dim;
                 }
-                return std::make_tuple(itensors, swapped_dim);
+                return std::make_tuple(itensors, swapped_dim, groups);
             },
             .post_transform = [dim1, dim2, &output_memory_config](const ttnn::Tensor& output) -> ttnn::Tensor {
                 return ttnn::transpose(output, dim1, dim2, output_memory_config);
             },
-            .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
+            .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
                 std::vector<ttnn::Tensor> itensors(tensors);
-                return concat_impl(itensors, dim, output_memory_config);
+                return concat_impl(itensors, dim, groups, output_memory_config);
             }
         }
     );
@@ -207,7 +207,7 @@ MassagedConcat build_non_aligned_last_dim_concat(const std::vector<ttnn::Tensor>
         });
     };
 
-    auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+    auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
         auto last_dim = tensors.front().get_shape().rank() - 1;
         if (dim == last_dim) {
             bool res = !dim_aligned(tensors, dim);
@@ -238,7 +238,7 @@ ttnn::Tensor ConcatOperation::invoke(
     const auto mem_config =
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now
-    
+
     if (input_tensors.size() == 1) {
         return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
     }
@@ -289,28 +289,12 @@ ttnn::Tensor ConcatOperation::invoke(
     auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
 
     std::vector<ttnn::Tensor> itensors(input_tensors);
-    auto res = concat_impl(itensors, dim, output_memory_config);
+    // FIXME: use massaged_concat here.
+    auto res = concat_impl(itensors, dim, groups, output_memory_config);
     for (auto& tensor : itensors) {
         tensor.deallocate();
     }
     return res;
-}
-
-ttnn::Tensor ConcatOperation::invoke (
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int dim,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::Tensor> optional_output_tensor) {
-    return invoke(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor);
-}
-};
-
-    auto output_memory_config = memory_config.value_or(first_tensor.memory_config());
-    auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
-    auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
-    std::vector<ttnn::Tensor> itensors(input_tensors);
-    auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
-    return massaged_concat(input_tensors, dim);
 }
 
 ttnn::Tensor ConcatOperation::invoke(

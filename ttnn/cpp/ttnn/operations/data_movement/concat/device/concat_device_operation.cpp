@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks ConcatDeviceOperation::create_program(
     };
 }
 
-Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, const unsigned int groups, const MemoryConfig &output_mem_config) {
+Tensor concat_impl(const std::vector<Tensor> &input_tensors, const std::int64_t dim, const unsigned int groups, const MemoryConfig &output_mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensors[0]}))};
     operation::launch_op(
         [dim, groups, output_mem_config](
