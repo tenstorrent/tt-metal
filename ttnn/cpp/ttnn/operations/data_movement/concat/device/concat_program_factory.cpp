@@ -15,8 +15,6 @@ using namespace tt;
 
 namespace {
 
-// Nothing to see here; move along
-
 uint32_t find_greatest_common_page_size(std::vector<uint32_t> &stick_sizes, uint32_t alignment) {
     TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
     uint32_t page_size = align(stick_sizes[0], alignment);
