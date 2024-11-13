@@ -65,6 +65,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           export PYTHONPATH=$TT_METAL_HOME
           cd $TT_METAL_HOME
+          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
           ctest --version
           NEW_PATH=$(pwd)
           find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${NEW_PATH}/build|g" {} +
