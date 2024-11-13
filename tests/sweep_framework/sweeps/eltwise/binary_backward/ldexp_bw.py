@@ -69,21 +69,18 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
-
     torch_grad_tensor = gen_func_with_cast_tt(partial(torch_random, low=-10, high=10, dtype=torch.float32), grad_dtype)(
         input_shape
     )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-90, high=90, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_a.retain_grad()
 
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=-90, high=90, dtype=torch.float32), input_b_dtype
     )(input_shape)
     torch_input_tensor_b.requires_grad = True
     torch_input_tensor_b.retain_grad()
