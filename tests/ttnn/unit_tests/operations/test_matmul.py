@@ -327,19 +327,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@run_for_wormhole_b0()
-@pytest.mark.parametrize("b", [1, 2])
-@pytest.mark.parametrize("m", [1024])
-@pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [1024])
-@pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("grid_size", [(8, 4)])
-@pytest.mark.parametrize("in0_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
-@pytest.mark.parametrize("num_out_block_h", [1, 2])
-@pytest.mark.parametrize("num_out_block_w", [1, 2])
-@pytest.mark.parametrize("transpose_mcast", [True, False])
-def test_matmul_2d_multiple_output_blocks_per_core(
+def run_matmul_2d_multiple_output_blocks_per_core(
     device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast
 ):
     if in0_sharded or out_sharded:
@@ -473,18 +461,66 @@ def test_matmul_2d_multiple_output_blocks_per_core(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [768])
+@pytest.mark.parametrize("b", [1, 2])
+@pytest.mark.parametrize("m", [1024])
 @pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [768])
-@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("n", [1024])
+@pytest.mark.parametrize("has_bias", [True, False])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in0_sharded", [True])
-@pytest.mark.parametrize("out_sharded", [True])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("transpose_tile", [True, False])
-def test_matmul_2d_tiny_tile(
+@pytest.mark.parametrize("in0_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("num_out_block_h", [1, 2])
+@pytest.mark.parametrize("num_out_block_w", [1, 2])
+@pytest.mark.parametrize("transpose_mcast", [True, False])
+def test_matmul_2d_multiple_output_blocks_per_core(
+    device,
+    b,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    in0_sharded,
+    out_sharded,
+    num_out_block_h,
+    num_out_block_w,
+    transpose_mcast,
+    use_program_cache,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = [compute_grid_size.x, compute_grid_size.y]
+    if grid_size[1] < 8:
+        pytest.skip("device does not have 8x8 grid")
+
+    for _ in range(2):
+        run_matmul_2d_multiple_output_blocks_per_core(
+            device,
+            b,
+            m,
+            k,
+            n,
+            has_bias,
+            grid_size,
+            in0_sharded,
+            out_sharded,
+            num_out_block_h,
+            num_out_block_w,
+            transpose_mcast,
+        )
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1
+
+
+def run_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     in0_shape = [1, 1, m, k]
@@ -602,9 +638,9 @@ def test_matmul_2d_tiny_tile(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [128])
+@pytest.mark.parametrize("m", [768])
 @pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [1024])
+@pytest.mark.parametrize("n", [768])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
 @pytest.mark.parametrize("tile_h", [16, 32])
@@ -613,7 +649,39 @@ def test_matmul_2d_tiny_tile(
 @pytest.mark.parametrize("out_sharded", [True])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("transpose_tile", [True, False])
-def test_matmul_1d_tiny_tile(
+def test_matmul_2d_tiny_tile(
+    device,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    tile_h,
+    tile_w,
+    in0_sharded,
+    out_sharded,
+    in1_dtype,
+    transpose_tile,
+    use_program_cache,
+):
+    for _ in range(2):
+        run_matmul_2d_tiny_tile(
+            device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+        )
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1
+
+
+def run_matmul_1d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     in0_shape = [1, 1, m, k]
@@ -731,6 +799,50 @@ def test_matmul_1d_tiny_tile(
         pt_out += bias
 
     assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("m", [128])
+@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("n", [1024])
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("grid_size", [(8, 4)])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True])
+@pytest.mark.parametrize("out_sharded", [True])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
+def test_matmul_1d_tiny_tile(
+    device,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    tile_h,
+    tile_w,
+    in0_sharded,
+    out_sharded,
+    in1_dtype,
+    transpose_tile,
+    use_program_cache,
+):
+    for _ in range(2):
+        run_matmul_1d_tiny_tile(
+            device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+        )
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1
 
 
 # fmt: off

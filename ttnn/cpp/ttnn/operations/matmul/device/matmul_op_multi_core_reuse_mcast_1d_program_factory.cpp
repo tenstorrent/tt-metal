@@ -1586,7 +1586,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 sender_writer_runtime_args[0] = src_buffer_b->address();
                 sender_writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    sender_writer_runtime_args[16] = (*bias_buffer)->address();
+                    sender_writer_runtime_args[17] = (*bias_buffer)->address();
                 }
             }
 
