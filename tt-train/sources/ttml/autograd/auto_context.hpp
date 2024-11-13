@@ -39,7 +39,7 @@ public:
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
-    ttnn::distributed::Device& get_device();
+    ttnn::distributed::MeshDevice& get_device();
 
 private:
     AutoContext();
