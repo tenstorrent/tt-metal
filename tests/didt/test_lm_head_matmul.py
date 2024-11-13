@@ -133,7 +133,7 @@ def test_lm_head_matmul(
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
-@pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
+@pytest.mark.parametrize("logical_chip_id", range(36), ids=[f"logical_chip_{i}_" for i in range(36)])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -147,7 +147,14 @@ def test_lm_head_matmul(
 def test_specific_chip_lm_head_matmul(
     mesh_device, logical_chip_id, iterations, determinism_check_iterations, use_program_cache
 ):
-    assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
+    # Special case for galaxy:
+    #   MeshDevice contains 32 chips, but their ids go from 4 - 35
+    if len(mesh_device.get_device_ids()) == 32:
+        assert (
+            logical_chip_id >= 4 and logical_chip_id <= 35
+        ), f"For TG configuration, logical chip id needs to be in range [4, 35] inclusive, but is {logical_chip_id}"
+    else:
+        assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_lm_head_matmul(
         mesh_device.get_device(logical_chip_id), iterations, determinism_check_iterations, use_program_cache, False
