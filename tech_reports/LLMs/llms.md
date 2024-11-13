@@ -1,5 +1,5 @@
 # LLMs in TT-NN
-Authors: 
+Authors:
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
   - [Contents](#contents)
@@ -7,7 +7,7 @@ Authors:
   - [2. Modules](#2-modules)
     - [2.1 Embedding](#21-embedding)
     - [2.2 RoPE](#22-rope)
-    - [2.3 Norm](#23-norm) 
+    - [2.3 Norm](#23-norm)
     - [2.4 Attention](#24-attention)
     - [2.5 MLP](#25-mlp)
     - [2.6 Decoder](#26-decoder)
@@ -57,7 +57,7 @@ Authors:
 ### 3.1 Generative Decoding
 ### 3.2 Prefill and Decode
   - submodules, tests
-  - how to combine prefill and decode, 
+  - how to combine prefill and decode,
   - slicing prefill to fit in L1
 ### 3.3 Multi-Device
 There are two main approaches for scaling across multiple devices: data parallel and tensor parallel.
@@ -236,10 +236,10 @@ For our llama family of models we are using the following sharding schemes:
 ### 4.3 Multiple CQs
   - how to feed back output to input and read output asyncronously
 ### 4.4 Op Configs
-  - Writing correct program configs and shard specs 
+  - Writing correct program configs and shard specs
   - Deciding how many cores to run an op on
     - Why did we use 16 cores for MLP
-  - Which matmul to use when @Colman Glagovich 
+  - Which matmul to use when @Colman Glagovich
     - 1d, 2d, dram-sharded, ...
   - Implicitly padding weights in program config for matmuls
 ### 4.5 Accuracy
@@ -259,7 +259,7 @@ For our llama family of models we are using the following sharding schemes:
 #### 4.10.1 Error Messages
   - Running out of L1
   - Shard spec and program config mismatches
-  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument. 
+  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument.
     - You'll see an error related to op invocation where the arguments don't match
 #### 4.10.2 Shard Spec Mismatches
 #### 4.10.3 Ethernet Dispatch Cores
