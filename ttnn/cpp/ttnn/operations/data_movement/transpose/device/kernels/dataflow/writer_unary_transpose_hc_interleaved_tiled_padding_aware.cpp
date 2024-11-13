@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 // Utility functions
-inline constexpr uint32_t div_up(uint32_t a, uint32_t b) {
+FORCE_INLINE constexpr uint32_t div_up(uint32_t a, uint32_t b) {
     return static_cast<uint32_t>((a + b - 1) / b);
 }
 
-inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+FORCE_INLINE constexpr uint32_t round_up(uint32_t a, uint32_t b) {
     return b * div_up(a, b);
 }
 
@@ -165,5 +166,35 @@ void kernel_main() {
 
         // Remove the processed tile from the front of the buffer
         cb_pop_front(cb_id_out0, 1);
+    }
+
+    // add padding
+    if constexpr (C_p > C) {
+        cb_wait_front(tt::CB::c_in1, 1);
+        uint32_t l1_read_ptr = get_read_ptr(tt::CB::c_in1);
+        constexpr uint32_t N = 1;
+        uint32_t c_t = C_t - 1;
+        constexpr uint32_t num_padded_tiles = 1*H*W_t;
+        for (uint32_t tile_idx = 0; tile_idx < num_padded_tiles; ++tile_idx) {
+            // Map tile_idx to (n, h, w_t)
+            uint32_t n = tile_idx / (H * W_t);
+            uint32_t remainder1 = tile_idx % (H * W_t);
+            uint32_t h = remainder1 / W_t;
+            uint32_t w_t = remainder1 % W_t;
+            uint8_t C_in_tile = C % TILE_HEIGHT;
+            uint8_t face_c_start = C_in_tile/ FACE_HEIGHT;
+            for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
+                uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
+                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                    for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
+                        uint32_t linear_idx = n * H * C_t * W_t + h * C_t * W_t + c_t * W_t + w_t;
+                        uint32_t offset = (face_c * NUM_FACES_W * FACE_HEIGHT * FACE_WIDTH + face_w * FACE_HEIGHT * FACE_WIDTH + sub_tile_line * FACE_WIDTH) * element_size;
+                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+                        noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
+                    }
+                }
+            }
+        }
+        cb_pop_front(tt::CB::c_in1, 1);
     }
 }
