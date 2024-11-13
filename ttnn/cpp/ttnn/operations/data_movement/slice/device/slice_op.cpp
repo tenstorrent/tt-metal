@@ -82,11 +82,11 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
     if(!output_tensors.empty() && output_tensors[0].has_value()){
-        const auto output_shape_required = std::get<0>(this->compute_output_specs(input_tensors)[0]);
+        const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
         const auto& out_tensor = output_tensors[0].value();
         TT_FATAL(out_tensor.get_padded_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_padded_shape());
     }
-    auto output_tensor_shape = std::get<0>(this->compute_output_specs(input_tensors)[0]);
+    auto output_tensor_shape = this->compute_output_specs(input_tensors)[0].logical_shape();
     if (has_step) { // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");

@@ -123,11 +123,11 @@ void validate_sharded_buffer_allocation(
     }
 }
 
-DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout) {
-    auto buffer_size_bytes = layout.compute_packed_buffer_size_bytes(shape);
-    auto page_size_bytes = layout.compute_page_size_bytes(shape);
-    auto shard_spec_buffer = layout.compute_shard_spec_buffer(shape);
-    auto memory_config = layout.get_memory_config();
+DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_spec) {
+    auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+    auto page_size_bytes = tensor_spec.compute_page_size_bytes();
+    auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
+    auto memory_config = tensor_spec.tensor_layout().get_memory_config();
 
     return Buffer::create(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);
 }
@@ -584,7 +584,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
         return to_host_helper<T>(tensor, blocking, cq_id);
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto devices = get_devices(tensor);
-        Tensor host_tensor(devices.size(), tensor.tensor_layout(), tensor.get_logical_shape());
+        Tensor host_tensor(devices.size(), tensor.tensor_spec());
         for (int device_index = 0; device_index < devices.size(); ++device_index) {
             const auto& device = devices[device_index];
             auto shard = get_shard_for_device(tensor, device);
@@ -697,14 +697,13 @@ template <typename T, template <typename> typename BufferType>
 DeviceBuffer initialize_data_on_device(
     BufferType<T>& data_to_write,
     Device* device,
-    const ttnn::SimpleShape& shape,
-    const TensorLayout& tensor_layout,
+    const TensorSpec& tensor_spec,
     std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt) {
 
     ZoneScoped;
     TT_ASSERT(device != nullptr);
 
-    auto device_buffer = allocate_buffer_on_device(device, shape, tensor_layout);
+    auto device_buffer = allocate_buffer_on_device(device, tensor_spec);
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
@@ -720,15 +719,14 @@ template <typename T>
 DeviceBuffer to_device_buffer(
     const Storage& storage,
     Device* device,
-    const ttnn::SimpleShape& shape,
-    const TensorLayout& tensor_layout,
+    const TensorSpec& tensor_spec,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
     return std::visit(
-        [&device, &shape, &tensor_layout, &queue](auto&& storage) -> DeviceBuffer {
+        [&device, &tensor_spec, &queue](auto&& storage) -> DeviceBuffer {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
-                return initialize_data_on_device<T>(data_to_write, device, shape, tensor_layout, queue);
+                return initialize_data_on_device<T>(data_to_write, device, tensor_spec, queue);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
@@ -764,7 +762,7 @@ Tensor to_device(const Tensor& tensor, Device* target_device, const MemoryConfig
     auto tile = tensor.get_tile();
     TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape);
 
-    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, logical_shape, tensor_layout, queue);
+    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, TensorSpec(logical_shape, tensor_layout), queue);
 
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, tile);
 }

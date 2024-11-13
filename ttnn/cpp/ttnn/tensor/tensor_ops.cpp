@@ -67,7 +67,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, workers, mem_config);
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor device_tensor = Tensor(workers, input_tensor.tensor_layout(), input_tensor.get_logical_shape());
+    Tensor device_tensor = Tensor(workers, input_tensor.tensor_spec());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t num_workers = workers.size();
@@ -106,7 +106,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     }
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor host_tensor(workers.size(), input_tensor.tensor_layout(), input_tensor.get_logical_shape());
+    Tensor host_tensor(workers.size(), input_tensor.tensor_spec());
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
@@ -188,7 +188,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
             auto& host_storage = std::get<MultiDeviceHostStorage>(input_tensor.get_storage());
             distributed_config = host_storage.strategy;
         }
-        Tensor tensor_modified_layout = Tensor(workers.size(), input_tensor.tensor_layout(), input_tensor.get_logical_shape(), distributed_config);
+        Tensor tensor_modified_layout = Tensor(workers.size(), input_tensor.tensor_spec(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
             worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {

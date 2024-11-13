@@ -26,7 +26,7 @@ void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_hit(
 
 ExampleMultipleReturnDeviceOperation::shape_return_value_t ExampleMultipleReturnDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return {tensor_args.input_tensor.tensor_attributes->shape, tensor_args.input_tensor.tensor_attributes->shape};
+    return {tensor_args.input_tensor.shape(), tensor_args.input_tensor.shape()};
 }
 
 ExampleMultipleReturnDeviceOperation::tensor_return_value_t ExampleMultipleReturnDeviceOperation::create_output_tensors(
