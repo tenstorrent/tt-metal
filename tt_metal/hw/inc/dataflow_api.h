@@ -34,19 +34,16 @@ constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessor
 #if defined(KERNEL_BUILD)
 constexpr uint8_t noc_index = NOC_INDEX;
 constexpr uint8_t noc_mode = NOC_MODE;
-extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
-extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
-extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
-extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 #else
+
+extern uint8_t noc_index;
+constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+#endif
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
-extern uint8_t noc_index;
-constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
-#endif
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
 extern uint32_t tt_l1_ptr* sem_l1_base[];

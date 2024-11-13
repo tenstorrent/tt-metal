@@ -347,15 +347,7 @@ int main() {
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
-    int32_t num_dram_to_noc_words = (NUM_NOCS * NUM_DRAM_BANKS) << 1;
-    l1_to_local_mem_copy((uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)MEM_BANK_TO_NOC_XY_SCRATCH, num_dram_to_noc_words);
-    int32_t num_l1_to_noc_words = (NUM_NOCS * NUM_L1_BANKS) << 1;
-    l1_to_local_mem_copy((uint*)l1_bank_to_noc_xy, (uint tt_l1_ptr*)(MEM_BANK_TO_NOC_XY_SCRATCH + num_dram_to_noc_words), num_l1_to_noc_words);
-
-    int32_t num_dram_offset_words = NUM_DRAM_BANKS << 2;
-    l1_to_local_mem_copy((uint*)bank_to_dram_offset, (uint tt_l1_ptr*)(MEM_BANK_OFFSET_SCRATCH), num_dram_offset_words);
-    int32_t num_l1_offset_words = NUM_L1_BANKS << 2;
-    l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(MEM_BANK_OFFSET_SCRATCH + num_dram_offset_words), num_l1_offset_words);
+    noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     noc_index = 0;

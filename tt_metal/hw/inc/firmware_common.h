@@ -13,6 +13,13 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "dev_msgs.h"
+#include "noc/noc_parameters.h"
+#include "debug/dprint.h"
+
+extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
+extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
+extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
+extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
 extern void kernel_init(uint32_t kernel_init);
 extern void kernel_launch(uint32_t kernel_base_addr);
@@ -57,6 +64,19 @@ inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
     l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
+}
+
+void noc_bank_table_init(uint64_t mem_bank_to_noc_addr)
+{
+    int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);
+    l1_to_local_mem_copy((uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)mem_bank_to_noc_addr, dram_to_noc_size_bytes >> 2);
+    int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
+    l1_to_local_mem_copy((uint*)l1_bank_to_noc_xy, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes), l1_to_noc_size_bytes >> 2);
+
+    int32_t dram_offsets_size_bytes = sizeof(bank_to_dram_offset);
+    l1_to_local_mem_copy((uint*)bank_to_dram_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes), dram_offsets_size_bytes >> 2);
+    int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
+    l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes + dram_offsets_size_bytes), l1_offsets_size_bytes >> 2);
 }
 
 FORCE_INLINE
