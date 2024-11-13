@@ -66,7 +66,8 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           cd $TT_METAL_HOME
           ctest --version
-          find ./build -type f -exec sed -i 's|/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build_Release|/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build|g' {} +
+          NEW_PATH=$(pwd)
+          find ./build -type f -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${NEW_PATH}/build|g" {} +
           cd $TT_METAL_HOME/build/tt-train
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
