@@ -696,6 +696,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0," Matrix Height Padding can't be negative");
 
+    std::cout << "conv2d ???? called" << std::endl;
     // convert_conv_weight_tensor adds the padding to the base shape.
     // Reshape the weights to remove padding from the base shape.
     //???????????????????????????????????

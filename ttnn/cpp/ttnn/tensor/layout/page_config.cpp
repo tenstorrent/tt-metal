@@ -83,6 +83,7 @@ Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryC
 }
 
 void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig&) const {
+    TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
     TT_FATAL(widthAlignment % tile_.get_width() == 0,
         "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, tile_.get_width());

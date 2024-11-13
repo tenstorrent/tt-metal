@@ -99,6 +99,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
             auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.view(),
                                                      tiled_output.get_padded_shape().view());
+            std::cout << "repeat ???? called" << std::endl;
             //????
             //tiled_output.set_shape(padded_to_tiled_shape);
             return tiled_output;

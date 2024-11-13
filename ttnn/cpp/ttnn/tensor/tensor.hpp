@@ -191,6 +191,7 @@ struct Tensor {
     DataType get_dtype() const;
     Layout get_layout() const;
     Tile get_tile() const;
+    const TensorSpec& get_tensor_spec() const;
 
     ttnn::SimpleShape get_logical_shape() const;
     ttnn::SimpleShape get_padded_shape() const;

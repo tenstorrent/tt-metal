@@ -232,7 +232,7 @@ void launch_op(
                         insert_buffer_and_shape_for_device(target_device, *local_tensor, *output_tensor);
                         int num_workers_completed = (output_tensor->tensor_attributes->num_workers_completed)++;
                         if (not num_workers_completed) {
-                            output_tensor->tensor_attributes->tensor_spec = local_tensor->tensor_attributes->tensor_spec;
+                            output_tensor->set_tensor_spec(local_tensor->tensor_spec());
                             output_tensor->tensor_attributes->metadata_populated = true;
                         }
                     }

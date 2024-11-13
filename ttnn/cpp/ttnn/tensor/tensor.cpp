@@ -463,7 +463,8 @@ void Tensor::deepcopy(const Tensor& other) {
     // Wait until the tensor being copied is populated
     other.wait_for_tensor_data_populated();
     // Populate tensor metadata
-    this->tensor_attributes->storage = other.tensor_attributes->storage;
+    this->set_storage(other.get_storage());
+    this->set_tensor_spec(other.get_tensor_spec());
     this->tensor_attributes->tensor_spec = other.tensor_attributes->tensor_spec;
     // Set metadata populated flag for getters
     this->tensor_attributes->metadata_populated = true;
@@ -474,7 +475,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     ZoneScoped;
     // Similar to deepcopy, but to be applied on a tensor that has an empty storage
     // container initialized. Require tensor storage to be correctly initialized.
-    this->tensor_attributes->tensor_spec = other.tensor_attributes->tensor_spec;
+    this->set_tensor_spec(other.get_tensor_spec());
     // Populate storage container with buffers + shapes
     std::visit(
         [this](auto&& storage) {
@@ -567,6 +568,11 @@ Layout Tensor::get_layout() const {
 Tile Tensor::get_tile() const {
     this->wait_for_tensor_metadata_populated();
     return this->tile();
+}
+
+const TensorSpec& Tensor::get_tensor_spec() const {
+    this->wait_for_tensor_metadata_populated();
+    return this->tensor_spec();
 }
 
 const Storage& Tensor::get_storage() const {
@@ -905,7 +911,7 @@ Tensor allocate_tensor_on_device(
 
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
-                device_tensor.tensor_attributes->tensor_spec = tensor_spec;
+                device_tensor.set_tensor_spec(tensor_spec);
                 device_tensor.tensor_attributes->metadata_populated = true;
             }
         });
