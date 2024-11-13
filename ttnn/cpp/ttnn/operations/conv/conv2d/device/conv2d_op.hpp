@@ -14,6 +14,24 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+const uint32_t act_cb = tt::CBIndex::c_0;
+const uint32_t weight_cb = tt::CBIndex::c_1;
+const uint32_t bias_cb = tt::CBIndex::c_2;
+const uint32_t sharded_act_cb = tt::CBIndex::c_3;
+const uint32_t cb_for_reader_indices = tt::CBIndex::c_4;
+const uint32_t cb_for_l1_array = tt::CBIndex::c_5;
+const uint32_t act_cb_row_major_bfloat16 = tt::CBIndex::c_6;
+const uint32_t act_cb_second_reader = tt::CBIndex::c_7;
+const uint32_t matmul_partials_cb = tt::CBIndex::c_24;
+const uint32_t tilize_mode_tilized_act_cb = tt::CBIndex::c_25;
+const uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_26;
+const uint32_t out0_cb = tt::CBIndex::c_16;
+const uint32_t temp_sum_cb = tt::CBIndex::c_27;
+}
+}
+
 // TODO: Accept parallelization
 enum class OptimizedConvOpParallelizationStrategy {
     MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE
@@ -43,8 +61,8 @@ struct OptimizedConvBlockConfig {
     uint32_t out_subblock_w_ntiles;
 };
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, const std::optional<const Tensor>& bias,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
+operation::ProgramWithCallbacks multi_core_conv2d_impl(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
+    sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out, bool fuse_relu,
@@ -60,6 +78,30 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height);
+
+std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
+    tt::tt_metal::Program& program,
+    const Tensor& input,
+    CoreRange core,
+    uint32_t num_cb0_tiles,
+    uint32_t num_cb1_tiles,
+    uint32_t num_cb0_tilized_tiles,
+    uint32_t num_output_tiles,
+    uint32_t num_reblock_cb_tiles,
+    uint32_t num_writer_output_tiles,
+    bool untilize_out,
+    tt::DataFormat act_df,
+    tt::DataFormat weight_df,
+    tt::DataFormat tilized_act_df,
+    tt::DataFormat out_df,
+    tt::DataFormat bias_df,
+    bool weight_width_sliced,
+    const Tensor& output,
+    uint32_t bias_ntiles,
+    bool with_bias,
+    bool split_reader,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc_en);
 
 // new micro op
 struct OptimizedConvNew {
