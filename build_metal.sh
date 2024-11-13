@@ -112,10 +112,6 @@ while true; do
             build_umd_tests="ON";;
         --build-programming-examples)
             build_programming_examples="ON";;
-        --cxx-compiler-path)
-            cxx_compiler_path="$2";shift;;
-        --c-compiler-path)
-            c_compiler_path="$2";shift;;
         --build-static-libs)
             build_static_libs="ON";;
         --disable-unity-builds)
