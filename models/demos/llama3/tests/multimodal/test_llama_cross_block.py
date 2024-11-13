@@ -257,17 +257,14 @@ def test_llama_cross_attention_transformer_block_inference(
                 ),
             )
 
-        full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
-        tt_full_text_mask_expand_11SD = ttnn.from_torch(
-            full_text_mask_expand_11SD,
-            device=mesh_device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        )
-        if mode == "decode":
-            tt_full_text_mask_expand_11SD = None
+            tt_out = tt_model(
+                tt_x,
+                xattn_mask=tt_xattn_mask,
+                full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
+                full_text_row_masked_out_mask_11SD=None,
+                xattn_cache=tt_xattn_cache,
+                mode=mode,
+            )
 
             tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
             tt_output_torch = tt_output_torch[:, :, :batch, :].reshape(batch, seq_len, dim)
