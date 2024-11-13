@@ -134,7 +134,11 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
             },
             .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
                 std::vector<ttnn::Tensor> itensors(tensors);
-                return concat_impl(itensors, dim, output_memory_config);
+                auto res = concat_impl(itensors, dim, output_memory_config);
+                for (auto& tensor : itensors) {
+                    tensor.deallocate();
+                }
+                return res;
             }
         }
     );
@@ -282,9 +286,14 @@ ttnn::Tensor ConcatOperation::invoke(
     auto output_memory_config = memory_config.value_or(first_tensor.memory_config());
     auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
     auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
-    std::vector<ttnn::Tensor> itensors(input_tensors);
     auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
-    return massaged_concat(input_tensors, dim);
+
+    std::vector<ttnn::Tensor> itensors(input_tensors);
+    auto res = concat_impl(itensors, dim, output_memory_config);
+    for (auto& tensor : itensors) {
+        tensor.deallocate();
+    }
+    return res;
 }
 
 ttnn::Tensor ConcatOperation::invoke (
