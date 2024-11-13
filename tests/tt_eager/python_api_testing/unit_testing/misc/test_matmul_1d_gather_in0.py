@@ -201,6 +201,7 @@ def test_multi_core_matmul_1d_wh(
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
         packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=True,
     )
 
     output_t = ttnn.matmul(
