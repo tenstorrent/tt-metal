@@ -97,6 +97,8 @@ def find_max_subblock(out_block_h, out_block_w):
 #   - m, k, n: Dimensions of the input tensors.
 #   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
 #   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
+#   - num_out_blocks_h: A parameter to divide an output block into multiple chunks on height dim, helping to reduce L1 cache usage.
+#   - num_out_blocks_w: A parameter to divide an output block into multiple chunks on width dim, helping to reduce L1 cache usage.
 
 matmul_shapes_bfloat16 = [
     (512, 512, 512, True, True, 1),
@@ -112,6 +114,8 @@ matmul_shapes_bfloat16 = [
     (3072, 3072, 4096, False, False, 2),
     (3072, 4096, 4096, False, False, 2),
     (4096, 4096, 4096, False, False, 4),
+    (8192, 8192, 8192, False, False, 4, 4, 4),
+    (16384, 16384, 16384, False, False, 8, 8, 8),
 ]
 
 matmul_shapes_bfloat8_b = [
@@ -128,6 +132,8 @@ matmul_shapes_bfloat8_b = [
     (3072, 3072, 4096, True, True, 2),
     (3072, 4096, 4096, True, True, 4),
     (4096, 4096, 4096, False, False, 4),
+    (8192, 8192, 8192, False, False, 4, 4, 4),
+    (16384, 16384, 16384, False, False, 8, 8, 8),
 ]
 
 
@@ -137,7 +143,12 @@ matmul_shapes_bfloat8_b = [
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize(
-    "dtype, math_fidelity", [(ttnn.bfloat16, ttnn.MathFidelity.HiFi2), (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi)]
+    "dtype, math_fidelity",
+    [
+        (ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
+        (ttnn.bfloat16, ttnn.MathFidelity.HiFi4),
+        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ],
 )
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
@@ -177,15 +188,17 @@ def test_matmul_2d_host_perf(
             matmul_shapes = matmul_shapes_bfloat16
         else:
             matmul_shapes = matmul_shapes_bfloat8_b
-        for m, k, n, in0_sharded, out_sharded, in0_block_w_div in matmul_shapes:
+        for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
             profiler.clear()
 
             in0_shape = [1, 1, m, k]
             in1_shape = [1, 1, k, n]
 
             in0_block_w = k // grid_size[0] // 32 // in0_block_w_div
-            out_block_h = m // grid_size[1] // tile_h
-            out_block_w = n // grid_size[0] // tile_w
+            per_core_M = m // grid_size[1] // tile_h
+            per_core_N = n // grid_size[0] // tile_w
+            out_block_h = per_core_M // num_out_blocks_h
+            out_block_w = per_core_N // num_out_blocks_w
             out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
 
             in0 = torch.ones(in0_shape).bfloat16()
@@ -222,8 +235,10 @@ def test_matmul_2d_host_perf(
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
                 out_subblock_w=out_subblock_w,
-                per_core_M=out_block_h,
-                per_core_N=out_block_w,
+                out_block_h=out_block_h,
+                out_block_w=out_block_w,
+                per_core_M=per_core_M,
+                per_core_N=per_core_N,
                 transpose_mcast=False,
                 fused_activation=None,
             )
