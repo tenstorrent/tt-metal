@@ -404,12 +404,20 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
@@ -532,6 +540,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             return output_11SH
 
+    # TODO Miguel: Remove transformation_mats input (send at initialization instead)
     def forward(
         self, x, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode", page_table=None
     ):
