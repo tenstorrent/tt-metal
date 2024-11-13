@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "command_queue_fixture.hpp"
@@ -595,6 +596,8 @@ TEST_F(RandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgra
 }
 
 TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
+    std::vector<uint32_t> trace_ids;
+    std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
@@ -602,20 +605,25 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
         this->create_kernel(program, CoreType::WORKER);
-    }
 
-    std::vector<uint32_t> trace_ids;
-    for (Program& program : this->programs) {
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
             EnqueueProgram(this->device_->command_queue(), program, false);
             const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
             EnqueueProgram(this->device_->command_queue(), program, false);
             EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
-
-            EnqueueTrace(this->device_->command_queue(), trace_id, false);
-
             trace_ids.push_back(trace_id);
+            program_ids_to_trace_ids.emplace(program.get_id(), trace_id);
+        }
+    }
+    Finish(this->device_->command_queue());
+
+    for (Program& program : this->programs) {
+        const uint64_t program_id = program.get_id();
+        const bool use_trace = program_ids_to_trace_ids.contains(program_id);
+        if (use_trace) {
+            const uint32_t trace_id = program_ids_to_trace_ids[program_id];
+            EnqueueTrace(this->device_->command_queue(), trace_id, false);
         }
         EnqueueProgram(this->device_->command_queue(), program, false);
     }
