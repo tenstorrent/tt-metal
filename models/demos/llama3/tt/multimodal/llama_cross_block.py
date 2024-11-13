@@ -114,9 +114,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def compute_xattn_kv_cache(self, xattn_tokens, xattn_cache, user_id):
-        return self.attention.compute_xattn_kv_cache(xattn_tokens, xattn_cache, user_id)
-
     def forward(
         self,
         x_11SH,
@@ -127,6 +124,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         xattn_cache,
         mode,
         user_id=0,
+        vision_tokens=None,
     ):
         attn_out = self.attention(
             x_11SH=self.attention_norm(x_11SH, mode=mode),
@@ -135,6 +133,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
             mode=mode,
             user_id=user_id,
+            vision_tokens=vision_tokens,
         )
         attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 

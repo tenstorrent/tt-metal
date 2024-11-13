@@ -87,7 +87,6 @@ def test_llama_cross_attention_transformer_block_inference(
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
     pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache]
 
-    # Iterate over batch
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
@@ -100,34 +99,6 @@ def test_llama_cross_attention_transformer_block_inference(
         )
         for _ in range(2)
     ]
-    for b in range(batch):
-        tt_tensor_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
-            tt_xattn_tokens[b : b + 1],
-            force_replicated=True,
-        )
-        tt_xattn_cache = tt_model.compute_xattn_kv_cache(tt_tensor_xattn_tokens, tt_xattn_cache, user_id=b)
-    tt_xattn_cache_torch = [
-        ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
-            batch,
-            n_heads,
-            vision_seq_len,
-            head_dim,
-        )
-        for x in tt_xattn_cache
-    ]
-
-    for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
-        passing, pcc_message = comp_pcc(pt, tt, pcc_required)
-
-        logger.info(comp_allclose(pt, tt))
-        logger.info(f"PCC: {pcc_message}")
-        if passing:
-            logger.info(f"compute_xattn_kv_cache Passed!")
-        else:
-            logger.warning(f"compute_xattn_kv_cache Failed!")
-            all_tests_pass = False
-
-    assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
 
     """
     Test forward, prefill and decode!
@@ -176,6 +147,10 @@ def test_llama_cross_attention_transformer_block_inference(
         if mode == "prefill":
             outputs = []
             for b in range(batch):
+                tt_tensor_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
+                    tt_xattn_tokens[b : b + 1],
+                    force_replicated=True,
+                )
                 tt_tensor_x = model_args.prepare_inputs_ttnn_prefill(
                     tt_x[b : b + 1],
                 )
@@ -211,6 +186,7 @@ def test_llama_cross_attention_transformer_block_inference(
                     xattn_cache=tt_xattn_cache,
                     mode=mode,
                     user_id=b,
+                    vision_tokens=tt_tensor_xattn_tokens,
                 )
 
                 tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
@@ -273,5 +249,27 @@ def test_llama_cross_attention_transformer_block_inference(
         logger.info(comp_allclose(pt_out, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         all_tests_pass = all_tests_pass and passing
+
+        if mode == "prefill":
+            tt_xattn_cache_torch = [
+                ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
+                    batch,
+                    n_heads,
+                    vision_seq_len,
+                    head_dim,
+                )
+                for x in tt_xattn_cache
+            ]
+
+            for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
+                passing, pcc_message = comp_pcc(pt, tt, pcc_required)
+
+                logger.info(comp_allclose(pt, tt))
+                logger.info(f"PCC: {pcc_message}")
+                if passing:
+                    logger.info(f"compute_xattn_kv_cache Passed!")
+                else:
+                    logger.warning(f"compute_xattn_kv_cache Failed!")
+                    all_tests_pass = False
 
     assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
