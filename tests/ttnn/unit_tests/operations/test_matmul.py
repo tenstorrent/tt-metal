@@ -339,17 +339,6 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 @pytest.mark.parametrize("num_out_block_h", [1, 2])
 @pytest.mark.parametrize("num_out_block_w", [1, 2])
 @pytest.mark.parametrize("transpose_mcast", [True, False])
-# @pytest.mark.parametrize("b", [1])
-# @pytest.mark.parametrize("m", [1024])
-# @pytest.mark.parametrize("k", [1024])
-# @pytest.mark.parametrize("n", [1024])
-# @pytest.mark.parametrize("has_bias", [True])
-# @pytest.mark.parametrize("grid_size", [(8, 4)])
-# @pytest.mark.parametrize("in0_sharded", [True])
-# @pytest.mark.parametrize("out_sharded", [True])
-# @pytest.mark.parametrize("num_out_block_h", [1, 2])
-# @pytest.mark.parametrize("num_out_block_w", [1, 2])
-# @pytest.mark.parametrize("transpose_mcast", [True])
 def test_matmul_2d_multiple_output_blocks_per_core(
     device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast
 ):
@@ -480,25 +469,136 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     if has_bias:
         pt_out += bias
 
-    # print(pt_out[0][0][0][0:32])
-    # print(output_tensor[0][0][0][0:32])
     assert_with_pcc(pt_out, output_tensor, 0.999)
-    # print(pt_out[0][0][0][0:32])
-    # print(output_tensor[0][0][0][0:32])
-    # for i in range(16):
-    #     print(i)
-    #     start = i*32
-    #     end = start + 32
-    #     assert_with_pcc(pt_out[0][0][2][start:end], output_tensor[0][0][2][start:end], 0.999)
-    # row_id = 0
-    # for i in range(512):
-    #     print(i)
-    #     row_id = i
-    #     assert_with_pcc(pt_out[0][0][i], output_tensor[0][0][i], 0.999)
-    # print(pt_out[0][0][row_id][0:32])
-    # print(output_tensor[0][0][row_id][0:32])
 
-    # assert_with_pcc(pt_out[0][0][row_id], output_tensor[0][0][row_id], 0.999)
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("m", [768])
+@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("n", [768])
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("grid_size", [(8, 4)])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True])
+@pytest.mark.parametrize("out_sharded", [True])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
+def test_matmul_2d_tiny_tile(
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+):
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+    bias_shape = [1, 1, n]
+
+    in0_block_w = k // grid_size[0] // 32
+    out_block_h = m // grid_size[1] // tile_h
+    out_block_w = n // grid_size[0] // tile_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    in0 = torch.ones(in0_shape).bfloat16()
+    in1 = torch.randn(in1_shape).bfloat16()
+
+    if in0_sharded:
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            (1, 1, m, k),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if has_bias:
+        bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        bias_t = ttnn.from_torch(
+            bias_padded,
+            tile=ttnn.Tile((tile_h, tile_w)),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    if out_sharded:
+        out_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    else:
+        out_mem_config = ttnn.L1_MEMORY_CONFIG
+    if out_sharded:
+        output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
+    else:
+        output_tile = ttnn.Tile([tile_h, tile_w])
+    if has_bias:
+        output_t = ttnn.linear(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=output_tile,
+        )
+    else:
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=output_tile,
+        )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out += bias
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
 @run_for_wormhole_b0()

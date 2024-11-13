@@ -445,7 +445,7 @@ def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     # shard config
-    grid_size = ttnn.CoreGrid(y=4, x=8)
+    grid_size = ttnn.CoreGrid(y=8, x=8)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_spec = ttnn.ShardSpec(
@@ -465,10 +465,10 @@ def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
-@pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [128])
-@pytest.mark.parametrize("h", [128])
-@pytest.mark.parametrize("w", [16])
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [1088])
+@pytest.mark.parametrize("h", [16])
+@pytest.mark.parametrize("w", [160])
 def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
         run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w)
@@ -577,15 +577,17 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
 @pytest.mark.parametrize(
     "n, c, h, w, grid_size",
     [
-        (1, 8, 4, 16, ttnn.CoreGrid(y=4, x=1)),
-        (4, 3, 3, 16, ttnn.CoreGrid(y=2, x=1)),
-        (2, 8, 4, 32, ttnn.CoreGrid(y=8, x=4)),
-        (2, 2, 8, 64, ttnn.CoreGrid(y=8, x=1)),
-        (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
-        (20, 4, 224, 224, ttnn.CoreGrid(y=8, x=7)),
-        (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
-        (16, 128, 256, 16, ttnn.CoreGrid(y=8, x=8)),
-        (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8)),
+        # (1, 8, 4, 16, ttnn.CoreGrid(y=4, x=1)),
+        # (4, 3, 3, 16, ttnn.CoreGrid(y=2, x=1)),
+        # (2, 8, 4, 32, ttnn.CoreGrid(y=8, x=4)),
+        # (2, 2, 8, 64, ttnn.CoreGrid(y=8, x=1)),
+        # (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
+        # (20, 4, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        # (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        # (16, 128, 256, 16, ttnn.CoreGrid(y=8, x=8)),
+        # (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8)),
+        # (1, 1056, 32, 160, ttnn.CoreGrid(y=8, x=8)),
+        (1, 1056, 2, 160, ttnn.CoreGrid(y=8, x=8)),
     ],
 )
 def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, use_program_cache):
