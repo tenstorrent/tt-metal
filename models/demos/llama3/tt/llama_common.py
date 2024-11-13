@@ -185,7 +185,13 @@ def get_rot_transformation_mat(dhead):
 
 
 def get_single_rot_mat(
-    dhead, mesh_device, num_devices, start_pos=0, theta: float = 500000.0, use_scaled=True, on_host=False, batch=1
+    dhead,
+    mesh_device,
+    num_devices,
+    start_pos=0,
+    theta: float = 500000.0,
+    use_scaled=True,
+    on_host=False,
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if use_scaled:
@@ -210,13 +216,13 @@ def get_single_rot_mat(
     current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
     return ttnn.from_torch(
-        current_rot_mat.T.unsqueeze(0).unsqueeze(0).expand(-1, batch, -1, -1),  # 1,batch,head_dim,head_dim
+        current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
     ), ttnn.from_torch(
-        rot_matrix.unsqueeze(0).unsqueeze(0).expand(-1, batch, -1, -1),  # 1,batch,head_dim,head_dim
+        rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,

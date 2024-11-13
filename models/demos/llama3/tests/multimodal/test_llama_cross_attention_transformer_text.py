@@ -292,7 +292,10 @@ def test_llama_cross_attention_transformer_text_inference(
             )
 
             rot_mats, _ = get_single_rot_mat(
-                model_args.head_dim, mesh_device, model_args.num_devices, start_pos=cur_pos - 1, batch=batch
+                model_args.head_dim,
+                mesh_device,
+                model_args.num_devices,
+                start_pos=cur_pos - 1,
             )
 
             transformation_mats = None

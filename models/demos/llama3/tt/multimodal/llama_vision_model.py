@@ -462,7 +462,6 @@ class CrossAttentionTransformer(torch.nn.Module):
             self.configuration.num_devices,
             start_pos=position_ids.item() - 1,  # TODO: Change function to support decode batch > 1
             # TODO: B must match max_batch_size, be careful
-            batch=B,
             on_host=True,
         )
 
