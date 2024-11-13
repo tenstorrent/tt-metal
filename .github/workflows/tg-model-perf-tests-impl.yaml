@@ -23,6 +23,13 @@ jobs:
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },
+          { name: "t3k CCL all_gather perf tests",
+            arch: wormhole_b0,
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type ccl_all_gather_perf_tg_device --dispatch-mode ""',
+            timeout: 75,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            owner_id: ULMEPM2MA}, # Sean Nijjar
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -41,13 +48,25 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: Download profiler build artifact
+        id: download-profiler-artifact
+        if: ${{ matrix.test-group.tracy }}
+        uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+        continue-on-error: true
+      - name: Download build artifact
+        id: download-artifact
+        if: ${{ !matrix.test-group.tracy }}
+        uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         timeout-minutes: 60
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
@@ -56,12 +75,28 @@ jobs:
           ${{ matrix.test-group.cmd }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy) }}
         run: |
-          ls -hal
-          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
-          ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL="CCL_Perf_${TODAY}.csv"
+          if [ "${{ matrix.test-info.tracy }}" == "true" ]; then
+            if [ -f "$PERF_REPORT_FILENAME_CCL" ]; then
+              echo "Found CCL Perf report: $PERF_REPORT_FILENAME_CCL"
+              echo "perf_report_filename=$PERF_REPORT_FILENAME_CCL" >> "$GITHUB_OUTPUT"
+            else
+              echo "No CCL perf report found for today."
+              exit 1
+            fi
+          else
+            if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+              echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+              echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
+            else
+              echo "No Models perf report found for today."
+              exit 1
+            fi
+          fi
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4

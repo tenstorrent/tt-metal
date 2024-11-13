@@ -295,9 +295,10 @@ def test_reduce_scatter_on_n300(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])
+@pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 532480}], indirect=True)
 def test_all_gather_on_tg(
     mesh_device,
     num_devices,
@@ -311,7 +312,7 @@ def test_all_gather_on_tg(
     function_level_defaults,
     enable_async,
     replication_factor,
-    num_iters=1,
+    num_iters,
 ):
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
