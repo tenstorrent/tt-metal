@@ -137,7 +137,6 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            # Disable Unity builds to detect any bitrot from not building each TU independently
             build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache"
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
