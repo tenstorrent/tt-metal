@@ -459,10 +459,12 @@ def test_rotary_embedding_llama_with_program_cache(
 
     num_ops = 2  # 2 * rope
     if mode == "decode":
-        num_ops += 3  # embedding + transpose + interleaved_to_sharded
+        num_ops += 4  # embedding + transpose + pad + interleaved_to_sharded
 
         # When batch size is 1, transpose is a no-op
         if batch == 1:
             num_ops -= 1
+        elif batch % 32 == 0:
+            num_ops -= 1  # When batch size is a multiple of 32, no padding
 
     assert device.num_program_cache_entries() == num_ops
