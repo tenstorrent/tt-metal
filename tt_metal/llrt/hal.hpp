@@ -31,6 +31,8 @@ enum class HalProgrammableCoreType {
     COUNT      = 3
 };
 
+static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
+
 enum class HalProcessorClassType : uint8_t {
     DM      = 0,
     // Setting this to 2 because we currently treat brisc and ncrisc as two unique processor classes on Tensix
