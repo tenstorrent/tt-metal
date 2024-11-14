@@ -71,8 +71,8 @@ protected:
                 continue;
             ids.push_back(id);
         }
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        tt::DevicePool::initialize(ids, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        tt::DevicePool::initialize(ids, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 

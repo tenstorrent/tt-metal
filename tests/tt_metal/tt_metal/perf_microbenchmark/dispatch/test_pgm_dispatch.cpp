@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
         const chip_id_t device_id = 0;
         DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         tt_metal::Device* device =
-            tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, dispatch_core_type);
+            tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];

@@ -13,8 +13,8 @@ namespace unit_tests::test_l1_banking_allocator {
 uint64_t get_alloc_limit(const tt::tt_metal::Device *device) {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
     uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    auto storage_core_bank_size = tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs(), dispatch_core_type);
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    auto storage_core_bank_size = tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs(), dispatch_core_config);
     const uint32_t allocator_alignment = device->get_allocator_alignment();
     const uint32_t interleaved_l1_bank_size = storage_core_bank_size.has_value() ? storage_core_bank_size.value() : (soc_desc.worker_l1_size - l1_unreserved_base);
     uint32_t storage_core_unreserved_base = ((MEM_MAILBOX_BASE + allocator_alignment - 1) / allocator_alignment) * allocator_alignment;

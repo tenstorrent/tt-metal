@@ -37,7 +37,7 @@ void ttnn_device(py::module& module) {
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER,
+        py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
         py::return_value_policy::reference,
         R"doc(
             Open a device with the given device_id. If the device is already open, return the existing device.
@@ -80,6 +80,16 @@ void py_device_module_types(py::module& m_device) {
     py::enum_<tt::tt_metal::DispatchCoreType>(m_device, "DispatchCoreType", "Enum of types of dispatch cores.")
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)
         .value("ETH", tt::tt_metal::DispatchCoreType::ETH);
+
+    py::enum_<tt::tt_metal::DispatchCoreAxis>(m_device, "DispatchCoreAxis", "Enum of axis (row or col) of dispatch cores.")
+        .value("ROW", tt::tt_metal::DispatchCoreAxis::ROW)
+        .value("COL", tt::tt_metal::DispatchCoreAxis::COL);
+
+    py::class_<tt::tt_metal::DispatchCoreConfig>(m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
+        .def(py::init<>(), "Default constructor initializing type to WORKER and axis to ROW.")
+        .def(py::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
+             "Constructor with specified dispatch core type and axis.",
+             py::arg("type"), py::arg("axis"));
 
     py::class_<Device, std::unique_ptr<Device, py::nodelete>>(
         m_device, "Device", "Class describing a Tenstorrent accelerator device.");
@@ -151,9 +161,9 @@ void device_module(py::module& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           tt::tt_metal::DispatchCoreType dispatch_core_type) {
+           const tt::tt_metal::DispatchCoreConfig &dispatch_core_config) {
             return tt::tt_metal::CreateDevice(
-                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -168,16 +178,16 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
     m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           tt::tt_metal::DispatchCoreType dispatch_core_type) {
+           const tt::tt_metal::DispatchCoreConfig &dispatch_core_config) {
             return tt::tt_metal::detail::CreateDevices(
-                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -192,7 +202,7 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
     m_device.def("CloseDevice", &tt::tt_metal::CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 

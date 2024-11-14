@@ -119,7 +119,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();
-    std::shared_ptr<ttnn::MeshDevice> mesh = ttnn::distributed::open_mesh_device(mesh_shape, 0, 0, 1, DispatchCoreType::WORKER);
+    std::shared_ptr<ttnn::MeshDevice> mesh = ttnn::distributed::open_mesh_device(mesh_shape, 0, 0, 1, DispatchCoreConfig{});
 
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
@@ -198,7 +198,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();
-    std::shared_ptr<ttnn::MeshDevice> mesh = ttnn::distributed::open_mesh_device(mesh_shape, 0, 0, 1, DispatchCoreType::WORKER);
+    std::shared_ptr<ttnn::MeshDevice> mesh = ttnn::distributed::open_mesh_device(mesh_shape, 0, 0, 1, DispatchCoreConfig{});
     // Create the outer ring on which Reduce Scatter will be run. This allows us to verify that there are no deadlocks when we send CCLs to the
     // first tunnel (forward path).
     auto view = ttnn::MeshDeviceView(*mesh);

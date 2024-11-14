@@ -14,7 +14,7 @@ MeshDevice::MeshDevice([[maybe_unused]]int device_index) :
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         /* num_command_queues*/ 1,
-        DispatchCoreType::WORKER,
+        DispatchCoreConfig{},
         ttnn::distributed::MeshType::RowMajor)) {
     assert(m_mesh_device);
 }

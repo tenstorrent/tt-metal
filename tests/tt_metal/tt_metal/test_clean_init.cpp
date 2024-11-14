@@ -38,8 +38,8 @@ int main(int argc, char **argv) {
     }
 
 
-    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+    const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 
     for (int device_id = 0; device_id < num_devices; device_id++) {

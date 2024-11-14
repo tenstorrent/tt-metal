@@ -189,6 +189,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         auto writer_core2 = all_l1_writer_cores_ordered[(i*2)+1];
         auto writer_core_phy2 = device->worker_core_from_logical_core(writer_core2);
 
+        log_info("writer_core_phy1: {}", writer_core_phy1);
+        log_info("writer_core_phy2: {}", writer_core_phy2);
+
         const std::array writer_rt_args = {
             (std::uint32_t) (vc + 2) & 0x3,
             // First L1 receiver core coordinates
@@ -868,8 +871,21 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::DispatchCoreConfig dispatch_core_config;
+        if (std::strcmp(getenv("ARCH_NAME"), "grayskull") != 0) {
+            dispatch_core_config = tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
+        } else {
+            dispatch_core_config = tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::COL};
+        }
+        tt_metal::Device *device = tt_metal::CreateDevice(device_id, 1, 0, 0, dispatch_core_config);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
+
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        tt::log_info("device x : {}", num_cores_x);
+        tt::log_info("device y : {}", num_cores_y);
+
 
         int clock_freq_mhz = get_tt_npu_clock(device);
 

@@ -16,7 +16,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    tt::tt_metal::DispatchCoreType dispatch_core_type,
+    const tt::tt_metal::DispatchCoreConfig &dispatch_core_config,
     MeshType mesh_type = MeshType::RowMajor,
     const std::pair<size_t, size_t>& offset = std::pair<size_t, size_t>(0, 0),
     const std::vector<int>& physical_device_ids = {});
