@@ -29,8 +29,6 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
-
 namespace tt {
 
 namespace tt_metal {
@@ -323,8 +321,8 @@ void Device::initialize_device_kernel_defines()
     auto grid_size = this->grid_size();
     this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
     this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(NOC_0_X(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(NOC_0_X(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
 }
 
 void Device::initialize_build() {
@@ -797,15 +795,15 @@ void Device::configure_kernel_variant(
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, kernel_physical_core.x))},
-        {"MY_NOC_Y", std::to_string(NOC_0_Y(my_noc_index, grid_size.y, kernel_physical_core.y))},
+        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, kernel_physical_core.x))},
+        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, kernel_physical_core.y))},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_slave_physical_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
+        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_slave_physical_core.x))},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
@@ -3134,8 +3132,8 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
     const auto& grid_size = this->grid_size();
     return NOC_XY_ENCODING(
-        NOC_0_X(noc_index, grid_size.x, physical_core.x),
-        NOC_0_Y(noc_index, grid_size.y, physical_core.y)
+        tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
+        tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
     );
 }
 
@@ -3145,17 +3143,17 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
         return NOC_MULTICAST_ENCODING(
-            NOC_0_X(noc_index, grid_size.x, physical_cores.start_coord.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.start_coord.y),
-            NOC_0_X(noc_index, grid_size.x, physical_cores.end_coord.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.end_coord.y)
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
         );
     } else {
         return NOC_MULTICAST_ENCODING(
-            NOC_0_X(noc_index, grid_size.x, physical_cores.end_coord.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.end_coord.y),
-            NOC_0_X(noc_index, grid_size.x, physical_cores.start_coord.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.start_coord.y)
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
+            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y)
         );
     }
 }

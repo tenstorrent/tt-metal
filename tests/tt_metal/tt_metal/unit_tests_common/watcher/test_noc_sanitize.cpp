@@ -8,7 +8,10 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
+
+// Do we really want to expose Hal like this?
+// This looks like an API level test
+#include "llrt/hal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -155,8 +158,8 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
             int noc = (use_ncrisc) ? 1 : 0;
             CoreCoord target_phys_core = {
-                NOC_0_X(noc, soc_d.grid_size.x, input_dram_noc_xy.x),
-                NOC_0_Y(noc, soc_d.grid_size.y, input_dram_noc_xy.y)
+                tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, input_dram_noc_xy.x),
+                tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, input_dram_noc_xy.y)
             };
             string risc_name = (is_eth_core) ? "erisc" : "brisc";
             if (use_ncrisc)
