@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moreh_norm_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
 
-MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::ProgramFactoryW::create(
+MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::ProgramFactoryNCOther::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
+    const auto dim = operation_attributes.dim;
     const auto p = operation_attributes.p;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -24,7 +25,7 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.get_legacy_shape();
-    const auto input_rank = input_shape.rank();
+    const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
 
     const auto H = input_shape[-2];
     const auto W = input_shape[-1];
@@ -32,13 +33,20 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
     const auto Ht = H / tt::constants::TILE_HEIGHT;
     const auto Wt = W / tt::constants::TILE_WIDTH;
 
-    const auto num_units = input.volume() / H / W * Ht;
+    const auto num_reduced_tiles_along_dim = input_shape[dim];
+    const auto num_output_tiles = output.volume() / tt::constants::TILE_HW;
 
-    const auto origin_w = input_shape.without_padding()[input_rank - 1];
+    uint32_t outer_stride{1};
+    for (int64_t j = dim; j < input_rank; ++j) {
+        outer_stride *= input_shape[j];
+    }
+    outer_stride /= tt::constants::TILE_HW;
 
-    auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
-    auto [floored_recip_p, recip_p_decimal, recip_p_is_negative] =
-        get_floored_p_and_decimal_and_p_is_negative(1.0f / p);
+    uint32_t num_inner_tiles{1};
+    for (int64_t j = dim + 1; j < input_rank; ++j) {
+        num_inner_tiles *= input_shape[j];
+    }
+    num_inner_tiles /= tt::constants::TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -56,7 +64,7 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
          core_group_1,
          core_group_2,
          num_units_per_core_group_1,
-         num_units_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_units);
+         num_units_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -66,19 +74,11 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
 
     const uint32_t in0_t{1};  // input
     const uint32_t in1_t{1};  // one
-    const uint32_t in2_t{1};  // decimal
-    const uint32_t in3_t{1};  // recip_p_decimal
-    const uint32_t in4_t{1};  // mask_w
 
     const uint32_t out0_t{1};  // output
 
-    const uint32_t im0_t{1};  // |x|
-    const uint32_t im1_t{1};  // log(|x|)
-    const uint32_t im2_t{1};  // exp(log(|x|) * decimal)
-    const uint32_t im3_t{1};  // |x|^p
-    const uint32_t im4_t{1};  // |x|^p * exp(log(|x|) * decimal) == |x + decimal|^p
-    const uint32_t im5_t{1};  // Add(|x + decimal|^p)
-    const uint32_t im6_t{1};  // Sum(|x + decimal|^p)
+    const uint32_t im0_t{1};  // f(x)
+    const uint32_t im1_t{1};  // calculate f(x) over dimensions
 
     CreateCircularBuffer(
         program,
@@ -87,28 +87,20 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
         {
             {tt::CB::c_in0, in0_t},    // input
             {tt::CB::c_in1, in1_t},    // one
-            {tt::CB::c_in2, in2_t},    // decimal
-            {tt::CB::c_in3, in3_t},    // recip_p_decimal
-            {tt::CB::c_in4, in4_t},    // mask_w
             {tt::CB::c_out0, out0_t},  // output
             {tt::CB::c_intermed0, im0_t, intermed_data_format},
             {tt::CB::c_intermed1, im1_t, intermed_data_format},
-            {tt::CB::c_intermed2, im2_t, intermed_data_format},
-            {tt::CB::c_intermed3, im3_t, intermed_data_format},
-            {tt::CB::c_intermed4, im4_t, intermed_data_format},
-            {tt::CB::c_intermed5, im5_t, intermed_data_format},
-            {tt::CB::c_intermed6, im6_t, intermed_data_format},
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_w/kernels/"
-        "reader_moreh_norm_w.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/"
+        "reader_moreh_norm_nc.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_w/kernels/"
-        "writer_moreh_norm_w.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/"
+        "writer_moreh_norm_nc.cpp";
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
@@ -117,12 +109,16 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    if (p == 0.0) {
+        compute_defines["IS_ZERO"] = "1";
+    } else {
+        if (p == -std::numeric_limits<float>::infinity())
+            compute_defines["MINUS_INF"] = "1";
+    }
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_w/kernels/"
-        "moreh_norm_w_kernel.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/"
+        "moreh_norm_nc_kernel.cpp";
 
     const auto compute_kernels_id_1 = CreateComputeKernel(
         program,
@@ -151,57 +147,47 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_units_per_core;
+        uint32_t num_output_tiles_per_core;
         KernelHandle compute_kernel_id;
         if (core_group_1.contains(core)) {
-            num_units_per_core = num_units_per_core_group_1;
+            num_output_tiles_per_core = num_units_per_core_group_1;
             compute_kernel_id = compute_kernels_id_1;
         } else if (core_group_2.contains(core)) {
-            num_units_per_core = num_units_per_core_group_2;
+            num_output_tiles_per_core = num_units_per_core_group_2;
             compute_kernel_id = compute_kernels_id_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
-
         // reader
         const std::vector<uint32_t> reader_runtime_args{
             input.buffer()->address(),
             static_cast<uint32_t>(is_dram(input)),
-            *reinterpret_cast<uint32_t*>(&decimal),
-            *reinterpret_cast<uint32_t*>(&recip_p_decimal),
-            num_units_per_core,
-            Wt,
+            num_output_tiles_per_core,
             tile_offset,
-            origin_w};
+            outer_stride,
+            num_inner_tiles,
+            num_reduced_tiles_along_dim};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         // writer
         const std::vector<uint32_t> writer_runtime_args{
-            output.buffer()->address(),
-            static_cast<uint32_t>(is_dram(output)),
-            num_units_per_core,
-            Wt,
-            tile_offset};
+            output.buffer()->address(), static_cast<uint32_t>(is_dram(output)), num_output_tiles_per_core, tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute
         const std::vector<uint32_t> compute_runtime_args{
-            num_units_per_core,
-            Wt,
-            origin_w,
-            floored_p,
-            static_cast<uint32_t>(p_is_negative),
-            floored_recip_p,
-            static_cast<uint32_t>(recip_p_is_negative)};
+            num_output_tiles_per_core,
+            num_reduced_tiles_along_dim,
+        };
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        tile_offset += num_units_per_core * Wt;
+        tile_offset += num_output_tiles_per_core;
     }
 
     return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
-void MorehNormOperation::ProgramFactoryW::override_runtime_arguments(
+void MorehNormOperation::ProgramFactoryNCOther::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
