@@ -527,6 +527,7 @@ def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_s
         ([1, 2], [3], [4, 5]),
         ([1], [2, 3], [3, 4]),
         ([1, 2], [3, 4], [4, 6]),
+        ([1, 16, 1, 6], [], []),
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -534,7 +535,6 @@ def test_01_volume_tensors(device, data, memory_config):
     (a, b, c_golden) = data
     a = torch.BFloat16Tensor(a)
     b = torch.BFloat16Tensor(b)
-    print(c_golden)
     assert torch.add(a, b).tolist() == c_golden
 
     ttnn_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
