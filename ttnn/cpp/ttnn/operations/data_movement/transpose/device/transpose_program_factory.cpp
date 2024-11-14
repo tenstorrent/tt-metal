@@ -453,23 +453,31 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
     const Tensor &input_tensor,
-    Tensor &output_tensor,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
-    uint32_t num_tiles_per_core_group_1,
-    CoreRangeSet core_group_2,
-    uint32_t num_tiles_per_core_group_2,
-    CoreRangeSet padded_core_group_1,
-    uint32_t padded_num_tiles_per_core_group_1,
-    CoreRangeSet padded_core_group_2,
-    uint32_t padded_num_tiles_per_core_group_2
+    Tensor &output_tensor
     ){
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
 
+    auto tile_shape = input_tensor.get_tile().get_tile_shape();
+    auto tile_hw = (tile_shape[0] * tile_shape[1]);
+    uint32_t num_tensor_tiles = input_tensor.volume() / tile_hw;
+    uint32_t num_output_tiles = output_tensor.volume() / tile_hw;
+    uint32_t W = input_tensor.get_logical_shape()[3], H = input_tensor.get_logical_shape()[2], C = input_tensor.get_logical_shape()[1], N = input_tensor.get_logical_shape()[0];
+    bool needs_padding = C % tile_shape[0] != 0;
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[2] / tile_shape[0]); // only last row of Ct should have padding
+
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
+
+    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+    auto [padded_num_cores, padded_all_cores, padded_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_1, padded_num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
+
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
     auto output_shape = output_tensor.get_padded_shape();
@@ -560,9 +568,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
-    auto [padded_num_cores, padded_all_cores, padded_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_1, padded_num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
-
     uint32_t src0_cb_index = tt::CB::c_in0;
     uint32_t padding_cb_index = tt::CB::c_in1;
 
@@ -622,8 +627,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
         program,
         unary_reader_kernel_id,
         unary_writer_kernel_id,
-        a, output, num_cores_total, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2,
-        padded_core_group_1, padded_num_tiles_per_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_2
+        a, output
     );
 
     auto override_runtime_args_callback = [
@@ -640,27 +644,13 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     ) {
         auto src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
-        auto tile_shape = src_tensor.get_tile().get_tile_shape();
-        uint32_t tile_hw = tile_shape[0] * tile_shape[1];
-        uint32_t num_tensor_tiles = src_tensor.volume() / tile_hw;
-        uint32_t num_output_tiles = dst_tensor.volume() / tile_hw;
-        uint32_t padded_num_tensor_tiles = num_output_tiles / (dst_tensor.get_padded_shape()[2] / tile_shape[0]); // only last row of Ct should have padding
 
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-        uint32_t num_cores_total = num_cores_x * num_cores_y;
-
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
-        auto [padded_num_cores, padded_all_cores, padded_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_1, padded_num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
-
-            override_runtime_args_mc_hc_tiled_interleaved<false>(
-                program,
-                unary_reader_kernel_id,
-                unary_writer_kernel_id,
-                src_tensor, dst_tensor, num_cores_total, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2,
-                padded_core_group_1, padded_num_tiles_per_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_2
-            );
+        override_runtime_args_mc_hc_tiled_interleaved<false>(
+            program,
+            unary_reader_kernel_id,
+            unary_writer_kernel_id,
+            src_tensor, dst_tensor
+        );
 
     };
 
