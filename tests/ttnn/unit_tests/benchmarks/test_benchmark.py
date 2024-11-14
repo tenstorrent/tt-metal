@@ -195,14 +195,14 @@ matmul_shapes_bfloat4_b = [
 ]
 
 matmul_configs = [
-    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
+    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
 ]
 
 
