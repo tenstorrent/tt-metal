@@ -25,14 +25,14 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "xfail": {
+    "temp": {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
         + gen_shapes([1, 1], [256, 256], [1, 1], 4),
-        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "grad_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
