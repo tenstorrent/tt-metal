@@ -183,9 +183,6 @@ def run_max_pool(
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
-    torch.set_printoptions(profile="full")
-    print("output_pytorch" + str(output_pytorch))
-    torch.set_printoptions(profile="default")  # reset
 
     ## reference
     golden_pytorch = torch.nn.MaxPool2d(
