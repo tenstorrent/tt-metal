@@ -8,7 +8,6 @@
 #include "common/env_lib.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
-#include "trace_fixture.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/buffers/circular_buffer_types.hpp"
