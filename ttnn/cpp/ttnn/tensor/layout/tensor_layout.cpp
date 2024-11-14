@@ -36,6 +36,12 @@ Alignment legacyShapeToAlignment(const ttnn::Shape& shape) {
         values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 
+    for (auto& value : values) {
+        if (value == 0) {
+            value = 1;
+        }
+    }
+
     Alignment result(std::move(values));
     return result;
 }
