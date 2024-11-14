@@ -36,19 +36,8 @@ std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedDeviceOperation::comp
 
 std::vector<Tensor> InterleavedToShardedDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    //return operation::generic_create_output_tensors(
-    //    *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
-
-
-    auto mem_config = this->output_mem_config;
-
-    return {create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        mem_config
-        )};
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks InterleavedToShardedDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
