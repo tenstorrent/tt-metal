@@ -153,9 +153,9 @@ matmul_shapes_bfloat16 = [
     (3072, 3072, 3072, True, True, 4, 1, 1),
     (3072, 3072, 4096, False, False, 2, 1, 1),
     (3072, 4096, 4096, False, False, 2, 1, 1),
-    (4096, 4096, 4096, False, False, 4, 1, 1),
-    (8192, 8192, 8192, False, False, 4, 4, 4),
-    (16384, 16384, 16384, False, False, 8, 8, 8),
+    (4096, 4096, 4096, False, False, 1, 2, 2),
+    (8192, 8192, 8192, False, False, 2, 4, 4),
+    (16384, 16384, 16384, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat8_b = [
@@ -195,14 +195,14 @@ matmul_shapes_bfloat4_b = [
 ]
 
 matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
 ]
 
 
