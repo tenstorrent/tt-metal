@@ -9,9 +9,11 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_int,
+    data_gen_with_val,
     compare_pcc,
     compare_equal,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_grayskull, skip_for_grayskull
 
 
@@ -998,32 +1000,43 @@ def test_binary_lcm_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 3, 32, 32])),
-        (torch.Size([1, 6, 32, 32])),
-        (torch.Size([1, 7, 320, 384])),
-        (torch.Size([1, 4, 320, 384])),
+        (torch.Size([1, 2, 32, 64, 64])),
+        (torch.Size([1, 3, 7, 29, 127])),
+        (torch.Size([1, 3, 2, 32])),
+        (torch.Size([1, 6, 49, 97])),
+        (torch.Size([1, 7, 320])),
+        (torch.Size([1, 49, 321])),
+        (torch.Size([4, 32])),
+        (torch.Size([49, 321])),
     ),
 )
 def test_binary_prelu_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
     channels = input_shapes[1]
     in_data2 = torch.rand((channels,), dtype=torch.bfloat16) * 200 - 100
+
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor2 = ttnn.from_torch(in_data2, layout=ttnn.TILE_LAYOUT, device=device)
+
     output_tensor = ttnn.prelu(input_tensor1, input_tensor2)
+    output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.prelu)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 3, 32, 32])),
-        (torch.Size([1, 6, 32, 32])),
-        (torch.Size([1, 7, 320, 384])),
-        (torch.Size([1, 4, 320, 384])),
+        (torch.Size([1, 2, 32, 64, 64])),
+        (torch.Size([1, 3, 7, 29, 127])),
+        (torch.Size([1, 3, 2, 32])),
+        (torch.Size([1, 6, 49, 97])),
+        (torch.Size([1, 7, 320])),
+        (torch.Size([1, 49, 321])),
+        (torch.Size([4, 32])),
+        (torch.Size([49, 321])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1032,10 +1045,12 @@ def test_binary_prelu_ttnn(input_shapes, device):
 )
 @skip_for_grayskull()
 def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
+
     output_tensor = ttnn.prelu(input_tensor1, scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.prelu)
     golden_tensor = golden_function(in_data1, scalar)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)

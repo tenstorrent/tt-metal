@@ -269,11 +269,16 @@ Tensor ExecutePrelu::invoke(const Tensor& input, float scalar, const std::option
 }
 
 Tensor ExecutePrelu::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const tt::tt_metal::LegacyShape s_a = input_a.get_legacy_shape();
-    auto volume = input_b.get_logical_volume();
-    // If volume = 1 Support for a single-value tensor yet to be handled. TODO(#14933)
-    TT_FATAL(s_a[1] == volume, "Mismatch of parameter numbers and input channel size");
-    Tensor b = ttnn::reshape(input_b, ttnn::SimpleShape{std::array<uint32_t, 4>{1, s_a[1], 1, 1}});
+    const auto s_a = input_a.get_shape();
+    const auto volume = input_b.get_logical_volume();
+
+    TT_FATAL(s_a[1] == volume, "Mismatch of parameter numbers and input channel size. Found parameter numbers = {} and channel size = {}.", volume, s_a[1]);
+    Tensor b = input_b;
+    if(s_a.rank()>2){
+        SmallVector<uint32_t> reshape(s_a.rank(), 1);
+        reshape[1] = s_a[1];
+        b = ttnn::reshape(input_b, ttnn::Shape(reshape));
+    }
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
     return result;
 }

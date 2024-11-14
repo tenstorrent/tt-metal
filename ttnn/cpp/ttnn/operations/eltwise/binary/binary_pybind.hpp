@@ -418,6 +418,7 @@ void bind_binary_composite_overload(
     const binary_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_rank = "2, 3, 4",
     const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
@@ -447,9 +448,9 @@ void bind_binary_composite_overload(
                  - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
+                 - {4}
 
-            {4}
+            {5}
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1.5, 2.5], [3.5, 4.5]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -460,6 +461,7 @@ void bind_binary_composite_overload(
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
+        supported_rank,
         note);
 
     bind_registered_operation(
@@ -1168,7 +1170,9 @@ void py_module(py::module& module) {
     detail::bind_binary_composite_overload(
         module,
         ttnn::prelu,
-        R"doc(Perform an eltwise-prelu operation. PReLU supports the case where the size of input_tensor_b matches the number of channels in input_tensor_a.)doc");
+        R"doc(Perform an eltwise-prelu operation. PReLU supports the case where the size of input_tensor_b matches the number of channels in input_tensor_a.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(2, 3, 4, 5)doc");
 
     detail::bind_binary_composite(
         module,
