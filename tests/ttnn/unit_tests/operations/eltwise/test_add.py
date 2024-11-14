@@ -534,6 +534,7 @@ def test_01_volume_tensors(device, data, memory_config):
     (a, b, c_golden) = data
     a = torch.BFloat16Tensor(a)
     b = torch.BFloat16Tensor(b)
+    print(c_golden)
     assert torch.add(a, b).tolist() == c_golden
 
     ttnn_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)

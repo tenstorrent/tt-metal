@@ -103,7 +103,7 @@ template <BinaryOpType binary_op_type>
 auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_tensor_b_arg, const std::optional<Tensor> &optional_output_tensor) {
     Tensor input_tensor_a = input_tensor_a_arg;
     Tensor input_tensor_b = input_tensor_b_arg;
-
+    std::cout<<"It comes to preprocess_inputs"<<std::endl;
     auto rank_a = input_tensor_a.get_shape().rank();
     auto rank_b = input_tensor_b.get_shape().rank();
 
