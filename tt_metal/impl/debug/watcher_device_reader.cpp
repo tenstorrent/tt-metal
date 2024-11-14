@@ -62,7 +62,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) 
         case DebugBrisc: return MEM_BRISC_STACK_SIZE;
         case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
         case DebugErisc: return 0; // Not managed/checked by us.
-        case DebugIErisc: return MEM_BRISC_STACK_SIZE;
+        case DebugIErisc: return MEM_IERISC_STACK_SIZE;
         case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
         case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
         case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;

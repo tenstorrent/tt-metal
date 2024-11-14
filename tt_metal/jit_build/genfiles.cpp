@@ -271,7 +271,7 @@ static void emit_unpack_data_formats(
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
-    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, const tt::ARCH arch) {
+    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool bfp8_pack_precise, const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.input_buf_dataformat_arr,
         desc.param_buf_dataformat_arr,
@@ -279,6 +279,7 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
         desc.output_buf_dataformat_arr,
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
+        bfp8_pack_precise,
         false,
         arch);
 
@@ -398,7 +399,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) =
-        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
+        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch);
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
