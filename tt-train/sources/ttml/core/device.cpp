@@ -4,7 +4,7 @@
 
 #include "device.hpp"
 
-#include "ttnn_all_includes.hpp"
+#include <core/ttnn_all_includes.hpp>
 
 namespace {
 void device_deleter(tt::tt_metal::Device* device) {

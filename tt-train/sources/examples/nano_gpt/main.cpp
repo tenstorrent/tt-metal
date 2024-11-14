@@ -343,7 +343,7 @@ int main(int argc, char **argv) {
             fmt::print(
                 "Full step time {} ms, cache entries: {}\n",
                 (double)duration / 1000,
-                device->get_devices()[0]->num_program_cache_entries());
+                device->num_program_cache_entries());
         }
         if (optimizer.get_steps() >= max_steps) {
             break;
@@ -360,7 +360,7 @@ int main(int argc, char **argv) {
         "{} Steps training time: {} s, cache entries: {}\n",
         max_steps,
         (double)duration / 1000000.,
-        device->get_devices()[0]->num_program_cache_entries());
+        device->num_program_cache_entries());
     wandbcpp::finish();
     return 0;
 }

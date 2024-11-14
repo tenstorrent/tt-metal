@@ -13,8 +13,7 @@
 #include <functional>
 #include <optional>
 #include <stdexcept>
-
-#include "ttnn_all_includes.hpp"
+#include <core/ttnn_all_includes.hpp>
 
 namespace {
 
@@ -148,7 +147,7 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 tt::tt_metal::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
     // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device->get_devices()[0], memory_config);
+    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device->get_device(0), memory_config);
 }
 
 tt::tt_metal::Tensor full(
@@ -169,10 +168,10 @@ tt::tt_metal::Tensor full(
                 (padded[3] + additional_padding_w),
             });
         // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device->get_devices()[0]));
+        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
     }
     // if not padding available, we can just create a tensor with the given shape
-    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device->get_devices()[0]));
+    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
 }
 
 tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
