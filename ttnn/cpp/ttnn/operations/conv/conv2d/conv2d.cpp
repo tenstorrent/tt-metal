@@ -696,7 +696,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0," Matrix Height Padding can't be negative");
 
-    std::cout << "conv2d ???? called" << std::endl;
     auto target_shape = ttnn::Shape(std::array<uint32_t,4>{1, 1, weight_matrix_height, out_channels},
         std::array<std::array<uint32_t, 2>, 4>{
             std::array<uint32_t, 2>{0, 0},

@@ -122,6 +122,9 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(out_memory_config.memory_layout));
 
     if (!input_tensor.is_sharded()) {
+        if (input_tensor.get_layout() == Layout::TILE) {
+            TT_FATAL(false, "OH NO");
+        }
         TT_FATAL(
             input_tensor.get_layout() == Layout::TILE,
             "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "

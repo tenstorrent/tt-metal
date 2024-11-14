@@ -67,7 +67,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
-        readback_tensor.set_tensor_spec(thread_local_tensor.tensor_spec());
+        readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
         readback_tensor.tensor_attributes->metadata_populated = true;
         readback_tensor.tensor_attributes->num_workers_completed++;
         // Ensure that the readback buffer is owned inside and outside the lambda
@@ -276,7 +276,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
-            readback_tensor.set_tensor_spec(thread_local_tensor.tensor_spec());
+            readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
             readback_tensor.tensor_attributes->metadata_populated = true;
             readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors

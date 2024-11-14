@@ -317,7 +317,8 @@ std::vector<LegacyShape> extract_legacy_shapes(
         for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
             const auto& tensor_spec = tensor_specs[idx];
             TensorLayout tensor_layout = use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
-            legacy_shapes.emplace_back(tensor_spec.logical_shape().view(), tensor_spec.compute_padded_shape().view());
+            auto logical_shape = tensor_spec.logical_shape();
+            legacy_shapes.emplace_back(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view());
         }
         return legacy_shapes;
     } else {

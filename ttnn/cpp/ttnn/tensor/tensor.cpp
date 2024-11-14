@@ -465,7 +465,6 @@ void Tensor::deepcopy(const Tensor& other) {
     // Populate tensor metadata
     this->set_storage(other.get_storage());
     this->set_tensor_spec(other.get_tensor_spec());
-    this->tensor_attributes->tensor_spec = other.tensor_attributes->tensor_spec;
     // Set metadata populated flag for getters
     this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
