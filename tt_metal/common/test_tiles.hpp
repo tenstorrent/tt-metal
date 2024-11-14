@@ -26,7 +26,7 @@ enum class TensorLayoutType {
 } // namespace tests::utils
 
 template <class T, template <typename...> typename BufferType>
-std::vector<T> convert_to_tile_layout(
+std::vector<T> convert_to_tile_layout_322(
     const BufferType<T>& data,
     std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
     std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt,
@@ -112,6 +112,81 @@ std::vector<T> convert_to_tile_layout(
 
     return result;
 }
+
+template <class T, template <typename...> typename BufferType>
+std::vector<T> convert_to_tile_layout(
+    const BufferType<T>& data,
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
+    ZoneScoped;
+
+    if (data.size() == 0) {
+        return {};
+    }
+
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+
+    TT_ASSERT(data.size() % tile_HW == 0);
+    int num_tiles = data.size() / tile_HW;
+
+    // Precompute sizes for the quadrants
+    size_t size_top_left = face_H * face_W;
+    size_t size_top_right = face_H * (tile_W - face_W);
+    size_t size_bottom_left = (tile_H - face_H) * face_W;
+    size_t size_bottom_right = (tile_H - face_H) * (tile_W - face_W);
+
+    // Initialize the result vector with the appropriate size
+    std::vector<T> result(data.size());
+
+    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+        size_t base_offset = tile_idx * tile_HW;
+
+        // Calculate offsets for each quadrant within the current tile
+        size_t offset_top_left = base_offset;
+        size_t offset_top_right = offset_top_left + size_top_left;
+        size_t offset_bottom_left = offset_top_right + size_top_right;
+        size_t offset_bottom_right = offset_bottom_left + size_bottom_left;
+
+        // Initialize pointers for writing into the result vector
+        size_t ptr_top_left = offset_top_left;
+        size_t ptr_top_right = offset_top_right;
+        size_t ptr_bottom_left = offset_bottom_left;
+        size_t ptr_bottom_right = offset_bottom_right;
+
+        int index = tile_idx * tile_HW;
+
+        for (int row = 0; row < tile_H; row++) {
+            for (int col = 0; col < tile_W; col++) {
+                if (row < face_H && col < face_W) {
+                    result[ptr_top_left++] = data[index];
+                } else if (row < face_H && col >= face_W) {
+                    result[ptr_top_right++] = data[index];
+                } else if (row >= face_H && col < face_W) {
+                    result[ptr_bottom_left++] = data[index];
+                } else if (row >= face_H && col >= face_W) {
+                    result[ptr_bottom_right++] = data[index];
+                } else {
+                    TT_ASSERT(false);
+                }
+                index++;
+            }
+        }
+
+        // Ensure that all data has been written correctly
+        TT_ASSERT(ptr_top_left == offset_top_left + size_top_left);
+        TT_ASSERT(ptr_top_right == offset_top_right + size_top_right);
+        TT_ASSERT(ptr_bottom_left == offset_bottom_left + size_bottom_left);
+        TT_ASSERT(ptr_bottom_right == offset_bottom_right + size_bottom_right);
+    }
+
+    return result;
+}
+
 
 template <class T, template <typename...> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(
@@ -242,7 +317,7 @@ inline std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + til
 
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
+inline std::vector<T> tilize_nchw_322(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> tilized_result;
     if(in_rowmajor.size() == 0) {
@@ -288,6 +363,59 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Spa
     return tilized_result;
 }
 
+template <typename T, template <typename...> typename BufferType>
+inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
+    ZoneScoped;
+    std::vector<T> tilized_result;
+    if (in_rowmajor.size() == 0) {
+        return tilized_result;
+    }
+
+    const int H = shape[shape.size() - 2];
+    const int W = shape[shape.size() - 1];
+    int batch_size = 1;
+    for (size_t i = 0; i < shape.size() - 2; i++) {
+        batch_size *= shape[i];
+    }
+
+    const int tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    const int tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    const int OH = round_up_to_tile(H, tile_H);
+    const int OW = round_up_to_tile(W, tile_W);
+
+    tilized_result.resize(batch_size * OH * OW, 0);
+
+    for (int batch_index = 0; batch_index < batch_size; batch_index++) {
+        const int batch_offset_in = batch_index * H * W;
+        const int batch_offset_out = batch_index * OH * OW;
+        for (int hs = 0; hs < H; hs += tile_H) {
+            for (int ws = 0; ws < W; ws += tile_W) {
+                for (int ht = 0; ht < tile_H; ht++) {
+                    const int h = ht + hs;
+                    if (h >= OH) continue;
+                    const int h_OW = h * OW;
+                    const int h_W = h * W;
+                    for (int wt = 0; wt < tile_W; wt++) {
+                        const int w = wt + ws;
+                        if (w >= OW) continue;
+                        const int out_offs = w + h_OW + batch_offset_out;
+                        T val = 0;
+                        if (w < W && h < H) {
+                            const int in_offs = w + h_W + batch_offset_in;
+                            val = in_rowmajor[in_offs];
+                        }
+                        tilized_result[out_offs] = val;
+                    }
+                }
+            }
+        }
+    }
+
+    TT_ASSERT(tilized_result.size() == batch_size * OH * OW);
+    return tilized_result;
+}
+
+
 struct TensAddr {
     std::vector<std::uint32_t> sh;
 
@@ -323,7 +451,7 @@ inline std::vector<T> convert_layout(
     switch (inL) {
         case tests::utils::TensorLayoutType::TILED_SWIZZLED:
             if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                return convert_to_tile_layout<T>(inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+                return convert_to_tile_layout<T>(inp, tile_shape, face_shape /*, transpose_within_face, transpose_of_faces*/);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
                 return untilize_nchw<T>(inp, shape, tile_shape);
             } else
