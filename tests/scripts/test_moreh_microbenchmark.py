@@ -288,7 +288,7 @@ def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
 
 
 def run_dram_read_remote_cb_sync_cmd(
-    k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_mixed_df_layers
+    k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_mixed_df_layers, use_sub_devices
 ):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb "
@@ -310,12 +310,13 @@ def run_dram_read_remote_cb_sync_cmd(
         + str(num_receivers)
         + " --num-mixed-df-layers "
         + str(num_mixed_df_layers)
+        + (" --use-sub-devices " if use_sub_devices else "")
     )
     run_moreh_single_test("DRAM read remote CB sync single-core ", command)
 
 
 def run_remote_cb_sync_matmul_single_core_cmd(
-    m, k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_layers
+    m, k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_layers, use_sub_devices
 ):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul "
@@ -339,6 +340,7 @@ def run_remote_cb_sync_matmul_single_core_cmd(
         + str(num_receivers)
         + " --num-layers "
         + str(num_layers)
+        + (" --use-sub-devices " if use_sub_devices else "")
     )
     run_moreh_single_test("DRAM read remote CB sync single-core ", command)
 
@@ -866,8 +868,22 @@ def test_dram_read_l1_write_core(
         ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 15),
     ],
 )
+@pytest.mark.parametrize(
+    "use_sub_devices",
+    [False, True],
+)
 def test_dram_read_remote_cb_sync(
-    arch, test, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
+    arch,
+    test,
+    test_vector,
+    num_tests,
+    nblock,
+    cb_nblock,
+    cb_padding,
+    data_format,
+    num_receivers,
+    num_mixed_df_layers,
+    use_sub_devices,
 ):
     data = []
     cycle_list = []
@@ -893,12 +909,12 @@ def test_dram_read_remote_cb_sync(
                 else:
                     input_size += k * n * 2048 // 1024
             run_dram_read_remote_cb_sync_cmd(
-                k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
+                k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
             )
         elif test == "Matmul":
             input_size = input_size * num_mixed_df_layers
             run_remote_cb_sync_matmul_single_core_cmd(
-                m, k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
+                m, k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
             )
         cycle = profile_results_kernel_duration()
         time = cycle / get_device_freq() / 1000.0 / 1000.0

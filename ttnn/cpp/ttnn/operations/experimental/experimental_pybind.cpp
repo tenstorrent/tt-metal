@@ -26,6 +26,7 @@
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
@@ -52,6 +53,7 @@ void py_module(py::module& module) {
 
     transformer::py_bind_rotary_embedding(module);
     transformer::py_bind_rotary_embedding_llama(module);
+    transformer::py_bind_rotary_embedding_llama_fused_qk(module);
     transformer::py_bind_rotate_half(module);
 
     reduction::detail::bind_argmax_operation(module);

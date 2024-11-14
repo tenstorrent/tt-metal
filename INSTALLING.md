@@ -29,16 +29,10 @@ Note the current compatability matrix:
 ### Step 2. System-level dependencies
 
 ```sh
-sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz cmake=3.16.3-1ubuntu1.20.04.1 ninja-build
-
-wget https://apt.llvm.org/llvm.sh
-chmod u+x llvm.sh
-sudo ./llvm.sh 17
-sudo apt install libc++-17-dev libc++abi-17-dev
+sudo ./install_dependencies.sh
 ```
 - Note: `CMake 3.16` is the targetted required version of `CMake` as it aligns with the default from `Ubuntu 20.04`. Some advanced build configurations like unity builds require `CMake 3.20`.
-  - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14 
+  - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14
 ---
 
 ### Step 3. Hugepages
