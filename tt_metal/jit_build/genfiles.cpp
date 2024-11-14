@@ -11,10 +11,12 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/common_runtime_address_map.h" // NOC_0_X
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
+
+#include "tt_metal/hw/inc/circular_buffer.h"
 
 namespace fs = std::filesystem;
 
@@ -270,7 +272,7 @@ static void emit_unpack_data_formats(
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
-    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, const tt::ARCH arch) {
+    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool bfp8_pack_precise, const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.input_buf_dataformat_arr,
         desc.param_buf_dataformat_arr,
@@ -278,6 +280,7 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
         desc.output_buf_dataformat_arr,
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
+        bfp8_pack_precise,
         false,
         arch);
 
@@ -397,7 +400,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) =
-        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
+        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch);
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -663,21 +666,6 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     ofstream file_stream_siec(path + "/slave_idle_erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_siec << output_string;
     file_stream_siec.close();
-}
-
-static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {
-    stringstream ss;
-
-    string end_of_line = " \\\n    ( \\";
-    for (const auto& core : cores) {
-        ss << end_of_line << endl;
-        ss << "    ((x) == NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << core.x
-           << ") && (y) == NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << core.y << "))";
-        end_of_line = " || \\";
-    }
-    ss << ")" << endl;
-
-    return ss.str();
 }
 
 }  // namespace tt::tt_metal

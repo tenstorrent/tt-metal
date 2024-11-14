@@ -14,53 +14,58 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "dev_msgs.h"
 
-extern uint32_t __ldm_bss_start[];
-extern uint32_t __ldm_bss_end[];
-extern uint32_t __ldm_data_start[];
-extern uint32_t __ldm_data_end[];
-extern void (* __init_array_start[])();
-extern void (* __init_array_end[])();
-
 extern void kernel_init(uint32_t kernel_init);
 extern void kernel_launch(uint32_t kernel_base_addr);
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t tt_l1_ptr *l1_addr, int32_t len) {
-    // Cover L1 load latency of 6 cycles for the bulk of the copy
-    int32_t n = 0;
-    while (n < len - 5) {
-        uint32_t v0 = l1_addr[n + 0];
-        uint32_t v1 = l1_addr[n + 1];
-        uint32_t v2 = l1_addr[n + 2];
-        uint32_t v3 = l1_addr[n + 3];
-        uint32_t v4 = l1_addr[n + 4];
-        uint32_t v5 = l1_addr[n + 5];
-        local_mem_addr[n + 0] = v0;
-        local_mem_addr[n + 1] = v1;
-        local_mem_addr[n + 2] = v2;
-        local_mem_addr[n + 3] = v3;
-        local_mem_addr[n + 4] = v4;
-        local_mem_addr[n + 5] = v5;
-        n += 6;
-    }
-    // Could optimize this further (eg, loop of 2 or 4), probably not worth it
-    while (n < len) {
-        local_mem_addr[n] = l1_addr[n];
-        n++;
-    }
-}
-
-inline void firmware_kernel_common_init(void *init_local_l1_base) {
-
-    // Handle stuff typically done in crt0 in asm.  Easier to do in C
+// Clear bss, copy initial data image, run global constructors.
+inline void do_crt1(uint32_t tt_l1_ptr *data_image) {
+    // Clear bss.
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
 
-    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    l1_to_local_mem_copy((uint32_t *)__ldm_data_start, (uint32_t *)((uint8_t *)init_local_l1_base), num_words);
+    // Copy initialized data.
+    extern uint32_t __ldm_data_start[];
+    extern uint32_t __ldm_data_end[];
+    uint32_t *dst = __ldm_data_start;
+    uint32_t tt_l1_ptr *src = data_image;
+    unsigned len = __ldm_data_end - __ldm_data_start;
+#pragma GCC unroll 0
+    while (len >= 3) {
+        auto v0 = src[0], v1 = src[1], v2 = src[2];
+        // 1) Make sure the optimizer does not think this is memcpy by
+        // hiding the pointer bookkeeping in an asm.
+        // 2) The scheduler doesn't know the above loads have 6 cycle
+        // latency. We emit the 3 bookkeeping adds as a single block
+        // in the load shadow before the stores. The optimizer will
+        // not be able to move these.
+        // 3) We don't need early clobbers here because of the +r
+        // constraint -- early clobbers would pessimize.
+        asm inline(
+            "addi %0,%0,3*%3\n\t"
+            "addi %1,%1,3*%3\n\t"
+            "addi %2,%2,-3"
+            : "+r"(src), "+r"(dst), "+r"(len)
+            : "i"(sizeof(v0)));
+        dst[-3] = v0, dst[-2] = v1, dst[-1] = v2;
+    }
+    // There are 0, 1 or 2 words of residue. This is smaller than a loop.
+    // We get smaller code layout by expecting the conditions to be true.
+    if (__builtin_expect(len >= 1, true)) {
+        dst[0] = src[0];
+        if (__builtin_expect(len >= 2, true))
+            dst[1] = src[1];
+    }
 
+    // Run constructors.
+    extern void (*__init_array_start[])();
+    extern void (*__init_array_end[])();
+#pragma GCC unroll 0
     for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
         (**fptr)();
     }
 }
+
 FORCE_INLINE
 uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
 
