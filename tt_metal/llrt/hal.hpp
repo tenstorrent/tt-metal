@@ -41,6 +41,7 @@ enum class HalProcessorClassType : uint8_t {
 };
 
 enum class HalL1MemAddrType : uint8_t {
+    BASE,
     BARRIER,
     MAILBOX,
     LAUNCH,
