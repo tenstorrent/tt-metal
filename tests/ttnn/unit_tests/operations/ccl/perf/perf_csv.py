@@ -214,9 +214,16 @@ def perf_report(file_path):
         averages_data.append(group_data)
 
     averages_df = pd.DataFrame(averages_data)
+    op_code = averages_df.iloc[0]["OP CODE"]
 
     today = time.strftime("%Y_%m_%d")
-    ccl_perf_file_path = f"CCL_Perf_{today}.csv"
+    if op_code == "AllGather":
+        ccl_perf_file_path = f"CCL_all_gather_Perf_{today}.csv"
+    elif op_code == "ReduceScatter":
+        ccl_perf_file_path = f"CCL_reduce_scatter_Perf_{today}.csv"
+    else:
+        ccl_perf_file_path = f"CCL_Perf_{today}.csv"
+
     os.rename(file_path, ccl_perf_file_path)
 
     averages_df.to_csv(ccl_perf_file_path, index=False)

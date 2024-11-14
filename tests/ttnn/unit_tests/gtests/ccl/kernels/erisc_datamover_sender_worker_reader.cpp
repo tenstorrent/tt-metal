@@ -38,7 +38,6 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, pages_to_read);
-        // DPRINT << "SR " << num_pages_read << "\n";
     }
     DPRINT << "SR DONE\n";
 
