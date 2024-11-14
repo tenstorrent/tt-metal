@@ -339,4 +339,39 @@ uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& t
     return peak_size_per_core;
 }
 
+// returns peak size of circular buffer allocations for a given trace
+uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json &trace) {
+    uint32_t current_size_per_core = 0;
+    uint32_t peak_size_per_core = 0;
+
+    size_t counter_expected = 0;
+    for (const auto &node : trace) {
+        // expect a trace to be sorted by counter (execution order)
+        if (node.at(kCounter).get<size_t>() == counter_expected) {
+            counter_expected++;
+        } else {
+            TT_THROW("Graph trace counter/execution out of order");
+        }
+
+        // process only circular buffer allocation and deallocation nodes
+        if (node.at(kNodeType) != kNodeCBAllocate && node.at(kNodeType) != kNodeCBDeallocateAll) {
+            continue;
+        }
+
+        if (node.at(kNodeType) == kNodeCBAllocate) {
+
+            bool is_globally_allocated = std::stoi(node.at(kParams).at(kGloballyAllocated).get<std::string>()) == 1;
+            if (!is_globally_allocated)
+            {
+                current_size_per_core += std::stoi(node.at(kParams).at(kSize).get<std::string>());
+                peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
+            }
+        } else { // kNodeCBDeallocateAll
+            current_size_per_core = 0;
+        }
+    }
+
+    return peak_size_per_core;
+}
+
 }  // namespace ttnn::graph

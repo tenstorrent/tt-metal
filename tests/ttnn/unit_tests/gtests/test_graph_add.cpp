@@ -34,6 +34,7 @@ struct AddOpGraphTestParam {
     std::vector<std::string> expected_calltrace;
     uint32_t expected_peak_L1_memory_usage = 0;
     uint32_t expected_intermediate_tensors_count = 0;
+    uint32_t expected_cb_peak_per_core = 0;
     uint32_t expected_l1_output_per_core = 0;
     uint32_t expected_l1_peak_per_core = 0;
     std::vector<graph::TensorInfo> expected_output_info;
@@ -74,6 +75,9 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         // per core buffer allocation size
         {
+            auto cb_peak_size_per_core = graph::extract_circular_buffers_peak_size_per_core(json_trace);
+            EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
+
             auto compute_with_storage_grid_size = this->getDevice().compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
@@ -128,6 +132,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor" },
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
+                .expected_cb_peak_per_core = 3 * 4096,
                 .expected_l1_output_per_core = 2048,
                 .expected_l1_peak_per_core = 2048,
                 .expected_output_info = {
@@ -144,8 +149,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_calltrace = { "ttnn::add", "ttnn::repeat", "ttnn::prim::old_infra_device_operation", "RepeatDeviceOperation", "tt::tt_metal::create_device_tensor", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 92160,
                 .expected_intermediate_tensors_count = 0,
+                .expected_cb_peak_per_core = 3 * 4096,
                 .expected_l1_output_per_core = 2048,
-                .expected_l1_peak_per_core = 2*2048,
+                .expected_l1_peak_per_core = 2 * 2048,
                 .expected_output_info = {
                     graph::TensorInfo{
                         .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
@@ -153,10 +159,86 @@ INSTANTIATE_TEST_SUITE_P(
                         .type = tt::tt_metal::BufferType::L1
                     }
                 },
+            },
+            AddOpGraphTestParam{
+                .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32*32, 32*32}),
+                .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32*32, 32*32}),
+                .memory_config = {
+                    .memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = tt::tt_metal::BufferType::L1,
+                    .shard_spec = tt::tt_metal::ShardSpec{
+                        CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                        {6 * 32, 32 * 32},
+                        ShardOrientation::COL_MAJOR}},
+                .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor" },
+                .expected_peak_L1_memory_usage = 20054016,
+                .expected_intermediate_tensors_count = 0,
+                .expected_cb_peak_per_core = 0,
+                .expected_l1_output_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
+                .expected_l1_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
+                .expected_output_info = {
+                    graph::TensorInfo{
+                        .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32*32, 32*32}),
+                        .size = 2 * (3 * 32 * 32 * 32 * 32),
+                        .type = tt::tt_metal::BufferType::L1}
+                }
             }
         ),
         ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH, tt::tt_metal::IGraphProcessor::RunMode::NORMAL)
-    )
+    ),
+    // Test case name generator: uid_buffer_type_memory_layout_run_mode
+    [](const testing::TestParamInfo<std::tuple<AddOpGraphTestParam, tt::tt_metal::IGraphProcessor::RunMode>>& info) {
+        std::stringstream ss;
+
+        static uint32_t uid = 0;
+        ss << uid++;
+
+        const auto& param = std::get<0>(info.param);
+        switch(param.memory_config.buffer_type)
+        {
+            case tt::tt_metal::BufferType::DRAM:
+                ss << "_DRAM";
+                break;
+            case tt::tt_metal::BufferType::L1:
+                ss << "_L1";
+                break;
+            default:
+                break;
+        }
+
+        switch(param.memory_config.memory_layout)
+        {
+            case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
+                ss << "_I";
+                break;
+            case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
+                ss << "_HS";
+                break;
+            case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
+                ss << "_WS";
+                break;
+            case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
+                ss << "_BS";
+                break;
+            default:
+                break;
+        }
+
+        const auto& run = std::get<1>(info.param);
+        switch(run)
+        {
+            case tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH:
+                ss << "_NO_DISPATCH";
+                break;
+            case tt::tt_metal::IGraphProcessor::RunMode::NORMAL:
+                ss << "_NORMAL";
+                break;
+            default:
+                break;
+        }
+
+        return ss.str();
+    }
 );
 
 

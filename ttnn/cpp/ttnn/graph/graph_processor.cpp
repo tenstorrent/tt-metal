@@ -145,8 +145,8 @@ void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint6
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
-        {"core_range_set", core_range_set.str()},
-        {"globally_allocated", std::to_string(is_globally_allocated)}
+        {kCoreRangeSet, core_range_set.str()},
+        {kGloballyAllocated, std::to_string(is_globally_allocated)}
     };
     auto counter = graph.size();
     {
