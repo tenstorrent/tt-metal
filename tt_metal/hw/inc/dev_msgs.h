@@ -16,6 +16,14 @@
 
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
+// Several firmware/kernel files depend on this file for dev_mem_map.h and/or noc_parameters.h inclusion
+// We don't want to pollute host code with those
+// Including them here within the guard to make FW/KERNEL happy
+// The right thing to do, would be "include what you use" in the other header files
+#include "noc/noc_parameters.h"
+#include "dev_mem_map.h"
+
 #if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
