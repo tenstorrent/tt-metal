@@ -259,6 +259,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         page_table=None,
         # get_last_token=-1,
         text_only_inference=False,
+        vision_tokens=None,
     ):
         for idx, (
             layer,
@@ -274,6 +275,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,
                     user_id=user_id,
+                    vision_tokens=vision_tokens,
                 )
             h = layer(
                 h,

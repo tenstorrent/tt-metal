@@ -175,8 +175,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         batch_images: List[List[PIL_Image.Image]],
         batch_masks: List[List[List[int]]],
         total_len: int,
-        xattn_caches,
-        user_id,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         skip_vision_encoder = False
 
@@ -244,10 +242,6 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        xattn_caches = [
-            layer.compute_xattn_kv_cache(vision_tokens_tt, xattn_caches[layer_num], user_id=user_id)
-            for layer_num, layer in enumerate(self.text_model.cross_attention_layers)
-        ]
         padded_masks = _pad_masks(  # torch.Size([1, 512, 1, 4])
             batch_masks,
             num_chunks,
@@ -270,7 +264,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             "constant",
             get_negative_inf_value(torch.float32),
         )
-        return (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask)
+        return (vision_tokens_tt, cross_attention_masks, full_text_row_masked_out_mask)
 
     def validate_inputs(self, tokens, position_ids):
         batch, seq_len = tokens.shape[:2]
@@ -556,6 +550,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         xattn_caches,  # list of ttnn tensors
         text_only_inference: bool = False,
         user_id=0,
+        vision_tokens=None,
     ) -> torch.Tensor:
         """
         This method takes torch tensors in, returns torch tensors.
@@ -595,6 +590,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             user_id=user_id,
             mode=mode,
             text_only_inference=text_only_inference,
+            vision_tokens=vision_tokens,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -612,6 +608,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         rot_mats,
         transformation_mats,
         user_id,
+        vision_tokens,
     ):
         """
         This method runs prefill forward. It takes ttnn tensors in, returns ttnn tensors.
@@ -627,6 +624,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             transformation_mats=transformation_mats,
             user_id=user_id,
             mode="prefill",
+            vision_tokens=vision_tokens,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         return tt_out

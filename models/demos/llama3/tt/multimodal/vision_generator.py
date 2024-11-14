@@ -51,12 +51,10 @@ class LlamaVision:
         Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
         """
         B = tokens.shape[0]
-        xattn_caches, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
+        vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
             batch_images=[vision_images],
             batch_masks=[vision_mask],
             total_len=total_len,
-            xattn_caches=xattn_caches,
-            user_id=user_id,
         )
 
         (
@@ -81,6 +79,7 @@ class LlamaVision:
             rot_mats,
             transformation_mats,
             user_id,
+            vision_tokens,
         )
 
         logits = self.model.process_output_prefill(tt_logits, B, prefill_len)
