@@ -614,6 +614,7 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
         ((32, 32, 32, 32), (0, 3)),
         ((32, 32, 32, 32), (1, 3)),
         ((32, 32, 32, 32), (2, 3)),
+        ((32, 32, 32, 32), (0, 1)),
     ],
 )
 def test_transpose_bfloat8_b(device, shape, swap_dims):
@@ -873,7 +874,5 @@ def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
-    # ttnn.set_printoptions(profile="full")
-    print(tt_output)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)

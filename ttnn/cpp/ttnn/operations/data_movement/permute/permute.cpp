@@ -59,8 +59,12 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
     auto input_shape = a.get_logical_shape();
 
     auto formatted_input_tensor = a;
-    bool wh = W == 2 && H == 3;
-    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and !wh && !a.is_sharded();
+    // WH and CN should be supported without typecast
+    bool wh = N == 0 && C == 1 && H == 3 && W == 2;
+    bool cn = N == 1 && C == 0 && H == 2 && W == 3;
+    bool cnwh = N == 1 && C == 0 && H == 3 && W == 2;
+    bool bfloat8_supported = wh || cn || cnwh;
+    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and !bfloat8_supported && !a.is_sharded();
     formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
     auto output = formatted_input_tensor;

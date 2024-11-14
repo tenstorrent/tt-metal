@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 // Utility functions
 FORCE_INLINE constexpr uint32_t div_up(uint32_t a, uint32_t b) {
@@ -175,8 +174,6 @@ void kernel_main() {
         cb_wait_front(tt::CB::c_in1, 1);
         uint32_t l1_read_ptr = get_read_ptr(tt::CB::c_in1);
         uint32_t c_t = C_t - 1;
-        DPRINT << "start_padding_tile_idx: " << start_padding_tile_idx << ENDL();
-        DPRINT << "end_padding_tile_idx: " << end_padding_tile_idx << ENDL();
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to (n, h, w_t)
             uint32_t n = tile_idx / (H * W_t);
@@ -186,16 +183,13 @@ void kernel_main() {
             uint8_t C_in_tile = C % TILE_HEIGHT;
             uint8_t face_c_start = C_in_tile/ FACE_HEIGHT;
             if (tile_idx == start_padding_tile_idx) {
-                DPRINT << "N: " << n << " H: " << h << " W: " << w_t << " C_in_tile: " << C_in_tile << " face_c_start: " << (uint32_t) face_c_start << ENDL();
             }
             for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
                 uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
                 if (tile_idx == start_padding_tile_idx) {
-                    DPRINT << "face_c: " << (uint32_t) face_c << " sub_tile_line_start: " << (uint32_t) sub_tile_line_start << ENDL();
                 }
                 for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
                     if (tile_idx == start_padding_tile_idx) {
-                        DPRINT << "face_c: " << (uint32_t) face_c << " face_w: " << (uint32_t) face_w << " sub_tile_line_start: " << (uint32_t) sub_tile_line_start << ENDL();
                     }
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
 

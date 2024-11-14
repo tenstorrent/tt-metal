@@ -5,17 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
-template <typename T>
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, T val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(begin_addr);
-    for (uint32_t i = 0; i < n; ++i) {
-        DPRINT << "fill_with_val: " << i << " " << val << ENDL();
-        ptr[i] = val;
-    }
-}
-
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
@@ -50,10 +39,4 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }
-
-    cb_reserve_back(tt::CB::c_in1, 1);
-    uint32_t l1_write_addr = get_write_ptr(tt::CB::c_in1);
-    fill_with_val<uint32_t>(l1_write_addr, 8, 123123);
-    cb_push_back(tt::CB::c_in1, 1);
-
 }

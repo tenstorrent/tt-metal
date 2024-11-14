@@ -10,7 +10,6 @@
 FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
-        // DPRINT << "fill_with_val: " << i << " " << val << ENDL();
         ptr[i] = val;
     }
 }

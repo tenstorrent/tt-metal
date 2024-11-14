@@ -566,24 +566,23 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     uint32_t src0_cb_index = tt::CB::c_in0;
     uint32_t padding_cb_index = tt::CB::c_in1;
 
-
-
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(face_shape[1] * a.element_size(), {{padding_cb_index, cb_data_format}})
-            .set_page_size(padding_cb_index, face_shape[1] * a.element_size());
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-
+    if (needs_padding) {
+        tt::tt_metal::CircularBufferConfig cb_src1_config =
+            tt::tt_metal::CircularBufferConfig(face_shape[1] * a.element_size(), {{padding_cb_index, cb_data_format}})
+                .set_page_size(padding_cb_index, face_shape[1] * a.element_size());
+        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    }
 
     // create reader kernel with compile time and runtime args
     tt::tt_metal::Buffer *src_buffer = a.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    float pad_value = 0.1f;
+    float pad_value = 0.0f;
     uint32_t element_size = a.element_size();
     uint32_t padding_val_packed = 0;
     uint32_t num_writes = 0;
@@ -602,7 +601,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
     program,
-    "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_interleaved_start_id_with_padding.cpp",
+    "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
     total_cores,
     tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -662,6 +661,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
                 src_tensor, dst_tensor, num_cores_total, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2,
                 padded_core_group_1, padded_num_tiles_per_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_2
             );
+
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
