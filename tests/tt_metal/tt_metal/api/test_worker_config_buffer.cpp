@@ -54,4 +54,4 @@ TEST(WorkerConfigBuffer, SmallSize) {
     }
 }
 
-}  // namespace working_config_buffer_tests
+}  // namespace worker_config_buffer_tests
