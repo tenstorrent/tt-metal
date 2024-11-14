@@ -18,7 +18,7 @@ size_t element_size_bytes(DataType dtype) {
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
-            TT_THROW("element_size_bytes() should not be used for BFLOAT8_B and BFLOAT4_B types becaues of how they are packed");
+            return sizeof(float);
 
         default:
             TT_THROW("Unsupported data type!");
@@ -111,8 +111,6 @@ const Tile& TilePageConfig::get_tile() const {
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
 {
-    TT_FATAL(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
-
     const auto element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
     auto width_alignment = sizeof(uint32_t) / element_size;
 
