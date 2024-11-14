@@ -203,6 +203,23 @@ void eth_send_bytes_over_channel_payload_only(
     }
 }
 
+// Calls the unsafe variant of eth_send_packet under the hood which is guaranteed not to context switch
+// We want this for code size reasons
+FORCE_INLINE
+void eth_send_bytes_over_channel_payload_only_unsafe(
+    uint32_t src_addr,
+    uint32_t dst_addr,
+    uint32_t num_bytes,
+    uint32_t num_bytes_per_send = 16,
+    uint32_t num_bytes_per_send_word_size = 1) {
+    uint32_t num_bytes_sent = 0;
+    while (num_bytes_sent < num_bytes) {
+        internal_::eth_send_packet_unsafe(
+            0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
+        num_bytes_sent += num_bytes_per_send;
+    }
+}
+
 /*
  * Sends the write completion signal to the receiver ethernet core, for transfers where the payload was already sent.
  * The second half of a full ethernet send.

@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/cpp/ttnn/operation.hpp"
 
+#include "ttnn/operation.hpp"
 namespace ttnn::operations::data_movement::detail {
 
 // start is inclusive, end is exclusive
