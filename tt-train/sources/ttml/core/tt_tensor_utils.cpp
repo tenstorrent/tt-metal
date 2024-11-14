@@ -270,7 +270,7 @@ tt::tt_metal::Tensor from_vector<uint32_t, DataType::UINT32>(
         if (layout != Layout::ROW_MAJOR) {
             output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
         }
-        output = ttnn::to_device(output, device->get_devices()[0], output_mem_config);
+        output = ttnn::to_device(output, device, output_mem_config);
     }
 
     return output;
