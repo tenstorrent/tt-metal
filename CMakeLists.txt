@@ -203,6 +203,9 @@ target_link_libraries(
         numa
 )
 
+if(NOT DEFINED ENV{ARCH_NAME})
+    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
+endif(NOT DEFINED ENV{ARCH_NAME})
 string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
 add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(

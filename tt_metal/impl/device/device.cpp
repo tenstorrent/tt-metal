@@ -29,8 +29,6 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
-
 namespace tt {
 
 namespace tt_metal {
@@ -323,8 +321,8 @@ void Device::initialize_device_kernel_defines()
     auto grid_size = this->grid_size();
     this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
     this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(NOC_0_X(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(NOC_0_X(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
 }
 
 void Device::initialize_build() {
