@@ -514,7 +514,7 @@ def run_qwen_demo(
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
                 if (
-                    user_tok != tokenizer.eos_id and user_done[user] == False
+                    user_tok != tokenizer.eos_token_id and user_done[user] == False
                 ):  # Stop saving the ouput after hitting the EOS token
                     all_outputs[user].append(user_tok)
                 else:
@@ -620,7 +620,7 @@ def run_qwen_demo(
     compile_decode_time = profiler.get_duration("compile_decode")
     inference_prefill_time = profiler.get_duration("inference_prefill")
     inference_decode_time = profiler.get_duration("inference_decode")
-    log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(max_generated_tokens))
+    log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(total_tokens_generated))
     log_saving_file_time = profiler.get_duration(f"log_saving_file")
 
     # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
@@ -650,7 +650,7 @@ def run_qwen_demo(
         "prepare_rot_mat_for_prefill": profiler.get_duration("prepare_rot_mat_for_prefill"),
         "compile_trace": profiler.get_duration("compile_trace_0"),  # Only for batch 0
         "capture_trace": profiler.get_duration("capture_trace_0"),  # Only for batch 0
-        "reset_rot_mat": sum(profiler.get_duration(f"reset_rot_mat_{i}") for i in range(max_generated_tokens)),
+        "reset_rot_mat": sum(profiler.get_duration(f"reset_rot_mat_{i}") for i in range(total_tokens_generated)),
         "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
@@ -675,19 +675,17 @@ def run_qwen_demo(
     "input_prompts, instruct_weights, num_batches, single_layer",
     [
         ("models/demos/qwen/demo/input_data_prefill_128.json", False, 1, False),
-        # ("models/demos/qwen/demo/input_data_prefill_128.json", False, 2, False),
-        # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, False),
-        # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 2, False),
-        # ("models/demos/qwen/demo/input_data_long.json", True, 1, False),
-        # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, True),
+        ("models/demos/qwen/demo/input_data_prefill_128.json", False, 2, False),
+        ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, False),
+        ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 2, False),
+        ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, True),
     ],
     ids=[
         "general_weights-1_batch",
-        # "general_weights-2_batch",
-        # "instruct_weights-1_batch",
-        # "instruct_weights-2_batch",
-        # "instruct_weights-long",
-        # "single_layer",
+        "general_weights-2_batch",
+        "instruct_weights-1_batch",
+        "instruct_weights-2_batch",
+        "single_layer",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
