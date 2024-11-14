@@ -207,7 +207,7 @@ matmul_configs = [
 
 
 @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 1824768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 1855488}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -392,6 +392,7 @@ def test_matmul_2d_host_perf(
                         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
+                    ttnn.release_trace(device, tid)
                 else:
                     profiler.start(f"run")
                     for iter in range(0, num_measurement_iterations):
