@@ -110,12 +110,8 @@ def compare_results(tt_tensor, golden_tensor, pcc=0.99):
 def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
     status = True
     for i in range(len(tt_tensor)):
+        tt_out_tensor = tt_tensor[i].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         pt_out_tensor = golden_tensor[i]
-        tt_out_tensor = tt_tensor[i]
-        if tt_out_tensor.dtype != ttnn.bfloat16:
-            tt_out_tensor = ttnn.typecast(tt_out_tensor, ttnn.bfloat16)
-
-        tt_out_tensor = tt_out_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=pcc)
         logger.debug(comp_pass)
         logger.debug(comp_out)
