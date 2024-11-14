@@ -36,17 +36,15 @@ uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used
 
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
-
-    // Not using do_crt1 since it is copying to registers???
-    // TODO: need to find free space that routing FW is not using
-    extern uint32_t __ldm_bss_start[];
-    extern uint32_t __ldm_bss_end[];
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
-
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+
+    // Not using firmware_kernel_common_init since it is copying to registers
+    // TODO: need to find free space that routing FW is not using
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     risc_init();
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
@@ -88,7 +86,7 @@ void __attribute__((noinline)) Application(void) {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr =
                     NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                                NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+                                NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
@@ -99,9 +97,9 @@ void __attribute__((noinline)) Application(void) {
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
             // Reset the launch message buffer read ptr
             mailboxes->launch_msg_rd_ptr = 0;
-            int64_t dispatch_addr =
+            uint64_t dispatch_addr =
                 NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                            NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+                            NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
             mailboxes->go_message.signal = RUN_MSG_DONE;
             internal_::notify_dispatch_core_done(dispatch_addr);
         } else {

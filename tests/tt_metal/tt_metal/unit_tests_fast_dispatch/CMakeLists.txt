@@ -12,6 +12,7 @@ set(UNIT_TESTS_FD_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_eth_ring_gather_EnqueueProgram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pipelining/basic_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/streams/test_autonomous_relay_streams.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/test_sub_device.cpp
 )
 
 add_executable(
