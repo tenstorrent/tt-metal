@@ -175,6 +175,8 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
         const MeshShape &submesh_shape,
         MeshType type = MeshType::RowMajor);
 
+    size_t num_program_cache_entries() const;
+
     static std::shared_ptr<MeshDevice> fetch_mesh_device(const std::vector<Device*>& devices);
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig &config,
