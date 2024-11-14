@@ -185,7 +185,13 @@ def get_rot_transformation_mat(dhead):
 
 
 def get_single_rot_mat(
-    dhead, mesh_device, num_devices, start_pos=0, theta: float = 500000.0, use_scaled=True, on_host=False
+    dhead,
+    mesh_device,
+    num_devices,
+    start_pos=0,
+    theta: float = 500000.0,
+    use_scaled=True,
+    on_host=False,
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if use_scaled:

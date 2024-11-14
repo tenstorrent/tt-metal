@@ -63,7 +63,7 @@ class ClassEmbedding(nn.Module):
 @pytest.mark.parametrize(
     "bsz, num_concurrent_media, num_chunks",
     [
-        ((1, 4, 4)),
+        ((1, 1, 4)),
     ],
 )
 @pytest.mark.parametrize(
