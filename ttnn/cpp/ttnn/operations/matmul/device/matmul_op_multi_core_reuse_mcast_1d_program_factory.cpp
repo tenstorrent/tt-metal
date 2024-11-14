@@ -234,8 +234,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
-            (std::uint32_t)1,
-            (std::uint32_t)1,
+            (std::uint32_t)1, // num_blocks_x
+            (std::uint32_t)1, // num_blocks_y
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -247,7 +247,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)(in0_shard_width_in_tiles),
             (std::uint32_t)(in0_shard_height_in_tiles),
             (std::uint32_t)(in0_block_w),
-            (std::uint32_t)per_core_M,
+            (std::uint32_t)per_core_M, // in0_block_h
 
             // batch args
             (std::uint32_t)B  // batch
@@ -271,8 +271,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)0,                         // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
-            (std::uint32_t)1,
-            (std::uint32_t)1,
+            (std::uint32_t)1, // num_blocks_x
+            (std::uint32_t)1, // num_blocks_y
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -800,7 +800,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(per_core_M / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
-                mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w);
+                mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w); // out_num_nonzero_subblocks_w
                 mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w);
                 mm_in1_sender_writer_args.push_back(out_subblock_w);
                 mm_in1_sender_writer_args.push_back(0);
@@ -1058,8 +1058,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)in0_shard_height_in_tiles,
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
-        (std::uint32_t)1,
-        (std::uint32_t)1,
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in0 mcast args
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -1088,8 +1088,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
-        (std::uint32_t)1,
-        (std::uint32_t)1,
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -1134,8 +1134,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
-        (std::uint32_t)1,
-        (std::uint32_t)1,
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -1267,8 +1267,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         in1_per_core_w,       // in1_per_core_w
 
         num_blocks,  // num_blocks
-        1,
-        1,
+        1, // out_num_blocks_x
+        1, // out_num_blocks_y
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w

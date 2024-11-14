@@ -93,7 +93,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
-    // hardcode testing, testing multiple blocks on height for now
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
     uint32_t in0_num_blocks_y = per_core_M / out_block_h;

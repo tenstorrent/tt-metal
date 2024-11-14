@@ -169,6 +169,7 @@ void kernel_main() {
                             noc_async_read_barrier();
                         } else {
                             in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
+                            in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
                         }
 
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its
