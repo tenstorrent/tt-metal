@@ -384,7 +384,8 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Spa
     const int OW = round_up_to_tile(W, tile_W);
 
     tilized_result.resize(batch_size * OH * OW, 0);
-    int out_index = 0;
+    int out_w = 0;
+    int out_h = 0;
     for (int batch_index = 0; batch_index < batch_size; batch_index++) {
         const int batch_offset_in = batch_index * H * W;
         const int batch_offset_out = batch_index * OH * OW;
@@ -397,14 +398,21 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Spa
                     for (int wt = 0; wt < tile_W; wt++) {
                         const int w = wt + ws;
                         if (w >= W) continue;
-                        int out_w = (out_index % OW);
-                        int out_h = (out_index / OW) % OH;
+                        //int out_w = (out_index % OW);
+                        //int out_h = (out_index / OW) % OH;
                         const int out_offs = out_w + out_h * OW + batch_offset_out;
-                        T val = 0;
                         const int in_offs = w + h_W + batch_offset_in;
-                        val = in_rowmajor[in_offs];
+                        T val = in_rowmajor[in_offs];
                         tilized_result[out_offs] = val;
-                        out_index++;
+
+                        out_w++;
+                        if (out_w == OW) {
+                            out_w = 0;
+                            out_h++;
+                            if (out_h == OH) {
+                                out_h = 0;
+                            }
+                        }
                     }
                 }
             }
