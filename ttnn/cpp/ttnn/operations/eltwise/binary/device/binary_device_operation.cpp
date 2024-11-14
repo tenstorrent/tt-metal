@@ -338,6 +338,7 @@ BinaryDeviceOperation::invoke(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    tt::log_debug(tt::LogOp, "******* scalar binary {} ", scalar);
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().get_dtype(),

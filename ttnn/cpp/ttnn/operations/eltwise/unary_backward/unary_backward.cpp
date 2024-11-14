@@ -1328,21 +1328,20 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'None', 'tanh')");
 
     if (approximate == "tanh") {
-        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
-        float kKappa = 0.044715;
-        Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_memory_config);
+        tt::log_debug(tt::LogOp, "************* in TANH gelu_bw");
+        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
+        float kKappa = 0.044715f;
+        Tensor x_sq = ttnn::square(input, output_memory_config);
         Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_memory_config);
         Tensor inner = ttnn::multiply(ttnn::add(input, ttnn::multiply(x_cube, kKappa, std::nullopt, output_memory_config)), kBeta, std::nullopt, output_mem_config);
         Tensor tanh_inner = ttnn::tanh(inner, output_memory_config);
 
-        Tensor left = ttnn::multiply(input, 0.5, std::nullopt, output_memory_config);
+        Tensor left = ttnn::multiply(input, 0.5f, std::nullopt, output_memory_config);
         Tensor right = ttnn::add(tanh_inner, 1, std::nullopt, output_memory_config);
 
         Tensor left_derivative = ttnn::multiply(right, 0.5, std::nullopt, output_memory_config);
 
-        Tensor tanh_derivative =
-            ttnn::neg(ttnn::subtract(ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_memory_config), 1, std::nullopt, output_mem_config),
-                output_memory_config);
+        Tensor tanh_derivative = ttnn::subtract(ttnn::ones_like(tanh_inner), ttnn::square(tanh_inner, output_memory_config), std::nullopt, output_mem_config);
         Tensor inner_derivative = ttnn::multiply(
             (ttnn::add(
                 ttnn::multiply(ttnn::multiply(x_sq, kKappa, std::nullopt, output_memory_config), 3, std::nullopt, output_memory_config), 1, std::nullopt, output_mem_config)), kBeta);
@@ -1353,7 +1352,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
                 output_memory_config);
 
         ttnn::multiply(queue_id, grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config, input_grad);
-        result.push_back(input_grad);
+        result.push_back(tanh_inner);
+        // result.push_back(input_grad);
     } else {
         float kAlpha = M_SQRT1_2;
         float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
