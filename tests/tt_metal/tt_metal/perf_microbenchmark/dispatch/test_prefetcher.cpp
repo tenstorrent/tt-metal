@@ -16,8 +16,6 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NOC_0_X
-
 #include "llrt/hal.hpp"
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)

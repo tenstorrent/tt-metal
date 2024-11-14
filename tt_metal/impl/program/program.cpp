@@ -1153,7 +1153,8 @@ uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_inde
 
     // TODO: this is asserted here as the leveling above can break the limits enforced by the API
     // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-    TT_FATAL(offset <= L1_KERNEL_CONFIG_SIZE, "offset {} cannot exceed config size {}", offset, L1_KERNEL_CONFIG_SIZE);
+    std::uint32_t l1_kernel_config_size = tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+    TT_FATAL(offset <= l1_kernel_config_size, "offset {} cannot exceed config size {}", offset, l1_kernel_config_size);
 
     return max_unique_rta_size + total_crta_size;
 }
