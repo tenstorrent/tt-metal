@@ -1567,7 +1567,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
                     uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + pcie_alignment - 1) & (~(pcie_alignment - 1));
                     uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
-                    const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? mem_l1_size(hal) : mem_eth_size(hal);
+                    const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? HAL_MEM_L1_SIZE : HAL_MEM_ETH_SIZE;
                     uint32_t dispatch_s_buffer_base;
                     uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                     if (dispatch_core_type == CoreType::WORKER) {
