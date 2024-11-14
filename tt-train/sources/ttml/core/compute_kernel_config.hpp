@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn_all_includes.hpp"
+#include <core/ttnn_all_includes.hpp>
 
 namespace ttml::core {
 

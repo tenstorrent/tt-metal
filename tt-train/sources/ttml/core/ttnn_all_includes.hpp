@@ -20,6 +20,7 @@
 #include <ttnn/cpp/ttnn/operations/copy.hpp>                                                       // NOLINT
 #include <ttnn/cpp/ttnn/operations/core/core.hpp>                                                  // NOLINT
 #include <ttnn/device.hpp>                                                                         // NOLINT
+#include <ttnn/distributed/api.hpp>                                                                // NOLINT
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                           // NOLINT
 #include <ttnn/operations/creation.hpp>                                                            // NOLINT
 #include <ttnn/operations/data_movement/concat/concat.hpp>                                         // NOLINT

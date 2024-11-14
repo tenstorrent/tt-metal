@@ -42,7 +42,7 @@ void AutoContext::reset_graph() {
     m_graph.reset();
 }
 
-tt::tt_metal::Device& AutoContext::get_device() {
+ttnn::distributed::MeshDevice& AutoContext::get_device() {
     return device.get_device();
 }
 

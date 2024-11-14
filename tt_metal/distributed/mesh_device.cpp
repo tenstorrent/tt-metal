@@ -4,6 +4,7 @@
 
 #include "tt_metal/distributed/mesh_device.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
 
@@ -409,6 +410,14 @@ void MeshDevice::disable_and_clear_program_cache() {
     for (auto device : this->devices) {
         device->disable_and_clear_program_cache();
     }
+}
+
+size_t MeshDevice::num_program_cache_entries() const {
+    size_t total_entries = 0;
+    for (auto device : this->devices) {
+        total_entries += device->num_program_cache_entries();
+    }
+    return total_entries;
 }
 
 }  // namespace tt::tt_metal::distributed

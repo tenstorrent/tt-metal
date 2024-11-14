@@ -6,7 +6,8 @@
 
 #include <memory>
 
-#include "ttnn_all_includes.hpp"
+#include <core/ttnn_all_includes.hpp>
+
 
 namespace ttml::core {
 // should I implement pimpl or its fine
