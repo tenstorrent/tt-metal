@@ -29,13 +29,10 @@ usage()
     echo
     echo "[--help, -h]                List this help"
     echo "[--validate, -v]            Validate that required packages are installed"
-    echo "[--docker, -d]              Indicate that script is run within a docker container, disables select packages"
-
     exit 1
 }
 
 validate=0
-docker=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,10 +41,6 @@ while [ $# -gt 0 ]; do
             ;;
         --validate|-v)
             validate=1
-            shift
-            ;;
-        --docker|-d)
-            docker=1
             shift
             ;;
         *)
@@ -124,7 +117,7 @@ install_llvm() {
 
 install()
 {
-    if [ $FLAVOR == "ubuntu" ] || [ $FLAVOR == "debian" ]; then
+    if [ $FLAVOR == "ubuntu" ]; then
         prep_ubuntu
 
         echo "Installing packages..."
