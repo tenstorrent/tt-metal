@@ -99,25 +99,6 @@ class TtModelArgs:
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.json'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
 
-        # Set the model name based on the checkpoint directory being loaded
-        # if "3.2-1B" in QWEN_DIR:
-        #     local_params = "QWEN3_2_1B_PARAMS"
-        #     self.model_name = "3.2-1B"
-        # elif "3.2-3B" in QWEN_DIR:
-        #     local_params = "QWEN3_2_3B_PARAMS"
-        #     self.model_name = "3.2-3B"
-        # elif "3.1-8B" in QWEN_DIR:
-        #     local_params = "QWEN3_1_8B_PARAMS"
-        #     self.model_name = "3.1-8B"
-        # elif "3.2-11B" in QWEN_DIR:
-        #     local_params = "QWEN3_2_11B_PARAMS"
-        #     self.model_name = "3.2-11B"
-        # elif "3.1-70B" in QWEN_DIR:
-        #     local_params = "QWEN3_1_70B_PARAMS"
-        #     self.model_name = "3.1-70B"
-        #     self.is_large_model = True
-        # else:
-        #     raise ValueError(f"Unsupported QWEN model: {QWEN_DIR}")
         self.is_large_model = False
         # Load model params
         if not dummy_weights:

@@ -89,18 +89,6 @@ class LMHead(LightweightModule):
         ]
 
     def forward(self, x: ttnn.Tensor):
-        # x = ttnn.to_torch(x).to(torch.bfloat16)
-        # out = x @ self.w
-        # out = ttnn.from_torch(
-        #     out,
-        #     device=self.mesh_device,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        # return out
-
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             output = ttnn.linear(

@@ -159,6 +159,7 @@ class TtQwenAttention(LightweightModule):
             cache_file_name=cache_name("bias_qkv"),
         )
 
+        # TODO: uncomment this for prefill which needs padding info
         # self.bias_qkv = ttnn.reshape(
         #     self.bias_qkv, ttnn.Shape([1, 1, 1, self.bias_qkv.shape[-1]], [1, 1, 32, self.bias_qkv.shape[-1]])
         # )
@@ -271,7 +272,6 @@ class TtQwenAttention(LightweightModule):
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
-            # bias = self.bias_qkv,
         )
         ttnn.deallocate(x)
 
@@ -298,7 +298,6 @@ class TtQwenAttention(LightweightModule):
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
-        # print(ttnn.to_torch(v_heads_1BKD))
 
         ttnn.deallocate(xqkv_fused)
 
@@ -443,7 +442,6 @@ class TtQwenAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
-            # bias = self.bias_qkv,
         )
 
         xqkv_fused = xqkv_fused + self.bias_qkv
@@ -475,6 +473,8 @@ class TtQwenAttention(LightweightModule):
         q_heads_1QSD, k_heads_1KSD = fall_back_rope(
             q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats, self.mesh_device
         )
+
+        # FIXME: Uncomment this when the rope is fixed
         # q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
         #     q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         # )
@@ -489,7 +489,7 @@ class TtQwenAttention(LightweightModule):
         keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        # ttnn.deallocate(k_heads_1KSD)
+        ttnn.deallocate(k_heads_1KSD)
         # sharding k_fill to deal with update_cache memory limitation
         if seq_len >= self.min_kv_prefill_shard_seqlen:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
@@ -498,7 +498,7 @@ class TtQwenAttention(LightweightModule):
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
 
-        # ttnn.deallocate(v_heads_1VSD)
+        ttnn.deallocate(v_heads_1VSD)
         # sharding v_fill to deal with update_cache memory limitation
         if seq_len >= self.min_kv_prefill_shard_seqlen:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
@@ -532,17 +532,13 @@ class TtQwenAttention(LightweightModule):
         k_heads_K1SD_8b = ttnn.reshape(k_heads_1KSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
         v_heads_V1SD_8b = ttnn.reshape(v_heads_1VSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
 
-        # q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        # ttnn.deallocate(q_heads_1QSD)
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
 
         q_heads_84SD_8b = ttnn.reshape(
-            q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
+            q_heads_1QSD_8b, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
 
-        # self.k = ttnn.to_torch(k_heads_K1SD_8b).view(1, 4, 128, 128)
-        # self.v = ttnn.to_torch(v_heads_V1SD_8b).view(1, 4, 128, 128)
-        # self.q = ttnn.to_torch(q_heads_84SD_8b).view(1, 28, 128, 128)
-        # print(self.scale)
         attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD_8b,
             k_heads_K1SD_8b,
@@ -563,8 +559,7 @@ class TtQwenAttention(LightweightModule):
         ttnn.deallocate(k_heads_K1SD_8b)
         ttnn.deallocate(v_heads_V1SD_8b)
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
-        # print("attn_output_1QSD", attn_output_1QSD.shape, ttnn.to_torch(attn_output_1QSD))
-        # self.o = ttnn.to_torch(attn_output_1QSD).view(1, 28, 128, 128)
+
         ###
         # Output matmul
         ###
@@ -574,8 +569,6 @@ class TtQwenAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # self.o2 = ttnn.to_torch(attn_output_11SH).view(1, 128, -1)
-        # print("attn_output_11SH", attn_output_11SH.shape, ttnn.to_torch(attn_output_11SH))
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])

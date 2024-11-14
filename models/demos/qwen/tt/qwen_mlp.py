@@ -60,20 +60,6 @@ class TtQwenMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        # x = ttnn.to_torch(x).to(torch.bfloat16)
-        # w1_out = x @ self.w1
-        # w3_out = x @ self.w3
-        # w2_in = torch.nn.functional.silu(w1_out) * w3_out
-        # w2_out = w2_in @ self.w2
-        # w2_out = ttnn.from_torch(
-        #     w2_out,
-        #     device=self.mesh_device,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        # return w2_out
 
         seq_len = x.shape[-2]
 
@@ -105,8 +91,6 @@ class TtQwenMLP(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # print("w1_out", w1_out.shape)
-
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -116,8 +100,6 @@ class TtQwenMLP(LightweightModule):
             program_config=pc_3,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # print("w3_out", w3_out.shape)
 
         ttnn.deallocate(x)
         w2_in = ttnn.multiply(
@@ -135,7 +117,6 @@ class TtQwenMLP(LightweightModule):
 
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
-        # print("w2_in", w2_in.shape)
         # This uses HiFi2 for full precision as it is dram-bound and uses bfp8 inputs
         w2_out = ttnn.linear(
             w2_in,
@@ -146,8 +127,6 @@ class TtQwenMLP(LightweightModule):
             program_config=pc_2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # print("w2_out", w2_out.shape)
 
         ttnn.deallocate(w2_in)
 

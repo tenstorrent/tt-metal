@@ -296,11 +296,13 @@ def run_qwen_demo(
         profiler.start(f"inference_prefill", iteration=batch_idx)
         for batch_id in range(batch_size):
             prefill_seq_len = prefill_lens[batch_id]
+
+            # TODO: uncomment this when prefill is fixed
             # # rot_mats_prefill = get_prefill_rot_mat(
             # #     model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
             # # )
 
-            # #FIXME: Remove thsi workaroun when device RoPE is fixed
+            # #FIXME: Remove this workaroun when device RoPE is fixed
             # freqs = precompute_freqs(model_args.head_dim, prefill_seq_len)
             # cos, sin = freqs[0], freqs[1]
             # freqs_cis = torch.complex(cos, sin)
@@ -511,7 +513,9 @@ def run_qwen_demo(
             # Save output token to print out later
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
-                if user_tok != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
+                if (
+                    user_tok != tokenizer.eos_id and user_done[user] == False
+                ):  # Stop saving the ouput after hitting the EOS token
                     all_outputs[user].append(user_tok)
                 else:
                     user_done[user] = True

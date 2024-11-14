@@ -140,18 +140,15 @@ class Attention(nn.Module):
         self.q = query
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
-        # self.k = xk.transpose(1, 2).view(1, 4, 128, 128)
-        # self.v = xv.transpose(1, 2).view(1, 4, 128, 128)
+
         # scores : [bsz, n_heads, seqlen | 1, seqlen]
         scores = torch.matmul(query, key.transpose(2, 3)) * self.scale
-        # print(self.scale)
         if mask is not None:
             scores += mask[None, None, ...]
 
         scores = scores.float()
         scores = nn.functional.softmax(scores, dim=-1).type_as(query)
         output = torch.matmul(scores, value)  # (bs, n_local_heads, slen, head_dim)
-        # print("torch output", output.shape, output)
         self.o = output
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         self.o2 = output
@@ -212,7 +209,6 @@ class TransformerBlock(nn.Module):
 
         r = self.self_attn.forward(self.input_layernorm(x), freqs_cis, positions, mask)
         h = x + r
-        # r = self.post_attention_layernorm(h)
         r = self.mlp.forward(self.post_attention_layernorm(h))
         out = h + r
         return out
