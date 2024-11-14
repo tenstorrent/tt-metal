@@ -29,6 +29,10 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 
+from models.utility_functions import (
+    comp_pcc,
+)
+
 
 def load_and_cache_context(context_url, cache_dir):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
@@ -164,8 +168,8 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
     dtype = ttnn.bfloat8_b
     # Miguel - parametrize this
-    paged_attention = False
-    batch_size = 1
+    paged_attention = True
+    batch_size = 32
     assert batch_size <= 32, "Batch size cannot be greater than 32"
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
@@ -209,7 +213,12 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
-        mesh_device, model_args.head_dim, model_args.max_seq_len, model_args.rope_theta, model_args.use_scaled_rope
+        mesh_device,
+        batch_size,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta,
+        model_args.use_scaled_rope,
     )
     transformation_mats_decode = rope_setup.get_trans_mats()
 
@@ -269,7 +278,8 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
 
-    max_generated_tokens = 100  # Maximum number of tokens to generate per user
+    # TODO Change this back to 100
+    max_generated_tokens = 20  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -325,7 +335,6 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             if batch_id == 0:  # First user prefill accounts for compile time
                 profiler.start(f"compile_prefill", iteration=batch_idx)
 
-            breakpoint()
             tt_out = tt_model(
                 prefill_input,
                 current_pos=None,
@@ -342,17 +351,18 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
                 profiler.end(f"compile_prefill", iteration=batch_idx)
 
             # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
-            if batch_size == 1:
-                ttnn.deallocate(tt_out)
-                tt_out = tt_model(
-                    prefill_input,
-                    current_pos=None,
-                    rot_mats=rot_mats_prefill,
-                    user_id=batch_id,
-                    mode="prefill",
-                    page_table=page_table_tt,
-                    get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
-                )
+            # Miguel: Uncomment
+            # if batch_size == 1:
+            #     ttnn.deallocate(tt_out)
+            #     tt_out = tt_model(
+            #         prefill_input,
+            #         current_pos=None,
+            #         rot_mats=rot_mats_prefill,
+            #         user_id=batch_id,
+            #         mode="prefill",
+            #         page_table=page_table_tt,
+            #         get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+            #     )
 
             pt_out.append(
                 ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
@@ -408,6 +418,8 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mat_idxs = rope_setup.get_rot_idxs(current_pos)
+
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
@@ -425,7 +437,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=False, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         ttnn.plus_one(current_pos_tensor)
         profiler.end(f"compile_trace_{batch_idx}")
@@ -436,6 +448,9 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
+        # TODO Miguel: I think the problem is here, not updating the get rot mats
+        # The problem is that the get_rot_mats is using embedding that ends up on the host.
+        rot_mats = rope_setup.get_rot_mats(rot_mat_idxs)
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
@@ -450,9 +465,12 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(
+            tt_out_rm, dim=3, use_multicore=False, output_tensor=tt_out_tok
+        )  # TODO Multicore is not compatible with batch > 1
         ttnn.deallocate(tt_out_rm)
         ttnn.plus_one(current_pos_tensor)
+        # ttnn.plus_one(rot_mat_idxs)  # TODO <- This won't work since embedding requires uint32 and plus_one only works for int32
 
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
@@ -471,8 +489,11 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
         )
 
+        # Reset the current position and output token tensors for the real decode run
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+        rot_mat_idxs_reset = rope_setup.get_rot_idxs(current_pos, on_host=True)
+        ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
         profiler.end(f"capture_trace_{batch_idx}")
 
@@ -496,12 +517,64 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             ttnn.record_event(0, op_event)
 
+            # Update current pos and mat idxs on host and send to device
+            # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
+            # If this tensor is int32, it won't be supported by ttnn.embedding
+            current_pos += 1
+            rot_mat_idxs_updated = rope_setup.get_rot_idxs(current_pos, on_host=True)
+            ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
+
             # Write to host
             ttnn.wait_for_event(1, op_event)
             tt_output_torch = ttnn.to_torch(
                 tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
             )[0, 0, 0, :batch_size]
             ttnn.record_event(1, write_event)
+
+            # TODO Miguel Remove
+            print("==== ITERATION", iteration, "====")
+            # Check input
+            input_torch = ttnn.to_torch(decode_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+            for i in range(batch_size):
+                input_equal = torch.eq(input_torch[:, :, 0, :], input_torch[:, :, i, :]).all()
+                if not input_equal:
+                    print("Batch", i, "input not equal")
+
+            # Check output
+            for i in range(batch_size):
+                out_equal = torch.eq(tt_output_torch[0], tt_output_torch[i])
+                if not out_equal:
+                    print("Batch", i, "output not equal")
+
+            # Check KV cache [Mismatch]
+            k_cache = ttnn.to_torch(
+                tt_model.layers[0].attention.layer_past[0], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+            )
+            v_cache = ttnn.to_torch(
+                tt_model.layers[0].attention.layer_past[1], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+            )
+            for i in range(batch_size):
+                k_equal = torch.eq(k_cache[0, :, :, :], k_cache[i, :, :, :]).all()
+                v_equal = torch.eq(v_cache[0, :, :, :], v_cache[i, :, :, :]).all()
+                if not k_equal:
+                    print("Batch", i, "k_cache not equal")
+                    # print(f"PCC = {comp_pcc(k_cache[0,:,:,:], k_cache[i,:,:,:])}")
+                if not v_equal:
+                    print("Batch", i, "v_cache not equal")
+                    # print(f"PCC = {comp_pcc(v_cache[0,:,:,:], v_cache[i,:,:,:])}")
+
+            # Check rot mats [All equal]
+            cos_out = ttnn.to_torch(rot_mats[0], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
+            sin_out = ttnn.to_torch(rot_mats[1], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
+
+            for i in range(batch_size):
+                cos_equal = torch.eq(cos_out[0, :, :], cos_out[i, :, :]).all()
+                sin_equal = torch.eq(sin_out[0, :, :], sin_out[i, :, :]).all()
+                if not cos_equal:
+                    print("Batch", i, "cos not equal")
+                if not sin_equal:
+                    print("Batch", i, "sin not equal")
+            ###########
 
             # Save output token to print out later
             for user in range(batch_size):
@@ -624,7 +697,6 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         "prepare_first_decode_token": profiler.get_duration("prepare_first_decode_token_0"),
         "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
         "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
-        # "prepare_rot_mat_for_prefill": profiler.get_duration("prepare_rot_mat_for_prefill"),
         "compile_trace": profiler.get_duration("compile_trace_0"),  # Only for batch 0
         "capture_trace": profiler.get_duration("capture_trace_0"),  # Only for batch 0
         "Total compile time": compile_prefill_time + compile_decode_time,
@@ -735,6 +807,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 2, False),
         ("models/demos/llama3/demo/input_data_long.json", True, 1, False),
         ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 1, True),
+        ("models/demos/llama3/demo/mayo.json", True, 1, False),
     ],
     ids=[
         "general_weights-1_batch",
@@ -743,6 +816,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         "instruct_weights-2_batch",
         "instruct_weights-long",
         "single_layer",
+        "mayo",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
