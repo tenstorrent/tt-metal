@@ -17,6 +17,9 @@
 #include "llrt/tt_memory.h"
 // clang-format on
 
+// FIXME: ARCH_NAME specific include
+#include "dev_mem_map.h" // MEM_LOCAL_BASE
+
 namespace tt {
 
 // llrt = lower-level runtime
