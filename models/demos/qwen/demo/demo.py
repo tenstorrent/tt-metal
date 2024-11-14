@@ -670,17 +670,17 @@ def run_qwen_demo(
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches, single_layer",
     [
-        # ("models/demos/qwen/demo/input_data_prefill_128.json", False, 1, False),
+        ("models/demos/qwen/demo/input_data_prefill_128.json", False, 1, False),
         # ("models/demos/qwen/demo/input_data_prefill_128.json", False, 2, False),
-        ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, False),
+        # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, False),
         # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 2, False),
         # ("models/demos/qwen/demo/input_data_long.json", True, 1, False),
         # ("models/demos/qwen/demo/input_data_questions_prefill_128.json", True, 1, True),
     ],
     ids=[
-        # "general_weights-1_batch",
+        "general_weights-1_batch",
         # "general_weights-2_batch",
-        "instruct_weights-1_batch",
+        # "instruct_weights-1_batch",
         # "instruct_weights-2_batch",
         # "instruct_weights-long",
         # "single_layer",

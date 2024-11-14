@@ -69,7 +69,7 @@ class TtModelArgs:
         self.is_large_model = False
         self.model_name = "Unknown"  # Qwen model name will be dependent on the checkpoint directory
 
-        QWEN_DIR = "/proj_sw/user_dev/Qwen2-7B"  # os.getenv("QWEN_DIR")
+        QWEN_DIR = "/proj_sw/user_dev/Qwen2-7B-Instruct"  # os.getenv("QWEN_DIR")
         if QWEN_DIR:
             if any([os.getenv("QWEN_CKPT_DIR"), os.getenv("QWEN_TOKENIZER_PATH"), os.getenv("QWEN_CACHE_PATH")]):
                 logger.warning(

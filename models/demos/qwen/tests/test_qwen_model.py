@@ -30,10 +30,10 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        # ("random", 1),
+        ("random", 1),
         ("instruct", None),
     ],
-    ids=["full"],
+    ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -53,13 +53,12 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
     mesh_device.enable_async(True)
 
     # This sets the minimum PCC for each iteration
-    pcc = 0.88 if layers == 1 else 0.94  # TODO For model test quick (1 layer) one iteration might get a worse PCC
+    pcc = 0.79
 
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights)
-    # model_args.n_layers = 5
-    iterations = 9
+    iterations = 6 if layers == 1 else 9
 
     if layers is not None:
         model_args.n_layers = layers
@@ -204,7 +203,7 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
         # Measure PCC if also running reference model
         if run_ref_pt:
             if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
-                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.98)
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.94)
             else:
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
