@@ -9,9 +9,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "impl/kernels/kernel.hpp"
 
-class TraceFixture : virtual public ::testing::Test {};
-
-class SingleDeviceTraceFixture : virtual public TraceFixture {
+class SingleDeviceTraceFixture : public ::testing::Test {
    protected:
     Device* device_;
     tt::ARCH arch_;

@@ -2,23 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <gtest/gtest.h>
-
-#include <exception>
-#include <filesystem>
-
-#include "assert.hpp"
-#include "core_coord.hpp"
-#include "detail/tt_metal.hpp"
 #include "host_api.hpp"
-#include "impl/kernels/data_types.hpp"
-#include "impl/program/program.hpp"
-#include "llrt/rtoptions.hpp"
-#include "tt_cluster_descriptor_types.h"
 
 using namespace tt;
-using namespace tt::tt_metal;
-using namespace tt::llrt;
 
 class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
    protected:
@@ -42,18 +31,18 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
     }
 
     void setup_kernel_dir(const string &orig_kernel_file, const string &new_kernel_file) {
-        const string &kernel_dir = OptionsG.get_kernel_dir();
+        const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
         const std::filesystem::path &kernel_file_path_under_kernel_dir(kernel_dir + new_kernel_file);
         const std::filesystem::path &dirs_under_kernel_dir = kernel_file_path_under_kernel_dir.parent_path();
         std::filesystem::create_directories(dirs_under_kernel_dir);
 
-        const string &metal_root = OptionsG.get_root_dir();
+        const string &metal_root = llrt::OptionsG.get_root_dir();
         const std::filesystem::path &kernel_file_path_under_metal_root(metal_root + orig_kernel_file);
         std::filesystem::copy(kernel_file_path_under_metal_root, kernel_file_path_under_kernel_dir);
     }
 
     void cleanup_kernel_dir() {
-        const string &kernel_dir = OptionsG.get_kernel_dir();
+        const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
         for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(kernel_dir)) {
             std::filesystem::remove_all(entry);
         }
@@ -69,10 +58,10 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
     }
 
     void validate_env_vars_are_set() {
-        if (!OptionsG.is_root_dir_specified()) {
+        if (!llrt::OptionsG.is_root_dir_specified()) {
             GTEST_SKIP() << "Skipping test: TT_METAL_HOME must be set";
         }
-        if (!OptionsG.is_kernel_dir_specified()) {
+        if (!llrt::OptionsG.is_kernel_dir_specified()) {
             GTEST_SKIP() << "Skipping test: TT_METAL_KERNEL_PATH must be set";
         }
     }
@@ -103,32 +92,3 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
         return std::filesystem::is_empty(file_path);
     }
 };
-
-TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
-    const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
-}
-
-TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
-    const string &orig_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    const string &new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
-    this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
-    this->create_kernel(new_kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
-    this->cleanup_kernel_dir();
-}
-
-TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirAndKernelRootDir) {
-    const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    this->setup_kernel_dir(kernel_file, kernel_file);
-    this->create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
-    this->cleanup_kernel_dir();
-}
-
-TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
-    const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
-    this->create_kernel(kernel_file);
-    EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
-}

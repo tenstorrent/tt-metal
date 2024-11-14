@@ -7,6 +7,9 @@
 #include "common/core_coord.hpp"
 #include "common/env_lib.hpp"
 #include "gtest/gtest.h"
+#include "dispatch_fixture.hpp"
+#include "trace_fixture.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/buffers/circular_buffer_types.hpp"
 #include "impl/device/device.hpp"
@@ -24,7 +27,7 @@
 #include "test_utils.hpp"
 #include "tt_soc_descriptor.h"
 
-class CommandQueueFixture : virtual public DispatchFixture {
+class CommandQueueFixture : public DispatchFixture {
    protected:
     tt::tt_metal::Device* device_;
     void SetUp() override {
@@ -47,11 +50,11 @@ class CommandQueueFixture : virtual public DispatchFixture {
     }
 };
 
-class CommandQueueEventFixture : virtual public CommandQueueFixture, virtual public EventFixture {};
+class CommandQueueEventFixture : public CommandQueueFixture {};
 
-class CommandQueueBufferFixture : virtual public CommandQueueFixture, virtual public BufferFixture {};
+class CommandQueueBufferFixture : public CommandQueueFixture {};
 
-class CommandQueueProgramFixture : virtual public CommandQueueFixture, virtual public ProgramFixture {};
+class CommandQueueProgramFixture : public CommandQueueFixture {};
 
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
    protected:
@@ -90,10 +93,9 @@ class CommandQueueSingleCardFixture : virtual public DispatchFixture {
     std::map<chip_id_t, tt::tt_metal::Device *> reserved_devices_;
 };
 
-class CommandQueueSingleCardBufferFixture : virtual public CommandQueueSingleCardFixture,
-                                            virtual public BufferFixture {};
+class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture, virtual public TraceFixture {
+class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
    protected:
     void SetUp() override {
         this->validate_dispatch_mode();
@@ -102,8 +104,7 @@ class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCard
     }
 };
 
-class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture,
-                                             virtual public ProgramFixture {};
+class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
 class CommandQueueMultiDeviceFixture : public DispatchFixture {
    protected:
@@ -138,8 +139,7 @@ class CommandQueueMultiDeviceFixture : public DispatchFixture {
     size_t num_devices_;
 };
 
-class CommandQueueMultiDeviceProgramFixture : virtual public CommandQueueMultiDeviceFixture,
-                                              virtual public ProgramFixture {};
+class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
 class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
    protected:
@@ -513,7 +513,7 @@ class RandomProgramTraceFixture : virtual public RandomProgramFixture, virtual p
     }
 };
 
-class MultiCommandQueueSingleDeviceFixture : virtual public DispatchFixture {
+class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -545,13 +545,13 @@ class MultiCommandQueueSingleDeviceFixture : virtual public DispatchFixture {
     tt::ARCH arch_;
 };
 
-class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture, public EventFixture {};
+class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
 
-class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture, public BufferFixture {};
+class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
 
-class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture, public ProgramFixture {};
+class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
 
-class MultiCommandQueueMultiDeviceFixture : virtual public DispatchFixture {
+class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -588,6 +588,6 @@ class MultiCommandQueueMultiDeviceFixture : virtual public DispatchFixture {
     std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
 };
 
-class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture, public BufferFixture {};
+class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture, public EventFixture {};
+class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};

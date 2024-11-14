@@ -8,10 +8,23 @@
 #include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 
-class DebugToolsFixture : virtual public ::testing::Test {};
+class DebugToolsFixture : public DispatchFixture {
+   protected:
+    bool watcher_previous_enabled;
+
+    void TearDown() override {
+        tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
+    }
+
+    template <typename T>
+    void RunTestOnDevice(const std::function<void(T*, Device*)>& run_function, Device* device) {
+        auto run_function_no_args = [=]() { run_function(static_cast<T*>(this), device); };
+        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
+    }
+};
 
 // A version of DispatchFixture with DPrint enabled on all cores.
-class DPrintFixture : virtual public DispatchFixture, virtual public DebugToolsFixture {
+class DPrintFixture : public DebugToolsFixture {
 public:
     inline static const string dprint_file_name = "gtest_dprint_log.txt";
 
@@ -19,14 +32,13 @@ public:
     void RunProgram(Device* device, Program& program) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DispatchFixture::RunProgram(device, program);
+        DebugToolsFixture::RunProgram(device, program);
         tt::DprintServerAwait();
     }
 
 protected:
     // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
     // disabled for DPRINT tests.
-    bool watcher_previous_enabled;
     void SetUp() override {
         // The core range (physical) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
@@ -46,12 +58,12 @@ protected:
         ExtraSetUp();
 
         // Parent class initializes devices and any necessary flags
-        DispatchFixture::SetUp();
+        DebugToolsFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DispatchFixture::TearDown();
+        DebugToolsFixture::TearDown();
 
         // Remove the DPrint output file after the test is finished.
         std::remove(dprint_file_name.c_str());
@@ -66,17 +78,13 @@ protected:
         tt::llrt::OptionsG.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::llrt::OptionsG.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, "");
         tt::llrt::OptionsG.set_test_mode_enabled(false);
-        tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
     }
 
     void RunTestOnDevice(
         const std::function<void(DPrintFixture*, Device*)>& run_function,
         Device* device
     ) {
-        auto run_function_no_args = [=]() {
-            run_function(this, device);
-        };
-        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
+        DebugToolsFixture::RunTestOnDevice(run_function, device);
         tt::DPrintServerClearLogFile();
         tt::DPrintServerClearSignals();
     }
@@ -97,7 +105,7 @@ protected:
 };
 
 // A version of DispatchFixture with watcher enabled
-class WatcherFixture : virtual public DispatchFixture, virtual public DebugToolsFixture {
+class WatcherFixture : public DebugToolsFixture {
 public:
     inline static const string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
@@ -106,7 +114,7 @@ public:
     void RunProgram(Device* device, Program& program, bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DispatchFixture::RunProgram(device, program);
+        DebugToolsFixture::RunProgram(device, program);
 
         // Wait for watcher to run a full dump before finishing, need to wait for dump count to
         // increase because we'll likely check in the middle of a dump.
@@ -117,7 +125,6 @@ public:
     }
 
 protected:
-    bool watcher_previous_enabled;
     int  watcher_previous_interval;
     bool watcher_previous_dump_all;
     bool watcher_previous_append;
@@ -143,15 +150,14 @@ protected:
         tt::watcher_clear_log();
 
         // Parent class initializes devices and any necessary flags
-        DispatchFixture::SetUp();
+        DebugToolsFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DispatchFixture::TearDown();
+        DebugToolsFixture::TearDown();
 
         // Reset watcher settings to their previous values
-        tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
         tt::llrt::OptionsG.set_watcher_interval(watcher_previous_interval);
         tt::llrt::OptionsG.set_watcher_dump_all(watcher_previous_dump_all);
         tt::llrt::OptionsG.set_watcher_append(watcher_previous_append);
@@ -165,10 +171,7 @@ protected:
         const std::function<void(WatcherFixture*, Device*)>& run_function,
         Device* device
     ) {
-        auto run_function_no_args = [=]() {
-            run_function(this, device);
-        };
-        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
+        DebugToolsFixture::RunTestOnDevice(run_function, device);
         // Wait for a final watcher poll and then clear the log.
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
         tt::watcher_clear_log();

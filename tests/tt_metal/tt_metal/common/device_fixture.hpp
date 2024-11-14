@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "buffer_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -53,7 +52,7 @@ class DeviceFixture : public ::testing::Test {
     size_t num_devices_;
 };
 
-class DeviceSingleCardFixture : virtual public ::testing::Test {
+class DeviceSingleCardFixture : public ::testing::Test {
    protected:
     void SetUp() override {
         this->validate_dispatch_mode();
@@ -84,7 +83,7 @@ class DeviceSingleCardFixture : virtual public ::testing::Test {
     size_t num_devices_;
 };
 
-class DeviceSingleCardBufferFixture : virtual public DeviceSingleCardFixture, virtual public BufferFixture {};
+class DeviceSingleCardBufferFixture : public DeviceSingleCardFixture {};
 
 class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
    protected:

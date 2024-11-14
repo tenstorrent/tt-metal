@@ -1242,7 +1242,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             CreateSemaphore(program, cr_set, j + 1);
         }
 
-        auto [brisc_unique_rtargs, brisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
         vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_brisc_unique_rtargs, num_brisc_common_rtargs, page_size};
@@ -1259,7 +1259,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
         vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_ncrisc_unique_rtargs, num_ncrisc_common_rtargs, page_size};
@@ -1276,7 +1276,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        auto [trisc_unique_rtargs, trisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
         vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_trisc_unique_rtargs, num_trisc_common_rtargs, page_size};

@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "core_coord.hpp"
+#include "common/core_coord.hpp"
 #include "detail/tt_metal.hpp"
 #include "host_api.hpp"
 #include "impl/device/device.hpp"
@@ -12,8 +12,7 @@
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/program/program.hpp"
 #include "tt_cluster_descriptor_types.h"
-
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include "program_with_kernel_created_from_string_fixture.hpp"
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
