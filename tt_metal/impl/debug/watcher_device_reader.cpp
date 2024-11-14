@@ -16,7 +16,6 @@
 // FIXME: Avoid dependence on ARCH_NAME specific includes
 #include "dev_mem_map.h" // for MEM_BRISC_STAC...
 #include "eth_l1_address_map.h" // for address_map
-#include "hostdevcommon/common_runtime_address_map.h" // for NOC_0_X, NOC_0_Y
 #include "hw/inc/dev_msgs.h"
 
 #include "third_party/umd/device/tt_arch_types.h"
@@ -63,7 +62,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) 
         case DebugBrisc: return MEM_BRISC_STACK_SIZE;
         case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
         case DebugErisc: return 0; // Not managed/checked by us.
-        case DebugIErisc: return MEM_BRISC_STACK_SIZE;
+        case DebugIErisc: return MEM_IERISC_STACK_SIZE;
         case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
         case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
         case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
@@ -79,7 +78,7 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
         // Get the physical coord from the noc coord
         const metal_SocDescriptor &soc_d = tt::Cluster::instance().get_soc_desc(device->id());
         CoreCoord phys_core = {
-            NOC_0_X(noc, soc_d.grid_size.x, noc_coord.x), NOC_0_Y(noc, soc_d.grid_size.y, noc_coord.y)};
+            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, noc_coord.x), tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, noc_coord.y)};
 
         CoreType core_type;
         try {

@@ -31,6 +31,8 @@ enum class HalProgrammableCoreType {
     COUNT      = 3
 };
 
+static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
+
 enum class HalProcessorClassType : uint8_t {
     DM      = 0,
     // Setting this to 2 because we currently treat brisc and ncrisc as two unique processor classes on Tensix
@@ -50,6 +52,7 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO,
     GO_MSG,
     LAUNCH_MSG_BUFFER_RD_PTR,
+    FW_VERSION_ADDR, // Really only applicable to active eth core right now
     COUNT // Keep this last so it always indicates number of enum options
 };
 
@@ -135,6 +138,11 @@ class Hal {
     void initialize(tt::ARCH arch);
 
     tt::ARCH get_arch() const {return arch_;}
+
+    template <typename IndexType, typename SizeType, typename CoordType>
+    auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const -> decltype(noc_size - 1 - coord) {
+        return noc_index == 0 ? coord : (noc_size - 1 - coord);
+    }
 
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;

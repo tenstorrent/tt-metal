@@ -4,14 +4,13 @@
 
 import math
 import pathlib
-from typing import Union, Tuple, Optional, Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
-from loguru import logger
 import torch
-
+import ttnn.decorators
+from loguru import logger
 
 import ttnn
-import ttnn.decorators
 
 
 def _golden_function(input_tensor: ttnn.Tensor, slices):
@@ -154,6 +153,7 @@ def from_torch(
     dtype: Optional[ttnn.DataType] = None,
     *,
     tile: Optional[ttnn.Tile] = None,
+    pad_value: Optional[float] = None,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
@@ -171,6 +171,7 @@ def from_torch(
 
     Keyword Args:
         tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
+        pad_value (float, optional): the desired padding value for tiling. Only used if `layout` is `TILE_LAYOUT`. Defaults to `None`.
         layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
         device (ttnn.Device, optional): the desired `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
@@ -193,14 +194,18 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile)
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value)
         shape_with_padding = tensor.shape
         tensor = tensor.reshape(tensor.shape.with_tile_padding())
         tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
         if device is None:
-            raise RuntimeError("device must be specified when memory_config is specified")
+            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
+
+    if pad_value is not None:
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
@@ -215,6 +220,8 @@ def from_torch(
             tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
+        if pad_value is not None:
+            tensor = tensor.pad_to_tile(pad_value)
         tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:

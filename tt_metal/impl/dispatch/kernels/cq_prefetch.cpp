@@ -12,8 +12,8 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "debug/dprint.h"
-
 #include "noc/noc_parameters.h" // PCIE_ALIGNMENT
+
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT; // for NOC PCIe alignemnt
 struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
@@ -24,7 +24,7 @@ typedef union {
 } CQPrefetchHToPrefetchDHeader;
 static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);
 
-typedef uint16_t prefetch_q_entry_type;
+using prefetch_q_entry_type = uint16_t;
 
 constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(0);
 constexpr uint32_t downstream_cb_log_page_size = get_compile_time_arg_val(1);

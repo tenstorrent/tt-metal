@@ -137,20 +137,16 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
 }
 
 void Cluster::generate_cluster_descriptor() {
-    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0)
+    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon)
                                    ? tt_ClusterDescriptor::get_cluster_descriptor_file_path()
                                    : "";
 
     // Cluster descriptor yaml not available for Blackhole bring up
-    if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE or this->target_type_ == TargetDevice::Simulator) {
+    if (this->target_type_ == TargetDevice::Simulator) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
         std::vector<chip_id_t> physical_mmio_device_ids;
         std::set<chip_id_t> logical_mmio_device_ids;
-        if (this->target_type_ == TargetDevice::Simulator) {
-            physical_mmio_device_ids = tt_SimulationDevice::detect_available_device_ids();
-        } else{
-            physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
-        }
+        physical_mmio_device_ids = tt_SimulationDevice::detect_available_device_ids();
         for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size();
              logical_mmio_device_id++) {
             logical_mmio_device_ids.insert(logical_mmio_device_id);
@@ -239,7 +235,7 @@ void Cluster::get_metal_desc_from_tt_desc(
     const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
     for (const auto it : input) {
         chip_id_t id = it.first;
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id)));
+        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
     }
 }
 
@@ -280,6 +276,12 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
     std::uint32_t dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
     device_driver->set_device_dram_address_params(tt_device_dram_address_params{dram_barrier_base});
+
+    l1_address_params.tensix_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    if (tt_metal::hal.get_arch() != tt::ARCH::GRAYSKULL) {
+        l1_address_params.eth_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
+        l1_address_params.fw_version_addr = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FW_VERSION_ADDR);
+    }
     device_driver->set_device_l1_address_params(l1_address_params);
 
     this->get_metal_desc_from_tt_desc(
@@ -340,18 +342,6 @@ uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
         return 0;
     } else {
         return this->driver_->harvested_rows_per_target.at(chip);
-    }
-}
-
-void Cluster::verify_eth_fw() const {
-    for (const auto &[chip, mmio_device_id] : this->device_to_mmio_device_) {
-        std::vector<uint32_t> fw_versions;
-        for (const CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
-            uint32_t val;
-            read_core(&val, sizeof(uint32_t), tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR);
-            fw_versions.push_back(val);
-        }
-        verify_sw_fw_versions(chip, SW_VERSION, fw_versions);
     }
 }
 
@@ -948,6 +938,9 @@ uint32_t Cluster::get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const 
     uint32_t depth = 0;
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
+            if (chip_id == assoc_mmio_device) {
+                continue;
+            }
             depth =
                 std::max(depth, uint32_t(this->cluster_desc_->get_ethernet_link_distance(chip_id, assoc_mmio_device)));
         }
@@ -966,7 +959,8 @@ uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
 }
 
 uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
-    return this->cluster_desc_->get_ethernet_link_distance(chip_id, this->get_associated_mmio_device(chip_id));
+    chip_id_t mmio_device_id = this->get_associated_mmio_device(chip_id);
+    return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
 }
 
 }  // namespace tt

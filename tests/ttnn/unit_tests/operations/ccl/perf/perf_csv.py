@@ -5,6 +5,7 @@
 import pandas as pd
 import os
 import re
+import time
 
 
 def perf_report(file_path):
@@ -12,7 +13,7 @@ def perf_report(file_path):
 
     df = df.dropna(subset=["DEVICE ERISC KERNEL DURATION [ns]"])
     df = df[df["OP TO OP LATENCY [ns]"] != 0]
-    df = df[df["TRACE ID"].notna() & (df["TRACE ID"] != "")]
+    df = df[df["METAL TRACE ID"].notna() & (df["METAL TRACE ID"] != "")]
 
     def remove_keys_from_attributes(attributes):
         attributes = attributes.replace(";", ",").replace("'", '"')
@@ -56,7 +57,9 @@ def perf_report(file_path):
     )
 
     df["dim"] = df["ATTRIBUTES"].apply(
-        lambda x: safe_parse_attributes(x).get("dim", "") if isinstance(safe_parse_attributes(x), dict) else ""
+        lambda x: safe_parse_attributes(x).get("dim", safe_parse_attributes(x).get("scatter_dim", ""))
+        if isinstance(safe_parse_attributes(x), dict)
+        else ""
     )
 
     df["num_links"] = df["ATTRIBUTES"].apply(
@@ -154,15 +157,15 @@ def perf_report(file_path):
                 op_bw = (output_tensor_volume * (n_chips - 1) / n_chips) / longest_device_fw_time
                 link_bw = (output_tensor_volume * (n_chips - 1) / n_chips) / longest_erisc_fw_time
             elif row["OP CODE"] == "ReduceScatter":
-                op_bw = (input_tensor_volume / n_chips) / longest_device_fw_time
-                link_bw = (input_tensor_volume * (n_chips - 1) / n_chips) / longest_erisc_fw_time
+                op_bw = input_tensor_volume / longest_device_fw_time
+                link_bw = input_tensor_volume / longest_erisc_fw_time
         elif row["topology"] == "Linear":
             if row["OP CODE"] == "AllGather":
                 op_bw = input_tensor_volume * n_chips / longest_device_fw_time
                 link_bw = input_tensor_volume * (n_chips - 1) / longest_erisc_fw_time
             elif row["OP CODE"] == "ReduceScatter":
                 op_bw = input_tensor_volume / longest_device_fw_time
-                link_bw = input_tensor_volume * (n_chips - 1) / n_chips / longest_erisc_fw_time
+                link_bw = input_tensor_volume / longest_erisc_fw_time
         return round(op_bw, 2), round(link_bw, 2)
 
     for i, (group, group_df) in enumerate(grouped, start=1):
@@ -194,24 +197,37 @@ def perf_report(file_path):
             "output_mem_config": group_df["output_mem_config"].iloc[0] if "output_mem_config" in group_df else "",
             "topology": group_df["topology"].iloc[0],
             "Layout": group_df["Layout"].iloc[0] if "Layout" in group_df else "",
+            "Data Type": group_df["Data Type"].iloc[0] if "Data Type" in group_df else "",
         }
 
         for column in numeric_columns:
             min_val = round(group_df[column].min(), 2)
             largest_vals = group_df[column].nlargest(3)
             max_val = round(largest_vals.iloc[-1], 2)
-            avg_val = round(group_df[column][~group_df[column].isin(largest_vals.head(2))].mean(), 2)
+            if min_val == max_val:
+                avg_val = min_val
+            else:
+                avg_val = round(group_df[column][~group_df[column].isin(largest_vals.head(2))].mean(), 2)
 
             group_data[column] = f"{min_val} - {avg_val} - {max_val}"
 
         averages_data.append(group_data)
 
     averages_df = pd.DataFrame(averages_data)
+    op_code = averages_df.iloc[0]["OP CODE"]
 
-    averages_file_path = file_path.replace(".csv", "_averages.csv")
+    today = time.strftime("%Y_%m_%d")
+    if op_code == "AllGather":
+        ccl_perf_file_path = f"CCL_all_gather_Perf_{today}.csv"
+    elif op_code == "ReduceScatter":
+        ccl_perf_file_path = f"CCL_reduce_scatter_Perf_{today}.csv"
+    else:
+        ccl_perf_file_path = f"CCL_Perf_{today}.csv"
 
-    averages_df.to_csv(averages_file_path, index=False)
+    os.rename(file_path, ccl_perf_file_path)
 
-    print(f"Averages CSV saved to: {averages_file_path}")
+    averages_df.to_csv(ccl_perf_file_path, index=False)
+
+    print(f"CCL Perf report CSV saved to: {ccl_perf_file_path}")
 
     return averages_df

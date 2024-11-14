@@ -140,6 +140,8 @@ class CoreRangeSet {
 
     CoreRangeSet(std::vector<CoreRange> &&core_ranges);
 
+    bool empty() const;
+
     size_t size() const;
 
     template <typename T>
@@ -150,6 +152,8 @@ class CoreRangeSet {
     bool intersects(const CoreRange &other) const;
 
     bool intersects(const CoreRangeSet &other) const;
+
+    CoreRangeSet intersection(const CoreRangeSet &other) const;
 
     bool contains(const CoreCoord &other) const;
 

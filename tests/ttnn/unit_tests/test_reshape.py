@@ -343,8 +343,42 @@ def test_reshape_int(input_shape, output_shape, device):
     torch_result = torch_input_tensor.reshape(output_shape)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1, 756, 128), (1, 27, 28, 128)),
+        ((1, 256, 16), (16, 256)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 16), (32, 8)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+    ],
+)
+def test_fp32_support(input_shape, output_shape, device):
+    torch_input_tensor = torch.randint(0, 100, input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
 
     output = ttnn.to_torch(ttnn_output)

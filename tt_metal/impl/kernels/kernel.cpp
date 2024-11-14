@@ -175,7 +175,7 @@ std::string Kernel::compute_hash() const {
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        KernelDefinesHash{}(this->defines_),
+        tt::utils::DefinesHash{}(this->defines_),
         this->config_hash());
 }
 
@@ -316,6 +316,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
+    build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
@@ -476,13 +477,6 @@ std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processo
         default: TT_THROW("Unknown data movement processor");
     }
     return os;
-}
-
-size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
-    size_t hash_value = 0;
-    for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
-        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
-    return hash_value;
 }
 
 }  // namespace tt_metal

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "noc/noc_parameters.h" // L1_ALIGNMENT
 
 namespace eth_l1_mem {
 

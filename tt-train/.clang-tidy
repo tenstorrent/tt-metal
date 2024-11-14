@@ -1,0 +1,30 @@
+Checks: "*,
+        -abseil-*,
+        -altera-*,
+        -android-*,
+        -fuchsia-*,
+        -google-*,
+        -llvm*,
+        -modernize-use-trailing-return-type,
+        -zircon-*,
+        -readability-else-after-return,
+        -readability-static-accessed-through-instance,
+        -readability-avoid-const-params-in-decls,
+        -cppcoreguidelines-non-private-member-variables-in-classes,
+        -misc-non-private-member-variables-in-classes,
+        -include-what-you-use,
+        -cppcoreguidelines-avoid-magic-numbers,
+        -readability-magic-numbers,
+        -misc-include-cleaner,
+        -easily-swappable-parameters,
+        -misc-no-recursion
+"
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+FormatStyle:     none
+
+CheckOptions:
+  - key: readability-identifier-length.IgnoredVariableNames
+    value: 'x|y|z|i|j|k|t|it|a|b'
+  - key: readability-identifier-length.IgnoredParameterNames
+    value: 'x|y|z|t|a|b'

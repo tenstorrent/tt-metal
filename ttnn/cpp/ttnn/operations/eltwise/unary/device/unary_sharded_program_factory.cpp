@@ -130,6 +130,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
+            .bfp8_pack_precise = args.bfp8_pack_precise,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});

@@ -40,7 +40,7 @@ void py_module(py::module& module) {
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
 
 
         Example:
@@ -69,7 +69,7 @@ void py_module(py::module& module) {
             const ttnn::Tensor& input_tensor,
             const ttnn::Tensor& weight,
             const std::optional<int>& padding_idx,
-            const ttnn::Layout& layout,
+            const std::optional<ttnn::Layout>& layout,
             EmbeddingsType embeddings_type,
             const std::optional<const DataType> dtype,
             std::optional<ttnn::Tensor> &optional_output_tensor,
@@ -81,7 +81,7 @@ void py_module(py::module& module) {
             py::arg("weight").noconvert(),
             py::kw_only(),
             py::arg("padding_idx") = std::nullopt,
-            py::arg("layout") = ttnn::ROW_MAJOR_LAYOUT,
+            py::arg("layout") = std::nullopt,
             py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,

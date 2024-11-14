@@ -18,6 +18,9 @@
 namespace ttnn {
 namespace ccl {
 
+class FabricEriscDatamoverBuilder;
+class EriscDatamoverBuilder;
+
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,
     const std::vector<Device*>& devices,
@@ -54,6 +57,8 @@ class CclOpTensorConfig {
 
     CclOpTensorConfig(Tensor const& tensor);
     uint32_t get_page_size() const;
+    uint32_t get_tile_size() const;
+    Tile get_tile() const;
 
     uint32_t get_buffer_start_address() const;
 
@@ -61,6 +66,8 @@ class CclOpTensorConfig {
 
    protected:
     uint32_t page_size;
+    uint32_t tile_size;
+    Tile tile;
     uint32_t buffer_start_address;
     tt::DataFormat df;
 };
@@ -408,19 +415,17 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
                 num_rows;
         } else {
-            this->num_cols = input_tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
+            this->num_cols = input_tensor.get_legacy_shape()[-1] / input_tensor.get_tile().get_width();
             auto input_shape = input_tensor.get_legacy_shape();
             auto output_shape = output_tensor.get_legacy_shape();
-            uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
+            uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / output_tensor.get_tile().get_width();
             this->num_rows =
                 std::accumulate(
                     input_shape.begin() + slice_dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>()) /
-                tt::constants::TILE_HEIGHT;
+                input_tensor.get_tile().get_height();
             this->row_offset =
                 (std::accumulate(
-                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) /
-                     tt::constants::TILE_HEIGHT -
-                 num_rows) *
+                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) / output_tensor.get_tile().get_height() - num_rows) *
                 num_output_cols;
             this->col_offset = num_output_cols - num_cols;
             this->num_tiles = num_rows * num_cols;
@@ -468,7 +473,14 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     Device const* device,
-    ccl::EriscDatamoverBuilder const& edm_builder,
+    FabricEriscDatamoverBuilder const& edm_builder,
+    CoreCoord const& eth_core,
+    NOC noc_id);
+
+KernelHandle generate_edm_kernel(
+   tt::tt_metal::Program& program,
+    Device const* device,
+    EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 
