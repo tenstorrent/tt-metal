@@ -43,7 +43,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
           docker_os_arch: ${{ matrix.build.os }}-amd64
           run_args: |
-            build_command="./build_metal.sh --build-type ${{ matrix.build-type }} --cxx-compiler-path ${{ matrix.build.cxx_compiler }} --c-compiler-path ${{ matrix.build.c_compiler }} --build-all"
+            build_command="./build_metal.sh --build-type ${{ matrix.build-type }} --cxx-compiler-path ${{ matrix.build.cxx_compiler }} --c-compiler-path ${{ matrix.build.c_compiler }} --build-all --disable-unity-builds"
             nice -n 19 $build_command
       - name: Check disk space
         run: |
