@@ -29,7 +29,7 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t> &stick_sizes, uint
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
+tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups) {
     TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
     TT_FATAL(groups == 1 || dim == 3, "Sharded concat RM only supports groups > 1 when dim=3");
@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 // output. The memory address gap between neighbor input rows is exactly the output width. In height concat, all input
 // rows are placed at column 0 but sequential rows in the output. The address gap between neighbor input rows is still
 // the output width (which is equal to the input width).
-operation::ProgramWithCallbacks s2s_concat_multi_core(
+tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
     TT_FATAL(dim == 2 || dim == 3, "Sharded concat only supports dim=2 or 3");
     const bool is_height_concat = dim == 2;
@@ -286,7 +286,7 @@ operation::ProgramWithCallbacks s2s_concat_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
+tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -420,7 +420,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks sharded_concat_multi_core(
+tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups) {
     if (output.is_sharded()) {
         if (input_tensors.size() == 2) {
@@ -442,7 +442,7 @@ operation::ProgramWithCallbacks sharded_concat_multi_core(
     }
 }
 
-operation::ProgramWithCallbacks concat_multi_core(
+tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 

@@ -26,7 +26,11 @@ struct eth_channel_sync_t {
     // First level ack that signals to sender that the payload was received by receiver,
     // indicating that sender can reuse the sender side buffer safely.
     volatile uint32_t receiver_ack;
-    uint32_t reserved_1;
+
+    // Logical channel ID tagged by the sender. Not required when channels
+    // are connected 1:1 (single producer - single consumer)
+    volatile uint32_t src_id;
+
     uint32_t reserved_2;
 };
 
@@ -60,6 +64,15 @@ void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_
         // Note, this is overly eager... Kills perf on allgather
         risc_context_switch();
     }
+    eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
+    eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
+    eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);
+    eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
+}
+
+FORCE_INLINE
+void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    ASSERT(eth_txq_reg_read(q_num, ETH_TXQ_CMD) == 0);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);

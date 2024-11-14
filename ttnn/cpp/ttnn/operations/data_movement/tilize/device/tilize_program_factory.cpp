@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     // Reader compile-time args
     uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2<decltype(stick_size)>(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
 
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
