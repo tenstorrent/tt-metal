@@ -5,7 +5,7 @@
 
 ## Contents
 
-- [New_Model_Bringup in TTNN](#new-model-bringup-in-ttnn)
+- [New Model Bringup in TTNN](#new-model-bringup-in-ttnn)
   - [Contents](#contents)
   - [1. Overview](#1-overview)
   - [2. New model bringup flow in TTNN](#2-new-model-bringup-flow-in-ttnn)
@@ -32,9 +32,9 @@
 
 ## 1. Overview
 
-The [YOLOv4](https://arxiv.org/pdf/2004.10934) is a state-of-the-art object detection model that processes images in real time, identifying and localizing multiple objects within a single forward pass. It builds on the strengths of its predecessors while incorporating several advancements to improve accuracy and efficiency.
+TTNN [TTNN](https://docs.tenstorrent.com/ttnn/latest/ttnn/about.html) is a library that provides a user-friendly interface to operations that run on TensTorrent’s hardware using tt-metal programming model. ttnn is designed to be intuitive to an user that is familiar with [PyTorch](https://pytorch.org/). This report will walk you through our recommented steps to bringup deep learning models that can run efficently on Tenstorrent's hardware using the TTNN library. We will suggest a flow with code examples and diagrams to enable new users interested in bringing up their own models.  
 
-## 2. YOLOv4 TT-NN Optimization Techniques
+## 2. New model bringup flow in TTNN
 
 ### 2.1 Sharding on all relevant OPs
   - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs.
