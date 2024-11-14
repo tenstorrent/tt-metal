@@ -76,16 +76,16 @@ def run(
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
-    torch_real = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+    torch_real = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), input_a_dtype)(
         input_shape
     ).to(torch.float32)
-    torch_imag = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+    torch_imag = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), input_a_dtype)(
         input_shape
     ).to(torch.float32)
     torch_input_tensor_a = torch.complex(torch_real, torch_imag)
 
     golden_function = ttnn.get_golden_function(ttnn.angle)
-    torch_output_tensor = golden_function(torch_input_tensor_a)
+    torch_output_tensor = golden_function(torch_input_tensor_a).to(torch.bfloat16)
 
     input_tensor_a_real = ttnn.from_torch(
         torch_real,
