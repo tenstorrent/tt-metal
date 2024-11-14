@@ -5,12 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-//#define DEBUG
-
-#ifdef DEBUG
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
-#endif
-
 void kernel_main() {
 
     const uint32_t dst_addr                 = get_arg_val<uint32_t>(0);
@@ -40,15 +34,9 @@ void kernel_main() {
     uint32_t stick_id = start_id;
     cb_wait_front(cb_id_out0, block_height);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-
-
     for (uint32_t h = 0; h < block_height; ++h) {
         uint64_t dst_noc_addr = get_noc_addr(stick_id, s0);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
-#ifdef DEBUG
-        noc_async_read_barrier();
-        tt::data_movement::common::print_pages(l1_read_addr, block_width_bytes >> 1, 1);
-#endif
         stick_id++;
         l1_read_addr += padded_block_width_bytes;
         noc_async_write_barrier();
