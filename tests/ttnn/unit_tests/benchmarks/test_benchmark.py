@@ -73,22 +73,47 @@ def test_benchmark_ttnn_matmul(device, use_program_cache, m_size, k_size, n_size
     assert total_time <= average_time
 
 
-def find_max_subblock(out_block_h, out_block_w):
-    max_product = 0
-    best_h = 1
-    best_w = 1
+SUBBLOCK_HW_CHOICES = [
+    (4, 2),
+    (2, 4),
+    (8, 1),
+    (1, 8),  # subblock_hw = 8
+    (7, 1),
+    (1, 7),  # subblock_hw = 7
+    (3, 2),
+    (2, 3),
+    (6, 1),
+    (1, 6),  # subblock_hw = 6
+    (5, 1),
+    (1, 5),  # subblock_hw = 5
+    (2, 2),
+    (4, 1),
+    (1, 4),  # subblock_hw = 4
+    (3, 1),
+    (1, 3),  # subblock_hw = 3
+    (2, 1),
+    (1, 2),  # subblock_hw = 2
+    (1, 1),  # subblock_hw = 1
+]
 
-    for h in range(1, out_block_h + 1):
-        if out_block_h % h == 0:  # h is a divisor of out_block_h
-            for w in range(1, out_block_w + 1):
-                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
-                    if h * w > max_product:
-                        max_product = h * w
-                        best_h = h
-                        best_w = w
-    if out_block_w > best_w:
-        best_h = 1
-    return best_h, best_w, max_product
+
+def get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, out_sharded=False, fp32_dest_acc_en=False):
+    for subblock_hw in SUBBLOCK_HW_CHOICES:
+        out_subblock_h = subblock_hw[0]
+        out_subblock_w = subblock_hw[1]
+
+        if fp32_dest_acc_en:
+            if (out_subblock_h * out_subblock_w) > 4:
+                continue
+
+        if out_sharded:
+            if n_tiles_per_core % out_subblock_w != 0 or out_subblock_h != 1:
+                continue
+
+        if m_tiles_per_core % out_subblock_h == 0 and n_tiles_per_core % out_subblock_w == 0:
+            return (out_subblock_h, out_subblock_w)
+
+    return (1, 1)
 
 
 # This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
@@ -145,21 +170,44 @@ matmul_shapes_bfloat8_b = [
     (2048, 3072, 3072, True, True, 1, 1, 1),
     (3072, 3072, 3072, True, True, 2, 1, 1),
     (3072, 3072, 4096, True, True, 2, 1, 1),
-    (3072, 4096, 4096, True, True, 4, 1, 1),
-    (4096, 4096, 4096, False, False, 4, 1, 1),
-    (8192, 8192, 8192, False, False, 4, 4, 4),
-    (16384, 16384, 16384, False, False, 8, 8, 8),
+    (3072, 4096, 4096, True, True, 1, 2, 2),
+    (4096, 4096, 4096, False, False, 1, 2, 2),
+    (8192, 8192, 8192, False, False, 2, 4, 4),
+    (16384, 16384, 16384, False, False, 4, 8, 8),
+]
+
+matmul_shapes_bfloat4_b = [
+    (512, 512, 512, True, True, 1, 1, 1),
+    (512, 1024, 1024, True, True, 1, 1, 1),
+    (512, 1024, 2048, True, True, 1, 1, 1),
+    (1024, 1024, 1024, True, True, 1, 1, 1),
+    (1024, 1024, 2048, True, True, 1, 1, 1),
+    (1024, 2048, 2048, True, True, 1, 1, 1),
+    (2048, 2048, 2048, True, True, 1, 1, 1),
+    (2048, 2048, 3072, True, True, 1, 1, 1),
+    (2048, 3072, 3072, True, True, 1, 1, 1),
+    (3072, 3072, 3072, True, True, 1, 1, 1),
+    (3072, 3072, 4096, True, True, 1, 1, 1),
+    (3072, 4096, 4096, True, True, 2, 1, 1),
+    (4096, 4096, 4096, True, True, 2, 1, 1),
+    (8192, 8192, 8192, False, False, 2, 2, 2),
+    (16384, 16384, 16384, False, False, 4, 4, 4),
 ]
 
 matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
+    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
 ]
 
 
 @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 1824768}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -191,6 +239,7 @@ def test_matmul_2d_host_perf(
                 "m",
                 "k",
                 "n",
+                "use_trace",
                 "grid_size",
                 "in0_sharded",
                 "out_sharded",
@@ -206,11 +255,13 @@ def test_matmul_2d_host_perf(
             ]
         )
 
-        for dtype, math_fidelity in matmul_configs:
+        for dtype, math_fidelity, use_trace in matmul_configs:
             if dtype == ttnn.bfloat16:
                 matmul_shapes = matmul_shapes_bfloat16
-            else:
+            elif dtype == ttnn.bfloat8_b:
                 matmul_shapes = matmul_shapes_bfloat8_b
+            elif dtype == ttnn.bfloat4_b:
+                matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
 
@@ -222,7 +273,9 @@ def test_matmul_2d_host_perf(
                 per_core_N = n // grid_size[0] // tile_w
                 out_block_h = per_core_M // num_out_blocks_h
                 out_block_w = per_core_N // num_out_blocks_w
-                out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+                out_subblock_h, out_subblock_w = get_subblock_sizes(out_block_h, out_block_w, out_sharded)
+
+                logger.info(f"M*K*N = {m}*{k}*{n} out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}")
 
                 in0 = torch.ones(in0_shape).bfloat16()
                 in1 = torch.randn(in1_shape).bfloat16()
@@ -310,27 +363,52 @@ def test_matmul_2d_host_perf(
                     output_tile=output_tile,
                 )
 
-                tid = ttnn.begin_trace_capture(device, cq_id=0)
-                output_t = ttnn.matmul(
-                    in0_t,
-                    in1_t,
-                    program_config=program_config,
-                    memory_config=out_mem_config,
-                    dtype=dtype,
-                    compute_kernel_config=compute_kernel_config,
-                    output_tile=output_tile,
-                )
-                ttnn.end_trace_capture(device, tid, cq_id=0)
-
                 for iter in range(0, num_warmup_iterations):
-                    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                    output_t = ttnn.matmul(
+                        in0_t,
+                        in1_t,
+                        program_config=program_config,
+                        memory_config=out_mem_config,
+                        dtype=dtype,
+                        compute_kernel_config=compute_kernel_config,
+                        output_tile=output_tile,
+                    )
 
-                profiler.start(f"run")
-                for iter in range(0, num_measurement_iterations):
-                    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-                ttnn.synchronize_device(device)
-                profiler.end(f"run")
+                if use_trace:
+                    tid = ttnn.begin_trace_capture(device, cq_id=0)
+                    for iter in range(0, num_measurement_iterations // 10):
+                        output_t = ttnn.matmul(
+                            in0_t,
+                            in1_t,
+                            program_config=program_config,
+                            memory_config=out_mem_config,
+                            dtype=dtype,
+                            compute_kernel_config=compute_kernel_config,
+                            output_tile=output_tile,
+                        )
+                    ttnn.end_trace_capture(device, tid, cq_id=0)
+                    profiler.start(f"run")
+                    for iter in range(0, 10):
+                        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(device)
+                    profiler.end(f"run")
+                else:
+                    profiler.start(f"run")
+                    for iter in range(0, num_measurement_iterations):
+                        output_t = ttnn.matmul(
+                            in0_t,
+                            in1_t,
+                            program_config=program_config,
+                            memory_config=out_mem_config,
+                            dtype=dtype,
+                            compute_kernel_config=compute_kernel_config,
+                            output_tile=output_tile,
+                        )
+                    ttnn.synchronize_device(device)
+                    profiler.end(f"run")
+
                 ttnn.DumpDeviceProfiler(device)
+
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
                 if math_fidelity == ttnn.MathFidelity.LoFi:
@@ -364,6 +442,7 @@ def test_matmul_2d_host_perf(
                         m,
                         k,
                         n,
+                        f"{True}" if use_trace else f"{False}",
                         grid_size,
                         in0_sharded,
                         out_sharded,
