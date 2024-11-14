@@ -234,7 +234,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                  num_units_per_row,
                  shard_height,
                  shard_width,
-                 padded_shard_width,
+                 (is_blackhole) ? shard_width : padded_shard_width,
                  curr_idx_w,
                  curr_idx_h});
             curr_idx_w += output_unit_size;

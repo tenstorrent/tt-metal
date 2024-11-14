@@ -41,16 +41,16 @@ void kernel_main() {
     cb_wait_front(cb_id_out0, block_height);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-#ifdef DEBUG
-    noc_async_read_barrier();
-    tt::data_movement::common::print_pages(l1_read_addr, block_width_bytes >> 1, block_height);
-#endif
 
     for (uint32_t h = 0; h < block_height; ++h) {
         uint64_t dst_noc_addr = get_noc_addr(stick_id, s0);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
+#ifdef DEBUG
+        noc_async_read_barrier();
+        tt::data_movement::common::print_pages(l1_read_addr, block_width_bytes >> 1, 1);
+#endif
         stick_id++;
-        l1_read_addr += block_width_bytes;
+        l1_read_addr += padded_block_width_bytes;
         noc_async_write_barrier();
     }
     cb_pop_front(cb_id_out0, block_height);
