@@ -5,7 +5,6 @@
 #if defined(ARCH_BLACKHOLE)
 
 #include "llrt/hal.hpp"
-#include "llrt/hal_asserts.hpp"
 #include "llrt/blackhole/bh_hal.hpp"
 #include "hw/inc/blackhole/core_config.h"
 #include "hw/inc/blackhole/dev_mem_map.h"

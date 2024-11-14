@@ -5,9 +5,6 @@
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
-// FIXME: ARCH_NAME specific include
-#include "dev_mem_map.h" // MEM_[L1/ETH]_BASE
-
 #pragma once
 
 namespace tt {
