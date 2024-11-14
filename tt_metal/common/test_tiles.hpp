@@ -26,7 +26,7 @@ enum class TensorLayoutType {
 } // namespace tests::utils
 
 template <class T, template <typename...> typename BufferType>
-std::vector<T> convert_to_tile_layout_322(
+std::vector<T> convert_to_tile_layout_old(
     const BufferType<T>& data,
     std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
     std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt,
@@ -317,7 +317,7 @@ inline std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + til
 
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> tilize_nchw_322(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
+inline std::vector<T> tilize_nchw_old(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> tilized_result;
     if(in_rowmajor.size() == 0) {
@@ -384,7 +384,7 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Spa
     const int OW = round_up_to_tile(W, tile_W);
 
     tilized_result.resize(batch_size * OH * OW, 0);
-
+    int out_index = 0;
     for (int batch_index = 0; batch_index < batch_size; batch_index++) {
         const int batch_offset_in = batch_index * H * W;
         const int batch_offset_out = batch_index * OH * OW;
@@ -392,19 +392,19 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Spa
             for (int ws = 0; ws < W; ws += tile_W) {
                 for (int ht = 0; ht < tile_H; ht++) {
                     const int h = ht + hs;
-                    if (h >= OH) continue;
-                    const int h_OW = h * OW;
+                    if (h >= H) continue;
                     const int h_W = h * W;
                     for (int wt = 0; wt < tile_W; wt++) {
                         const int w = wt + ws;
-                        if (w >= OW) continue;
-                        const int out_offs = w + h_OW + batch_offset_out;
+                        if (w >= W) continue;
+                        int out_w = (out_index % OW);
+                        int out_h = (out_index / OW) % OH;
+                        const int out_offs = out_w + out_h * OW + batch_offset_out;
                         T val = 0;
-                        if (w < W && h < H) {
-                            const int in_offs = w + h_W + batch_offset_in;
-                            val = in_rowmajor[in_offs];
-                        }
+                        const int in_offs = w + h_W + batch_offset_in;
+                        val = in_rowmajor[in_offs];
                         tilized_result[out_offs] = val;
+                        out_index++;
                     }
                 }
             }
