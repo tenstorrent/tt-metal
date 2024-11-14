@@ -7,11 +7,10 @@
 
 #include "debug/dprint.h"
 
-template <typename T>
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, T val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(begin_addr);
+FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
-        DPRINT << "fill_with_val: " << i << " " << val << ENDL();
+        // DPRINT << "fill_with_val: " << i << " " << val << ENDL();
         ptr[i] = val;
     }
 }
@@ -22,6 +21,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t num_writes = get_compile_time_arg_val(1);
+    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(2);
+    constexpr uint32_t needs_padding = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -50,10 +52,14 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }
-
-    cb_reserve_back(tt::CB::c_in1, 1);
-    uint32_t l1_write_addr = get_write_ptr(tt::CB::c_in1);
-    fill_with_val<uint32_t>(l1_write_addr, 8, 123123);
-    cb_push_back(tt::CB::c_in1, 1);
+    if constexpr (needs_padding) {
+        // Add padding
+        cb_reserve_back(tt::CB::c_in1, 1);
+        uint32_t l1_write_addr = get_write_ptr(tt::CB::c_in1);
+        // Fill with padding value
+        // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
+        fill_with_val(l1_write_addr, num_writes, padding_val_packed);
+        cb_push_back(tt::CB::c_in1, 1);
+    }
 
 }

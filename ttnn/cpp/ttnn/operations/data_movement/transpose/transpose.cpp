@@ -144,8 +144,12 @@ ttnn::Tensor ExecuteTranspose::invoke(
         return detail::transpose_nd(input_tensor, normalized_dim1, normalized_dim2, memory_config_arg);
     }
 
+    std::cout << "normalized_dim1: " << normalized_dim1 << std::endl;
+    std::cout << "normalized_dim2: " << normalized_dim2 << std::endl;
+
     bool wh = (normalized_dim1 == 2 && normalized_dim2 == 3) || (normalized_dim2 == 2 && normalized_dim1 == 3);
-    bool typecast = input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and input_unsqueezed.get_layout() == Layout::TILE and !wh and !input_unsqueezed.is_sharded();
+    bool typecast = input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and !wh and !input_unsqueezed.is_sharded();
+    std::cout << "typecast: " << typecast << std::endl << std::endl;
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_typecasted}))};

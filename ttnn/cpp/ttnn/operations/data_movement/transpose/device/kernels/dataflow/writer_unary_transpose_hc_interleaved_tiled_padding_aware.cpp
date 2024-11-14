@@ -20,6 +20,8 @@ void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0);
     uint32_t start_tile_idx  = get_arg_val<uint32_t>(1);
     uint32_t end_tile_idx  = get_arg_val<uint32_t>(2);
+    uint32_t start_padding_tile_idx  = get_arg_val<uint32_t>(3);
+    uint32_t end_padding_tile_idx  = get_arg_val<uint32_t>(4);
 
     // Compile-time constants
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
@@ -172,10 +174,10 @@ void kernel_main() {
     if constexpr (C_p > C) {
         cb_wait_front(tt::CB::c_in1, 1);
         uint32_t l1_read_ptr = get_read_ptr(tt::CB::c_in1);
-        constexpr uint32_t N = 1;
         uint32_t c_t = C_t - 1;
-        constexpr uint32_t num_padded_tiles = 1*H*W_t;
-        for (uint32_t tile_idx = 0; tile_idx < num_padded_tiles; ++tile_idx) {
+        DPRINT << "start_padding_tile_idx: " << start_padding_tile_idx << ENDL();
+        DPRINT << "end_padding_tile_idx: " << end_padding_tile_idx << ENDL();
+        for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to (n, h, w_t)
             uint32_t n = tile_idx / (H * W_t);
             uint32_t remainder1 = tile_idx % (H * W_t);
@@ -183,10 +185,20 @@ void kernel_main() {
             uint32_t w_t = remainder1 % W_t;
             uint8_t C_in_tile = C % TILE_HEIGHT;
             uint8_t face_c_start = C_in_tile/ FACE_HEIGHT;
+            if (tile_idx == start_padding_tile_idx) {
+                DPRINT << "N: " << n << " H: " << h << " W: " << w_t << " C_in_tile: " << C_in_tile << " face_c_start: " << (uint32_t) face_c_start << ENDL();
+            }
             for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
                 uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
+                if (tile_idx == start_padding_tile_idx) {
+                    DPRINT << "face_c: " << (uint32_t) face_c << " sub_tile_line_start: " << (uint32_t) sub_tile_line_start << ENDL();
+                }
                 for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                    if (tile_idx == start_padding_tile_idx) {
+                        DPRINT << "face_c: " << (uint32_t) face_c << " face_w: " << (uint32_t) face_w << " sub_tile_line_start: " << (uint32_t) sub_tile_line_start << ENDL();
+                    }
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
+
                         uint32_t linear_idx = n * H * C_t * W_t + h * C_t * W_t + c_t * W_t + w_t;
                         uint32_t offset = (face_c * NUM_FACES_W * FACE_HEIGHT * FACE_WIDTH + face_w * FACE_HEIGHT * FACE_WIDTH + sub_tile_line * FACE_WIDTH) * element_size;
                         uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);

@@ -55,13 +55,12 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
     uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
 
-    bool pad_n = H == 0 || W == 0;
-    bool pad_c = H == 1 || W == 1;
     // Convert tensor back to original
     auto input_shape = a.get_logical_shape();
 
     auto formatted_input_tensor = a;
-    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and formatted_input_tensor.get_layout() == Layout::TILE and (pad_n or pad_c) and !a.is_sharded();
+    bool wh = W == 2 && H == 3;
+    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and !wh && !a.is_sharded();
     formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
     auto output = formatted_input_tensor;
