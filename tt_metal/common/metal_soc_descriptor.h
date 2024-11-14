@@ -7,6 +7,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "core_coord.hpp"
 #include "third_party/umd/device/tt_soc_descriptor.h"
+#include "third_party/umd/device/tt_cluster_descriptor.h"
 
 //! tt_SocDescriptor contains information regarding the SOC configuration targetted.
 /*!
@@ -37,7 +38,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
     std::map<int, CoreCoord> chan_to_logical_eth_core_map;
 
-    metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask);
+    metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType &board_type);
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_channel(int dram_chan) const;
@@ -73,4 +74,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
+    // This is temporary until virtual coordinates are enabled because BH chips on
+    //  different cards use different physical PCIe NoC endpoints
+    void update_pcie_cores(const BoardType &board_type);
 };

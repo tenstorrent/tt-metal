@@ -47,6 +47,7 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      TEST_DATA_DIR: ${{ github.workspace }}/tt-train/tests/test_data
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
@@ -66,17 +67,9 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           cd $TT_METAL_HOME
           cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
-          ctest --version
-          NEW_PATH=$(pwd)
-          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${NEW_PATH}/build|g" {} +
+          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${TT_METAL_HOME}/build|g" {} +
           cd $TT_METAL_HOME/build/tt-train
-          echo "tests/ttml_tests"
-          file tests/ttml_tests || true
-          echo "tests/ttml_tests"
           ldd tests/ttml_tests || true
-          ls -lart tests || true
-          sleep 600
-          llvm-readelf-17 -h tests/ttml_tests
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}

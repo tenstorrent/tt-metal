@@ -6,13 +6,22 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 using namespace ttml::tokenizers;
 
+namespace {
+std::string getTestDataDir() {
+    const char* envVar = std::getenv("TEST_DATA_DIR");
+    return (envVar) ? std::string(envVar) : std::string(TEST_DATA_DIR);
+}
+}
+
 class BPETokenizerTest : public ::testing::Test {
 protected:
-    BPETokenizer tokenizer = BPETokenizer(std::string(TEST_DATA_DIR) + "/tokenizer.json");
+    BPETokenizer tokenizer = BPETokenizer(getTestDataDir() + "/tokenizer.json");
 };
 
 TEST_F(BPETokenizerTest, EncodeAndDecode) {

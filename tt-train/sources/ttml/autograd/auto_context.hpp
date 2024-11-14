@@ -40,7 +40,6 @@ public:
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
     ttnn::distributed::MeshDevice& get_device();
-
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
