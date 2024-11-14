@@ -22,8 +22,8 @@ include(FetchContent)
 FetchContent_Declare(
     sfpi
     URL
-        https://github.com/tenstorrent/sfpi/releases/download/v0.0.0-lfsectomy/sfpi-release.tgz
-    URL_HASH MD5=3ffa5a871a6289f19617de7293c1dac0
+        https://github.com/tenstorrent/sfpi/releases/download/v5.0.0/sfpi-release.tgz
+    URL_HASH MD5=10cacabe92846076cb4d7596e46d06be
     SOURCE_DIR
     ${PROJECT_SOURCE_DIR}/runtime/sfpi
 )
