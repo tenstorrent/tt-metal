@@ -29,7 +29,7 @@
 #include "third_party/umd/device/tt_arch_types.h"
 #include "third_party/umd/device/tt_cluster_descriptor.h"
 #include "third_party/umd/device/tt_cluster_descriptor_types.h"
-#include "third_party/umd/device/tt_device.h"
+#include "third_party/umd/device/cluster.h"
 #include "third_party/umd/device/tt_soc_descriptor.h"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "third_party/umd/device/xy_pair.h"
@@ -90,7 +90,7 @@ void Cluster::detect_arch_and_target() {
         this->arch_ = tt::get_arch_from_string(arch_env);
     }else {
         this->target_type_ = TargetDevice::Silicon;
-        std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
+        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
         this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
         for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
             chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
@@ -143,7 +143,7 @@ void Cluster::generate_cluster_descriptor() {
 
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
-        // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
+        // Cannot use tt::umd::Cluster::detect_available_device_ids because that returns physical device IDs
         std::vector<chip_id_t> physical_mmio_device_ids;
         std::set<chip_id_t> logical_mmio_device_ids;
         physical_mmio_device_ids = tt_SimulationDevice::detect_available_device_ids();
@@ -215,7 +215,7 @@ void Cluster::assert_risc_reset() {
 
 void Cluster::assign_mem_channels_to_devices(
     chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
-    // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per
+    // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt::umd::Cluster and denotes the max number of host memory channels per
     // MMIO device Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
     // One WH gateway should have 8 remote deivces in its control group.
     TT_ASSERT(controlled_device_ids.size() <= 9, "Unable to assign each device to its own host memory channel!");
@@ -253,7 +253,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
-        device_driver = std::make_unique<tt_SiliconDevice>(
+        device_driver = std::make_unique<tt::umd::Cluster>(
             sdesc_path,
             this->cluster_desc_path_,
             all_chips_set,
