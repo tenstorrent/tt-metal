@@ -245,6 +245,30 @@ def num_to_core_range_set(x):
     )
 
 
+def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+    """
+    Helper function which copies host tensors to device tensors.
+    If no device_tensors are provided, it creates new device tensors and returns them.
+    """
+    if device_tensors is None:
+        assert mesh_device is not None, "mesh_device is required when device_tensors is None"
+        ret = []
+        for i in range(len(host_tensors)):
+            if host_tensors[i] is None:
+                ret.append(None)
+            else:
+                on_device = ttnn.to_device(host_tensors[i], device=mesh_device)
+                ret.append(on_device)
+        return ret
+    else:
+        for i in range(len(host_tensors)):
+            if host_tensors[i] is None:
+                assert device_tensors[i] is None
+                continue
+            ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
+        return device_tensors
+
+
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     """Helper function based on logic used in reference model:
     https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
