@@ -4,13 +4,13 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -40,6 +40,8 @@ void MAIN {
 #ifdef AMSGRAD
     constexpr auto tmp_cb_max_exp_avg_sq = tt::CB::c_intermed3;
 #endif
+    constexpr auto cb_beta1_exponent = tt::CB::c_intermed4;
+    constexpr auto cb_beta2_exponent = tt::CB::c_intermed5;
     constexpr auto cb_tmp1 = tt::CB::c_intermed6;
     constexpr auto cb_tmp2 = tt::CB::c_intermed7;
 
@@ -56,6 +58,8 @@ void MAIN {
 
     cb_wait_front(cb_scalar_args, 5);
     cb_wait_front(cb_one, onetile);
+    cb_wait_front(cb_beta1_exponent, onetile);
+    cb_wait_front(cb_beta2_exponent, onetile);
 
     binary_op_init_common(cb_param_in, cb_scalar_args);
 
@@ -116,7 +120,8 @@ void MAIN {
         mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
 
         // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
-        mul_tiles_to_cb(cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq, first_tile, beta2_tile, /*pop0=*/0, /*pop1=*/0);
+        mul_tiles_to_cb(
+            cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq, first_tile, beta2_tile, /*pop0=*/0, /*pop1=*/0);
 
         // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1
         add_tiles_to_cb(tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq, first_tile, first_tile);
@@ -129,33 +134,19 @@ void MAIN {
         // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
-        // cb_tmp1 = pow(beta2, step);
+        // cb_beta2_exponent = pow(beta2, step); Calculated from host
+
+        // cb_tmp1 = 1 / (1 - cb_beta2_exponent);
         tile_regs_acquire();
         cb_reserve_back(cb_tmp1, onetile);
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta2_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_push_back(cb_tmp1, onetile);
-        tile_regs_release();
-
-        // cb_tmp1 = 1 / (1 - cb_tmp1);
-        tile_regs_acquire();
-        cb_wait_front(cb_tmp1, onetile);
-        cb_reserve_back(cb_tmp1, onetile);
-        sub_tiles_init_with_dt(cb_one, cb_tmp1);
-        sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
+        sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
+        sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
         pack_tile_with_dt(dst0, cb_tmp1);
-        cb_pop_front(cb_tmp1, onetile);
         cb_push_back(cb_tmp1, onetile);
         tile_regs_release();
 
@@ -222,33 +213,19 @@ void MAIN {
         tile_regs_release();
 
         // bias_correction1 = 1 - pow(beta1, step);
-        // cb_tmp2 = pow(beta1, step);
+        // cb_beta1_exponent = pow(beta1, step); Calculated from host
+
+        // cb_tmp2 = 1 / (1 - cb_beta1_exponent);
         tile_regs_acquire();
         cb_reserve_back(cb_tmp2, onetile);
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta1_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        cb_push_back(cb_tmp2, onetile);
-        tile_regs_release();
-
-        // cb_tmp2 = 1 / (1 - cb_tmp2);
-        tile_regs_acquire();
-        cb_wait_front(cb_tmp2, onetile);
-        cb_reserve_back(cb_tmp2, onetile);
-        sub_tiles_init_with_dt(cb_one, cb_tmp2);
-        sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
+        sub_tiles_init_with_dt(cb_one, cb_beta1_exponent);
+        sub_tiles(cb_one, cb_beta1_exponent, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
         pack_tile_with_dt(dst0, cb_tmp2);
-        cb_pop_front(cb_tmp2, onetile);
         cb_push_back(cb_tmp2, onetile);
         tile_regs_release();
 
@@ -275,5 +252,7 @@ void MAIN {
 
     cb_pop_front(cb_scalar_args, 5);
     cb_pop_front(cb_one, onetile);
+    cb_pop_front(cb_beta1_exponent, onetile);
+    cb_pop_front(cb_beta2_exponent, onetile);
 }  // void MAIN
 }  // namespace NAMESPACE
