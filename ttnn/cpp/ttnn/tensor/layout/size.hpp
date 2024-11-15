@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <utility>
 #include <tuple>
+#include <ostream>
 
 namespace tt::tt_metal {
 
