@@ -24,7 +24,7 @@ Hal::Hal() {
         this->arch_ = tt::get_arch_from_string(arch_env);
     }else {
         std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        //TT_ASSERT(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
+        //TT_FATAL(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
         if (physical_mmio_device_ids.size() > 0) {
             this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
             for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
