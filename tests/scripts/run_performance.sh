@@ -95,7 +95,7 @@ run_device_perf_models() {
 
     env pytest models/demos/mnist/tests -m $test_marker
 
-    env pytest -n auto models/demos/lenet/tests -m $test_marker
+    env pytest models/demos/lenet/tests -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
