@@ -23,6 +23,7 @@ Hal::Hal() {
         this->arch_ = tt::get_arch_from_string(arch_env);
     }else {
         std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
+        TT_FATAL(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
         this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
         for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
             chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
@@ -45,7 +46,7 @@ Hal::Hal() {
         case tt::ARCH::BLACKHOLE: initialize_bh();
         break;
 
-        case tt::ARCH::Invalid: TT_THROW("Unsupported arch for HAL"); // Why would an invalid type need to exist
+        case tt::ARCH::Invalid: TT_THROW("Unsupported arch for HAL");
         break;
     }
 }
