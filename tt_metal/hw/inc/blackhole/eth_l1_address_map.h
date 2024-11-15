@@ -6,8 +6,6 @@
 
 #include <cstdint>
 
-// #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
-
 namespace eth_l1_mem {
 
 struct address_map {
@@ -57,7 +55,7 @@ struct address_map {
   static constexpr std::int32_t MEM_ERISC_STACK_BASE = RISC_LOCAL_MEM_BASE + MEM_ERISC_LOCAL_SIZE - MEM_ERISC_STACK_SIZE;
 
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = MEM_ERISC_MAP_END;
-  static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 63) & ~63; // don't need this
+  static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 63) & ~63; // don't need this - just to get things to compile
   static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (LAUNCH_ERISC_APP_FLAG + 63) & ~63;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_SIZE - ERISC_L1_UNRESERVED_BASE;
 

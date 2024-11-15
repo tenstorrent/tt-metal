@@ -428,9 +428,13 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            if (is_idle_eth or this->arch() == ARCH::BLACKHOLE) {
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            if (not is_idle_eth) {
+                reset_val = reset_val & static_cast<TensixSoftResetOptions>(~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             }
+            std::cout << "Reset val for eth " << is_idle_eth << " is " << std::hex << (uint32_t)reset_val << std::dec << std::endl;
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core), reset_val);
+
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
@@ -490,6 +494,10 @@ void Device::reset_cores() {
         std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
         DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
         DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
+
+        uint32_t reset_val;
+        tt::Cluster::instance().read_reg(&reset_val, tt_cxy_pair(this->id_, physical_core), 0xFFB121B0);
+        std::cout << "Active eth core in reset_cores reset val " << std::hex << reset_val << std::dec << std::endl;
 
         data = tt::llrt::read_hex_vec_from_core(
             this->id(), physical_core, launch_addr, sizeof(launch_msg_t));
@@ -665,14 +673,21 @@ void Device::initialize_and_launch_firmware() {
 
     // Load erisc app base FW to eth cores on WH and idle erisc FW on second risc of BH active eth cores
     std::unordered_set<CoreCoord> bh_active_eth_cores;
+
+    auto init_aeric = std::getenv("TT_METAL_INIT_ACTIVE_ETH") != nullptr;
+
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
-        this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+        if (init_aeric) {
+            this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+        }
         if (this->arch() == ARCH::BLACKHOLE) {
             bh_active_eth_cores.insert(phys_eth_core);
-            not_done_cores.insert(phys_eth_core);
+            if (init_aeric) {
+                not_done_cores.insert(phys_eth_core);
+            }
         }
     }
 

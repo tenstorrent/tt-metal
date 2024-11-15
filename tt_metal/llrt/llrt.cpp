@@ -242,6 +242,12 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
     uint64_t go_msg_addr = tt_metal::hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
+    if (dispatch_core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        uint32_t pc_addr;
+        tt::Cluster::instance().read_reg(&pc_addr, tt_cxy_pair(chip_id, core), 0xFFB14008);
+        std::cout << "Eth core " << core.str() << " pc " << std::hex << pc_addr << " expected " << eth_l1_mem::address_map::FIRMWARE_BASE << std::endl;
+    }
+
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};

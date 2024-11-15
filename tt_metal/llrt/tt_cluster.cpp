@@ -371,10 +371,10 @@ void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord
     this->driver_->deassert_risc_reset_at_core(virtual_chip_coord, soft_resets);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord, const TensixSoftResetOptions &soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
-    this->driver_->assert_risc_reset_at_core(virtual_chip_coord);
+    this->driver_->assert_risc_reset_at_core(virtual_chip_coord, soft_resets);
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {

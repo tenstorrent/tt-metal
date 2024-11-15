@@ -64,7 +64,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         // BH active ethernet runs idle erisc FW on the second ethernet
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
-            .local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH
+            .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH
         };
         processor_classes[processor_class_idx] = processor_types;
     }
