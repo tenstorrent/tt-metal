@@ -15,9 +15,10 @@ from llama_models.llama3.reference_impl.generation import (
     TokenResult,
     sample_top_p,
 )
+from models.demos.llama3.tt.llama_common import copy_host_to_device
 
 
-class LlamaVision:
+class LlamaGenerator:
     def __init__(self, model, model_args, mesh_device, vllm=False, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -35,6 +36,105 @@ class LlamaVision:
         self.vllm = vllm
         self.tokenizer = tokenizer
         self.formatter = formatter
+
+    def prefill_forward_single_user_text(
+        self,
+        tokens,
+        page_table,
+        user_id,
+        last_token_idx,
+    ):
+        """
+        Performs vision encode step then text prefill.
+        Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
+        """
+        prefill_input, rot_mats_prefill, page_table_tt = self.model.prepare_inputs_prefill(
+            tokens, page_table=page_table
+        )
+
+        tt_logits = self.model.ttnn_prefill_forward(
+            prefill_input,
+            rot_mats=rot_mats_prefill,
+            user_id=user_id,
+            page_table=page_table_tt,
+            get_last_token=(last_token_idx // 32) * 32,
+        )
+
+        logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+
+        return logits
+
+    def decode_forward_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+    ):
+        """
+        Performs text decode step.
+        Returns logits
+        """
+        tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
+            tokens, current_pos, page_table
+        )
+
+        tt_logits = self.model.ttnn_decode_forward(
+            tt_tokens,
+            tt_current_pos,
+            rot_mats=tt_rot_mats,
+            page_table=tt_page_table,
+        )
+
+        logits = self.model.process_output_decode(tt_logits)
+        return logits
+
+    def capture_trace_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+    ):
+        """
+        Captures a trace for the decode_forward method.
+        """
+
+        # Compile run
+        self.decode_forward_text(tokens, current_pos, page_table)
+
+        # Get inputs ready for trace run
+        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
+        tt_out_trace = self.model.ttnn_decode_forward(*transformed_inputs)
+
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+
+        return trace_id, tt_out_trace, *device_inputs
+
+    def decode_forward_trace_text(
+        self,
+        trace_id,
+        device_inputs,
+        tt_out_trace,
+        tokens,
+        current_pos,
+        page_table=None,
+    ):
+        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+
+        device_inputs = copy_host_to_device(
+            host_tensors=host_inputs,
+            device_tensors=device_inputs,
+        )
+
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        logits = self.model.process_output_decode(tt_out_trace)
+
+        return logits
 
     def prefill_forward_single_user(
         self,
