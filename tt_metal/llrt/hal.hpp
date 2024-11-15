@@ -266,7 +266,7 @@ extern Hal hal;
 }  // namespace tt
 
 
-#define HAL_MEM_L1_BASE tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_BASE tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_BASE tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_SIZE tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_ETH_BASE tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_ETH_SIZE tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE)
