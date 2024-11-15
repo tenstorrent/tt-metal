@@ -40,7 +40,7 @@ using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::ve
 
 // FIXME: this papers over an issue in pad, so we should probably move the
 // fix there.
-MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output_memory_config) {
+MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output_memory_config) {
     return MassagedConcat(
         MassagedConcatParams {
             .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
@@ -87,7 +87,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output
     );
 }
 
-MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig &output_memory_config) {
+MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, const MemoryConfig& output_memory_config) {
     return MassagedConcat(
         MassagedConcatParams {
             .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
@@ -144,7 +144,7 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
     );
 }
 
-MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, MemoryConfig &output_memory_config, int dim1, int dim2) {
+MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, const MemoryConfig& output_memory_config, int dim1, int dim2) {
     return MassagedConcat(
         MassagedConcatParams {
             .predicate = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
@@ -187,7 +187,7 @@ MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, MemoryConfig &ou
     );
 }
 
-MassagedConcat build_non_aligned_last_dim_concat(const std::vector<ttnn::Tensor>& tensors, uint8_t queue_id, MemoryConfig &output_memory_config) {
+MassagedConcat build_non_aligned_last_dim_concat(const std::vector<ttnn::Tensor>& tensors, uint8_t queue_id, const MemoryConfig& output_memory_config) {
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
@@ -283,14 +283,12 @@ ttnn::Tensor ConcatOperation::invoke(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
-    auto output_memory_config = memory_config.value_or(first_tensor.memory_config());
-    auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
-    auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
+    auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, mem_config);
+    auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, mem_config);
     auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
 
     std::vector<ttnn::Tensor> itensors(input_tensors);
-    // FIXME: use massaged_concat here.
-    auto res = concat_impl(itensors, dim, groups, output_memory_config);
+    auto res = massaged_concat(itensors, dim, groups);
     for (auto& tensor : itensors) {
         tensor.deallocate();
     }
