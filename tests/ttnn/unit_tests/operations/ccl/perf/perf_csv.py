@@ -171,15 +171,6 @@ def perf_report(file_path):
 
     utilization_data = []
 
-    def calculate_utilization(row):
-        link_bw = 12.5 if row["topology"] == "Linear" else 25.0  # GB/s
-        num_links = int(row["num_links"])
-
-        theoretical_peak = num_links * link_bw
-        utilization = (row["Link BW [GB/s]"] / theoretical_peak) * 100 if theoretical_peak > 0 else 0
-
-        return theoretical_peak, utilization
-
     for i, (group, group_df) in enumerate(grouped, start=1):
         group_df = group_df.iloc[2 * group_df["n_chips"].iloc[0] :]
 
@@ -196,9 +187,6 @@ def perf_report(file_path):
         )
         group_df["Cycles Count"] = group_df["DEVICE FW END CYCLE"] - group_df["DEVICE FW START CYCLE"]
         group_df[["Op BW [GB/s]", "Link BW [GB/s]"]] = group_df.apply(calculate_bandwidth, axis=1, result_type="expand")
-        group_df[["Theoretical Peak [GB/s]", "Utilization [%]"]] = group_df.apply(
-            calculate_utilization, axis=1, result_type="expand"
-        )
 
         group_file_path = file_path.replace(".csv", f"_group_{i}.csv")
 
@@ -215,21 +203,6 @@ def perf_report(file_path):
             "Data Type": group_df["Data Type"].iloc[0] if "Data Type" in group_df else "",
         }
 
-        utilization_summary = {
-            "Input Shape": group_df["Input Shape"].iloc[0],
-            "OP CODE": group_df["OP CODE"].iloc[0],
-            "dim": group_df["dim"].iloc[0] if "dim" in group_df else "",
-            "num_links": group_df["num_links"].iloc[0] if "num_links" in group_df else "",
-            "output_mem_config": group_df["output_mem_config"].iloc[0] if "output_mem_config" in group_df else "",
-            "topology": group_df["topology"].iloc[0],
-            "Layout": group_df["Layout"].iloc[0] if "Layout" in group_df else "",
-            "Data Type": group_df["Data Type"].iloc[0] if "Data Type" in group_df else "",
-            "Link BW [GB/s]": f"{group_df['Link BW [GB/s]'].min()} - {group_df['Link BW [GB/s]'].mean():.2f} - {group_df['Link BW [GB/s]'].max()}",
-            "Theoretical Peak [GB/s]": round(group_df["Theoretical Peak [GB/s]"].mean(), 2),
-            "Utilization [%]": f"{group_df['Utilization [%]'].min():.2f} - {group_df['Utilization [%]'].mean():.2f} - {group_df['Utilization [%]'].max():.2f}",
-        }
-        utilization_data.append(utilization_summary)
-
         for column in numeric_columns:
             min_val = round(group_df[column].min(), 2)
             largest_vals = group_df[column].nlargest(3)
@@ -241,6 +214,33 @@ def perf_report(file_path):
 
             group_data[column] = f"{min_val} - {avg_val} - {max_val}"
 
+        link_bw_str = group_data["Link BW [GB/s]"]
+        link_bw_values = [float(x.strip()) for x in link_bw_str.split(" - ")]
+
+        link_bw_min, link_bw_avg, link_bw_max = link_bw_values
+
+        link_bw = 12.5 if group_df["topology"].iloc[0] == "Linear" else 25.0  # GB/s
+        num_links = int(group_df["num_links"].iloc[0]) if "num_links" in group_df else 0
+
+        theoretical_peak = num_links * link_bw
+        min_utilization = round((link_bw_min / theoretical_peak) * 100, 2)
+        avg_utilization = round((link_bw_avg / theoretical_peak) * 100, 2)
+        max_utilization = round((link_bw_max / theoretical_peak) * 100, 2)
+
+        utilization_summary = {
+            "Input Shape": group_df["Input Shape"].iloc[0],
+            "OP CODE": group_df["OP CODE"].iloc[0],
+            "dim": group_df["dim"].iloc[0] if "dim" in group_df else "",
+            "num_links": group_df["num_links"].iloc[0] if "num_links" in group_df else "",
+            "output_mem_config": group_df["output_mem_config"].iloc[0] if "output_mem_config" in group_df else "",
+            "topology": group_df["topology"].iloc[0],
+            "Layout": group_df["Layout"].iloc[0] if "Layout" in group_df else "",
+            "Data Type": group_df["Data Type"].iloc[0] if "Data Type" in group_df else "",
+            "Link BW [GB/s]": f"{group_df['Link BW [GB/s]'].min()} - {group_df['Link BW [GB/s]'].mean():.2f} - {group_df['Link BW [GB/s]'].max()}",
+            "Theoretical Peak [GB/s]": f"{theoretical_peak}",
+            "Utilization [%]": f"{min_utilization} - {avg_utilization} - {max_utilization}",
+        }
+        utilization_data.append(utilization_summary)
         averages_data.append(group_data)
 
     utilization_df = pd.DataFrame(utilization_data)
