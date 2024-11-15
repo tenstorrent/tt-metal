@@ -75,6 +75,7 @@ jobs:
     secrets: inherit
   # UMD Unit Tests
   umd-unit-tests:
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false

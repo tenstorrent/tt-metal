@@ -51,10 +51,9 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build UMD device and tests
-        run: |
-          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON
-          cmake --build build --target umd_tests
+      - uses: ./.github/actions/prepare-metal-run
+        with:
+          arch: ${{ inputs.arch }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: build/test/umd/${{ inputs.arch }}/unit_tests
