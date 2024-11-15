@@ -1392,8 +1392,26 @@ Continuous batching improves TTFT by reducing wait times for incoming users. It 
 Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position ids can be different for each user in the batch. Implementing continuous batching requires that the serving code track data for each slot of the batch. An example of our continuous batching demo can be found [here](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/t3000/llama2_70b/demo/demo_continuous_batching.py). In production deployment, vLLM handles continuous batching for the LLM service.
 
 ### 3.5 vLLM Integration
-  - Our vLLM repo and what's needed to integrate with it.
+#### Overview
+vLLM is an open-source LLM serving library. We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM support continuous batching and paged attention. In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
 
+Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal) has instructions for setting up the environment.
+
+#### Implementation Requirements
+In order to add vLLM support to a new model, the model must conform to a certain interface. An example of the interface is the [Llama2-70b generation code](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/t3000/llama2_70b/tt/llama_generation.py), which implements `prefill_forward`, `decode_forward`, and `initialize_vllm_model`. Beyond implementing the functionality needed for continuous batching, a model must also implement paged attention. For an example, see [Llama2-70b attention](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/t3000/llama2_70b/tt/llama_attention_optimized.py).
+
+#### vLLM modifications
+On the vLLM side there may be additional changes needed to support the new model.
+
+Modify the [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization. Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model. 
+
+#### Testing
+Finally, test the new model through vLLM. Register the new model as seen in [`offline_inference_tt.py`](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
+```python
+from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+ModelRegistry.register_model("TTLlamaForCausalLM", TtLlamaModelForGeneration)
+```
+and run `offline_inference_tt.py` to generate outputs with vLLM. 
 
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
