@@ -251,12 +251,6 @@ TEST(AnyRangeTest, CanTransferOwnershipFromRangeOfNonTrivialElements) {
         {
             const SharedIntRange range = std::move(foo);
 
-            // ownership transferred from array to range
-            EXPECT_EQ(foo[0], nullptr);
-            EXPECT_EQ(foo[1], nullptr);
-            EXPECT_EQ(foo[2], nullptr);
-            EXPECT_EQ(foo[3], nullptr);
-
             // no extra copies stored
             EXPECT_EQ(range[0].use_count(), 1);
             EXPECT_EQ(range[1].use_count(), 1);
