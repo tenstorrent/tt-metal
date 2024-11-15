@@ -203,7 +203,7 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
         # Measure PCC if also running reference model
         if run_ref_pt:
             if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
-                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.94)
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.9465661)
             else:
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 

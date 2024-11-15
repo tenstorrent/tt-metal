@@ -3,7 +3,7 @@
 This codebase includes the Qwen2 family of models.
 
 The current version supports the following Qwen2 models:
-- Qwen2-8B
+- Qwen2-7B
 
 All the above qwen models are compatible and tested on the following Tenstorrent hardware:
 - N150 (1-chip)
@@ -59,10 +59,10 @@ When running the demo, do not forget to setup the `$QWEN_DIR` environment variab
 # Examples of how to run the demo for any supported Llama3 models
 
 # Run a single continuous batch with instruct weights
-pytest models/demos/qwen/demo/demo.py -k 'instruct and 1_batch'
+FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'instruct and 1_batch'
 
 # Run 2 continuous batches with general weights
-pytest models/demos/qwen/demo/demo.py -k 'general and 2_batch'
+FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'general and 2_batch'
 ```
 
 ## Known Issues

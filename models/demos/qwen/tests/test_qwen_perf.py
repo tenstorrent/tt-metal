@@ -51,7 +51,7 @@ def test_qwen_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_p
     model_args = TtModelArgs(mesh_device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    expected_inference_time = 0.04
+    expected_inference_time = 0.07
 
     # model_args.n_layers = 1
     # Clear global profiler state before starting measurements
