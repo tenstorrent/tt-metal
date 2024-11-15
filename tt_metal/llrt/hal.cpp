@@ -17,6 +17,7 @@ namespace tt_metal {
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
 Hal::Hal() {
+    this->arch_ = tt::ARCH::Invalid;
     if(std::getenv("TT_METAL_SIMULATOR_EN")) {
         auto arch_env = std::getenv("ARCH_NAME");
         TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
@@ -25,8 +26,8 @@ Hal::Hal() {
         std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
         TT_FATAL(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
         this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-        for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
-            chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
+        for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
+            chip_id_t device_id = physical_mmio_device_ids.at(i);
             tt::ARCH detected_arch = detect_arch(device_id);
             TT_FATAL(
                 this->arch_ == detected_arch,
