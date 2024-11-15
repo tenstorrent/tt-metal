@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 import torch.nn as nn
-import torch
 
 
 def conv(device, input_tensor, batch_size, parameters):
@@ -26,7 +25,6 @@ def conv(device, input_tensor, batch_size, parameters):
         deallocate_activation=True,
         reallocate_halo_output=True,
     )
-    # x = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight,
@@ -42,18 +40,14 @@ def conv(device, input_tensor, batch_size, parameters):
         input_width=input_tensor.shape[2],
         conv_config=conv_config,
         conv_op_cache={},
-        debug=True,
         groups=1,
     )
     return x, out_height, out_width
 
 
-def Lenet(input_tensor, model, batch_size, num_classes, device, parameters, reset_seeds):
+def lenet(input_tensor, batch_size, device, parameters):
     conv_1, out_height, out_width = conv(device, input_tensor, batch_size, parameters.layer1)
-
-    conv_1 = ttnn.from_device(conv_1)
-    conv_1 = ttnn.to_layout(conv_1, layout=ttnn.TILE_LAYOUT)
-    conv_1 = ttnn.to_device(conv_1, device=device)
+    conv_1 = ttnn.sharded_to_interleaved(conv_1, ttnn.L1_MEMORY_CONFIG)
     conv_1 = ttnn.reshape(conv_1, (batch_size, out_height, out_width, conv_1.shape[-1]))
     conv_1 = ttnn.permute(conv_1, (0, 3, 1, 2))
     conv_1 = ttnn.to_torch(conv_1)
@@ -67,21 +61,24 @@ def Lenet(input_tensor, model, batch_size, num_classes, device, parameters, rese
 
     conv_2, out_height, out_width = conv(device, maxpool_1, batch_size, parameters.layer2)
 
-    conv_2 = ttnn.from_device(conv_2)
-    conv_2 = ttnn.to_layout(conv_2, layout=ttnn.TILE_LAYOUT)
-    conv_2 = ttnn.to_device(conv_2, device=device)
-    conv_2 = ttnn.reshape(conv_2, (batch_size, out_height, out_width, conv_2.shape[-1]))
-    conv_2 = ttnn.permute(conv_2, (0, 3, 1, 2))
-    conv_2 = ttnn.to_torch(conv_2)
+    conv_2 = ttnn.to_layout(conv_2, layout=ttnn.ROW_MAJOR_LAYOUT)
+    maxpool_2 = ttnn.max_pool2d(
+        input_tensor=conv_2,
+        batch_size=batch_size,
+        input_h=out_height,
+        input_w=out_width,
+        channels=conv_2.shape[3],
+        kernel_size=[2, 2],
+        stride=[2, 2],
+        padding=[0, 0],
+        dilation=[1, 1],
+    )
 
-    max = nn.MaxPool2d(kernel_size=2, stride=2)
-    maxpool_2 = max(conv_2)
-
-    maxpool_2 = ttnn.from_torch(maxpool_2, dtype=ttnn.bfloat16)
-
-    maxpool_2 = ttnn.reshape(maxpool_2, (maxpool_2.shape[0], -1))
-    maxpool_2 = ttnn.to_device(maxpool_2, device=device)
+    maxpool_2 = ttnn.sharded_to_interleaved(maxpool_2, ttnn.L1_MEMORY_CONFIG)
     maxpool_2 = ttnn.to_layout(maxpool_2, layout=ttnn.TILE_LAYOUT)
+    maxpool_2 = ttnn.reshape(maxpool_2, (batch_size, 5, 5, maxpool_2.shape[3]))
+    maxpool_2 = ttnn.permute(maxpool_2, (0, 3, 1, 2))
+    maxpool_2 = ttnn.reshape(maxpool_2, (maxpool_2.shape[0], -1))
 
     linear_1 = ttnn.linear(
         maxpool_2,
