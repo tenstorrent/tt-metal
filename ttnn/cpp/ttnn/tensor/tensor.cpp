@@ -113,7 +113,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
     }
 }
 
-Tensor::Tensor(const Storage storage, const TensorSpec& tensor_spec): tensor_id{std::nullopt}, deallocate_through_destructor(false) {
+Tensor::Tensor(const Storage storage, const TensorSpec& tensor_spec) {
     tensor_attributes = std::make_shared<TensorAttributes>(storage, tensor_spec);
 
     ZoneScoped;
@@ -168,7 +168,6 @@ Tensor::Tensor(const Storage storage, const TensorSpec& tensor_spec): tensor_id{
         },
         storage);
     this->tensor_attributes->num_workers_completed = this->tensor_attributes->num_shards_to_be_populated;
-    this->tensor_attributes->metadata_populated = true;
 }
 
 Tensor::Tensor(const std::vector<Device *>& workers):
@@ -178,7 +177,7 @@ Tensor::Tensor(const std::vector<Device *>& workers):
         return;
     }
 
-    Storage storage = [&](){
+    tensor_attributes->storage = [&](){
         if (workers.size() == 1) {
             return Storage(DeviceStorage());
         }
@@ -206,7 +205,7 @@ Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> dist
         return;
     }
 
-    Storage storage = [&]() {
+    tensor_attributes->storage = [&]() {
         if (num_buffers == 1) {
             return Storage(OwnedStorage());
         }
@@ -428,7 +427,6 @@ void Tensor::deepcopy(const Tensor& other) {
     this->set_storage(other.get_storage());
     this->set_tensor_spec(other.get_tensor_spec());
     // Set metadata populated flag for getters
-    this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
 }
 
@@ -452,7 +450,6 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
         },
         other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the
                                // worker thread
-    this->tensor_attributes->metadata_populated = true;
     this->tensor_attributes->num_workers_completed++;
 }
 
@@ -873,7 +870,6 @@ Tensor allocate_tensor_on_device(
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
                 device_tensor.set_tensor_spec(tensor_spec);
-                device_tensor.tensor_attributes->metadata_populated = true;
             }
         });
     }

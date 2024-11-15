@@ -233,7 +233,6 @@ void launch_op(
                         int num_workers_completed = (output_tensor->tensor_attributes->num_workers_completed)++;
                         if (not num_workers_completed) {
                             output_tensor->set_tensor_spec(local_tensor->tensor_spec());
-                            output_tensor->tensor_attributes->metadata_populated = true;
                         }
                     }
                 }

@@ -84,7 +84,6 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
                 TensorLayout tensor_layout = input_tensor.get_tensor_spec().tensor_layout();
                 tensor_layout.set_memory_config(mem_config);
                 device_tensor.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), tensor_layout));
-                device_tensor.tensor_attributes->metadata_populated = true;
             }
         });
     }
@@ -123,7 +122,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
             uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
                 host_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
-                host_tensor.tensor_attributes->metadata_populated = true;
             }
         });
     }
@@ -211,7 +209,6 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
                     auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
                     auto upd_layout = TensorLayout(orig_layout.get_data_type(), PageConfig(target_layout), orig_layout.get_memory_config());
                     tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
-                    tensor_modified_layout.tensor_attributes->metadata_populated = true;
                 }
             });
         }

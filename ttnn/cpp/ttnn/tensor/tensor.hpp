@@ -207,7 +207,10 @@ struct Tensor {
     //                                      Setters
     // ======================================================================================
     inline void set_storage(const Storage &storage) { this->tensor_attributes->storage = storage; }
-    inline void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->tensor_spec = tensor_spec; }
+    inline void set_tensor_spec(const TensorSpec& tensor_spec) {
+        this->tensor_attributes->tensor_spec = tensor_spec;
+        this->tensor_attributes->metadata_populated = true;
+    }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
