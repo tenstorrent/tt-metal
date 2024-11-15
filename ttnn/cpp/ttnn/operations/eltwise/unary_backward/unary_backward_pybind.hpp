@@ -1655,7 +1655,7 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::tan_bw,
-        R"doc(Performs backward operations for tan on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for tan on :attr:`input_tensor` with given :attr:`grad_tensor`. "Supported input range is (-1.45, 1.45)")doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_op(
