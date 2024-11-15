@@ -110,13 +110,10 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
         return tensor;
     }
 
-    bool tile_tensor_view_reshape_possible = (layout == ttnn::Layout::TILE and
-        ((shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0) and (shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0)) and
-        (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1])
-        );
+    bool this_is_view = tensor_shape[-1] == shape[-1];
 
-    // For Tensors already on host we can do the tensor.reshape (changing of view)
-    if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or tile_tensor_view_reshape_possible) {
+    // For Tensors already on host or if the page size matches, we can do a view
+    if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or this_is_view) {
         return tensor.reshape(shape);
     }
 
