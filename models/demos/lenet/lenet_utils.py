@@ -1,12 +1,13 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import torchvision
-import torchvision.transforms as transforms
-from models.experimental.lenet.reference.lenet import LeNet5
 import ttnn
+import torchvision.transforms as transforms
+
+from models.experimental.lenet.reference.lenet import LeNet5
 
 
 def get_test_data(batch_size=64):
@@ -39,12 +40,12 @@ def get_test_data(batch_size=64):
     return batch, images, outputs
 
 
-def load_torch_lenet(weka_path, num_classes):
-    model2 = LeNet5(num_classes).to("cpu")
-    checkpoint = torch.load(weka_path, map_location=torch.device("cpu"))
-    model2.load_state_dict(checkpoint["model_state_dict"])
-    model2.eval()
-    return model2, checkpoint["model_state_dict"]
+def load_torch_lenet(path, num_classes):
+    model = LeNet5(num_classes).to("cpu")
+    checkpoint = torch.load(path, map_location=torch.device("cpu"))
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    return model, checkpoint["model_state_dict"]
 
 
 def custom_preprocessor(model, device):
