@@ -2,45 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+
 #include "hal.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_arch_types.h"
+
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/third_party/umd/device/cluster.h"
 
 namespace tt {
 
 namespace tt_metal {
 
-Hal hal;
-
-// This back poitner is a little clunky but necessary at least for now
-Hal::Hal() : initialized_(false) {
-}
-
-void Hal::initialize(tt::ARCH arch) {
-
-    const std::lock_guard<std::mutex> lock(this->lock);
-
-    if (!this->initialized_) {
-        switch (arch) {
-        case tt::ARCH::GRAYSKULL:
-            initialize_gs();
-            break;
-
-        case tt::ARCH::WORMHOLE_B0:
-            initialize_wh();
-            break;
-
-        case tt::ARCH::BLACKHOLE:
-            initialize_bh();
-            break;
-
-        default:
-            TT_THROW("Unsupported arch for HAL");
+// Hal Constructor determines the platform architecture by using UMD
+// Once it knows the architecture it can self initialize architecture specific memory maps
+Hal::Hal() {
+    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
+        auto arch_env = std::getenv("ARCH_NAME");
+        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
+        this->arch_ = tt::get_arch_from_string(arch_env);
+    }else {
+        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
+        this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
+        for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
+            chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
+            tt::ARCH detected_arch = detect_arch(device_id);
+            TT_FATAL(
+                this->arch_ == detected_arch,
+                "Expected all devices to be {} but device {} is {}",
+                get_arch_str(this->arch_),
+                device_id,
+                get_arch_str(detected_arch));
         }
+    }
+    switch (this->arch_) {
+        case tt::ARCH::GRAYSKULL: initialize_gs();
+        break;
 
-        this->arch_ = arch;
+        case tt::ARCH::WORMHOLE_B0: initialize_wh();
+        break;
 
-        this->initialized_ = true;
+        case tt::ARCH::BLACKHOLE: initialize_bh();
+        break;
+
+        case tt::ARCH::Invalid: TT_THROW("Unsupported arch for HAL"); // Why would an invalid type need to exist
+        break;
     }
 }
 

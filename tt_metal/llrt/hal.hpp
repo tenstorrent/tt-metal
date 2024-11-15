@@ -120,8 +120,6 @@ inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_cl
 
 class Hal {
   private:
-    std::mutex lock;
-    bool initialized_;
     tt::ARCH arch_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
@@ -135,9 +133,7 @@ class Hal {
   public:
     Hal();
 
-    void initialize(tt::ARCH arch);
-
-    tt::ARCH get_arch() {return arch_;}
+    tt::ARCH get_arch() const {return arch_;}
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const -> decltype(noc_size - 1 - coord) {
@@ -259,7 +255,24 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
 }
 
-extern Hal hal;
+class HalSingleton : public Hal {
+private:
+    HalSingleton() = default;
+    HalSingleton(const HalSingleton&) = delete;
+    HalSingleton(HalSingleton&&) = delete;
+    ~HalSingleton() = default;
+
+    HalSingleton& operator=(const HalSingleton&) = delete;
+    HalSingleton& operator=(HalSingleton&&) = delete;
+
+public:
+    static inline HalSingleton& getInstance() {
+        static HalSingleton instance;
+        return instance;
+    }
+};
+
+inline auto& hal = HalSingleton::getInstance(); // inline variable requires C++17
 
 }  // namespace tt_metal
 }  // namespace tt

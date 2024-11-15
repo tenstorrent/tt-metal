@@ -67,8 +67,6 @@ Cluster::Cluster() {
 
     this->detect_arch_and_target();
 
-    tt_metal::hal.initialize(arch_);
-
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
