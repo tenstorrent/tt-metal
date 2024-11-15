@@ -197,7 +197,7 @@ sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val)
 
     t1 = t1 * dst_reg[0];
 
-    v_if (sfpi::abs(val) > 1){
+    v_if (sfpi::abs(val) > 0){
         t1 = 1.570796327f - t1;
     }
     v_endif;
