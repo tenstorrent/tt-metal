@@ -358,7 +358,6 @@ Pointwise Binary
    ttnn.rsub_bw
    ttnn.min_bw
    ttnn.max_bw
-   ttnn.lerp_bw
 
 Pointwise Ternary
 =================
@@ -376,6 +375,7 @@ Pointwise Ternary
    ttnn.addcmul_bw
    ttnn.addcdiv_bw
    ttnn.where_bw
+   ttnn.lerp_bw
 
 Losses
 ======
