@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "command_queue_fixture.hpp"
@@ -449,7 +450,10 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTrace) {
         EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
-    Finish(device_->command_queue());
+    const uint32_t trace_id = this->trace_programs();
+
+    Finish(this->device_->command_queue());
+    ReleaseTrace(this->device_, trace_id);
 }
 
 TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
@@ -589,4 +593,150 @@ TEST_F(RandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgra
 
     Finish(this->device_->command_queue());
     ReleaseTrace(this->device_, trace_id);
+}
+
+TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
+    std::vector<uint32_t> trace_ids;
+    std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        this->programs[i] = CreateProgram();
+        Program& program = this->programs[i];
+        this->create_kernel(program, CoreType::WORKER);
+
+        const bool use_trace = (rand() % 2) == 0;
+        if (use_trace) {
+            EnqueueProgram(this->device_->command_queue(), program, false);
+            const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
+            EnqueueProgram(this->device_->command_queue(), program, false);
+            EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
+            trace_ids.push_back(trace_id);
+            program_ids_to_trace_ids.emplace(program.get_id(), trace_id);
+        }
+    }
+    Finish(this->device_->command_queue());
+
+    for (Program& program : this->programs) {
+        const uint64_t program_id = program.get_id();
+        const bool use_trace = program_ids_to_trace_ids.contains(program_id);
+        if (use_trace) {
+            const uint32_t trace_id = program_ids_to_trace_ids[program_id];
+            EnqueueTrace(this->device_->command_queue(), trace_id, false);
+        }
+        EnqueueProgram(this->device_->command_queue(), program, false);
+    }
+
+    Finish(this->device_->command_queue());
+    for (const uint32_t trace_id : trace_ids) {
+        ReleaseTrace(this->device_, trace_id);
+    }
+}
+
+TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
+    if (!does_device_have_active_eth_cores(this->device_)) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+    }
+
+    std::vector<uint32_t> trace_ids;
+    std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        this->programs[i] = CreateProgram();
+        Program& program = this->programs[i];
+        // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
+        // and the max kernel size to ensure that the kernel can fit in the ring buffer
+        KernelProperties kernel_properties;
+        kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
+        kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+        this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+
+        const bool use_trace = (rand() % 2) == 0;
+        if (use_trace) {
+            EnqueueProgram(this->device_->command_queue(), program, false);
+            const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
+            EnqueueProgram(this->device_->command_queue(), program, false);
+            EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
+            trace_ids.push_back(trace_id);
+            program_ids_to_trace_ids.emplace(program.get_id(), trace_id);
+        }
+    }
+    Finish(this->device_->command_queue());
+
+    for (Program& program : this->programs) {
+        const uint64_t program_id = program.get_id();
+        const bool use_trace = program_ids_to_trace_ids.contains(program_id);
+        if (use_trace) {
+            const uint32_t trace_id = program_ids_to_trace_ids[program_id];
+            EnqueueTrace(this->device_->command_queue(), trace_id, false);
+        }
+        EnqueueProgram(this->device_->command_queue(), program, false);
+    }
+
+    Finish(this->device_->command_queue());
+    for (const uint32_t trace_id : trace_ids) {
+        ReleaseTrace(this->device_, trace_id);
+    }
+}
+
+TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
+    if (!does_device_have_active_eth_cores(this->device_)) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+    }
+
+    std::vector<uint32_t> trace_ids;
+    std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        this->programs[i] = CreateProgram();
+        Program& program = this->programs[i];
+
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
+            // and the max kernel size to ensure that the kernel can fit in the ring buffer
+            KernelProperties kernel_properties;
+            kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
+            kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            KernelProperties kernel_properties;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        }
+
+        const bool use_trace = (rand() % 2) == 0;
+        if (use_trace) {
+            EnqueueProgram(this->device_->command_queue(), program, false);
+            const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
+            EnqueueProgram(this->device_->command_queue(), program, false);
+            EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
+            trace_ids.push_back(trace_id);
+            program_ids_to_trace_ids.emplace(program.get_id(), trace_id);
+        }
+    }
+    Finish(this->device_->command_queue());
+
+    for (Program& program : this->programs) {
+        const uint64_t program_id = program.get_id();
+        const bool use_trace = program_ids_to_trace_ids.contains(program_id);
+        if (use_trace) {
+            const uint32_t trace_id = program_ids_to_trace_ids[program_id];
+            EnqueueTrace(this->device_->command_queue(), trace_id, false);
+        }
+        EnqueueProgram(this->device_->command_queue(), program, false);
+    }
+
+    Finish(this->device_->command_queue());
+    for (const uint32_t trace_id : trace_ids) {
+        ReleaseTrace(this->device_, trace_id);
+    }
 }
