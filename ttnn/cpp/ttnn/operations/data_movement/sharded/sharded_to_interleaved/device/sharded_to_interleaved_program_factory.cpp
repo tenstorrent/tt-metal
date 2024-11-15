@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
-        num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
+        num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
         num_units_per_shard_width_last;
 
     tt_metal::Device* device = input.device();
@@ -30,6 +30,11 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     auto shard_strategy = input.memory_config().memory_layout;
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    auto& all_cores = shard_spec.grid;
+    uint32_t num_cores = all_cores.num_cores();
+    uint32_t num_cores_unpadded = 0;
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
+
     CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
     if (output.get_layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
@@ -40,7 +45,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
+        num_units_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -55,17 +60,27 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.get_legacy_shape()[-1] * output.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1];
+        num_units_height = input.volume() / input.get_legacy_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             output_unit_size - (round_up(num_units_per_row, output_unit_size) - num_units_per_row);
     }
 
-    bool convert_df = input_cb_data_format != output_cb_data_format;
+    // re-calculate end_core in the case shard grid is larger than used grid
+    if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
+        end_core = cores[num_cores_unpadded - 1];
+    } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (output.get_layout() == Layout::TILE) {
+            num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
+        } else {
+            num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
+        }
+        end_core = cores[num_cores_unpadded - 1];
+    }
 
-    auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = all_cores.num_cores();
+    bool convert_df = input_cb_data_format != output_cb_data_format;
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t out_cb_index = src0_cb_index;
@@ -141,13 +156,18 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
     uint32_t padded_offset_bytes;
 
-    for (const auto& core : cores) {
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
+        uint32_t shard_height = num_units_per_shard_height;
+        uint32_t shard_width = input.get_layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
+        bool height_or_width_sharded_and_core_out_of_range = (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED || shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) && (i > num_cores_unpadded - 1);
+        if (height_or_width_sharded_and_core_out_of_range) {
+            shard_height = 0;
+            shard_width = 0;
+        }
         if (input.get_layout() == Layout::TILE) {
-            uint32_t shard_height = num_units_per_shard_height;
-            uint32_t shard_width = num_units_per_shard_width;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
@@ -192,8 +212,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                 curr_idx_h += num_units_per_row * num_units_per_shard_height;
             }
         } else {
-            uint32_t shard_height = num_units_per_shard_height;
-            uint32_t shard_width = output_unit_size;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
