@@ -200,8 +200,13 @@ void kernel_main() {
                     // Offset to the start of the current face along the width of the tile
                     uint32_t face_w_offset = face_w * face_height_width;
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
+                        // offset to the start of the current sub-tile line
                         uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line * FACE_WIDTH) * element_size;
+
+                        // Compute the write address
                         uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+
+                        // Perform asynchronous write
                         noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
                     }
                 }
