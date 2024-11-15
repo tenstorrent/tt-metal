@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <utility>
+#include <tuple>
 
 namespace tt::tt_metal {
 
