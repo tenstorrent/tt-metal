@@ -49,8 +49,12 @@ include(cmake/dependencies.cmake)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 3rd party projects
-add_subdirectory(3rd_party/tokenizers-cpp)
-add_subdirectory(3rd_party/wandb-cpp)
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
+    add_subdirectory(3rd_party EXCLUDE_FROM_ALL)
+else()
+    add_subdirectory(3rd_party EXCLUDE_FROM_ALL SYSTEM)
+endif()
 # ttml projects
 
 add_subdirectory(sources)

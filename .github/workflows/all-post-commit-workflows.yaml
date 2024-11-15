@@ -168,6 +168,12 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+  code-analysis:
+    needs: build-docker-image-2204
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04-amd64
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
