@@ -15,15 +15,15 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_prelu(uint value) {
+inline void calculate_prelu(const uint value) {
+
     // SFPU microcode
     Converter c_value;
     c_value.u = value;
     vFloat init = c_value.f;
 
-    #pragma GCC unroll 8
+    #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];

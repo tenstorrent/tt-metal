@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
