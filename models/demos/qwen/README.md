@@ -58,6 +58,8 @@ When running the demo, do not forget to setup the `$QWEN_DIR` environment variab
 ```
 # Examples of how to run the demo for any supported Llama3 models
 
+Currently, this model is only supported on N150 (single-device). If you are running this demo on a multi-chip device, please make sure FAKE_DEVICE is set to N150.
+
 # Run a single continuous batch with instruct weights
 FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'instruct and 1_batch'
 
