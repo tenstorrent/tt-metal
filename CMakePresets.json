@@ -28,6 +28,15 @@
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"}
         }
+      },
+      {
+        "name": "clang-tidy-fix",
+        "inherits": "clang-tidy",
+        "description": "Run Clang Tidy and apply fixes",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"}
+        }
       }
     ],
     "buildPresets": [
@@ -42,6 +51,11 @@
         "configurePreset": "clang-tidy",
         "configuration": "RelWithDebInfo",
         "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-fix",
+        "configurePreset": "clang-tidy-fix",
+        "configuration": "RelWithDebInfo"
       }
     ]
   }

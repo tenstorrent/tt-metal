@@ -156,7 +156,7 @@ void JitBuildState::finish_init() {
     this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(this->dispatch_message_addr_) + " ";
 
     // Create the objs from the srcs
-    for (string src : srcs_) {
+    for (const string& src : srcs_) {
         // Lop off the right side from the last "."
         string stub = src.substr(0, src.find_last_of("."));
         // Lop off the leading path

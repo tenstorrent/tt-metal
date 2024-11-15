@@ -1799,7 +1799,7 @@ void Device::setup_tunnel_for_remote_devices() {
 
     tunnels_from_mmio_ = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
     uint32_t index = 0;
-    for (auto tunnel : tunnels_from_mmio_) {
+    for (const auto& tunnel : tunnels_from_mmio_) {
         for (auto remote_dev : tunnel) {
             log_info(tt::LogMetal, "MMIO Device {} : Tunnel {} : Device {}", mmio_device_id, index, remote_dev);
         }
