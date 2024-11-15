@@ -2560,15 +2560,16 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [1024])
-@pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_width_sharded_to_interleaved_large_grid(
-    device, n, c, h, w, grid_size, shard_orientation, layout, output_dtype
-):
+def test_width_sharded_to_interleaved_large_grid(device, n, c, h, w, shard_orientation, layout, output_dtype):
     if output_dtype != ttnn.bfloat16 and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("row major layout does not support bfloat format")
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = [compute_grid_size.x, compute_grid_size.y]
+
     torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
 
     shard_shape = (64, 256)
@@ -2595,15 +2596,16 @@ def test_width_sharded_to_interleaved_large_grid(
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [512])
 @pytest.mark.parametrize("w", [256])
-@pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_height_sharded_to_interleaved_large_grid(
-    device, n, c, h, w, grid_size, shard_orientation, layout, output_dtype
-):
+def test_height_sharded_to_interleaved_large_grid(device, n, c, h, w, shard_orientation, layout, output_dtype):
     if output_dtype != ttnn.bfloat16 and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("row major layout does not support bfloat format")
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = [compute_grid_size.x, compute_grid_size.y]
+
     torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
 
     shard_shape = (256, 256)
