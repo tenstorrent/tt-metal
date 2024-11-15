@@ -782,6 +782,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in1_per_core_w,     // in1_per_core_w
 
         num_blocks,  // num_blocks
+        1, // out_num_blocks_x
+        1, // out_num_blocks_y
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w

@@ -405,6 +405,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,
+                .out_block_h = per_core_M,
+                .out_block_w = per_core_N,
                 .per_core_M = per_core_M,
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
@@ -556,6 +558,8 @@ MatmulProgramConfig create_matmul_program_config(
         .in0_block_w = k_tiles_per_core,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
+        .out_block_h = m_tiles_per_core,
+        .out_block_w = n_tiles_per_core,
         .per_core_M = m_tiles_per_core,
         .per_core_N = n_tiles_per_core,
         .transpose_mcast = transpose_mcast,
@@ -677,6 +681,8 @@ MatmulProgramConfig get_matmul_program_config(
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,
+                .out_block_h = per_core_M,
+                .out_block_w = per_core_N,
                 .per_core_M = per_core_M,
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
@@ -1183,7 +1189,12 @@ void Matmul::validate(
                 // tensor in1
                 TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                TT_FATAL(program_config.per_core_M % program_config.out_block_h == 0, "Error: incompatible values {} and {}", program_config.per_core_M, program_config.out_block_h);
+                TT_FATAL(program_config.per_core_N % program_config.out_block_w == 0, "Error: incompatible values {} and {}", program_config.per_core_N, program_config.out_block_w);
+                TT_FATAL(program_config.out_block_h % program_config.out_subblock_h == 0, "Error: incompatible values {} and {}", program_config.out_block_h, program_config.out_subblock_h);
+                TT_FATAL(program_config.out_block_w % program_config.out_subblock_w == 0, "Error: incompatible values {} and {}", program_config.out_block_w, program_config.out_subblock_w);
                 if (input_tensor_a.memory_config().is_sharded()) {
+                    TT_FATAL(program_config.fuse_batch, "Error");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout;
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t K = input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[1];
@@ -1557,6 +1568,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
+                    program_config.out_block_h,
+                    program_config.out_block_w,
                     program_config.per_core_M,
                     program_config.per_core_N,
                     program_config.fuse_batch,

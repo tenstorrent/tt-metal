@@ -234,6 +234,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
+            (std::uint32_t)1, // num_blocks_x
+            (std::uint32_t)1, // num_blocks_y
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -245,6 +247,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)(in0_shard_width_in_tiles),
             (std::uint32_t)(in0_shard_height_in_tiles),
             (std::uint32_t)(in0_block_w),
+            (std::uint32_t)per_core_M, // in0_block_h
 
             // batch args
             (std::uint32_t)B  // batch
@@ -258,6 +261,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)1,            // in0_tensor_stride_w
             (std::uint32_t)K,            // in0_tensor_stride_h
             (std::uint32_t)in0_block_w,  // in0_tensor_next_block_stride
+            (std::uint32_t)K * per_core_M,  // in0_tensor_next_h_dim_block_stride
             // in0 block args
             (std::uint32_t)in0_block_w,               // in0_block_w
             (std::uint32_t)per_core_M,                // in0_block_h
@@ -267,6 +271,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)0,                         // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
+            (std::uint32_t)1, // num_blocks_x
+            (std::uint32_t)1, // num_blocks_y
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -289,12 +295,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         (std::uint32_t)1,                // in1_tensor_stride_w
         (std::uint32_t)N,                // in1_tensor_stride_h
         (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
+        (std::uint32_t)per_core_N,       // in1_tensor_next_w_dim_block_stride
         // in1 block args
         (std::uint32_t)per_core_N,                // in1_block_w
         (std::uint32_t)in0_block_w,               // in1_block_h
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in1 mcast args
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -311,6 +320,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)per_core_N,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)per_core_M * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -333,6 +344,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -487,6 +500,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in1_per_core_w,       // in1_per_core_w
 
         num_blocks,  // num_blocks
+        1,          // out_num_blocks_x
+        1,          // out_num_blocks_y
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -772,6 +787,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(per_core_M / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w); // out_num_nonzero_subblocks_w
                 mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                 mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
                 mm_in1_sender_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
@@ -784,6 +800,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(per_core_M / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w); // out_num_nonzero_subblocks_w
                 mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w);
                 mm_in1_sender_writer_args.push_back(out_subblock_w);
                 mm_in1_sender_writer_args.push_back(0);
@@ -870,7 +887,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 writer_runtime_args[0] = src_buffer_b->address();
                 writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    writer_runtime_args[16] = (*bias_buffer)->address();
+                    writer_runtime_args[17] = (*bias_buffer)->address();
                 }
             }
 
@@ -1031,6 +1048,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)1,            // in0_tensor_stride_w
         (std::uint32_t)K,            // in0_tensor_stride_h
         (std::uint32_t)in0_block_w,  // in0_tensor_next_block_stride
+        (std::uint32_t)K * per_core_M,  // in0_tensor_next_h_dim_block_stride
         // in0 block args
         (std::uint32_t)in0_block_w,               // in0_block_w
         (std::uint32_t)per_core_M,                // in0_block_h
@@ -1040,6 +1058,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)in0_shard_height_in_tiles,
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in0 mcast args
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -1061,12 +1081,15 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)1,                // in1_tensor_stride_w
         (std::uint32_t)N,                // in1_tensor_stride_h
         (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
+        (std::uint32_t)per_core_N,       // in1_tensor_next_w_dim_block_stride
         // in1 block args
         (std::uint32_t)per_core_N,                // in1_block_w
         (std::uint32_t)in0_block_w,               // in1_block_h
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -1083,6 +1106,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)per_core_N,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)per_core_M * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -1109,6 +1134,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)1, // out_num_blocks_x
+        (std::uint32_t)1, // out_num_blocks_y
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -1121,6 +1148,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)per_core_N,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)per_core_M * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -1238,6 +1267,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         in1_per_core_w,       // in1_per_core_w
 
         num_blocks,  // num_blocks
+        1, // out_num_blocks_x
+        1, // out_num_blocks_y
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -1436,6 +1467,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 (std::uint32_t)out_subblock_h,
                 (std::uint32_t)0,
                 (std::uint32_t)per_core_N / out_subblock_w,
+                (std::uint32_t)per_core_N / out_subblock_w,
                 (std::uint32_t)out_subblock_w,
                 (std::uint32_t)0,
                 (std::uint32_t)0};
@@ -1465,9 +1497,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
             if (output_idx_y == num_blocks_y - 1) {
                 // padding args (WRITER)
+                mm_in1_receiver_writer_args.push_back(per_core_M / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                 mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
                 mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                mm_in1_receiver_writer_args.push_back(per_core_N / out_subblock_w);
                 mm_in1_receiver_writer_args.push_back(per_core_N / out_subblock_w);
                 mm_in1_receiver_writer_args.push_back(out_subblock_w);
                 mm_in1_receiver_writer_args.push_back(0);
@@ -1475,8 +1509,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             } else {
                 // padding args (WRITER)
                 mm_in1_receiver_writer_args.push_back(per_core_M / out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(per_core_M / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(0);
+                mm_in1_receiver_writer_args.push_back(per_core_N / out_subblock_w);
                 mm_in1_receiver_writer_args.push_back(per_core_N / out_subblock_w);
                 mm_in1_receiver_writer_args.push_back(out_subblock_w);
                 mm_in1_receiver_writer_args.push_back(0);
@@ -1550,7 +1586,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 sender_writer_runtime_args[0] = src_buffer_b->address();
                 sender_writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    sender_writer_runtime_args[16] = (*bias_buffer)->address();
+                    sender_writer_runtime_args[17] = (*bias_buffer)->address();
                 }
             }
 
