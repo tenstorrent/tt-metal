@@ -29,6 +29,8 @@ from models.demos.qwen.tt.qwen_common import HostEmbedding
     indirect=True,
 )
 def test_qwen_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    if mesh_device.shape != (1, 1):
+        pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)

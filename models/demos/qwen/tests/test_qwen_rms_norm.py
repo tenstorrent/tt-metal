@@ -30,6 +30,8 @@ from models.demos.qwen.tt.distributed_norm import DistributedNorm
 )
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
 def test_qwen_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc, mode):
+    if mesh_device.shape != (1, 1):
+        pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
