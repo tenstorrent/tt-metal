@@ -61,9 +61,6 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
-
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
@@ -76,7 +73,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
     )(input_shape)
 
-    torch_output_tensor = torch.lerp(torch_input_tensor_a, torch_input_tensor_b, torch_input_tensor_c)
+    golden_function = ttnn.get_golden_function(ttnn.lerp)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, torch_input_tensor_c)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
