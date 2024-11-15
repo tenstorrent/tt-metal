@@ -6,10 +6,11 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
   pages: write
   id-token: write
   packages: write
+  pull-requests: write
 
 jobs:
   static-checks:
