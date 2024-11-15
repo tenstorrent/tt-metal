@@ -32,65 +32,27 @@
 
 ## 1. Overview
 
-TTNN [TTNN](https://docs.tenstorrent.com/ttnn/latest/ttnn/about.html) is a library that provides a user-friendly interface to operations that run on TensTorrent’s hardware using tt-metal programming model. ttnn is designed to be intuitive to an user that is familiar with [PyTorch](https://pytorch.org/). This report will walk you through our recommented steps to bringup deep learning models that can run efficently on Tenstorrent's hardware using the TTNN library. We will suggest a flow with code examples and diagrams to enable new users interested in bringing up their own models.  
+TTNN [TTNN](https://docs.tenstorrent.com/ttnn/latest/ttnn/about.html) is a library that provides a user-friendly interface to operations that run on TensTorrent’s hardware using tt-metal programming model. ttnn is designed to be intuitive to an user that is familiar with [PyTorch](https://pytorch.org/). This report will walk you through our recommented steps to bringup deep learning models that can run efficently on Tenstorrent's hardware using the TTNN library. We will suggest a flow with code examples and diagrams to enable new users interested in bringing up their own models.
 
 ## 2. New model bringup flow in TTNN
 
-### 2.1 Sharding on all relevant OPs
-  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs.
-  - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding)
-  - Sharding Concepts
-![Sharding Concept](images/sharding_concept.png)
-  - Illustrative example
-![Sharding Example](images/sharding_example.png)
+### 2.1 Recommended steps for model bringup
+  - The following diagram illustrates our recommened steps for a new model bring-up on TTNN.
+![New model bring-up flow](images/Flow.png)
+  - In the following sections we will dive deeper into each step with examples.
 
-Example:-
 
-Functional Code:-
-```python
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor_left = ttnn.sharded_to_interleaved(output_tensor_left, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.concat([output_tensor, output_tensor_left], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
-```
-Optimized Code:-
-```python
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor_left = ttnn.to_layout(output_tensor_left, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_sharded_memory_config = ttnn.create_sharded_memory_config(
-            [512, 128],
-            core_grid=output_tensor_left.memory_config().shard_spec.grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-        output_tensor = ttnn.concat(
-            [output_tensor, output_tensor_left], dim=3, memory_config=output_sharded_memory_config
-        )
-```
-- We are converting the inputs to ROW_MAJOR_LAYOUT because the Concat operation only supports this layout.
-- We create an output_sharded_memory_config with a shard shape of [512, 128], as the input shard shape is [512, 64]. This is a width-wise concatenation of two height-sharded tensors, each with an inner dimension of 64, resulting in an inner dimension of 128.
-- The core_grid can be any shard specification grid of either of the inputs. In the example above, I’ve used the output_tensor of the left input.
-- We are adopting a HEIGHT sharding strategy because the inputs being concatenated are using a height-sharded strategy.
+### 2.2 Create a model Card
+  - The model card may be created as a github issue or a google sheet/google doc. It is meant to proivde the high-level details of the model.
+![create a model card](images/model_card.png)
+### 2.3 Using the reference model in Torch
+  - If the model is publicly available, you may include a link to the reference model. Here is an example: [yolov4_reference_model](https://github.com/Tianxiaomo/pytorch-YOLOv4/blob/master/models.py)
+### 2.4 Create the torch model graph
+  - Generate the pytorch model graph. If you already have access to a torch reference model, you may generate it using the existing code. Otherwise, you will need to implement a torch model first as this will be used later on for comparision to the TTNN model ouputs any ways. Here is an example: [yolov4_torch_graph](https://github.com/user-attachments/files/17112021/model_pytorch_yolov4.gv.pdf)
+### 2.5 Extract the model summary
+  - Generate a torch model summary in order to extract the arguments and parameters of each op in the torch implementation. Here is a reference code for generating the model summary: [yolov4_model_summary_generation_script](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/reference/yolov4_summary.py)
+  - Using the reference graph and model summary, document the modules and all torch ops required for the model implementation. For instance, in yolo-v4, there are 9 modules; Resblock, Downsample1 (DS1), DS2, DS3, DS4, DS5, Neck, Head and Yolov4. And, the following ops: Conv2d, Maxpool, concat, batch_norm, Mish, leakyRelu, upsample, add.
 
-### 2.2 Deallocate Unused tensors
-
-If you are not going to use the input passed to the convolution, you should deallocate it to minimize memory usage.
-
-Functional_code:-
-
-```python
-                conv_config = ttnn.Conv2dConfig(
-                        deallocate_activation=False,
-                    )
-```
-
-Optimized code:-
-```python
-            conv_config = ttnn.Conv2dConfig(
-                        deallocate_activation=True,
-                    )
-```
-
-Use the `ttnn.deallocate(tensor)` API to deallocate any tensors that are no longer needed. While this may not directly enhance the model's performance, it will free up memory, allowing space for other tensors.
 
 ### 2.3 Data type Optimization
 - Uses more efficient data types (e.g., `bfloat8_b`) to reduce memory usage and enhance computation speed.
@@ -1707,3 +1669,4 @@ This auto-download process will be executed in the corresponding test files of t
 ## 5. Conclusion
 
 This walkthrough presents various optimization techniques used in the YOLOv4 model and its sub-modules.
+# YOLOv4 in TT-NN
