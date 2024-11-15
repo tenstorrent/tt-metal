@@ -24,17 +24,19 @@ Hal::Hal() {
         this->arch_ = tt::get_arch_from_string(arch_env);
     }else {
         std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        TT_FATAL(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
-        this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-        for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
-            chip_id_t device_id = physical_mmio_device_ids.at(i);
-            tt::ARCH detected_arch = detect_arch(device_id);
-            TT_FATAL(
-                this->arch_ == detected_arch,
-                "Expected all devices to be {} but device {} is {}",
-                get_arch_str(this->arch_),
-                device_id,
-                get_arch_str(detected_arch));
+        //TT_ASSERT(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
+        if (physical_mmio_device_ids.size() > 0) {
+            this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
+            for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
+                chip_id_t device_id = physical_mmio_device_ids.at(i);
+                tt::ARCH detected_arch = detect_arch(device_id);
+                TT_FATAL(
+                    this->arch_ == detected_arch,
+                    "Expected all devices to be {} but device {} is {}",
+                    get_arch_str(this->arch_),
+                    device_id,
+                    get_arch_str(detected_arch));
+            }
         }
     }
     switch (this->arch_) {
@@ -47,7 +49,7 @@ Hal::Hal() {
         case tt::ARCH::BLACKHOLE: initialize_bh();
         break;
 
-        case tt::ARCH::Invalid: TT_THROW("Unsupported arch for HAL");
+        case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/;
         break;
     }
 }
