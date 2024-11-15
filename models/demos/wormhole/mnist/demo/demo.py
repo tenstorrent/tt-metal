@@ -68,7 +68,7 @@ def run_demo_dataset(batch_size, iterations, model_location_generator, mesh_devi
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("batch_size", [32])
+@pytest.mark.parametrize("batch_size", [512])
 @pytest.mark.parametrize("iterations", [1])
 def test_demo_dataset(
     batch_size,

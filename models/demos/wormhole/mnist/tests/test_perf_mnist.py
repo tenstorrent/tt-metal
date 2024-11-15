@@ -29,7 +29,7 @@ test_dataset = datasets.MNIST(root="./data", train=False, transform=None, downlo
 def get_expected_times(tt_mnist):
     if is_wormhole_b0():
         return {
-            tt_mnist: (7.71, 0.0105),
+            tt_mnist: (10.460, 0.0139),
         }[tt_mnist]
 
 
@@ -37,7 +37,7 @@ def get_expected_times(tt_mnist):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "batch_size",
-    [32],
+    [512],
 )
 @pytest.mark.parametrize(
     "tt_mnist",
@@ -98,7 +98,7 @@ def test_performance_mnist(mesh_device, batch_size, tt_mnist, model_location_gen
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [32, 143288.92],
+        [512, 2899420.682],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
