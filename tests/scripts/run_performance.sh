@@ -120,6 +120,7 @@ run_device_perf_models() {
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
+
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker

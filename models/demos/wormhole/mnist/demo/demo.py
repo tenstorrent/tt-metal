@@ -12,7 +12,7 @@ from loguru import logger
 from torch.utils.data import DataLoader
 from models.demos.wormhole.mnist.reference.mnist import MnistModel
 from models.demos.wormhole.mnist.tt import tt_mnist
-
+from models.utility_functions import disable_persistent_kernel_cache
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.utility_functions import is_wormhole_b0, skip_for_grayskull
 
@@ -25,7 +25,8 @@ def run_demo_dataset(batch_size, iterations, model_location_generator, mesh_devi
     state_dict = torch.load(model_location_generator("mnist_model.pt", model_subdir="mnist"))
     model = MnistModel(state_dict)
     model = model.eval()
-
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = (2 * batch_size) if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
@@ -65,10 +66,11 @@ def run_demo_dataset(batch_size, iterations, model_location_generator, mesh_devi
 
     accuracy = correct / (batch_size * iterations)
     logger.info(f"MNIST Inference Accuracy for {batch_size}x{iterations} Samples : {accuracy}")
+    assert accuracy >= 0.96484375, f"Expected accuracy : { 0.96484375} Actual accuracy: {accuracy}"
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("batch_size", [512])
+@pytest.mark.parametrize("batch_size", [128])
 @pytest.mark.parametrize("iterations", [1])
 def test_demo_dataset(
     batch_size,
@@ -76,6 +78,7 @@ def test_demo_dataset(
     model_location_generator,
     mesh_device,
 ):
+    disable_persistent_kernel_cache()
     return run_demo_dataset(
         batch_size=batch_size,
         iterations=iterations,
