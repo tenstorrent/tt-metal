@@ -261,7 +261,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
+   ./build/test/tt_metal/ --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:

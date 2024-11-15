@@ -25,7 +25,7 @@
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include "tt_metal/common/work_split.hpp"
 
 using std::vector;

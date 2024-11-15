@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "command_queue_fixture.hpp"
+#include "trace_fixture.hpp"
 #include "test_utils.hpp"
 #include "detail/tt_metal.hpp"
 #include "tt_metal/common/env_lib.hpp"

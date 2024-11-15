@@ -5,7 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <deque>
-#include "tt_metal/host_api.hpp"
+#include "host_api.hpp"
 #include "impl/kernels/kernel.hpp"
 
 struct TestBufferConfig {

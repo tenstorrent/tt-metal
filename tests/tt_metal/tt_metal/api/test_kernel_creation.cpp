@@ -32,7 +32,12 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnStorageCores) {
             GTEST_SKIP() << "This test only runs on devices with storage only cores";
         }
         tt_metal::Program program = CreateProgram();
-        CoreRangeSet storage_core_range_set = CoreRangeSet(this->devices_.at(id)->storage_only_cores());
+        const std::set<CoreCoord>& storage_only_cores = this->devices_.at(id)->storage_only_cores();
+        std::set<CoreRange> storage_only_core_ranges;
+        for (CoreCoord core : storage_only_cores) {
+            storage_only_core_ranges.emplace(core);
+        }
+        CoreRangeSet storage_core_range_set(storage_only_core_ranges);
         EXPECT_ANY_THROW(
             auto test_kernel = tt_metal::CreateKernel(
                 program,
@@ -49,10 +54,13 @@ TEST_F(DispatchFixture, TensixIdleEthCreateKernelsOnDispatchCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         Device* device = this->devices_.at(id);
-        std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs());
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        std::set<CoreCoord> dispatch_core_range_set(dispatch_cores.begin(), dispatch_cores.end());
-
+        std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_type);
+        std::set<CoreRange> dispatch_core_ranges;
+        for (CoreCoord core : dispatch_cores) {
+            dispatch_core_ranges.emplace(core);
+        }
+        CoreRangeSet dispatch_core_range_set(dispatch_core_ranges);
         if (dispatch_core_type == CoreType::WORKER) {
             EXPECT_ANY_THROW(
                 auto test_kernel = tt_metal::CreateKernel(

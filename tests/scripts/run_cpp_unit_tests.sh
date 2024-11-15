@@ -13,15 +13,15 @@ TT_METAL_KERNEL_PATH=$kernel_path ./build/test/tt_metal/ --gtest_filter=CompileP
 rm -rf $kernel_path
 
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
-    ./build/test/tt_metal/unit_tests
+    ./build/test/tt_metal/
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow
     env python tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
-    ./build/test/tt_metal/unit_tests_fast_dispatch
-    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
+    ./build/test/tt_metal/
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/ --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     # Enable this on BH after #14613
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
-        TT_METAL_GTEST_ETH_DISPATCH=1 ./build/test/tt_metal/unit_tests_fast_dispatch
+        TT_METAL_GTEST_ETH_DISPATCH=1 ./build/test/tt_metal/
     fi
     env python tests/scripts/run_tt_eager.py --dispatch-mode fast
     env python tests/scripts/run_tt_metal.py --dispatch-mode fast
