@@ -70,7 +70,7 @@ std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
     );
 }
 
-void Trace::initialize_buffer(CommandQueue& cq, std::shared_ptr<TraceBuffer> trace_buffer) {
+void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer) {
     std::vector<uint32_t>& trace_data = trace_buffer->desc->data;
     uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(

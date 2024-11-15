@@ -149,7 +149,7 @@ NlpCreateHeadsDeviceOperation::invoke(
         uint32_t head_dim,
         const bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors) {
+        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
 
     return {operation_attributes_t{.num_q_heads = num_q_heads,
                                    .num_kv_heads = num_kv_heads.value_or(num_q_heads),

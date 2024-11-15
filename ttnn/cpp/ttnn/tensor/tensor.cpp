@@ -74,7 +74,7 @@ void Tensor::TensorAttributes::update_main_thread_ref_count(Device *worker, uint
     }
 }
 
-Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
+Tensor::Tensor(const Storage& storage, const ttnn::Shape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
     tensor_id{std::nullopt},
     deallocate_through_destructor(false) {
 
@@ -228,7 +228,7 @@ Tensor::~Tensor() {
     tensor_attributes.reset();
 }
 
-Tensor::Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.view()), dtype, layout, tile) {}
+Tensor::Tensor(const Storage& storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.view()), dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
@@ -848,7 +848,7 @@ Tensor allocate_tensor_on_device(
     return device_tensor;
 }
 
-void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
+void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id) {
     // Top level wrapper to copy a host tensor to a preallocated device tensor
     TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
     Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(device_tensor.workers.at(0), host_tensor);

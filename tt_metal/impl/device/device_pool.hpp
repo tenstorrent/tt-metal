@@ -14,7 +14,7 @@
 namespace tt {
 namespace tt_metal::detail {
 
-void CloseDevices(std::map<chip_id_t, Device *> devices);
+void CloseDevices(const std::map<chip_id_t, Device *>& devices);
 
 }  // namespace tt_metal::detail
 
@@ -22,7 +22,7 @@ using Device = tt_metal::Device;
 class DevicePool {
     friend Device;
     friend tt_metal::v1::DeviceHandle;
-    friend void tt_metal::detail::CloseDevices(std::map<chip_id_t, Device *> devices);
+    friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, Device *>& devices);
 
    public:
     DevicePool &operator=(const DevicePool &) = delete;
@@ -36,7 +36,7 @@ class DevicePool {
     }
 
     static void initialize(
-        std::vector<chip_id_t> device_ids,
+        const std::vector<chip_id_t>& device_ids,
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
@@ -54,7 +54,7 @@ class DevicePool {
    private:
     ~DevicePool();
     DevicePool(
-        std::vector<chip_id_t> device_ids,
+        const std::vector<chip_id_t>& device_ids,
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
@@ -82,7 +82,7 @@ class DevicePool {
     void init_profiler_devices() const;
     void activate_device(chip_id_t id);
     void initialize_device(tt_metal::v1::DeviceHandle dev) const;
-    void add_devices_to_pool(std::vector<chip_id_t> device_ids);
+    void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     static DevicePool *_inst;
 
     // TODO remove with v0

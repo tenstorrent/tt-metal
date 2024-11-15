@@ -478,7 +478,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
 #endif
 }
 
-void SetDeviceProfilerDir(std::string output_dir){
+void SetDeviceProfilerDir(const std::string& output_dir){
 #if defined(TRACY_ENABLE)
     for (auto& device_id : tt_metal_device_profiler_map)
     {

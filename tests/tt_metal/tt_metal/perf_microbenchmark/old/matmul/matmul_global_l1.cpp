@@ -37,9 +37,9 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::Device* device, MathFidelity math_fidelity, CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K, bool bcast_batch,
     uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w,
-    uint32_t per_core_M, uint32_t per_core_N, std::shared_ptr<tt_metal::Buffer> in0_buffer,
-    std::shared_ptr<tt_metal::Buffer> in1_buffer, std::shared_ptr<tt_metal::Buffer> bias_buffer,
-    std::shared_ptr<tt_metal::Buffer> out_buffer, tt::DataFormat in0_data_format,
+    uint32_t per_core_M, uint32_t per_core_N, const std::shared_ptr<tt_metal::Buffer>& in0_buffer,
+    const std::shared_ptr<tt_metal::Buffer>& in1_buffer, const std::shared_ptr<tt_metal::Buffer>& bias_buffer,
+    const std::shared_ptr<tt_metal::Buffer>& out_buffer, tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format, tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format) {
   tt_metal::Program program{};

@@ -157,10 +157,10 @@ void launch_op(
 
 void launch_with_autoformat(
     std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors input_tensors,
+    const Tensors& input_tensors,
     Tensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {}
+    const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {}
 );
 
 std::vector<Device*> get_workers_for_op_output(

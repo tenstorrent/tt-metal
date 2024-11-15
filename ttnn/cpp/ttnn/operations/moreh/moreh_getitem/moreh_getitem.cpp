@@ -8,10 +8,10 @@ namespace ttnn::operations::moreh::moreh_getitem {
 Tensor MorehGetItem::invoke(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
-    const ttnn::SmallVector<uint32_t> index_dims,
+    const ttnn::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     // const CoreRange core_range,
-    const std::optional<MemoryConfig> memory_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     return ttnn::prim::moreh_getitem(input, index_tensors, index_dims, output, memory_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

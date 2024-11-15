@@ -18,7 +18,7 @@
 
 namespace {
 
-void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape input_shape) {
+void run_create_tensor_test(tt::tt_metal::Device* device, const ttnn::SimpleShape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,

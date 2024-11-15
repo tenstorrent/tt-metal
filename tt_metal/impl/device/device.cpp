@@ -771,8 +771,8 @@ void Device::clear_l1_state() {
 
 void Device::configure_kernel_variant(
     Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,
+    const string& path,
+    const std::vector<uint32_t>& compile_args,
     CoreCoord kernel_core,
     CoreCoord kernel_physical_core,
     CoreType dispatch_core_type,

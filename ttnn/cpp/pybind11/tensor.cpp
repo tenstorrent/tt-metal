@@ -6,6 +6,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
 
+#include <utility>
+
 #include "tensor.hpp"
 #include "ttnn/cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
@@ -201,7 +203,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
             py::init<>(
                 [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
                     return MemoryConfig{
-                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = shard_spec};
+                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = std::move(shard_spec)};
                 }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,

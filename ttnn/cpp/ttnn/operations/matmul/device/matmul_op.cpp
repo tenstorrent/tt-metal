@@ -55,7 +55,7 @@ inline bool get_fp32_dest_acc_en(const std::optional<const ttnn::DeviceComputeKe
 bool get_broadcast_batch(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const MatmulProgramConfig> matmul_program_config) {
+    const std::optional<const MatmulProgramConfig>& matmul_program_config) {
     uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
     bool broadcast_batch = batch_size_b == 1;
     if (!matmul_program_config.has_value()) {
@@ -217,7 +217,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const ttnn::types::Shape& input_shape_a,
     const ttnn::types::Shape& input_shape_b,
     const CoreCoord& core_coord,
-    const std::optional<const UnaryWithParam> fused_activation,
+    const std::optional<const UnaryWithParam>& fused_activation,
     const bool fp32_dest_acc_en,
     const TensorMemoryLayout input_layout_a) {
     auto a_padded_shape = input_shape_a.padded_shape();
@@ -282,7 +282,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const bool fuse_batch,
-    const std::optional<UnaryWithParam> fused_activation,
+    const std::optional<UnaryWithParam>& fused_activation,
     const bool mcast_in0,
     const bool out_sharded,
     const std::optional<const CoreCoord> compute_with_storage_grid_size,
@@ -429,7 +429,7 @@ MatmulProgramConfig create_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const CoreCoord> user_core_coord,
-    const std::optional<UnaryWithParam> fused_activation,
+    const std::optional<UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const MemoryConfig& mem_config) {
     auto a_shape = input_tensor_a.get_shape();
@@ -572,7 +572,7 @@ MatmulProgramConfig get_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MemoryConfig& output_mem_config,
-    const std::optional<UnaryWithParam> fused_activation,
+    const std::optional<UnaryWithParam>& fused_activation,
     const bool matmul,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
@@ -750,7 +750,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const MemoryConfig& mem_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord> user_core_coord,
-    const std::optional<UnaryWithParam> user_fused_activation,
+    const std::optional<UnaryWithParam>& user_fused_activation,
     const bool user_run_batched) {
     const bool has_user_grid = user_core_coord.has_value();
     if (has_user_grid || !input_tensor_a.is_sharded()) {
@@ -949,7 +949,7 @@ Matmul create_matmul_struct(
 Tensor matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
     const uint8_t queue_id) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};

@@ -57,7 +57,7 @@ void update_sfpu_op_to_hlk_op()
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
+bool run_sfpu_test(const string& sfpu_name,int tile_factor=1,bool use_DRAM=true) {
 
     bool multibank = true;
     bool pass = true;

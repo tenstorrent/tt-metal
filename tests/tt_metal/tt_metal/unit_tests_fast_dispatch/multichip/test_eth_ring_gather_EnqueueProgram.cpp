@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <utility>
 
 #include "command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -176,7 +177,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     uint32_t num_bytes_per_send = 16) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
-    const auto& sender_receivers = get_sender_receiver_cores(device_ring);
+    const auto& sender_receivers = get_sender_receiver_cores(std::move(device_ring));
 
     // Generate inputs
     uint32_t numel = byte_size_per_device / sizeof(uint32_t);
@@ -325,7 +326,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     uint32_t num_bytes_per_send = 16) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
-    const auto& sender_receivers = get_sender_receiver_cores(device_ring);
+    const auto& sender_receivers = get_sender_receiver_cores(std::move(device_ring));
 
     // Generate inputs
     uint32_t numel = cfg.size_bytes / sizeof(uint32_t);

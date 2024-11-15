@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <utility>
 
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -420,7 +421,7 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
 
 operation::ProgramWithCallbacks create_program_dram_sharded(
     tt::tt_metal::Device* device,
-    CoreRangeSet all_storage_cores,
+    const CoreRangeSet& all_storage_cores,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -1237,7 +1238,7 @@ namespace matmul {
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1332,7 +1333,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         in0_block_w,
         per_core_M,
         per_core_N,
-        fused_activation,
+        std::move(fused_activation),
         in0_buffer,
         in1_buffer,
         bias_buffer,
@@ -1354,7 +1355,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1374,7 +1375,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
         in0_block_w,
         per_core_M,
         per_core_N,
-        fused_activation,
+        std::move(fused_activation),
         untilize_out,
         skip_compute,
         skip_in0_mcast,

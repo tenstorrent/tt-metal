@@ -181,7 +181,7 @@ Tensor to_weight_tile_layout(
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -211,7 +211,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -509,7 +509,7 @@ Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> tran
         output_tensors, tensor.storage_type(), ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
 }
 
-void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable) {
+void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
     auto input_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
     for (const auto& device_tensor : input_tensors) {
         callable(device_tensor);

@@ -34,7 +34,7 @@ inline namespace v0 {
             tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER,
             const std::vector<uint32_t> &l1_bank_remap = {});
 
-        void CloseDevices(std::map<chip_id_t, Device *> devices);
+        void CloseDevices(const std::map<chip_id_t, Device *>& devices);
 
         /**
         * Copies data from a host buffer into the specified buffer
@@ -47,7 +47,7 @@ inline namespace v0 {
         * | host_buffer | Buffer on host to copy data from                | std::vector<uint32_t> & | Host buffer size must match buffer               | Yes      |
         */
         void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer);
-        void WriteToBuffer( std::shared_ptr<Buffer> buffer, const std::vector<uint32_t> &host_buffer);
+        void WriteToBuffer( const std::shared_ptr<Buffer>& buffer, const std::vector<uint32_t> &host_buffer);
         /**
         * Copies data from a buffer into a host buffer
         *
@@ -60,7 +60,7 @@ inline namespace v0 {
         * | shard_order | For a sharded buffer we can read in shard order | bool                    |                                                  | No       |
         */
         void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
-        void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
+        void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
 
         /**
         * Copies data from a buffer into a host buffer
@@ -80,7 +80,7 @@ inline namespace v0 {
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
         void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true);
-        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true);
+        void LaunchProgram(Device *device, const std::shared_ptr<Program>& program, bool wait_until_cores_done = true);
         void WaitProgramDone(Device *device, Program &program);
 
         /**
@@ -179,7 +179,7 @@ inline namespace v0 {
          * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
          * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path | No       |
          * */
-        void SetDeviceProfilerDir(std::string output_dir = "");
+        void SetDeviceProfilerDir(const std::string& output_dir = "");
 
         /**
          * Set the directory for all host-side CSV logs produced by the profiler instance in the tt-metal module

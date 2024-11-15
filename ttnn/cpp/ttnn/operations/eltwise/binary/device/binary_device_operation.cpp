@@ -4,6 +4,8 @@
 
 #include "binary_device_operation.hpp"
 
+#include <utility>
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
@@ -319,8 +321,8 @@ BinaryDeviceOperation::invoke(
     return {
         operation_attributes_t{
             binary_op_type,
-            activations,
-            input_tensor_a_activation,
+            std::move(activations),
+            std::move(input_tensor_a_activation),
             std::nullopt,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             output_dtype.value_or(input_tensor_a_arg.get_dtype()),
@@ -347,8 +349,8 @@ BinaryDeviceOperation::invoke(
     return {
         operation_attributes_t{
             binary_op_type,
-            activations,
-            input_tensor_a_activation,
+            std::move(activations),
+            std::move(input_tensor_a_activation),
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             output_dtype.value_or(input_tensor_a_arg.get_dtype()),

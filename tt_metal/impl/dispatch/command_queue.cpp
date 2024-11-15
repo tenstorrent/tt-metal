@@ -2922,7 +2922,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::Tr
     std::fill(this->expected_num_workers_completed.begin(), this->expected_num_workers_completed.begin() + num_sub_devices, 0);
     // Record commands using bypass mode
     this->tid = tid;
-    this->trace_ctx = ctx;
+    this->trace_ctx = std::move(ctx);
     // Record original value of launch msg wptr
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(SubDeviceId{i});
@@ -2999,7 +2999,7 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
 }
 
 void EnqueueAddBufferToProgramImpl(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     Program& program) {
     std::visit(
         [&program](auto&& b) {
@@ -3013,10 +3013,10 @@ void EnqueueAddBufferToProgramImpl(
 
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     Program& program,
     bool blocking) {
-    EnqueueAddBufferToProgramImpl(buffer, program);
+    EnqueueAddBufferToProgramImpl(std::move(buffer), program);
 }
 
 void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
@@ -3040,13 +3040,13 @@ void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
 
 void EnqueueSetRuntimeArgs(
     CommandQueue& cq,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     std::shared_ptr<RuntimeArgs> runtime_args_ptr,
     bool blocking) {
     auto runtime_args_md = RuntimeArgsMetadata{
         .core_coord = core_coord,
-        .runtime_args_ptr = runtime_args_ptr,
+        .runtime_args_ptr = std::move(runtime_args_ptr),
         .kernel = kernel,
     };
     cq.run_command(CommandInterface{
@@ -3105,7 +3105,7 @@ void EnqueueWriteBuffer(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // TODO(agrebenisan): Move to deprecated
-    EnqueueWriteBuffer(cq, buffer, src.data(), blocking, sub_device_ids);
+    EnqueueWriteBuffer(cq, std::move(buffer), src.data(), blocking, sub_device_ids);
 }
 
 void EnqueueReadBuffer(
@@ -3236,7 +3236,7 @@ void EnqueueWriteBufferImpl(
     HostDataType src,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    cq.hw_command_queue().enqueue_write_buffer(buffer, src, blocking, sub_device_ids);
+    cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), blocking, sub_device_ids);
 }
 
 void EnqueueProgramImpl(

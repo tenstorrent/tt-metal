@@ -177,7 +177,7 @@ void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::op
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -185,7 +185,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -233,8 +233,8 @@ struct Conv2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt);
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
         uint8_t queue_id,
@@ -252,8 +252,8 @@ struct Conv2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt);
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace conv2d
 }  // namespace operations::conv

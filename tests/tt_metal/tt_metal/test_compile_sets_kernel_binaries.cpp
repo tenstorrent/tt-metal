@@ -22,7 +22,7 @@
 using std::vector;
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<Kernel> kernel) {
+std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<Kernel>& kernel) {
     auto root_dir = jit_build_get_kernel_compile_outpath(mask);
     TT_FATAL(kernel != nullptr, "Error");
     TT_FATAL(std::filesystem::exists(root_dir + kernel->name()), "Error");

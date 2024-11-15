@@ -130,7 +130,7 @@ std::tuple<MorehAdamOperation::operation_attributes_t, MorehAdamOperation::tenso
     const std::optional<uint32_t> step,
     const std::optional<bool> amsgrad,
 
-    const std::optional<const Tensor> max_exp_avg_sq_in,
+    const std::optional<const Tensor>& max_exp_avg_sq_in,
     const std::optional<const Tensor> param_out,
     const std::optional<const Tensor> exp_avg_out,
     const std::optional<const Tensor> exp_avg_sq_out,

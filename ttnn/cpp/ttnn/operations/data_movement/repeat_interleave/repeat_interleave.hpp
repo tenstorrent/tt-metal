@@ -26,7 +26,7 @@ struct ExecuteRepeatInterleave {
         const ttnn::Tensor& input_tensor,
         uint32_t repeats,
         int32_t dim,
-        std::optional<MemoryConfig> output_mem_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 }  // namespace data_movement

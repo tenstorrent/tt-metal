@@ -56,7 +56,7 @@ ReduceScatter create_reduce_scatter_struct (
     const ttnn::operations::binary::BinaryOpType binary_op_type,
     const uint32_t scatter_dim,
     const uint32_t num_links,
-    const MemoryConfig output_mem_config,
+    const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices,

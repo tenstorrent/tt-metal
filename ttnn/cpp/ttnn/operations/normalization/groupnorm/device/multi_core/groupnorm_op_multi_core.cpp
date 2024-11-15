@@ -21,7 +21,7 @@ namespace ttnn::operations::normalization {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
@@ -118,9 +118,9 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor &a,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    const std::optional<const Tensor> input_mask,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
     const uint32_t num_groups,

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 
 #include "device/tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
@@ -152,7 +153,7 @@ void SystemMesh::register_mesh_device(const std::shared_ptr<MeshDevice> &mesh_de
 }
 
 std::vector<Device*> SystemMesh::map_mesh_device(
-    std::shared_ptr<MeshDevice> mesh_device,
+    const std::shared_ptr<MeshDevice>& mesh_device,
     size_t num_command_queues,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -215,7 +216,7 @@ static MeshDeviceID generate_unique_mesh_id() {
 }
 
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh)
-    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(parent_mesh) {}
+    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,

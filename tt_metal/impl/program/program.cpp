@@ -36,7 +36,7 @@ namespace tt::tt_metal {
 namespace {
 std::atomic<bool> enable_persistent_kernel_cache = false;
 
-void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::shared_ptr<Kernel> kernel) {
+void GenerateBinaries(Device *device, JitBuildOptions &build_options, const std::shared_ptr<Kernel>& kernel) {
     //ZoneScoped;
     //const std::string tracyPrefix = "GenerateBinaries_";
     //ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
@@ -52,7 +52,7 @@ void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::share
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_kernel_defines_hash) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_kernel_defines_hash) {
     // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per
     // device This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
 
@@ -226,17 +226,17 @@ class Program_ {
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
     friend void ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
+    friend KernelHandle AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
 
-    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
+    KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    friend void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
-    void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
+    friend void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
+    void add_config_buffer(const std::shared_ptr<Buffer>& config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device);
@@ -265,7 +265,7 @@ class Program_ {
     friend Internal_;
 };
 
-KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type) {
+KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type) {
     return program.pimpl_->add_kernel(std::move(kernel), core_type);
 }
 
@@ -282,7 +282,7 @@ void ValidateCircularBufferRegion(const Program &program, const Device *device) 
     program.pimpl_->validate_circular_buffer_region(device);
 }
 
-void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer) {
+void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer) {
     program.pimpl_->add_config_buffer(std::move(config_buffer));
 }
 
@@ -326,7 +326,7 @@ detail::Program_::Program_() :
 
 Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
 
-KernelHandle detail::Program_::add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &programmable_core_type) {
+KernelHandle detail::Program_::add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
@@ -811,7 +811,7 @@ void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint
     pimpl_->add_semaphore(crs, semaphore_id, init_value, core_type);
 }
 
-void detail::Program_::add_config_buffer(std::shared_ptr<Buffer> config_buffer) { config_buffers_.emplace_back(config_buffer); }
+void detail::Program_::add_config_buffer(const std::shared_ptr<Buffer>& config_buffer) { config_buffers_.emplace_back(config_buffer); }
 
 std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;
@@ -1760,7 +1760,7 @@ void v1::UpdateCircularBufferTotalSize(
 }
 
 void v1::UpdateDynamicCircularBufferAddress(
-    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle, v1::BufferHandle buffer) {
+    v1::ProgramHandle &program, v1::CircularBufferHandle cb_handle, const v1::BufferHandle& buffer) {
     v0::UpdateDynamicCircularBufferAddress(program, static_cast<v0::CBHandle>(cb_handle), *buffer);
 }
 

@@ -20,11 +20,11 @@ std::vector<std::optional<Tensor>> MorehAdam::invoke(
     const std::optional<float> weight_decay,
     const std::optional<uint32_t> step,
     const std::optional<bool> amsgrad,
-    const std::optional<const Tensor> max_exp_avg_sq_in,
-    const std::optional<const Tensor> param_out,
-    const std::optional<const Tensor> exp_avg_out,
-    const std::optional<const Tensor> exp_avg_sq_out,
-    const std::optional<const Tensor> max_exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_in,
+    const std::optional<const Tensor>& param_out,
+    const std::optional<const Tensor>& exp_avg_out,
+    const std::optional<const Tensor>& exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_adam(
@@ -60,11 +60,11 @@ OptionalTensors MorehAdam::create_async_optional_output_tensors(
     const std::optional<float> weight_decay,
     const std::optional<uint32_t> step,
     const std::optional<bool> amsgrad,
-    const std::optional<const Tensor> max_exp_avg_sq_in,
-    const std::optional<const Tensor> param_out,
-    const std::optional<const Tensor> exp_avg_out,
-    const std::optional<const Tensor> exp_avg_sq_out,
-    const std::optional<const Tensor> max_exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_in,
+    const std::optional<const Tensor>& param_out,
+    const std::optional<const Tensor>& exp_avg_out,
+    const std::optional<const Tensor>& exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     // First three are always true, last one depends on amsgrad

@@ -7,6 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <utility>
+
 #include "pybind11/decorators.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "ttnn/cpp/pybind11/json_class.hpp"
@@ -82,7 +84,7 @@ void py_module(py::module& module) {
                 per_core_M,
                 per_core_N,
                 transpose_mcast,
-                fused_activation,
+                std::move(fused_activation),
                 fuse_batch
             );
         }),

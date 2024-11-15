@@ -174,7 +174,7 @@ void DevicePool::init_profiler_devices() const {
 }
 
 void DevicePool::initialize(
-    std::vector<chip_id_t> device_ids,
+    const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -299,7 +299,7 @@ bool DevicePool::is_device_active(chip_id_t id) const {
     }
 }
 
-void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
+void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -389,7 +389,7 @@ void DevicePool::init_firmware_on_active_devices() const {
 }
 
 DevicePool::DevicePool(
-    std::vector<chip_id_t> device_ids,
+    const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,

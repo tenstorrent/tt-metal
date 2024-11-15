@@ -69,7 +69,7 @@ struct MorehNllLossStep2DeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const Tensor& target_tensor,
-        const std::string reduction,
+        const std::string& reduction,
         const std::optional<Tensor>& weight_tensor,
         const std::optional<Tensor>& divisor_tensor,
         const std::optional<Tensor>& output_tensor,

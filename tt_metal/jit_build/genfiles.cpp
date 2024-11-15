@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <utility>
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
@@ -205,7 +206,7 @@ static std::pair<vector<DataFormat>, vector<DataFormat>> extend_pack_data_format
     return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
 }
 
-static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
+static std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
     std::string formats_string = "";
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
@@ -214,7 +215,7 @@ static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
 }
 
 static std::string create_formats_array_string(
-    std::string array_type, std::string array_name, int array_size, std::string array_data) {
+    const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
     stringstream str_stream;
 
     str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << endl;
@@ -232,7 +233,7 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, unpack_to_dest_mode);
+        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
 
     TT_ASSERT(
         src_formats.size() == 24 && dst_formats.size() == 24,
@@ -250,9 +251,9 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
 }
 
 static void emit_unpack_data_formats(
-    std::string unpack_data_format_descs,
-    std::vector<DataFormat> src_formats_all_cbs,
-    std::vector<DataFormat> dst_formats_all_cbs) {
+    const std::string& unpack_data_format_descs,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs) {
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
     ofstream file_stream;
     file_stream.open(unpack_data_format_descs);
@@ -261,12 +262,12 @@ static void emit_unpack_data_formats(
         "constexpr std::int32_t",
         "unpack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(src_formats_all_cbs));
+        data_format_vec_to_string(std::move(src_formats_all_cbs)));
     file_stream << create_formats_array_string(
         "constexpr std::int32_t",
         "unpack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(dst_formats_all_cbs));
+        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
     file_stream.close();
 }
 
@@ -305,9 +306,9 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
 }
 
 static void emit_pack_data_formats(
-    std::string pack_data_format_descs,
-    std::vector<DataFormat> src_formats_all_cbs,
-    std::vector<DataFormat> dst_formats_all_cbs) {
+    const std::string& pack_data_format_descs,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
     file_stream << "#pragma once\n\n";
@@ -315,12 +316,12 @@ static void emit_pack_data_formats(
         "constexpr unsigned char",
         "pack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(src_formats_all_cbs));
+        data_format_vec_to_string(std::move(src_formats_all_cbs)));
     file_stream << create_formats_array_string(
         "constexpr unsigned char",
         "pack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(dst_formats_all_cbs));
+        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
 
     // budabackend-style format array
     // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16,
@@ -422,7 +423,7 @@ static std::string array_to_string(const uint32_t arr[]) {
     return formats_string;
 }
 
-static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
+static void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(unpack_tile_dims_descs);
     file_stream << "#pragma once\n\n";
@@ -436,7 +437,7 @@ static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_des
     file_stream.close();
 }
 
-static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
+static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(pack_tile_dims_descs);
     file_stream << "#pragma once\n\n";

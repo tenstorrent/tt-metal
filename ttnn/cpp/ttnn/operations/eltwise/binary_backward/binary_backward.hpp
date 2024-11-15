@@ -314,7 +314,7 @@ struct ExecuteBackwardDiv  {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
-        string round_mode = "None",
+        const string& round_mode = "None",
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 
@@ -323,7 +323,7 @@ struct ExecuteBackwardDiv  {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
-        string round_mode = "None",
+        const string& round_mode = "None",
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt,
@@ -333,7 +333,7 @@ struct ExecuteBackwardDiv  {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
-        string round_mode = "None",
+        const string& round_mode = "None",
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 
@@ -341,7 +341,7 @@ struct ExecuteBackwardDiv  {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
-        string round_mode = "None",
+        const string& round_mode = "None",
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt,

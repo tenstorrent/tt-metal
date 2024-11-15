@@ -15,7 +15,7 @@ namespace tt_metal {
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -23,7 +23,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -111,7 +111,7 @@ bool is_device_tensor(const Tensor& tensor);
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
 
 // Given a multi-device tensor, and a callable, apply the function to all per-device tensors.
-void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable);
+void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
 // Given a multi-device tensor, return all the devices it is mapped to.
 std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
