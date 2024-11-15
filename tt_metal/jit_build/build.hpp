@@ -148,13 +148,14 @@ class JitBuildCompute : public JitBuildState {
 class JitBuildActiveEthernet : public JitBuildState {
   private:
   public:
-    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
+    // is_cooperative denotes whether active ethernet
+    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config, bool is_cooperative);
 };
 
 class JitBuildIdleEthernet : public JitBuildState {
   private:
   public:
-    JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config, bool enable_slaves=false);
+    JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 // Abstract base class for kernel specialization

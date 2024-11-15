@@ -12,6 +12,7 @@ set(PROCS
     trisc2
     ierisc
     slave_ierisc
+    aerisc
 )
 set(TYPES
     firmware

@@ -1,9 +1,9 @@
-ifeq ($(ARCH_NAME),$(filter $(ARCH_NAME),wormhole wormhole_b0))
-ERISC_MAKE = TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C hw/firmware/riscv/targets/erisc
-ERISC_MAKE_CLEAN = TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C hw/firmware/riscv/targets/erisc clean
-else
+ifeq ($(ARCH_NAME),$(filter $(ARCH_NAME),grayskull))
 ERISC_MAKE = @echo 'Skipping Erisc build for Grayskull.'
 ERISC_MAKE_CLEAN = @echo 'Skipping Erisc clean for Grayskull.'
+else
+ERISC_MAKE = TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C hw/firmware/riscv/targets/erisc
+ERISC_MAKE_CLEAN = TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C hw/firmware/riscv/targets/erisc clean
 endif
 
 hw/firmware:

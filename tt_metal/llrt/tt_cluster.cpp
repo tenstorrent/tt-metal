@@ -792,7 +792,7 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
             //      - due to lack of timeouts in eth training, ports with nothing connected will stay at 0xFACE0001
             // 0xFACE0005: ethernet is done training / active
             bool is_active = false;
-            if (training_status == 0xFACE0005) { // TODO handle case when eth is training
+            if (training_status != 0xFACE0000) { // TODO handle case when eth is training
                 CoreCoord logical_active_eth = soc_desc.get_logical_ethernet_core_from_physical(physical_eth_core);
                 active_ethernet_cores.insert(logical_active_eth);
                 is_active = true;
@@ -898,6 +898,9 @@ std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
 
 // TODO: ALLAN Can change to write one bit
 void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const {
+    if (arch_ == ARCH::BLACKHOLE) {
+        return;
+    }
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
     const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     // TODO: initialize devices if user does not

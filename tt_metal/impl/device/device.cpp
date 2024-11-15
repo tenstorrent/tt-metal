@@ -346,20 +346,15 @@ void Device::initialize_build() {
                             break;
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
-                            if (this->arch() == ARCH::BLACKHOLE) {
-                                bool enable_slaves = false; // Risc1 of active ethernet cores on BH run idle erisc FW
-                                build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr}, enable_slaves);
-                            } else {
-                                build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            }
+                            bool is_cooperative = this->arch() == ARCH::WORMHOLE_B0; // Cooperative means context switching to base FW
+                            build_states[index] = std::make_shared<JitBuildActiveEthernet>(
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr}, is_cooperative);
+
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
-                            bool enable_slaves = is_fw and processor_class == 0;
                             build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr}, enable_slaves);
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
                             break;
                         }
                         default:
@@ -664,8 +659,8 @@ void Device::initialize_and_launch_firmware() {
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
 
-        llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+        // llrt::write_hex_vec_to_core(
+        //     this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 
     // Load erisc app base FW to eth cores on WH and idle erisc FW on second risc of BH active eth cores
@@ -731,27 +726,29 @@ void Device::clear_l1_state() {
 
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-    std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
-        0);
+    if (this->arch() != ARCH::BLACKHOLE) {
+        // std::vector<uint32_t> zero_vec_above_tile_header_buffer(
+        //     (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        //     0);
 
-    // Clear erisc sync info
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        // Clear erisc sync info
+        for (const auto &eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
 
-        llrt::write_hex_vec_to_core(
-            this->id(),
-            physical_core,
-            zero_vec_above_tile_header_buffer,
-            eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
+            // llrt::write_hex_vec_to_core(
+            //     this->id(),
+            //     physical_core,
+            //     zero_vec_above_tile_header_buffer,
+            //     eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
 
-        /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
-        std::vector<uint32_t> zero_vec_below_command_q_base(
-            (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
+            /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
+            std::vector<uint32_t> zero_vec_below_command_q_base(
+                (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
 
-        llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
-        */
+            llrt::write_hex_vec_to_core(
+                this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
+            */
+        }
     }
     // TODO: clear idle eriscs as well
 }
@@ -2914,6 +2911,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     constexpr uint32_t harvesting_map_bits = 12;
     this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits) | tt::Cluster::instance().get_harvesting_mask(this->id());
     this->initialize_cluster();
+    std::cout << "Cluster initialized" << std::endl;
     this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
     // Reset the launch_message ring buffer state seen on host, since its reset on device, each time FW is initialized
@@ -2956,6 +2954,7 @@ bool Device::close() {
     auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
     std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
 
+    std::cout << "Waiting for " << wait_for_cores.size() << " cores " << std::endl;
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
     DprintServerDetach(this);
@@ -2979,6 +2978,7 @@ bool Device::close() {
     }
 
     if (this->id_ != mmio_device_id) {
+        std::cout << "Resetting cores on another chip!" << std::endl;
         for (auto it = not_done_dispatch_cores[mmio_device_id].begin(); it != not_done_dispatch_cores[mmio_device_id].end(); it++) {
             const auto &phys_core = *it;
             if(llrt::is_ethernet_core(phys_core, this->id_)) {

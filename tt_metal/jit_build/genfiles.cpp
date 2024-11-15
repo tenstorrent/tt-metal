@@ -655,6 +655,10 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     ofstream file_stream_ec(path + "/erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_ec << output_string;
     file_stream_ec.close();
+    fs::create_directories(path + "/active_erisc");
+    ofstream file_stream_aec(path + "/active_erisc/generated_bank_to_noc_coord_mapping.h");
+    file_stream_aec << output_string;
+    file_stream_aec.close();
     fs::create_directories(path + "/idle_erisc");
     ofstream file_stream_iec(path + "/idle_erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_iec << output_string;
