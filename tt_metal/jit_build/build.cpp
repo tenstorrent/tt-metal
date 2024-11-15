@@ -188,7 +188,9 @@ void JitBuildState::finish_init() {
             this->link_objs_ += build_dir + "ncrisc-halt.o ";
         }
     } else {
-        this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        if (this->target_name_ != "erisc") {
+            this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        }
     }
     if (this->target_name_ == "brisc" or this->target_name_ == "idle_erisc") {
         this->link_objs_ += build_dir + "noc.o ";
@@ -600,7 +602,7 @@ void JitBuildState::weaken(const string& log_file, const string& out_dir) const 
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
-    static std::string_view const strong_names[] = {"__fw_export_*"};
+    static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     elf.WriteImage(pathname_out);
 }
