@@ -78,7 +78,7 @@ public:
 
     Tile get_tile() const;
 
-    bool is_row_major() const;
+    Layout get_layout() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("config");
     const auto attribute_values() const {

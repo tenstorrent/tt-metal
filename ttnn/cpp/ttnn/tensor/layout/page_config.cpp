@@ -64,9 +64,13 @@ size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) c
     return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
 }
 
-bool PageConfig::is_row_major() const {
-    return std::holds_alternative<RowMajorPageConfig>(config_);
+Layout PageConfig::get_layout() const {
+    if (std::holds_alternative<RowMajorPageConfig>(config_)) {
+        return Layout::ROW_MAJOR;
+    }
+    return Layout::TILE;
 }
+
 
 Tile PageConfig::get_tile() const {
     return std::visit([&](const auto& config) { return config.get_tile(); }, config_);

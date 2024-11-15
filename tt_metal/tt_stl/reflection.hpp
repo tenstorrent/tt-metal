@@ -1041,7 +1041,8 @@ inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept {
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
         fmt::print("Hashing std::variant: {}\n", variant);
     }
-    return std::visit([](const auto& value) { return hash_object(value); }, variant);
+    auto active_variant = variant.index();
+    return std::visit([&](const auto& value) { return hash_objects(active_variant, value); }, variant);
 }
 
 template <typename... Ts>

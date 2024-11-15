@@ -28,7 +28,7 @@ public:
     [[deprecated("Use of Legacy Padded Shape is deprecated")]]
     static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape);
 
-    Layout get_layout() const { return page_config_.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
+    Layout get_layout() const { return page_config_.get_layout(); }
     PageConfig get_page_config() const { return page_config_; }
     DataType get_data_type() const { return dtype_; }
     const MemoryConfig& get_memory_config() const { return memory_config_; }
