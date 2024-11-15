@@ -10,7 +10,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 
-#define MOREH_POW_FACTORY_H(name)                                                           \
+#define MOREH_ABS_POW_FACTORY_H(name)                                                       \
     struct name {                                                                           \
         struct shared_variables_t {                                                         \
             KernelHandle reader_kernels_id;                                                 \
@@ -33,11 +33,11 @@
             tensor_return_value_t& output_tensor);                                          \
     };
 
-namespace ttnn::operations::moreh::moreh_pow {
+namespace ttnn::operations::moreh::moreh_abs_pow {
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
 
-struct MorehPowOperation {
+struct MorehAbsPowOperation {
     struct operation_attributes_t {
         const float p;
 
@@ -52,9 +52,9 @@ struct MorehPowOperation {
     using shape_return_value_t = Shape;
     using tensor_return_value_t = Tensor;
 
-    MOREH_POW_FACTORY_H(MorehPowFactory)
+    MOREH_ABS_POW_FACTORY_H(MorehAbsPowFactory)
 
-    using program_factory_t = std::variant<MorehPowFactory>;
+    using program_factory_t = std::variant<MorehAbsPowFactory>;
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -68,9 +68,9 @@ struct MorehPowOperation {
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
-}  // namespace ttnn::operations::moreh::moreh_pow
+}  // namespace ttnn::operations::moreh::moreh_abs_pow
 
 namespace ttnn::prim {
-constexpr auto moreh_pow =
-    ttnn::register_operation<"ttnn::prim::moreh_pow", ttnn::operations::moreh::moreh_pow::MorehPowOperation>();
+constexpr auto moreh_abs_pow = ttnn::
+    register_operation<"ttnn::prim::moreh_abs_pow", ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation>();
 }  // namespace ttnn::prim

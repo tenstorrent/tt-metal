@@ -5,6 +5,7 @@
 import ttnn
 import ttnn._ttnn
 
+abs = ttnn._ttnn.operations.moreh.moreh_abs_pow
 adam = ttnn._ttnn.operations.moreh.moreh_adam
 adamw = ttnn._ttnn.operations.moreh.moreh_adamw
 arange = ttnn._ttnn.operations.moreh.moreh_arange
@@ -34,7 +35,6 @@ nll_loss_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_backward
 nll_loss_unreduced_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_unreduced_backward
 norm = ttnn._ttnn.operations.moreh.moreh_norm
 norm_backward = ttnn._ttnn.operations.moreh.moreh_norm_backward
-pow = ttnn._ttnn.operations.moreh.moreh_pow
 sgd = ttnn._ttnn.operations.moreh.moreh_sgd
 softmax = ttnn._ttnn.operations.moreh.moreh_softmax
 softmax_backward = ttnn._ttnn.operations.moreh.moreh_softmax_backward

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moreh_pow_device_operation.hpp"
+#include "moreh_abs_pow_device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::moreh::moreh_pow {
+namespace ttnn::operations::moreh::moreh_abs_pow {
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
     auto floored_p = std::floor(p);
@@ -18,39 +18,39 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-MorehPowOperation::program_factory_t MorehPowOperation::select_program_factory(
+MorehAbsPowOperation::program_factory_t MorehAbsPowOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case for int32
-    return MorehPowFactory{};
+    return MorehAbsPowFactory{};
 }
 
 void validate_tensors(
-    const MorehPowOperation::operation_attributes_t& operation_attributes,
-    const MorehPowOperation::tensor_args_t& tensor_args) {
+    const MorehAbsPowOperation::operation_attributes_t& operation_attributes,
+    const MorehAbsPowOperation::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     auto& output = tensor_args.output;
 
-    check_tensor(input, "moreh_pow", "input", {DataType::BFLOAT16, DataType::INT32});
-    check_tensor(output, "moreh_pow", "output", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(input, "moreh_abs_pow", "input", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(output, "moreh_abs_pow", "output", {DataType::BFLOAT16, DataType::INT32});
 }
 
-void MorehPowOperation::validate_on_program_cache_miss(
+void MorehAbsPowOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehPowOperation::validate_on_program_cache_hit(
+void MorehAbsPowOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
-MorehPowOperation::shape_return_value_t MorehPowOperation::compute_output_shapes(
+MorehAbsPowOperation::shape_return_value_t MorehAbsPowOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& input_shape = input.get_shape();
     return input_shape;
 };
 
-MorehPowOperation::tensor_return_value_t MorehPowOperation::create_output_tensors(
+MorehAbsPowOperation::tensor_return_value_t MorehAbsPowOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
         log_debug(tt::LogOp, "{}:{} use output tensor", __func__, __LINE__);
@@ -66,7 +66,8 @@ MorehPowOperation::tensor_return_value_t MorehPowOperation::create_output_tensor
         operation_attributes.memory_config);
 };
 
-std::tuple<MorehPowOperation::operation_attributes_t, MorehPowOperation::tensor_args_t> MorehPowOperation::invoke(
+std::tuple<MorehAbsPowOperation::operation_attributes_t, MorehAbsPowOperation::tensor_args_t>
+MorehAbsPowOperation::invoke(
     const Tensor& input,
     const float p,
     const std::optional<Tensor>& output,
@@ -80,4 +81,4 @@ std::tuple<MorehPowOperation::operation_attributes_t, MorehPowOperation::tensor_
 
     return {operation_attributes, tensor_args};
 }
-}  // namespace ttnn::operations::moreh::moreh_pow
+}  // namespace ttnn::operations::moreh::moreh_abs_pow

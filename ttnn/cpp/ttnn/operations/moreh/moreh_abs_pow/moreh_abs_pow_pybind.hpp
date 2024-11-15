@@ -8,6 +8,6 @@
 
 namespace py = pybind11;
 
-namespace ttnn::operations::moreh::moreh_pow {
-void bind_moreh_pow_operation(py::module& module);
-}  // namespace ttnn::operations::moreh::moreh_pow
+namespace ttnn::operations::moreh::moreh_abs_pow {
+void bind_moreh_abs_pow_operation(py::module& module);
+}  // namespace ttnn::operations::moreh::moreh_abs_pow

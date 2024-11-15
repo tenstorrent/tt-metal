@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moreh_pow_pybind.hpp"
+#include "moreh_abs_pow_pybind.hpp"
 
-#include "moreh_pow.hpp"
+#include "moreh_abs_pow.hpp"
 #include "pybind11/decorators.hpp"
 
-namespace ttnn::operations::moreh::moreh_pow {
-void bind_moreh_pow_operation(py::module &module) {
+namespace ttnn::operations::moreh::moreh_abs_pow {
+void bind_moreh_abs_pow_operation(py::module &module) {
     bind_registered_operation(
         module,
-        ttnn::moreh_pow,
+        ttnn::moreh_abs_pow,
         "Moreh Pow Operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),

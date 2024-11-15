@@ -7,8 +7,8 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::moreh::moreh_pow {
-struct MorehPow {
+namespace ttnn::operations::moreh::moreh_abs_pow {
+struct MorehAbsPow {
     static Tensor invoke(
         const Tensor& input,
         const float p,
@@ -16,9 +16,10 @@ struct MorehPow {
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
-}  // namespace ttnn::operations::moreh::moreh_pow
+}  // namespace ttnn::operations::moreh::moreh_abs_pow
 
 namespace ttnn {
-constexpr auto moreh_pow =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_pow", ttnn::operations::moreh::moreh_pow::MorehPow>();
+constexpr auto moreh_abs_pow = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::moreh_abs_pow",
+    ttnn::operations::moreh::moreh_abs_pow::MorehAbsPow>();
 }
