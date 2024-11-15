@@ -1025,6 +1025,48 @@ def forward(
 ## 3. Features
 ### 3.1 Generative Decoding
 
+Almost every LLM generates text in the same manner: Given a prompt from the user, the LLM predicts the next token. Then, the LLM takes that new token and uses it as context to predict the following token. This process repeats until the LLM generates a token that indicates the end of the sequence, or until the user decides to stop the generation. The process is called "autoregressive generation" because each new token is used to predict the next token.
+
+#### Model Inputs and Outputs
+Inputs to the mode for generative decoding are generally:
+- tokens: produced by the tokenizer
+- position ids: the position of the tokens in the sequence
+- KV cache: an inference optimization that caches intermediate values
+
+In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE. 
+
+The model outputs:
+- logits for the next token
+- an updated KV cache
+
+The logits are unnormalized probabilities over the vocabulary. Given these probabilities, the sampler must decide which of these tokens in the vocabulary will be chosen. There are a few sampling methods that are commonly used to pick the next token.
+- greedy decoding (argmax of the logits, picks the most likely next token)
+- top-p/top-k sampling (restricts the logits according to p and k values, then samples according to the remaining probabilities)
+
+#### KV cache
+The KV cache is an inference optimization. It allows us to cache some intermediate values during the first inference step which are reused in later steps.
+On the first inference step, the model processes the full prompt and caches the K and V projections for each layer. Subsequent inference steps compute a Q, K, V projection only for the new token, then use the cached K and V projections in attention. Therefore the first step (prefill) creates the KV cache and subsequent steps (decode) use and update the cache.
+
+The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it can be necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.  
+
+#### Batching
+LLMs use batching to process multiple sequences in parallel. There are a few reasons why batching is useful:
+- Real-world LLM services need to handle multiple concurrent requests.
+- LLM inference is bound by time to read model weights from DRAM. Batching allows model weight reuse across multiple sequences.
+- Total throughput of the system increases with batch size.
+
+However, there are tradeoffs with batching. As the batch size increases, the latency per decode step will also increase. It is typical to use different batch sizes for different use cases, depending on the goal of the system.
+
+#### Performance Metrics
+Time to first token (TTFT) measures the latency to generate the first token of the sequence. This is the time to prefill a prompt. It is a measure of interactivity. 
+
+Total throughput (tokens per second) tells us the total number of tokens that the model can generate per second. `total throughput = batch size / decode step latency`. Total throughput is important for cost-sensitive systems or offline processing, where interactivity is less important than throughput. Generally, increasing batch size will increase total throughput.
+
+User throughput (tokens per second per user) is calculate as `user throughput = 1 / decode step latency`. User throughput tells us how interactive the model is, and tells us how fast the generation is for a single user. Generally, decreasing batch size will increase user throughput. 
+
+Note that each of these metrics change with batch size and sequence length. When reporting TTFT, total throughput, and user throughput, the batch size and sequence length must be specified. 
+
+
 ### 3.2 Prefill and Decode
 
 Large language models require two distinct phases for inference due to the fundamental nature of transformer attention and autoregressive generation: prefill and decode.
