@@ -56,9 +56,123 @@ Authors:
 ## 3. Features
 ### 3.1 Generative Decoding
 ### 3.2 Prefill and Decode
-  - submodules, tests
-  - how to combine prefill and decode,
-  - slicing prefill to fit in L1
+Large language models require two distinct phases for inference due to the fundamental nature of transformer attention and autoregressive generation:
+
+#### Prefill
+- The prefill phase is sequential for each user, but parallel for the prompt tokens of each user.
+- During prefill, the system computes attention scores for all prompt tokens against each other and populates the key-value (KV) cache.
+- Prefill also computes the first token for the following autoregressive generation.
+
+#### Decode
+- The decode phase is parallel for all users, but sequential for each token within a batch of users.
+- Each new token can only be generated after the previous one, as the system must maintain causality in attention computations.
+
+#### Module and Test Differences
+The attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`. Attention has two different test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
+- A tensor of size `(batch, dim)` in L1 for decode
+- A tensor of size `(seqlen, dim)` in DRAM for prefill
+
+Each test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the ttnn device implementation.
+
+The MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences (mentioned below).
+
+The decoder module and model module also handle prefill and decode in the same file, but they call the respective modes within the attention and MLP modules.
+
+#### Technical Implementation Differences
+
+##### 1. Reshaping for Large Matrix Multiplications
+In prefill mode, the system reshapes input tensors to process sequences in smaller chunks in parallel for larger matrix multiplications, such as `wqkv`, `wo` in the attention module, and `w1`, `w2`, `w3` in the MLP module. This reshaping prevents running out of memory in cases of long prefill sequence lengths. For instance:
+
+```python
+if seq_len > 2048:
+    x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+
+xqkv_fused = ttnn.linear(
+    x_11SH,
+    self.wqkv,
+    dtype=ttnn.bfloat16,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    compute_kernel_config=self.compute_kernel_config_hifi2,
+    program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+)
+```
+
+This reshaping is not needed for decode mode because it processes one token at a time. In decode mode, the parallelization is over user batches, which is only up to 32.
+
+##### 2. KV Cache Management
+###### Prefill:
+```python
+# Fill cache with initial states
+ttnn.experimental.paged_fill_cache(
+    keys_BKSD,
+    k_fill,
+    page_table,
+    batch_idx=user_id
+)
+```
+
+###### Decode:
+```python
+# Update KV cache with a single new token
+ttnn.experimental.paged_update_cache(
+    keys,
+    k_heads_1BKD,
+    update_idxs_tensor=current_pos,
+    page_table=page_table
+)
+```
+
+##### 3. Attention Computation
+###### Prefill:
+```python
+# Split q_heads into num_groups and kv_heads for parallel group computation for GQA
+q_heads_84SD_8b = ttnn.reshape(
+    q_heads_1QSD_8b,
+    [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
+)
+
+# Prefill implements causal masking across the full sequence
+attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+    q_heads_84SD_8b,
+    k_heads_K1SD_8b,
+    v_heads_V1SD_8b,
+    is_causal=True,  # Ensures tokens only attend to previous tokens
+    scale=self.scale
+)
+```
+
+###### Decode:
+```python
+# Decode uses cached states instead of recomputing
+attn_output_11BH = ttnn.transformer.scaled_dot_product_attention_decode(
+    q_heads_1BQD,  # Only new token query
+    keys,          # Cached keys
+    values,        # Cached values
+    cur_pos_tensor=current_pos  # Track position for causal attention
+)
+```
+
+##### 4. Slicing Before the LM Head
+In prefill mode, the system slices the output of the last decoder layer to the last tile before computing the LM head. This is necessary because it only needs the last token from prefill to start the autoregressive decoding.
+
+```python
+x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+```
+
+##### 5. Activation Memory Configs
+Prefill keeps the intermediate activations in DRAM because of the large size of the tensors containing the entire prompt sequence length. Decode has a sequence length of 1 and, therefore, keeps the intermediate tensors in L1 for lower latency.
+
+#### Prefill vs. Decode: Comparison Summary
+
+| Aspect | Prefill Mode | Decode Mode |
+| --- | --- | --- |
+| Purpose | Bulk sequence processing for initialization or training | Incremental processing for autoregressive inference |
+| Demo Parallelization | Sequential for each user, parallel for the prompt tokens of each user | Parallel for 32 users, sequential for each token within a batch of users |
+| Batch and sequence Length | Processes long sequences (≥ 128 tokens), single user | Processes batch of users (≤ 32 users), single token |
+| Memory Use | DRAM, with reshaping into smaller chunks for long sequence lengths | L1 on-chip memory for fast, low-latency processing |
+| Attention | Handles sequences in bulk; more memory-intensive | Incremental attention with precomputed components |
+| LM head slicing | Slices to last tile before Lm head matmul to extract the last token | Slicing not required |
+
 ### 3.3 Multi-Device
 There are two main approaches for scaling across multiple devices: data parallel and tensor parallel.
 
