@@ -4,13 +4,12 @@
 
 #include <gtest/gtest.h>
 
-#include "basic_fixture.hpp"
-#include "tt_metal/host_api.hpp"
+#include "host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 
 // TODO: Add a variant with randomized allocations and deallocations
-TEST_F(BasicFixture, TestDirectedSeriesOfAllocDealloc) {
+TEST(FreeListAllocator, TestDirectedSeriesOfAllocDealloc) {
     constexpr uint32_t max_size_bytes = 1024;
     constexpr uint32_t min_allocation_size_bytes = 32;
     constexpr uint32_t alignment = 32;
@@ -132,7 +131,7 @@ TEST_F(BasicFixture, TestDirectedSeriesOfAllocDealloc) {
     EXPECT_EQ(addr_20.value(), 64);
 }
 
-TEST_F(BasicFixture, TestResizeAllocator) {
+TEST(FreeListAllocator, TestResizeAllocator) {
     constexpr uint32_t max_size_bytes = 1024;
     constexpr uint32_t min_allocation_size_bytes = 32;
     constexpr uint32_t alignment = 32;
@@ -184,7 +183,7 @@ TEST_F(BasicFixture, TestResizeAllocator) {
     EXPECT_EQ(addr_6.value(), 32);
 }
 
-TEST_F(BasicFixture, TestDirectedResizeAllocator) {
+TEST(FreeListAllocator, TestDirectedResizeAllocator) {
     constexpr uint32_t max_size_bytes = 1024;
     constexpr uint32_t min_allocation_size_bytes = 32;
     constexpr uint32_t alignment = 32;

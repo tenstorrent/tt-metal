@@ -8,10 +8,9 @@
 #include <functional>
 #include <random>
 
-#include "basic_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include "host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt;
@@ -41,7 +40,7 @@ namespace unit_tests::basic::soc_desc {
 
 
 // This test ensures that no logical core maps to a harvested row
-TEST_F(BasicFixture, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
+TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::GetNumAvailableDevices();
     ASSERT_TRUE(num_devices > 0);
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

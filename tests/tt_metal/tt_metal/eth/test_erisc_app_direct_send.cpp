@@ -34,7 +34,6 @@ struct erisc_info_t {
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 namespace unit_tests::erisc::direct_send {
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE

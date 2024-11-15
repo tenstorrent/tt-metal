@@ -25,7 +25,7 @@ TEST_F(CommandQueueFixture, TestCannotAccessCommandQueueForClosedDevice) {
     EXPECT_ANY_THROW(device_->command_queue());
 }
 
-TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
+TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
     auto &command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);

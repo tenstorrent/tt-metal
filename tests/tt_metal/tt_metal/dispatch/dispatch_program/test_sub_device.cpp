@@ -14,9 +14,8 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "test_utils/stimulus.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
-#include "command_queue_test_utils.hpp"
 #include "sub_device_test_utils.hpp"
 
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {

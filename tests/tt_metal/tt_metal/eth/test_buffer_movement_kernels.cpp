@@ -11,6 +11,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/test_utils/df/df.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

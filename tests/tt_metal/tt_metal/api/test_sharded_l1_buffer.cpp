@@ -6,7 +6,6 @@
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/common/constants.hpp"
 
 using namespace tt::tt_metal;

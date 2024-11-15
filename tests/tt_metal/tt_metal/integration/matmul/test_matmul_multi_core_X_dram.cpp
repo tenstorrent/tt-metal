@@ -12,6 +12,7 @@
 #include "test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
+#include "matmul_test_utils.hpp"
 
 using std::vector;
 using namespace tt;

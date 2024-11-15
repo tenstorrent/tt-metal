@@ -25,7 +25,12 @@ set(UNIT_TESTS_API_SRC
 add_executable(unit_tests_api ${UNIT_TESTS_API_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_api)
 
-target_link_libraries(unit_tests_api PUBLIC test_metal_common_libs)
+target_link_libraries(
+    unit_tests_api
+    PRIVATE
+        test_metal_common_libs
+        Boost::smart_ptr
+)
 target_include_directories(
     unit_tests_api
     PRIVATE

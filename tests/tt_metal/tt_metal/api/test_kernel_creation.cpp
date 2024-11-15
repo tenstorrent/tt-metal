@@ -21,7 +21,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
-                {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+                DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
     }
 }
 
@@ -38,7 +38,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnStorageCores) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 storage_core_range_set,
-                {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+                DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
     }
 }
 
@@ -58,14 +58,14 @@ TEST_F(DispatchFixture, TensixIdleEthCreateKernelsOnDispatchCores) {
                 auto test_kernel = tt_metal::CreateKernel(
                     program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
-                    dispatch_core_range_set,
-                    {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+                    CoreRangeSet(dispatch_core_range_set),
+                    DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
         } else if (dispatch_core_type == CoreType::ETH) {
             EXPECT_ANY_THROW(auto test_kernel = tt_metal::CreateKernel(
                                  program,
                                  "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
-                                 dispatch_core_range_set,
-                                 {.noc = tt_metal::NOC::NOC_0, .eth_mode = Eth::IDLE}););
+                                 CoreRangeSet(dispatch_core_range_set),
+                                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0}););
         }
     }
 }

@@ -19,7 +19,6 @@ using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {

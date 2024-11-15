@@ -4,10 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include "basic_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include "host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt;
@@ -62,9 +61,9 @@ void read_translation_table (Device* device, CoreCoord logical_node, std::vector
 #endif
 }
 
-}  // namespace unit_tests::basic::device
+}  // namespace unit_tests::basic::test_noc
 
-TEST_F(BasicFixture, TensixSingleDeviceHarvestingPrints) {
+TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
@@ -103,7 +102,7 @@ TEST_F(BasicFixture, TensixSingleDeviceHarvestingPrints) {
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 
-TEST_F(BasicFixture, TensixVerifyNocNodeIDs) {
+TEST(NOC, TensixVerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
@@ -126,7 +125,7 @@ TEST_F(BasicFixture, TensixVerifyNocNodeIDs) {
     }
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
-TEST_F(BasicFixture, TensixVerifyNocIdentityTranslationTable) {
+TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     if (arch == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();
