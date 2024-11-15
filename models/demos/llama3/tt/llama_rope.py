@@ -87,9 +87,26 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
+        # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
+        prefill_trans_mat_torch = get_rot_transformation_mat(dhead=head_dim)
+        self.transformation_mat_prefill = ttnn.from_torch(
+            prefill_trans_mat_torch,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+        )
+
     def get_trans_mats(self):
+        # TODO: Colman deprecate
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
         return self.transformation_mat
+
+    def get_both_trans_mats(self):
+        assert self.transformation_mat is not None, "Transformation matrix not initialized"
+        assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"
+        return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
