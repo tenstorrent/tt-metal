@@ -9,7 +9,7 @@
 #include <string>
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/third_party/umd/device/tt_device.h"
+#include "tt_metal/third_party/umd/device/cluster.h"
 #include "yaml-cpp/yaml.h"
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
