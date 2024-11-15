@@ -40,7 +40,8 @@
       {
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
-        "configuration": "RelWithDebInfo"
+        "configuration": "RelWithDebInfo",
+        "nativeToolOptions": ["-k0"]
       }
     ]
   }
