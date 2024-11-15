@@ -160,7 +160,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 128), (1, 1, 16, 32)])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""

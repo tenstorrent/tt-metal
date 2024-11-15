@@ -51,6 +51,10 @@ public:
     //  H is all dimensions except W multiplied and aligned to tile and shard height
     Size compute_physical_shape(const ttnn::SimpleShape& shape) const;
 
+    void set_memory_config(MemoryConfig memory_config) {
+        memory_config_ = std::move(memory_config);
+    }
+
     static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
     const auto attribute_values() const {
         return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_);

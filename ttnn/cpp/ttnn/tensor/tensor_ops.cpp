@@ -81,7 +81,9 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
             insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
-                device_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
+                TensorLayout tensor_layout = input_tensor.get_tensor_spec().tensor_layout();
+                tensor_layout.set_memory_config(mem_config);
+                device_tensor.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), tensor_layout));
                 device_tensor.tensor_attributes->metadata_populated = true;
             }
         });
@@ -111,7 +113,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
-        target_device->push_work([host_tensor, blocking, target_device, input_tensor, workers, worker_index, cq_id]() mutable {
+        target_device->push_work([host_tensor, blocking, target_device, input_tensor, worker_index, cq_id]() mutable {
             TT_ASSERT(
                 input_tensor.storage_type() == StorageType::DEVICE or input_tensor.storage_type() == StorageType::MULTI_DEVICE,
                 "Can only use worker queue for cpu call if tensor is on device.");
@@ -206,7 +208,9 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
                 insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
                 uint32_t num_workers_completed = (tensor_modified_layout.tensor_attributes->num_workers_completed)++;
                 if (not num_workers_completed) {
-                    tensor_modified_layout.set_tensor_spec(input_tensor.get_tensor_spec());
+                    auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
+                    auto upd_layout = TensorLayout(orig_layout.get_data_type(), PageConfig(target_layout), orig_layout.get_memory_config());
+                    tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
                     tensor_modified_layout.tensor_attributes->metadata_populated = true;
                 }
             });

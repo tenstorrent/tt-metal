@@ -253,20 +253,7 @@ struct Tensor {
         }
     }
 
-    const MemoryConfig memory_config() const {
-        return std::visit(
-            [](const auto &storage) -> MemoryConfig {
-                using T = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<T, DeviceStorage>) {
-                    return storage.memory_config();
-                } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                    return storage.memory_config();
-                } else {
-                    TT_THROW("MemoryConfig can only be obtained for a tensor with DeviceStorage");
-                }
-            },
-            this->get_storage());
-    }
+    const MemoryConfig memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
     const std::optional<ShardSpec> shard_spec() const { return this->memory_config().shard_spec; }
 
     const bool is_sharded() const;

@@ -33,6 +33,25 @@ namespace tt {
 
 namespace tt_metal {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+MemoryConfig extract_memory_config(const Storage& storage) {
+    return std::visit(
+        [](const auto &storage) -> MemoryConfig {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return storage.memory_config();
+            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                return storage.memory_config();
+            } else {
+                return MemoryConfig{};
+            }
+        },
+        storage);
+}
+}
+}
+
 Tensor::TensorAttributes::TensorAttributes(): tensor_spec(
     ttnn::SimpleShape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}),
     TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig{})) {}
@@ -42,7 +61,7 @@ Tensor::TensorAttributes::TensorAttributes(const Storage storage, const TensorSp
 }
 
 Tensor::TensorAttributes::TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile)
-    : TensorAttributes(storage, TensorSpec(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), MemoryConfig{}, shape))) {}
+    : TensorAttributes(storage, TensorSpec(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), CMAKE_UNIQUE_NAMESPACE::extract_memory_config(storage), shape))) {}
 
 void Tensor::TensorAttributes::increment_main_thread_ref_count(Device *worker) {
     if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and not tt::tt_metal::detail::InWorkerThread()) {
@@ -86,7 +105,7 @@ void Tensor::TensorAttributes::update_main_thread_ref_count(Device *worker, uint
 }
 
 Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(storage, TensorSpec(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), MemoryConfig{}, shape))) {
+    Tensor(storage, TensorSpec(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), CMAKE_UNIQUE_NAMESPACE::extract_memory_config(storage), shape))) {
     if (tile.has_value()) {
         if (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT) {
             tt::log_warning("only matmul op and ccl all-gather currently supports the customized tile shape: {}", tile->get_tile_shape());
