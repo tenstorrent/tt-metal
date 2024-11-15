@@ -251,7 +251,7 @@ struct Tensor {
         }
     }
 
-    const MemoryConfig memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
+    const MemoryConfig memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
     const std::optional<ShardSpec> shard_spec() const { return this->memory_config().shard_spec; }
 
     const bool is_sharded() const;
