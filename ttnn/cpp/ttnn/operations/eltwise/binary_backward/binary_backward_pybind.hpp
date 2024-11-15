@@ -268,7 +268,7 @@ void bind_binary_backward_addalpha(py::module& module, const binary_backward_ope
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_float_string_default(
+void bind_binary_backward_bias_gelu(
     py::module& module,
     const binary_backward_operation_t& operation,
     const std::string& parameter_name_a,
@@ -312,9 +312,11 @@ void bind_binary_backward_float_string_default(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2}, {4} = {6})
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> approximate = "none"
+            >>> output = ttnn.bias_gelu_bw(grad_tensor, tensor1, tensor2, approximate)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1159,7 +1161,7 @@ void py_module(py::module& module) {
         ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward_float_string_default(
+    detail::bind_binary_backward_bias_gelu(
         module,
         ttnn::bias_gelu_bw,
         "bias",
