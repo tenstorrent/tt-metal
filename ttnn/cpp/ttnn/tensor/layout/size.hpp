@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace tt::tt_metal {
 
