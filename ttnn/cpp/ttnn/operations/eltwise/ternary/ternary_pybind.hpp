@@ -240,6 +240,8 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+            input_tensor_b, input_tensor_c should have same dtype as input_tensor_a
+
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
