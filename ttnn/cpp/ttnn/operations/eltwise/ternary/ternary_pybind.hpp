@@ -208,30 +208,43 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
 template <typename ternary_operation_t>
 void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, input_tensor_c: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b`
-                * :attr:`input_tensor_c` (ttnn.Tensor or Number):
+        R"doc(
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        {2}
 
-            Supported dtypes and layouts:
+        .. math::
+            \mathrm{{output\_tensor}} = \verb|{0}|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}).
 
-            +----------------------------+---------------------------------+-------------------+
-            |     Dtypes                 |         Layouts                 |     Ranks         |
-            +----------------------------+---------------------------------+-------------------+
-            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-            +----------------------------+---------------------------------+-------------------+
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor): the input tensor.
+            input_tensor_c (ttnn.Tensor or Number): the input tensor.
 
-            Note : bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
-            Example:
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-                >>> tensor3 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-                >>> output = {1}(tensor1, tensor2, tensor3/scalar)
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                  - Ranks
+                * - BFLOAT16, BFLOAT8_B
+                  - TILE
+                  - 2, 3, 4
+
+            bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+
+        Example:
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+            >>> tensor3 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+            >>> output = {1}(tensor1, tensor2, tensor3/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -265,7 +278,7 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
                 },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
-            py::arg("value") = 1.0f,
+            py::arg("value"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
@@ -368,8 +381,7 @@ void py_module(py::module& module) {
     detail::bind_ternary_lerp(
         module,
         ttnn::lerp,
-        R"doc(Computes Lerp on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Computes Lerp on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_ternary_mac(
         module,
