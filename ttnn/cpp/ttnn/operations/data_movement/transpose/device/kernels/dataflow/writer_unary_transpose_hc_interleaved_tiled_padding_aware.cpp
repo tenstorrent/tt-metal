@@ -96,6 +96,9 @@ void kernel_main() {
         uint32_t output_face_h = rem / FACE_HEIGHT;
         uint32_t output_sub_tile_line = rem % FACE_HEIGHT;
 
+        // Precompute offset for the current face_h
+        uint32_t face_h_offset = output_face_h * NUM_FACES_W * face_height_width;
+
         // Calculate the index along the channel dimension for the output tensor
         uint32_t output_h = h * TILE_HEIGHT;
 
@@ -119,6 +122,10 @@ void kernel_main() {
             // Precompute the additive factor for output_h_face_line
             uint32_t base_output_h_face_line = output_h_face;
 
+            // Determine the number of sub-tile lines to process
+            bool is_last_sub_tile_line = (h == H_t - 1) && (face_h == num_faces_h - 1);
+            uint8_t sub_tile_lines = is_last_sub_tile_line ? sub_tile_lines_real : FACE_HEIGHT;
+
             // Iterate over faces in the width dimension
             for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
                 // Compute output_w_face once per face_w
@@ -127,12 +134,8 @@ void kernel_main() {
                 // Precompute the offset multiplier for the current face_w
                 uint32_t face_w_offset = face_w * face_height_width;
 
-                // Determine the number of sub-tile lines to process
-                bool is_last_sub_tile_line = (h == H_t - 1) && (face_h == num_faces_h - 1);
-                uint8_t sub_tile_lines = is_last_sub_tile_line ? sub_tile_lines_real : FACE_HEIGHT;
-
-                // Precompute offset for the current face_h
-                uint32_t face_h_offset = output_face_h * NUM_FACES_W * face_height_width;
+                // Compute the offset
+                uint32_t offset = (face_h_offset + face_w_offset + output_sub_tile_line * FACE_WIDTH) * element_size;
 
                 // Iterate over sub-tile lines
                 for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
@@ -141,9 +144,6 @@ void kernel_main() {
 
                     // Compute the linear index
                     uint32_t linear_idx = base_linear_idx + output_h_face_line * C_t * W_t;
-
-                    // Compute the offset
-                    uint32_t offset = (face_h_offset + face_w_offset + output_sub_tile_line * FACE_WIDTH) * element_size;
 
                     // Compute the write address
                     uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
@@ -173,34 +173,41 @@ void kernel_main() {
     if constexpr (C_p > C) {
         cb_wait_front(tt::CB::c_in1, 1);
         uint32_t l1_read_ptr = get_read_ptr(tt::CB::c_in1);
-        uint32_t c_t = C_t - 1;
+
+        constexpr uint32_t c_t = C_t - 1;
+        constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
+        constexpr uint8_t face_c_start = C_in_tile/ FACE_HEIGHT;
+
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to (n, h, w_t)
             uint32_t n = tile_idx / (H * W_t);
             uint32_t remainder1 = tile_idx % (H * W_t);
             uint32_t h = remainder1 / W_t;
             uint32_t w_t = remainder1 % W_t;
-            uint8_t C_in_tile = C % TILE_HEIGHT;
-            uint8_t face_c_start = C_in_tile/ FACE_HEIGHT;
-            if (tile_idx == start_padding_tile_idx) {
-            }
-            for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
-                uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
-                if (tile_idx == start_padding_tile_idx) {
-                }
-                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
-                    if (tile_idx == start_padding_tile_idx) {
-                    }
-                    for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
 
-                        uint32_t linear_idx = n * H * C_t * W_t + h * C_t * W_t + c_t * W_t + w_t;
-                        uint32_t offset = (face_c * NUM_FACES_W * FACE_HEIGHT * FACE_WIDTH + face_w * FACE_HEIGHT * FACE_WIDTH + sub_tile_line * FACE_WIDTH) * element_size;
+            // Calculate linear_idx of padded tile inside output tensor buffer
+            uint32_t linear_idx = n * H * C_t * W_t + h * C_t * W_t + c_t * W_t + w_t;
+
+            for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
+                // Offset to the start of the current face along the channel dimension/height of the tile
+                uint32_t face_c_offset = face_c * NUM_FACES_W * face_height_width;
+
+                // Sub-tile/face line where our padded data starts
+                uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
+
+                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+
+                    // Offset to the start of the current face along the width of the tile
+                    uint32_t face_w_offset = face_w * face_height_width;
+                    for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
+                        uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line * FACE_WIDTH) * element_size;
                         uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
                         noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
                     }
                 }
             }
         }
+        noc_async_write_barrier();
         cb_pop_front(tt::CB::c_in1, 1);
     }
 }
