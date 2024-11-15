@@ -22,6 +22,7 @@
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
 volatile tt_l1_ptr uint8_t *const slave_idle_erisc_run = &mailboxes->slave_sync.dm1;
 
+uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
