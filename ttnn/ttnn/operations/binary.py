@@ -357,7 +357,7 @@ def torch_squared_difference(x, y, *args, **kwargs):
 
 
 def _golden_function_scatter(input_tensor_a, input_tensor_b, *args, **kwargs):
-    input_tensor_b[:, :, : input_tensor_a.shape[-2], : input_tensor_a.shape[-1]] = input_tensor_a
+    input_tensor_b[0:, 0:, : input_tensor_a.shape[-2], : input_tensor_a.shape[-1]] = input_tensor_a
     return input_tensor_b
 
 
