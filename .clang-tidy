@@ -25,7 +25,6 @@ Checks: >
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
   -bugprone-unused-raii,
-  -bugprone-use-after-move,
   -cert-env33-c,
   -cert-err09-cpp,
   -cert-err33-c,
