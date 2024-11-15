@@ -81,9 +81,8 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
             insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
-                TensorLayout tensor_layout = input_tensor.get_tensor_spec().tensor_layout();
-                tensor_layout.set_memory_config(mem_config);
-                device_tensor.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), tensor_layout));
+                device_tensor.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(),
+                    input_tensor.get_tensor_spec().tensor_layout().with_memory_config(mem_config)));
             }
         });
     }

@@ -8,7 +8,7 @@ namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-size_t element_size_bytes(DataType dtype) {
+size_t rm_element_size_bytes(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16: return sizeof(bfloat16);
         case DataType::FLOAT32: return sizeof(float);
@@ -18,6 +18,7 @@ size_t element_size_bytes(DataType dtype) {
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+            // To store block floats in RowMajor layout, we use a fallback and store full floats instead
             return sizeof(float);
 
         default:
@@ -111,7 +112,7 @@ RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
 {
-    const auto element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
+    const auto element_size = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     auto width_alignment = sizeof(uint32_t) / element_size;
 
     if(memory_config.shard_spec.has_value() && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -134,7 +135,7 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
 void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
-    const uint32_t element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
+    const uint32_t element_size = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     const uint32_t page_alignment = sizeof(uint32_t) / element_size;
 
     TT_FATAL((width_alignment % page_alignment) == 0,
@@ -154,7 +155,7 @@ void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType
 
 Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
-        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype));
+        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
     }
 
     if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
@@ -172,7 +173,7 @@ Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtyp
 }
 
 size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
-    const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
+    const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     return size;
 }
 
