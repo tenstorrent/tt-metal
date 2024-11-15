@@ -32,10 +32,10 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
-    uint32_t num_cores_unpadded = 0;
+    uint32_t num_cores_unpadded = num_cores;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
 
-    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
+    CoreCoord end_core = cores[num_cores - 1];
     if (output.get_layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
@@ -70,15 +70,14 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     // re-calculate end_core in the case shard grid is larger than used grid
     if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
-        end_core = cores[num_cores_unpadded - 1];
     } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
         if (output.get_layout() == Layout::TILE) {
             num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
         } else {
             num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
         }
-        end_core = cores[num_cores_unpadded - 1];
     }
+    TT_FATAL(num_cores_unpadded == num_cores, "number of cores {} in shard spec not equal to the unpadded number of cores {}", num_cores_unpadded, num_cores);
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
@@ -158,15 +157,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     uint32_t padded_offset_bytes;
 
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const auto& core = cores[i];
+    for (const auto& core : cores) {
         uint32_t shard_height = num_units_per_shard_height;
         uint32_t shard_width = input.get_layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
-        bool height_or_width_sharded_and_core_out_of_range = (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED || shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) && (i > num_cores_unpadded - 1);
-        if (height_or_width_sharded_and_core_out_of_range) {
-            shard_height = 0;
-            shard_width = 0;
-        }
         if (input.get_layout() == Layout::TILE) {
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core.x == end_core.x && core.y == end_core.y) {
