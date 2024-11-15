@@ -87,12 +87,7 @@ autograd::TensorPtr nll_loss(
     auto out = autograd::create_tensor(loss_tensor);
 
     autograd::GradFunction grad = [prediction, target, out, Ndim, Cdim, device, divisor]() {
-        auto out_grad = ttnn::empty(
-            ttnn::Shape({Ndim, Cdim}),
-            DataType::BFLOAT16,
-            Layout::TILE,
-            device,
-            prediction->get_value().memory_config());
+        auto out_grad = core::empty(ttnn::Shape({Ndim, Cdim}), device, prediction->get_value().memory_config());
         auto grad = ttnn::moreh_nll_loss_backward(
             target->get_value(),
             out->get_grad(),

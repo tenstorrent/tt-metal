@@ -184,7 +184,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSubDeviceAllocations) {
         device->load_sub_device_manager(sub_device_manager_1);
 
         auto buffer_1 = CreateBuffer(shard_config_1, SubDeviceId{0});
-        EXPECT_EQ(buffer_1->address(), max_addr - page_size_1);
+        EXPECT_EQ(buffer_1->address(), max_addr - buffer_1->aligned_page_size());
         EnqueueWriteBuffer(device->command_queue(), buffer_1, input_1, false);
         std::vector<uint32_t> output_1;
         EnqueueReadBuffer(device->command_queue(), buffer_1, output_1, true);
@@ -206,7 +206,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSubDeviceAllocations) {
         device->load_sub_device_manager(sub_device_manager_2);
 
         auto buffer_3 = CreateBuffer(shard_config_2, SubDeviceId{1});
-        EXPECT_EQ(buffer_3->address(), max_addr - page_size_2);
+        EXPECT_EQ(buffer_3->address(), max_addr - buffer_3->aligned_page_size());
         EnqueueWriteBuffer(device->command_queue(), buffer_3, input_2, false);
         std::vector<uint32_t> output_2;
         EnqueueReadBuffer(device->command_queue(), buffer_3, output_2, true);
@@ -220,7 +220,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSubDeviceAllocations) {
         }
 
         auto buffer_4 = CreateBuffer(shard_config_1,  SubDeviceId{0});
-        EXPECT_EQ(buffer_4->address(), max_addr - page_size_1);
+        EXPECT_EQ(buffer_4->address(), max_addr - buffer_4->aligned_page_size());
         EXPECT_THROW(CreateBuffer(interleaved_config, SubDeviceId{0}), std::exception);
     }
 }
