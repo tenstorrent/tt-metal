@@ -109,7 +109,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     }
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor host_tensor({}, workers.size());
+    Tensor host_tensor(workers.size());
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
@@ -154,7 +154,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worke
     if (worker and worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
         // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
         Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, input_tensor);
-        Tensor tensor_modified_layout = Tensor({}, 1);
+        Tensor tensor_modified_layout = Tensor(1);
         worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout]() mutable {
             TT_ASSERT(
                 async_safe_tensor.storage_type() == StorageType::OWNED or
@@ -192,7 +192,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
             auto& host_storage = std::get<MultiDeviceHostStorage>(input_tensor.get_storage());
             distributed_config = host_storage.strategy;
         }
-        Tensor tensor_modified_layout = Tensor({}, workers.size(), distributed_config);
+        Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
             worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {

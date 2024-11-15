@@ -94,15 +94,10 @@ struct Tensor {
     Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
     Tensor(const Storage storage, const TensorSpec& tensor_spec);
 
-    // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
+    // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
-    Tensor(
-        const std::vector<Device *>& workers,
-        uint32_t num_buffers = 0,
-        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-
-    Tensor(uint32_t num_buffers, const TensorSpec& tensor_spec, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    Tensor(const std::vector<Device *>& workers, const TensorSpec& tensor_spec, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+    explicit Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+    explicit Tensor(const std::vector<Device *>& workers);
 
     Tensor(const Tensor &other);
 

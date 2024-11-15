@@ -584,7 +584,8 @@ Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
         return to_host_helper<T>(tensor, blocking, cq_id);
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto devices = get_devices(tensor);
-        Tensor host_tensor(devices.size(), tensor.get_tensor_spec());
+        Tensor host_tensor(devices.size());
+        host_tensor.set_tensor_spec(tensor.get_tensor_spec());
         for (int device_index = 0; device_index < devices.size(); ++device_index) {
             const auto& device = devices[device_index];
             auto shard = get_shard_for_device(tensor, device);

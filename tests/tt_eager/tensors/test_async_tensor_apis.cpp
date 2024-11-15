@@ -42,7 +42,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
     Tensor host_tensor = ttnn::numpy::arange<float>(0, 32 * 32 * 4, 1);
-    Tensor readback_tensor({}, 1);
+    Tensor readback_tensor(1);
 
     auto func = [device, host_tensor, readback_tensor]() mutable {
         // Ensure that both the lambda and global scope have ownership to this tensor
@@ -239,7 +239,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
-    Tensor readback_tensor({}, 1);
+    Tensor readback_tensor(1);
     std::thread worker;
 
     {
