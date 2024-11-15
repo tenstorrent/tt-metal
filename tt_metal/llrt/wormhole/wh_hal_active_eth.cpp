@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "llrt/hal.hpp"
+#include "llrt/hal_asserts.hpp"
 #include "llrt/wormhole/wh_hal.hpp"
 #include "hw/inc/wormhole/core_config.h"
 #include "hw/inc/wormhole/dev_mem_map.h"
