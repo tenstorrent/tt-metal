@@ -53,7 +53,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
     // Tools
-    this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    this->gpp_ = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
 
     // Flags
     string common_flags;
@@ -294,8 +294,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
                       env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " + "-I" + env_.root_ +
-                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" + env_.root_ +
-                      "tt_metal/third_party/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" +
+                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" +
+                      env_.root_ + "runtime/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" +
                       env_.root_ + "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
 
     if (this->is_fw_) {
