@@ -141,7 +141,6 @@ Pointwise Unary
    ttnn.isneginf
    ttnn.isposinf
    ttnn.leaky_relu
-   ttnn.lerp
    ttnn.lgamma
    ttnn.log
    ttnn.log10
@@ -373,6 +372,7 @@ Pointwise Ternary
    ttnn.addcmul
    ttnn.mac
    ttnn.where
+   ttnn.lerp
    ttnn.addcmul_bw
    ttnn.addcdiv_bw
    ttnn.where_bw
