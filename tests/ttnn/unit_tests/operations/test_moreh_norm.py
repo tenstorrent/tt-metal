@@ -55,7 +55,7 @@ def torch_norm(torch_input, torch_output_grad, *, p=2.0, dim=None, keepdim=False
             - `torch_output`: The result of the norm operation.
             - `torch_input_grad`: The gradient of the input tensor (if `do_backward=True`), otherwise None.
     """
-    torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=keepdim)
+    torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=keepdim)
     torch_input_grad = None
     if do_backward:
         torch_output.backward(torch_output_grad)
@@ -96,7 +96,7 @@ def ttnn_norm(
     _, ttnn_output_shape = compute_output_shape(torch_input.shape, dim, keepdim=keepdim)
     ttnn_input = create_ttnn_tilized_tensor(torch_input, device, dtype)
     if do_backward:
-        torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=keepdim)
+        torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=keepdim)
         ttnn_output = create_ttnn_tilized_tensor(torch_output, device, dtype)
     else:
         ttnn_output = create_ttnn_tilized_tensor(torch.empty(ttnn_output_shape), device, dtype)
@@ -350,21 +350,21 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, use_program_cache):
 @pytest.mark.parametrize(
     "dim_rtol_atol",
     [
-        [[], 0.2, 0.2],
-        [None, 0.2, 0.2],
-        [0, 0.1, 0.1],
-        [1, 0.1, 0.1],
-        [2, 0.1, 0.1],
-        [3, 0.1, 0.1],
-        [[0, 1], 0.1, 0.1],
-        [[0, 1, 2], 0.15, 0.15],
-        [[0, 1, 2, 3], 0.2, 0.2],
-        [[0, 1, 3], 0.15, 0.15],
-        [[0, 2, 3], 0.15, 0.15],
-        [[1, 2], 0.1, 0.1],
-        [[1, 2, 3], 0.15, 0.15],
-        [[1, 3], 0.1, 0.1],
-        [[2, 3], 0.1, 0.1],
+        [[], 0.06, 0.06],
+        [None, 0.06, 0.06],
+        [0, 0.06, 0.06],
+        [1, 0.06, 0.06],
+        [2, 0.06, 0.06],
+        [3, 0.06, 0.06],
+        [[0, 1], 0.06, 0.06],
+        [[0, 1, 2], 0.06, 0.06],
+        [[0, 1, 2, 3], 0.06, 0.06],
+        [[0, 1, 3], 0.06, 0.06],
+        [[0, 2, 3], 0.06, 0.06],
+        [[1, 2], 0.06, 0.06],
+        [[1, 2, 3], 0.06, 0.06],
+        [[1, 3], 0.06, 0.06],
+        [[2, 3], 0.06, 0.06],
     ],
     ids=[
         "global_norm(dim=[])",
