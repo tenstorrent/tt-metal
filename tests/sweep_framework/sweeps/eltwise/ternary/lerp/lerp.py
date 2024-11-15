@@ -42,6 +42,18 @@ parameters = {
 }
 
 
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if (
+        test_vector["input_b_dtype"] != test_vector["input_a_dtype"]
+        or test_vector["input_c_dtype"] != test_vector["input_a_dtype"]
+    ):
+        return True, "Dtype for lerp operands needs to be same"
+    return False, None
+
+
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.

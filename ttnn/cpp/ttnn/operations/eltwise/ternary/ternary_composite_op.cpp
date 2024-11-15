@@ -52,6 +52,7 @@ Tensor _addcdiv(
 
 // lerp(input, end, weight) = start   weight * (end - start)
 Tensor _lerp_overload(const Tensor& input_a, const Tensor& input_b, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(input_a.dtype() == input_b.dtype(), "Expected the same dtype as start (input_a), for end (input_b)");
     Tensor t_diff = ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config);
     Tensor t_mul = ttnn::multiply(t_diff, value, std::nullopt, output_mem_config);
     Tensor result = ttnn::add(input_a, t_mul, std::nullopt, output_mem_config);
@@ -59,6 +60,8 @@ Tensor _lerp_overload(const Tensor& input_a, const Tensor& input_b, float value,
 }
 
 Tensor _lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(input_a.dtype() == input_b.dtype(), "Expected the same dtype as start (input_a), for end (input_b)");
+    TT_FATAL(input_a.dtype() == input_c.dtype(), "Expected the same dtype as start (input_a), for weight (input_c)");
     Tensor t_diff = ttnn::multiply(
         ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config), input_c, std::nullopt, output_mem_config);
     Tensor result = ttnn::add(input_a, t_diff, std::nullopt, output_mem_config);
