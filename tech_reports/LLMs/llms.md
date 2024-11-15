@@ -1375,9 +1375,26 @@ For our [Llama3 family of models](../../models/demos/llama3) we are using the fo
 
 
 ### 3.4 Continuous Batching
-  - quick intro and how it is implemented in demos.
+Continuous batching is a serving optimization. To describe continuous batching, it is useful to first discuss LLM serving without continuous batching. Without continuous batching, an LLM service waits for `batch_size` requests to come in. The service then prefills each request. Then, the service decodes the batched requests token by token. Once all users in the batch finish generation, the service accepts new requests. This is suboptimal because 1) some requests might end generation early, so 2) some slots in the batch are doing no useful computation, while 3) new requests are waiting.
+
+In contrast, continuous batching allows the service to process new requests as soon as there is a free slot in the batch. The pseudo-code for this algorithm is shown below.
+```python
+while True:
+  if not is_full(current_batch) and not prefill_q.empty():
+    model_prefill(prefill_q.pop())
+  elif not is_empty(current_batch):
+    model_decode(current_batch)
+  else:
+    break
+```
+Continuous batching improves TTFT by reducing wait times for incoming users. It also increases total throughput by keeping the decode batch full of useful work.
+
+Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position ids can be different for each user in the batch. Implementing continuous batching requires that the serving code track data for each slot of the batch. An example of our continuous batching demo can be found [here](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/t3000/llama2_70b/demo/demo_continuous_batching.py). In production deployment, vLLM handles continuous batching for the LLM service.
+
 ### 3.5 vLLM Integration
   - Our vLLM repo and what's needed to integrate with it.
+
+
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
 Reference [Metal Trace guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for background on tracing. Tracing allows you to record a single pass of your model and store the list of commands and buffers used on-device. You can then execute that trace in a single command with no additional work performed on the host. This eliminates overhead in stages 1-3, you are still responsible for transferring any data needed to and from the device, but host-device transfer of commands is eliminated.
