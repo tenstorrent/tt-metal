@@ -37,10 +37,13 @@ PageConfig::PageConfig(Layout layout)
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if(layout == Layout::ROW_MAJOR) {
-        config_ = RowMajorPageConfig();
+        if (tile.has_value()) {
+            tt::log_warning("Specifying tile shape for a row major layout is deprecated, and will be removed soon");
+        }
+        config_ = RowMajorPageConfig(tile.value_or(Tile()));
     }
     else {
-        config_ =  TilePageConfig(tile.value_or(Tile()));
+        config_ = TilePageConfig(tile.value_or(Tile()));
     }
 }
 
@@ -64,13 +67,8 @@ bool PageConfig::is_row_major() const {
     return std::holds_alternative<RowMajorPageConfig>(config_);
 }
 
-Tile PageConfig::get_tile() const
-{
-    if(std::holds_alternative<TilePageConfig>(config_)) {
-        return std::get<TilePageConfig>(config_).get_tile();
-    }
-
-    return Tile();
+Tile PageConfig::get_tile() const {
+    return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
 }
 
 
@@ -108,6 +106,8 @@ size_t TilePageConfig::get_page_size_bytes(const Size& page_shape, DataType dtyp
 const Tile& TilePageConfig::get_tile() const {
     return tile_;
 }
+
+RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
 {
@@ -174,6 +174,10 @@ Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtyp
 size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
     const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
     return size;
+}
+
+const Tile& RowMajorPageConfig::get_tile() const {
+    return tile_;
 }
 
 } // namespace tt::tt_metal
