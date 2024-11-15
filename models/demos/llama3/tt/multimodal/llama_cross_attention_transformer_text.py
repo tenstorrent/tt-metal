@@ -17,6 +17,10 @@ from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 
+from models.utility_functions import (
+    nearest_32,
+)
+
 
 def _get_full_row_masked_out_mask(
     attn_bias,
@@ -215,8 +219,30 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             full_text_row_masked_out_mask,
         )
 
-    def setup_cache(self, max_batch_size, dtype):
+    def setup_cache(self, max_batch_size):
         self.cache_is_setup = True
+
+        # Prepare xattn_caches
+        chunk_length = nearest_32(self.configuration.vision_chunk_ntok)
+        vision_seq_len = self.configuration.vision_max_num_chunks * chunk_length
+        xattn_cache = [
+            [
+                ttnn.from_torch(
+                    torch.zeros(
+                        max_batch_size, self.configuration.n_heads, vision_seq_len, self.configuration.head_dim
+                    ),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                )
+                for _ in range(2)
+            ]
+            for l in range(len(self.cross_attention_layers))
+        ]
+
+        return xattn_cache
 
     def forward(
         self,
@@ -233,6 +259,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         page_table=None,
         # get_last_token=-1,
         text_only_inference=False,
+        vision_tokens=None,
     ):
         for idx, (
             layer,
@@ -247,6 +274,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,
+                    user_id=user_id,
+                    vision_tokens=vision_tokens,
                 )
             h = layer(
                 h,
@@ -286,5 +315,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             outputs.append(output)
 
         output = ttnn.concat(outputs, dim=-1)
+        output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output

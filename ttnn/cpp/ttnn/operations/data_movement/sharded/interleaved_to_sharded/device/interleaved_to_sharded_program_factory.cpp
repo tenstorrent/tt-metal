@@ -38,7 +38,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
-    bool is_blackhole_and_dram = (input.device()->arch() == tt::ARCH::BLACKHOLE) and src_is_dram;
 
     if (input.get_layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
@@ -95,10 +94,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole_and_dram) {
+    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole) {
         uint32_t scratch_cb_page_size;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
-        if (is_blackhole_and_dram) {
+        if (is_blackhole) {
             scratch_cb_page_size = align(input_unit_size, hal.get_alignment(HalMemType::L1));
         }
         else {
@@ -246,14 +245,20 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             bool aligned = (src_is_dram ? curr_idx_w % dram_alignment == 0 : true);
-            aligned = aligned and !(is_blackhole_and_dram);
+            aligned = aligned and !(is_blackhole);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
-                if(src_is_dram) {
+                //TODO: is this right, leaving non BH case the same for now, should investigate
+                if(!is_blackhole) {
                     aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
                 }
                 else {
-                    aligned_width_offset = tt::round_down(curr_idx_w, l1_alignment);
+                    if(src_is_dram) {
+                        aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
+                    }
+                    else {
+                        aligned_width_offset = tt::round_down(curr_idx_w, l1_alignment);
+                    }
                 }
                 aligned_offset = curr_idx_w - aligned_width_offset;
                 aligned_shard_width = aligned_offset + shard_width;

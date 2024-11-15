@@ -5,12 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-//#define DEBUG
-
-#ifdef DEBUG
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
-#endif
-
 void kernel_main() {
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
@@ -44,20 +38,15 @@ void kernel_main() {
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, block_height);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-    uint32_t l1_write_addr_base = l1_write_addr;
     if (aligned) {
         for (uint32_t h = 0; h < block_height; ++h) {
             uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
             noc_async_read(src_noc_addr, l1_write_addr, block_width_bytes);
             stick_id++;
-#ifdef DEBUG
-            noc_async_read_barrier();
-            tt::data_movement::common::print_pages(l1_write_addr, block_width_bytes >> 1, 1);
-#endif
             l1_write_addr += padded_block_width_bytes;
         }
     } else {
-        cb_reserve_back(cb_id_in1, 4);
+        cb_reserve_back(cb_id_in1, 1);
         uint32_t scratch_l1_write_addr = get_write_ptr(cb_id_in1);
         uint64_t scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr + aligned_offset);
         for (uint32_t h = 0; h < block_height; ++h) {
@@ -65,15 +54,10 @@ void kernel_main() {
             noc_async_read(src_noc_addr, scratch_l1_write_addr, aligned_block_width_bytes);
             noc_async_read_barrier();
             noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, block_width_bytes);
-#ifdef DEBUG
-            noc_async_read_barrier();
-            tt::data_movement::common::print_pages(l1_write_addr, block_width_bytes >> 1, 1);
-#endif
             stick_id++;
             l1_write_addr += padded_block_width_bytes;
         }
     }
-
     noc_async_read_barrier();
     cb_push_back(cb_id_in0, block_height);
 }

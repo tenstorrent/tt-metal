@@ -64,11 +64,11 @@ ttnn::Tensor to_device(const ttnn::Tensor& tensor, Device* device, const std::op
     else {
         return tensor.to(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
     }
+
 }
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor, MeshDevice* mesh_device, const std::optional<MemoryConfig>& memory_config) {
-
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     // Currently no direct sharded write support in BLACKHOLE due to alignment issue
     if(mem_config.is_sharded ()  and (mesh_device->arch() == tt::ARCH::BLACKHOLE)) {
@@ -78,6 +78,7 @@ ttnn::Tensor to_device(
     else {
         return tensor.to(mesh_device, mem_config);
     }
+
 
 }
 
@@ -104,6 +105,7 @@ ttnn::Tensor allocate_tensor_on_device(
 void copy_host_to_device_tensor(ttnn::Tensor host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id) {
     tt::tt_metal::write_tensor(host_tensor, device_tensor, cq_id);
 }
+
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, uint8_t cq_id) {
 

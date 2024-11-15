@@ -566,6 +566,24 @@ class TtModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
+            xattn_cache_y_cores = (
+                16 // self.num_devices
+            )  # Based on seqlen, this formula gives us a valid number of y cores
+            xattn_cache_x_cores = 8
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
+                # using n_heads since xattn repeats KV to match Q
+                (
+                    nearest_32(
+                        (self.n_heads // self.num_devices) * seq_len // (xattn_cache_y_cores * xattn_cache_x_cores)
+                    ),
+                    self.head_dim,
+                ),
+                ttnn.CoreGrid(y=xattn_cache_y_cores, x=xattn_cache_x_cores),
+                ttnn.ShardStrategy.HEIGHT,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -607,7 +625,7 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False):
+    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
@@ -647,11 +665,11 @@ class TtModelArgs:
         if torch.is_tensor(x):
             x = ttnn.from_torch(
                 x,
-                device=self.mesh_device,
+                device=self.mesh_device if not on_host else None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
-                memory_config=input_mem_cfg,
+                memory_config=input_mem_cfg if not on_host else None,
             )
         else:  # Convert the row major layout from embedding back to tile layout
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)

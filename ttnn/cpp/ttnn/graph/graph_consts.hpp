@@ -21,6 +21,8 @@ namespace ttnn::graph {
     constexpr auto kShape = "shape";
     constexpr auto kNumCores = "num_cores";
     constexpr auto kPageSize = "page_size";
+    constexpr auto kCoreRangeSet = "core_range_set";
+    constexpr auto kGloballyAllocated = "globally_allocated";
 
     // node names
     constexpr auto kNodeBuffer = "buffer";
