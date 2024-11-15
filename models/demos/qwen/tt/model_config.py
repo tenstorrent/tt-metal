@@ -79,8 +79,11 @@ class TtModelArgs:
             self.DEFAULT_TOKENIZER_PATH = QWEN_DIR
             self.DEFAULT_CACHE_PATH = os.path.join(QWEN_DIR, self.device_name)
         else:
-            assert "Please set $QWEN_DIR to a valid checkpoint directory"
-
+            # Defaults to CI path
+            QWEN_DIR = "/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct"
+            self.DEFAULT_CKPT_DIR = QWEN_DIR
+            self.DEFAULT_TOKENIZER_PATH = QWEN_DIR
+            self.DEFAULT_CACHE_PATH = os.path.join(QWEN_DIR, self.device_name)
         if not dummy_weights:
             # Assert if all folders and files exist
             assert os.path.exists(
