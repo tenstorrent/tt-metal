@@ -37,6 +37,17 @@ Authors:
         - [4.10.4.2 Large Matmuls](#41042-large-matmuls)
 
 ## 1. Overview
+What’s the best way to bring up high-performance multi-chip models on Tenstorrent hardware with the Metal stack? We continue to try to answer this question; here are our current best practices, tips and workarounds.
+
+What you need:
+
+* Access to TT hardware. This guide is specifically for bringing models up on wormhole, so whilst most of this advice applies equally to grayskull it is very WH (wormhole)-centric.
+* Good grasp of PyTorch and transformers. We will not be covering any basics here. For example, this document assumes you understand what a kv-cache is and get the difference between prefill (reading tokens and generating the kv-cache entries) and decode (auto-regressively generating new tokens one at a time). Beginner tutorials will follow, for now this is to help experts get up to speed deploying LLMs on Metal.
+* Familiarity with Metal and ttnn. How to install, build, run examples and so on.
+* Will to win. This is the cutting edge, which means everything is still being developed and sometimes both the API and our advice will be in flux. It’s fun and everything is open source so if in doubt trust the code, but it’s not called the cuddling edge for a reason and not everything will always be easy! We will get there, though, and with your help all the faster.
+
+The [ViT guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ViT-TTNN/vit.md) provides an excellent introduction to using Metal with transformers and if anything in this document seems unclear or intimidating you should look at that first. It has pictures!
+
 ## 2. Modules
 ### 2.1 Embedding
 ### 2.2 RoPE
