@@ -16,8 +16,7 @@
     - [2.6 Create issues for potential bugs or missing TTNN ops](#26-create-issues-for-potential-bugs-or-missing-ttnn-ops)
   - [3. End to end model in TTNN](#3-end-to-end-model-in-ttnn)
     - [3.1 Create TTNN unit tests per module and per op](#31-create-ttnn-unit-tests-per-module-and-per-op)
-    - [3.2 Accuracy](#32-accuracy--)
-    - [3.3 PCC](#32-pcc--)
+    - [3.2 PCC](#32-pcc--)
     - [3.4 Quantitative evaluation](#34-quantitative-evaluation)
     - [3.5 Qualitative evaluation](#35-qualitative-evaluation)
   - [4. End to end model performance](#4-end-to-end-model-performance)
@@ -65,12 +64,17 @@
 
 ## 3.1 Create TTNN unit tests per module and per op
   - It is highly recommended to start by creating TTNN unit tests per op in your model. Then move on to create pytests per module in your model. Here you can find examples of writing unit tests for the maxpool op: [unit tests for maxpool](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/test_maxpool2d.py)
-  - The unit tests per op will use PCC to ensure the TTNN op's output is an accurate match with that of torch.
+  - The unit tests per op will use [PCC](https://en.wikipedia.org/wiki/Pearson_correlation_coefficient) to ensure the TTNN op's output is an accurate match with that of torch.
   - It will also enable the user to try different settings and TTNN knobs available for the op and analyze the performance of the op and optimize it when possible. The optimization and range of knobs available to the user per op is a more advanced topic. However, once you develop a good command of the over all bring up process, you may refer to the [yolov4_tech_report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md) to learn more. The existing unit tests such as the conv2d unit tests for ResNet model [here](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/test_new_conv2d.py#L706) are also a great starting point. You may explore more unit tests for different ops under [operations unit tests](https://github.com/tenstorrent/tt-metal/tree/main/tests/ttnn/unit_tests/operations).
   - Once you have unit tests for all the ops in a module of your model, for instance, all the ops in Downsample1 module of yolov4, you may proceed with the module bring up in TTNN. At this stage, all ops might be supported on TTNN and the unit tests may pass for all which would be great. However, it might happen that an op does not have a kernel implementation for TTNN yet or it might fail with the confifurations you need. In such cases, you may proceed with creating detailed git hub issues to request support for those and fall back to torch for those ops unit the support is added in TTNN.
   - Here is an example of the downsample1 module implementation of YOLO-v4 in torch: [DS1 in torch](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/reference/downsample1.py). And the TTNN implmentation of the same module is here: [DS1 in TTNN](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/ttnn/downsample1.py)
 The diagram below illustrates the corresponding Downsample1 module:
 ![Downsample1 Diagram](tech_reports/YoloV4-TTNN/images/Downsample1_diagram.png)
+
+## 3.2 PCC
+  - Similar to individual ops unit tests, user is highly encouraged to check per module [PCC](https://en.wikipedia.org/wiki/Pearson_correlation_coefficient) to ensure the accueacy of per module output from the TTNN implmenetation. Here is an example of it in DS1 module implementation of yolov4. [DS1 PCC assertion](https://github.com/tenstorrent/tt-metal/blob/2c4ab4cd2e5a54f1baada4ebb7c2977c721231b2/models/experimental/yolov4/ttnn/yolov4.py#L189)
+
+
 
 In this representation, the convolution encompasses both the convolution and Batch Norm operations, as they have been folded together.
 
