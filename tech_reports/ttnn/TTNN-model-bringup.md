@@ -3,7 +3,6 @@
 **Authors**: Dalar Vartanians\
 **Correspondence**: `dvartanians@tenstorrent.com`
 
-## Contents
 
 - [New Model Bringup in TTNN](#new-model-bringup-in-ttnn)
   - [Contents](#contents)
@@ -14,13 +13,13 @@
     - [2.3 Using the reference model in Torch](#23-using-the-reference-model-in-torch)
     - [2.4 Create the torch model graph](#24-create-the-torch-model-graph)
     - [2.5 Extract the model summary](#25-extract-the-model-summary)
-    - [2.6 Create TTNN unit tests per module and per op](#26-create-ttnn-unit-tests-per-module-and-per-op)
-    - [2.7 Create issues for potential bugs or missing TTNN ops](#27-create-issues-for-potential-bugs-or-missing-ttnn-ops)
+    - [2.6 Create issues for potential bugs or missing TTNN ops](#26-create-issues-for-potential-bugs-or-missing-ttnn-ops)
   - [3. End to end model in TTNN](#3-end-to-end-model-in-ttnn)
-    - [3.1 Accuracy](#31-accuracy--)
-    - [3.2 PCC](#32-pcc--)
-    - [3.3 Quantitative evaluation](#33-quantitative-evaluation)
-    - [3.4 Qualitative evaluation](#34-qualitative-evaluation)
+    - [3.1 Create TTNN unit tests per module and per op](#31-create-ttnn-unit-tests-per-module-and-per-op)
+    - [3.2 Accuracy](#32-accuracy--)
+    - [3.3 PCC](#32-pcc--)
+    - [3.4 Quantitative evaluation](#34-quantitative-evaluation)
+    - [3.5 Qualitative evaluation](#35-qualitative-evaluation)
   - [4. End to end model performance](#4-end-to-end-model-performance)
     - [4.1 Performance sheet](#41-performance-sheet)
     - [4.2 Visualizer](#42-visualizer--)
@@ -32,7 +31,7 @@
 
 ## 1. Overview
 
-TTNN [TTNN](https://docs.tenstorrent.com/ttnn/latest/ttnn/about.html) is a library that provides a user-friendly interface to operations that run on TensTorrent’s hardware using tt-metal programming model. ttnn is designed to be intuitive to an user that is familiar with [PyTorch](https://pytorch.org/). This report will walk you through our recommented steps to bringup deep learning models that can run efficently on Tenstorrent's hardware using the TTNN library. We will suggest a flow with code examples and diagrams to enable new users interested in bringing up their own models.
+[TTNN](https://docs.tenstorrent.com/ttnn/latest/ttnn/about.html) is a library that provides a user-friendly interface to operations that run on TensTorrent’s hardware using tt-metal programming model. ttnn is designed to be intuitive to an user that is familiar with [PyTorch](https://pytorch.org/). This report will walk you through our recommented steps to bringup deep learning models that can run efficently on Tenstorrent's hardware using the TTNN library. We will suggest a flow with code examples and diagrams to enable new users interested in bringing up their own models.
 
 ## 2. New model bringup flow in TTNN
 
@@ -41,283 +40,35 @@ TTNN [TTNN](https://docs.tenstorrent.com/ttnn/latest/ttnn/about.html) is a libra
 ![New model bring-up flow](images/Flow.png)
   - In the following sections we will dive deeper into each step with examples.
 
-
 ### 2.2 Create a model Card
   - The model card may be created as a github issue or a google sheet/google doc. It is meant to proivde the high-level details of the model.
 ![create a model card](images/model_card.png)
+
 ### 2.3 Using the reference model in Torch
   - If the model is publicly available, you may include a link to the reference model. Here is an example: [yolov4_reference_model](https://github.com/Tianxiaomo/pytorch-YOLOv4/blob/master/models.py)
+
 ### 2.4 Create the torch model graph
-  - Generate the pytorch model graph. If you already have access to a torch reference model, you may generate it using the existing code. Otherwise, you will need to implement a torch model first as this will be used later on for comparision to the TTNN model ouputs any ways. Here is an example: [yolov4_torch_graph](https://github.com/user-attachments/files/17112021/model_pytorch_yolov4.gv.pdf)
+  - The next step is to generate the pytorch model graph. If you already have access to a torch reference model, you may generate it using the existing code. Otherwise, you will need to implement a torch model first as this will be used later on for comparision to the TTNN model ouputs any ways. Here is an example: [yolov4_torch_graph](https://github.com/user-attachments/files/17112021/model_pytorch_yolov4.gv.pdf)
+
 ### 2.5 Extract the model summary
   - Generate a torch model summary in order to extract the arguments and parameters of each op in the torch implementation. Here is a reference code for generating the model summary: [yolov4_model_summary_generation_script](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/reference/yolov4_summary.py)
-  - Using the reference graph and model summary, document the modules and all torch ops required for the model implementation. For instance, in yolo-v4, there are 9 modules; Resblock, Downsample1 (DS1), DS2, DS3, DS4, DS5, Neck, Head and Yolov4. And, the following ops: Conv2d, Maxpool, concat, batch_norm, Mish, leakyRelu, upsample, add.
+  - Using the reference graph and model summary, document the modules and all torch ops required for the model implementation. For instance, in yolo-v4, there are 9 modules; Resblock, Downsample1 (DS1), DS2, DS3, DS4, DS5, Neck, Head and Yolov4. And, the following ops: Conv2d, Maxpool, concat, batch_norm, Mish, leakyRelu, upsample, add. The model summary will include the parameters of each op.
+
+### 2.6 Create issues for potential bugs or missing TTNN ops
+  - As you extract all torch ops using the torch graph and model summary in the previous step, you will need to create the equivalant TTNN unit tests per op in the next step. You may realize that some of the ops might not have a TTNN implementation yet. In such cases, you may file a github issue to reqest an implementation. Here is an example where convTranspose2D was not available. An issue was created and the op got implemented by Metalium team. [missing TTNN convTranspose2D github issue](https://github.com/tenstorrent/tt-metal/issues/6326)
 
 
-### 2.3 Data type Optimization
-- Uses more efficient data types (e.g., `bfloat8_b`) to reduce memory usage and enhance computation speed.
+## 3. End to end model in TTNN
+  - Once, you have created a model card and extracted all required details from a torch implmentation of the model, you can use the following diagram that breaks down the steps to have a full model implmentation in TTNN:
+![Model bring-up](images/model_bringup.png)
+  - In the following sections we will dive deep into each step.
 
-- Similar to the functional implementation but uses more efficient data types and operations.
-
-
-Functional Code:-
-
-```python
-              conv_config = ttnn.Conv2dConfig(
-                        weights_dtype=ttnn.bfloat16,
-              )
-```
-
-Optimized Code:-
-
-```python
-              conv_config = ttnn.Conv2dConfig(
-                        weights_dtype=ttnn.bfloat8_b,
-              )
-```
-### 2.4 Use best shardlayout for convolution
-
-
-Using the appropriate shard layout for convolution can increase the core count of the convolution/Matmuls and enhance overall performance.
-
-The shard layout for convolution is determined based on specific conditions: it is recommended to use `BLOCK_SHARDED` if 𝐶 ≈= 𝑁 * 𝐻 * 𝑊, `HEIGHT_SHARDED` if N* H * W ≫ C, and `WIDTH_SHARDED` if 𝐶 ≫ 𝑁 * 𝐻 * 𝑊.
-
-For example, consider two inputs: the first with a size of [1, 60, 80, 128] (NHWC type), a kernel size of (3, 3), padding of (1, 1), and a stride of (1, 1); and the second with a size of [1, 16, 16, 256] (NHWC type), also with a kernel size of (3, 3), padding of (1, 1), and a stride of (2, 2).
-
-Based on the above principles, it is advisable to use HEIGHT_SHARDED for the first input (since
-𝑁 * 𝐻 * 𝑊 ≫ 𝐶 ) and BLOCK_SHARDED for the second input (as 𝑁 * 𝐻 * 𝑊 ≈= 𝐶 ).
-
-The diagram below illustrates that using HEIGHT_SHARDED for the first convolution and BLOCK_SHARDED for the second results in a higher core count and lower Device Kernel Duration (in nanoseconds). In contrast, if BLOCK_SHARDED is used for the first convolution and HEIGHT_SHARDED for the second, the core count decreases and the Device Kernel Duration increases. Additionally, the overall utilization is greater in the left graph compared to the right, highlighting the benefits of applying the correct sharding strategy in the left graph.
-
-![Convolution ShardLayout comparison](images/Shard_layout_example.png)
-
-#### How to generate the graph?
-1. Generate the Performance Sheet:
-   - First, build the profiler using the command: ./scripts/build_scripts/build_with_profiler_opt.sh.
-   - Next, execute the command: ./tt_metal/tools/profiler/profile_this.py -n <Folder_name> -c "pytest <path_to_test_file>".
-   - Download the generated CSV file (the file path will be displayed in the terminal).
-2. Access the Analysis Tool:
-   - Go throught this [comment](https://github.com/tenstorrent/tt-metal/issues/12468#issuecomment-2341711534).
-   - Open the deployment link there.
-3. Select Device:
-   - When prompted for Grayskull/Wormhole, choose the device you used.
-4. Upload CSV File:
-   - Upload the generated CSV file to view the graphical analysis of the performance sheet.
-
-## 3. YOLOv4 Architecture
-The YOLOv4 model in our TT-NN implementation consists of 8 sub_modules including YOLOv4 module.
-- [Downsample1](#31-downsample1--)
-- [Downsample2](#32-downsample2--)
-- [Downsample3](#33-downsample3--)
-- [Downsample4](#34-downsample4--)
-- [Downsample5](#35-downsample5--)
-- [Neck](#36-neck--)
-- [Head](#37-head--)
-- [YOLOv4](#3-YOLOv4-architecture)
-
-In the TT-NN implementation, we do not use the resblock sub-module separately; instead, we incorporate the resblock module directly wherever necessary.
-
-The YOLOv4 model consists of operations such as Convolution, Batch Norm, Mish, Concat, Addition, Leaky ReLU, MaxPool2D, and Upsample. In our TT-NN implementation, we merge the weights and biases of the Convolution and Batch Norm layers and pass them together to the convolution operation.
-
-The folding of convolution and bias is done through the following function,
-```python
-                        def fold_bn_to_conv_weights_bias(model, path):
-                            bn_weight = model[path + ".conv.1.weight"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
-                            bn_running_var = model[path + ".conv.1.running_var"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
-
-                            weight = model[path + ".conv.0.weight"]
-                            weight = (weight / torch.sqrt(bn_running_var)) * bn_weight
-
-                            bn_running_mean = model[path + ".conv.1.running_mean"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
-                            bn_bias = model[path + ".conv.1.bias"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
-
-                            bias = -(bn_weight) * (bn_running_mean / torch.sqrt(bn_running_var)) + bn_bias
-
-                            bias = bias.reshape(1, 1, 1, -1)
-                            return (
-                                ttnn.from_torch(
-                                    weight,
-                                ),
-                                ttnn.from_torch(bias),
-                            )
-```
-Since there are numerous convolution operations in the YOLOv4 model, we have created a `common.py` file that contains the convolution function. This approach enhances code readability and reduces the overall number of lines in the code.
-
-```python
-class Conv:
-    def __init__(
-        self,
-        model,
-        path,
-        input_params,
-        conv_params,
-        *,
-        act_block_h=None,
-        reshard=False,
-        deallocate=True,
-        height_sharding=True,
-        activation="",
-        fused_op=True,
-        width_sharding=False,
-    ) -> None:
-        if fused_op:
-            self.weights, self.bias = fold_bn_to_conv_weights_bias(model, path)
-        else:
-            weight = model[path + ".conv.0.weight"]
-            bias = model[path + ".conv.0.bias"]
-            self.weights = ttnn.from_torch(weight)
-            bias = bias.reshape(1, 1, 1, -1)
-            self.bias = ttnn.from_torch(bias)
-        self.input_params = input_params
-        self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
-        self.conv_params = conv_params
-        self.out_channels = self.weights.shape[0]
-        self.act_block_h = act_block_h
-        self.reshard = reshard
-
-        if width_sharding:
-            self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        else:
-            self.shard_layout = (
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            )
-        self.deallocate = deallocate
-        self.activation = activation
-
-    def __str__(self) -> str:
-        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
-
-    def __call__(self, device, input_tensor):
-        conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
-            weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            activation=self.activation,
-            shard_layout=self.shard_layout,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=False,
-            act_block_w_div=1,
-            packer_l1_accum_enabled=False,
-            input_channels_alignment=16 if self.input_params[3] < 16 else 32,
-            transpose_shards=False,
-            reshard_if_not_optimal=self.reshard,
-            deallocate_activation=self.deallocate,
-            reallocate_halo_output=False,
-        )
-        if self.act_block_h is not None:
-            conv_config.act_block_h_override = self.act_block_h
-
-        [output_tensor, _out_height, _out_width, self.weights, self.bias] = ttnn.conv2d(
-            input_tensor=input_tensor,
-            weight_tensor=self.weights,
-            bias_tensor=self.bias,
-            in_channels=self.input_params[3],
-            out_channels=self.out_channels,
-            device=device,
-            kernel_size=self.kernel_size,
-            stride=(self.conv_params[0], self.conv_params[1]),
-            padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=self.input_params[0],
-            input_height=self.input_params[1],
-            input_width=self.input_params[2],
-            conv_config=conv_config,
-        )
-        return output_tensor
-```
-Here are the convolution parameters that can be utilized to enhance the performance of convolution:
-
-1. Set math_fidelity to `MathFidelity::LoFi`
-```py
-                conv_config = ttnn.Conv2dConfig(
-                            math_fidelity=ttnn.MathFidelity.LoFi,
-                            )
-```
-
-2. Set the dtype and weight_dtype to `BFLOAT8_b`
-```py
-                conv_config = ttnn.Conv2dConfig(
-                           dtype=ttnn.bfloat8_b,
-                            weights_dtype=ttnn.bfloat8_b,
-                            )
-```
-
-3. Enable `deallocate_activation` if you are not using the input tensor of the conv anywhere after passing into this conv.
-```py
-                conv_config = ttnn.Conv2dConfig(
-                        deallocate_activation=True,
-                        )
-```
-Let's see with a example where to use deallocate_activation=True and deallocate_activation=False.
-![Downsample1 Deallocate](images/Downsample1_deallocate.png)
-
-In the diagram above,in Downsample1 sub_module, we can see that the input passed to conv3 and conv5 is used later in the flow. Therefore, for conv3 and conv5, `deallocate_activation` is set to `False`, while for the other convolutions, `deallocate_activation` is set to `True` since their inputs are not used further.
-
-We have set deallocate_activation=True for conv1 since the input passed to conv1 is not used elsewhere, as indicated by the dotted edges. For conv3, deallocate_activation=False is set because its input is used by conv4 later in the flow. However, we are deallocating the input passed to conv4, as it is not needed beyond that point.
-
-
-4. Configure sharding with respect to the input dimension, i.e., it is advised to use `BLOCK_SHARDED` if C ~= N*H*W, `HEIGHT_SHARDED` if  N*H*W >>> C and `WIDTH_SHARDED` if C >>> N*H*W. It has been explained in the link available [here](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md#sharding).
-
-Example,
-if input shape is 1,128,128,32[NHWC], we can use height sharding since  N*H*W >>> C,
-```py
-                conv_config = ttnn.Conv2dConfig(
-                        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                        )
-```
-if input shape is 1,32,32,640[NHWC], we can use block sharding since  N*H*W ~= C,
-```py
-                conv_config = ttnn.Conv2dConfig(
-                        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                        )
-```
-if input shape is 1,16,16,1024[NHWC], we can use width sharding since C >>> N*H*W,
-```py
-                conv_config = ttnn.Conv2dConfig(
-                        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                        )
-```
-
-The YOLOv4() module serves as the main component of YOLOv4, calling the Downsample1, Downsample2, Downsample3, Downsample4, Downsample5, as well as the Neck and Head sub-modules.
-
-The diagram below illustrates the TT-NN module of `YOLOvV4()`:
-![YoloV4_Diagram](images/YoloV4_Diagram.png)
-
-Here is the code structure for the main YOLOv4 module:
-
-```python
-class TtYOLOv4:
-    def __init__(self, path) -> None:
-        self.torch_model = torch.load(path)
-        self.torch_keys = self.torch_model.keys()
-        self.down1 = Down1(self)
-        self.down2 = Down2(self)
-        self.down3 = Down3(self)
-        self.down4 = Down4(self)
-        self.down5 = Down5(self)
-
-        self.neck = TtNeck(self)
-        self.head = TtHead(self)
-
-    def __call__(self, device, input_tensor):
-        d1 = self.down1(device, input_tensor)
-        d2 = self.down2(device, d1)
-        ttnn.deallocate(d1)
-        d3 = self.down3(device, d2)
-        ttnn.deallocate(d2)
-        d4 = self.down4(device, d3)
-        d5 = self.down5(device, d4)
-        x20, x13, x6 = self.neck(device, [d5, d4, d3])
-        x4, x5, x6 = self.head(device, [x20, x13, x6])
-
-        return x4, x5, x6
-```
-
-We will go through each sub_modules one by one,
-
-## 3.1 Downsample1 :-
-
-The Downsample1 sub-module includes Convolution, Batch Norm, Mish, Concat, and Addition operations.
-
+## 3.1 Create TTNN unit tests per module and per op
+  - It is highly recommended to start by creating TTNN unit tests per op in your model. Then move on to create pytests per module in your model. Here you can find examples of writing unit tests for the maxpool op: [unit tests for maxpool](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/test_maxpool2d.py)
+  - The unit tests per op will use PCC to ensure the TTNN op's output is an accurate match with that of torch.
+  - It will also enable the user to try different settings and TTNN knobs available for the op and analyze the performance of the op and optimize it when possible. The optimization and range of knobs available to the user per op is a more advanced topic. However, once you develop a good command of the over all bring up process, you may refer to the [yolov4_tech_report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md) to learn more. The existing unit tests such as the conv2d unit tests for ResNet model [here](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/test_new_conv2d.py#L706) are also a great starting point. You may explore more unit tests for different ops under [operations unit tests](https://github.com/tenstorrent/tt-metal/tree/main/tests/ttnn/unit_tests/operations).
+  - Once you have unit tests for all the ops in a module of your model, for instance, all the ops in Downsample1 module of yolov4, you may proceed with the module bring up in TTNN. At this stage, all ops might be supported on TTNN and the unit tests may pass for all which would be great. However, it might happen that an op does not have a kernel implementation for TTNN yet or it might fail with the confifurations you need. In such cases, you may proceed with creating detailed git hub issues to request support for those and fall back to torch for those ops unit the support is added in TTNN.
+  - Here is an example of the downsample1 module implementation of YOLO-v4 in torch: [DS1 in torch](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/reference/downsample1.py). And the TTNN implmentation of the same module is here: [DS1 in TTNN](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/ttnn/downsample1.py)
 The diagram below illustrates the TT-NN sub-module of `Down1()`, which corresponds to Downsample1:
 ![Downsample1 Diagram](images/Downsample1_diagram.png)
 
