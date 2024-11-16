@@ -152,6 +152,7 @@ std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vecto
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
+    auto tile = input_tensor.get_tensor_spec().tile();
     if(this->output_mem_config.is_sharded()) {
         return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
@@ -159,10 +160,10 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config,
-            input_tensor.get_tile()
+            tile
             )};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
     }
 }
 

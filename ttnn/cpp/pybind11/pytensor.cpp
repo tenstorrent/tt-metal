@@ -229,16 +229,17 @@ Tensor convert_torch_tensor_to_tt_tensor(
                             Layout::ROW_MAJOR,
                             optional_tile)
                             .to(Layout::TILE);
+            auto tile = optional_tile.value_or(Tile());
             auto output_float_data = owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(
-                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tensor.get_tile());
+                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
             auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
                     std::move(OwnedStorage{std::move(output_buffer)}),
                     shape,
                     data_type,
                     Layout::TILE,
-                    tensor.get_tile());
+                    tile);
         }
         case DataType::BFLOAT4_B: {
             auto data_ptr = reinterpret_cast<float *>(torch_data_ptr);
@@ -251,16 +252,17 @@ Tensor convert_torch_tensor_to_tt_tensor(
                             Layout::ROW_MAJOR,
                             optional_tile)
                             .to(Layout::TILE);
+            auto tile = optional_tile.value_or(Tile());
             auto output_float_data = owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(
-                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tensor.get_tile());
+                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
             auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
                     std::move(OwnedStorage{std::move(output_buffer)}),
                     shape,
                     data_type,
                     Layout::TILE,
-                    tensor.get_tile());
+                    tile);
         }
         default: {
             TT_THROW("Unsupported DataType: {}", data_type);
@@ -404,16 +406,17 @@ Tensor convert_numpy_tensor_to_tt_tensor(
                             Layout::ROW_MAJOR,
                             optional_tile)
                             .to(Layout::TILE);
+            auto tile = optional_tile.value_or(Tile());
             auto output_float_data = owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(
-                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tensor.get_tile());
+                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
             auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
                     std::move(OwnedStorage{std::move(output_buffer)}),
                     shape,
                     data_type,
                     Layout::TILE,
-                    tensor.get_tile());
+                    tile);
         }
         case DataType::BFLOAT4_B: {
             auto data_ptr = reinterpret_cast<float *>(np_data_ptr);
@@ -426,16 +429,17 @@ Tensor convert_numpy_tensor_to_tt_tensor(
                             Layout::ROW_MAJOR,
                             optional_tile)
                             .to(Layout::TILE);
+            auto tile = optional_tile.value_or(Tile());
             auto output_float_data = owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(
-                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tensor.get_tile());
+                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
             auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
                     std::move(OwnedStorage{std::move(output_buffer)}),
                     shape,
                     data_type,
                     Layout::TILE,
-                    tensor.get_tile());
+                    tile);
         }
         default: {
             TT_THROW("Unsupported DataType: {}", data_type);
@@ -480,7 +484,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
 
-    auto output = Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), tt_shards.at(0).get_layout(), tt_shards.at(0).get_tile());
+    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec());
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -541,7 +545,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             },
             tt_tensor.get_storage());
 
-        const auto& tile = tt_tensor.get_tile();
+        const auto tile = tt_tensor.get_tensor_spec().tile();
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
             TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
@@ -553,7 +557,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                                     tt_tensor.get_shape(),
                                     DataType::FLOAT32,
                                     tt_tensor.get_layout(),
-                                    tt_tensor.get_tile())
+                                    tile)
                                     .to(Layout::ROW_MAJOR);
             auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
             buffer = owned_buffer::create<float>(std::move(output_float_data));
@@ -569,7 +573,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                                     tt_tensor.get_shape(),
                                     DataType::FLOAT32,
                                     tt_tensor.get_layout(),
-                                    tt_tensor.get_tile())
+                                    tile)
                                     .to(Layout::ROW_MAJOR);
             auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
             buffer = owned_buffer::create<float>(std::move(output_float_data));
@@ -634,7 +638,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             },
             tt_tensor.get_storage());
 
-        const auto& tile = tt_tensor.get_tile();
+        const auto tile = tt_tensor.get_tensor_spec().tile();
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
             TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
@@ -647,7 +651,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                                     tt_tensor.get_shape(),
                                     DataType::FLOAT32,
                                     tt_tensor.get_layout(),
-                                    tt_tensor.get_tile())
+                                    tile)
                                     .to(Layout::ROW_MAJOR);
             auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
             buffer = owned_buffer::create<float>(std::move(output_float_data));
@@ -664,7 +668,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                                     tt_tensor.get_shape(),
                                     DataType::FLOAT32,
                                     tt_tensor.get_layout(),
-                                    tt_tensor.get_tile())
+                                    tile)
                                     .to(Layout::ROW_MAJOR);
             auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
             buffer = owned_buffer::create<float>(std::move(output_float_data));
@@ -1048,7 +1052,7 @@ void pytensor_module(py::module &m_tensor) {
         .def_property_readonly("shape", [](const Tensor &self) { return self.get_shape(); })
         .def_property_readonly("dtype", [](const Tensor &self) { return self.get_dtype(); })
         .def_property_readonly("layout", [](const Tensor &self) { return self.get_layout(); })
-        .def_property_readonly("tile", [](const Tensor &self) { return self.get_tile(); })
+        .def_property_readonly("tile", [](const Tensor &self) { return self.get_tensor_spec().tile(); })
         .def(
             "deallocate",
             [](Tensor &self, bool force) { return self.deallocate(force); },
@@ -1646,7 +1650,7 @@ void pytensor_module(py::module &m_tensor) {
 
         )doc")
         .def(
-            "get_tile", [](const Tensor &self) { return self.get_tile(); }, R"doc(
+            "get_tile", [](const Tensor &self) { return self.get_tensor_spec().tile(); }, R"doc(
             Get tile dims of TT Tensor.
 
             .. code-block:: python

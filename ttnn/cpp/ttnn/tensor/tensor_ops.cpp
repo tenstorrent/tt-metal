@@ -328,7 +328,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
     const auto& new_padded_shape = new_shape.padded_shape();
-    const auto& tile = input_tensor.get_tile();
+    const auto tile = input_tensor.get_tensor_spec().tile();
     TT_ASSERT(
         input_tensor.volume() == new_padded_shape.volume(),
         "{} != {}",
@@ -340,7 +340,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
     auto output = std::visit(
-        [&input_tensor, &new_shape](auto&& storage) -> Tensor {
+        [&input_tensor, &new_shape, &tile](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
@@ -348,7 +348,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                 for (int i = 0; i < updated_storage.shapes.size(); i++) {
                     updated_storage.shapes[i] = new_shape;
                 }
-                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
@@ -358,7 +358,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                     new_shapes.insert({device_id, new_shape});
                 }
                 updated_storage.shapes = new_shapes;
-                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
             }
             if constexpr (std::is_same_v<T, DeviceStorage>) {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
@@ -367,7 +367,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                         DeviceBuffer device_buffer = device_storage.get_buffer();
                         device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
                         device_storage.insert_buffer(device_buffer);
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
                     } else {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         DeviceBuffer device_buffer = device_storage.get_buffer();
@@ -389,13 +389,13 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                         device_buffer->set_shard_spec(shard_spec_buffer);
                         device_storage.insert_buffer(device_buffer);
 
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
                     }
                 } else {
-                    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
                 }
             } else {
-                return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
             }
         },
         input_tensor.get_storage());

@@ -126,9 +126,9 @@ Tensor::Tensor(const Storage storage, const TensorSpec& tensor_spec) {
                 TT_ASSERT(storage.buffer->device() != nullptr);
                 workers = {storage.buffer->device()};
                 tensor_impl::validate_on_device_dtype_and_layout(storage.buffer->device(),
-                    tensor_spec.compute_padded_shape(),
-                    tensor_spec.tensor_layout().get_data_type(),
-                    tensor_spec.tensor_layout().get_layout());
+                    tensor_spec.padded_shape(),
+                    tensor_spec.data_type(),
+                    tensor_spec.layout());
                 // Increment main thread ref count for all tensors on device
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
                 // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
@@ -147,9 +147,9 @@ Tensor::Tensor(const Storage storage, const TensorSpec& tensor_spec) {
                     TT_ASSERT(buffer->device() != nullptr);
                     TT_ASSERT(buffer->device()->id() == device_id);
                     tensor_impl::validate_on_device_dtype_and_layout(buffer->device(),
-                        tensor_spec.compute_padded_shape(),
-                        tensor_spec.tensor_layout().get_data_type(),
-                        tensor_spec.tensor_layout().get_layout());
+                        tensor_spec.padded_shape(),
+                        tensor_spec.data_type(),
+                        tensor_spec.layout());
                     workers.push_back(buffer->device());
                 }
                 // Increment main thread ref count for all tensors on cluster
@@ -507,30 +507,40 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 
 // Getters - Spin until tensor is populated before querying tensor metadata
 tt::tt_metal::LegacyShape Tensor::get_legacy_shape() const {
-    this->wait_for_tensor_metadata_populated();
+    wait_for_tensor_metadata_populated();
     return legacy_shape();
 }
 
 ttnn::Shape Tensor::get_shape() const {
-    this->wait_for_tensor_metadata_populated();
+    wait_for_tensor_metadata_populated();
     return shape();
 }
 DataType Tensor::get_dtype() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->dtype();
+    wait_for_tensor_metadata_populated();
+    return dtype();
 }
 Layout Tensor::get_layout() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->layout();
-}
-Tile Tensor::get_tile() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->tile();
+    wait_for_tensor_metadata_populated();
+    return layout();
 }
 
 const TensorSpec& Tensor::get_tensor_spec() const {
-    this->wait_for_tensor_metadata_populated();
-    return this->tensor_spec();
+    wait_for_tensor_metadata_populated();
+    return tensor_spec();
+}
+
+const ttnn::SimpleShape& Tensor::get_logical_shape() const {
+    wait_for_tensor_metadata_populated();
+    return logical_shape();
+}
+
+const ttnn::SimpleShape& Tensor::get_padded_shape() const {
+    wait_for_tensor_metadata_populated();
+    return padded_shape();
+}
+
+tt::tt_metal::Padding Tensor::get_padding() const {
+    return get_legacy_shape().padding();
 }
 
 const Storage& Tensor::get_storage() const {
@@ -674,18 +684,6 @@ uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(
 bool Tensor::is_scalar() const {
     const ttnn::SimpleShape logical_shape = this->get_shape().logical_shape();
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
-}
-
-ttnn::SimpleShape Tensor::get_logical_shape() const {
-    return this->get_shape().logical_shape();
-}
-
-ttnn::SimpleShape Tensor::get_padded_shape() const {
-    return this->get_shape().padded_shape();
-}
-
-tt::tt_metal::Padding Tensor::get_padding() const {
-    return this->get_legacy_shape().padding();
 }
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, Device* device) {
@@ -896,10 +894,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                 device_tensor.storage_type() == StorageType::DEVICE or
                     device_tensor.storage_type() == StorageType::MULTI_DEVICE,
                 "write_tensor only supports host_tensor to device_tensor data transfer");
-            TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape(), "Error");
-            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
-            TT_FATAL(async_safe_tensor.get_layout() == device_tensor.get_layout(), "Error");
-            TT_FATAL(async_safe_tensor.get_tile() == device_tensor.get_tile(), "Error");
+            TT_FATAL(async_safe_tensor.get_tensor_spec() == device_tensor.get_tensor_spec(), "Error");
             std::visit(
                 [worker_index, worker, cq_id, &async_safe_tensor](auto&& s) {
                     void* host_data = nullptr;

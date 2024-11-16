@@ -11,11 +11,17 @@ namespace tt::tt_metal {
 
 class TensorSpec final {
 public:
-    TensorSpec(ttnn::SimpleShape logical_shape, TensorLayout tensor_layout): logical_shape_(std::move(logical_shape)), tensor_layout_(std::move(tensor_layout)) {}
+    TensorSpec(ttnn::SimpleShape logical_shape, TensorLayout tensor_layout):
+        logical_shape_(std::move(logical_shape)),
+        tensor_layout_(std::move(tensor_layout)),
+        cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
+        cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {}
     TensorSpec(TensorSpec&&) noexcept = default;
     TensorSpec& operator=(TensorSpec&&) = default;
     TensorSpec(const TensorSpec&) = default;
     TensorSpec& operator=(const TensorSpec&) = default;
+    bool operator==(const TensorSpec&) const = default;
+    bool operator!=(const TensorSpec&) const = default;
 
     const ttnn::SimpleShape& logical_shape() const {
         return logical_shape_;
@@ -23,11 +29,24 @@ public:
     const TensorLayout& tensor_layout() const {
         return tensor_layout_;
     }
-    ttnn::SimpleShape compute_padded_shape() const {
-        return tensor_layout_.compute_padded_shape(logical_shape_);
+    DataType data_type() const {
+        return tensor_layout_.get_data_type();
     }
-    ttnn::Shape compute_shape() const {
-        return ttnn::Shape(logical_shape_.view(), compute_padded_shape().view());
+    Layout layout() const {
+        return tensor_layout_.get_layout();
+    }
+    const ttnn::SimpleShape& padded_shape() const {
+        return cached_padded_shape_;
+    }
+    const Size& physical_shape() const {
+        return cached_physical_shape_;
+    }
+    ttnn::Shape shape() const {
+        return ttnn::Shape(logical_shape_.view(), cached_padded_shape_.view());
+    }
+
+    Tile tile() const {
+        return tensor_layout_.get_page_config().get_tile();
     }
 
     Strides compute_strides() const {
@@ -42,9 +61,6 @@ public:
     size_t compute_page_size_bytes() const {
         return tensor_layout_.compute_page_size_bytes(logical_shape_);
     }
-    Size compute_physical_shape() const {
-        return tensor_layout_.compute_physical_shape(logical_shape_);
-    }
 
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
     const auto attribute_values() const {
@@ -54,6 +70,9 @@ public:
 private:
     ttnn::SimpleShape logical_shape_;
     TensorLayout tensor_layout_;
+
+    ttnn::SimpleShape cached_padded_shape_;
+    Size cached_physical_shape_;
 };
 
 }

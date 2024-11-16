@@ -558,7 +558,7 @@ Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::op
             // Stalling reads for tensor data-type and layout are needed here
             // since some worker might have raced ahead to these lookups, while
             // another worker is populating this metadata.
-            const Tile tile = tensor.get_tile();
+            const Tile tile = tensor.get_tensor_spec().tile();
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 shard = Tensor{
                     DeviceStorage{s.get_buffer_for_device(target_device)},
@@ -595,12 +595,12 @@ void insert_buffer_and_shape_for_device(
                 s.insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->tensor_spec.compute_shape());
+                    shard.tensor_attributes->tensor_spec.shape());
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->tensor_spec.compute_shape());
+                    shard.tensor_attributes->tensor_spec.shape());
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
@@ -631,7 +631,7 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
                 using BorrowedStorageType = std::vector<std::decay_t<decltype(*(buffer.begin()))>>;
                 auto owned_buf = owned_buffer::create(BorrowedStorageType(buffer.begin(), buffer.end()));
                 owned_tensor =
-                    Tensor(OwnedStorage{owned_buf}, tensor.get_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                    Tensor(OwnedStorage{owned_buf}, tensor.get_tensor_spec());
             },
             borrowed_buffer);
         return owned_tensor;

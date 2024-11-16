@@ -412,17 +412,19 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
                 num_rows;
         } else {
-            this->num_cols = input_tensor.get_legacy_shape()[-1] / input_tensor.get_tile().get_width();
             auto input_shape = input_tensor.get_legacy_shape();
             auto output_shape = output_tensor.get_legacy_shape();
-            uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / output_tensor.get_tile().get_width();
+            auto input_tile = input_tensor.tensor_spec().tile();
+            auto output_tile = output_tensor.tensor_spec().tile();
+            this->num_cols = input_shape[-1] / input_tensor.tensor_spec().tile().get_width();
+            uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / output_tile.get_width();
             this->num_rows =
                 std::accumulate(
                     input_shape.begin() + slice_dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>()) /
-                input_tensor.get_tile().get_height();
+                input_tile.get_height();
             this->row_offset =
                 (std::accumulate(
-                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) / output_tensor.get_tile().get_height() - num_rows) *
+                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) / output_tile.get_height() - num_rows) *
                 num_output_cols;
             this->col_offset = num_output_cols - num_cols;
             this->num_tiles = num_rows * num_cols;
