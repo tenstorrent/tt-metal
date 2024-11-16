@@ -45,7 +45,7 @@ Authors:
 ### 2.3 Norm
 ---
 
-Normalization is a critical operation in Large Language Models (LLMs), ensuring stable training and efficient inference. Two widely adopted normalization techniques widely used in modern LLMs, **LayerNorm** and **RMSNorm**, are fully supported in TT-NN.
+Normalization is a critical operation in Large Language Models (LLMs), ensuring stable training and efficient inference. Two widely adopted normalization techniques in modern LLMs, **LayerNorm** and **RMSNorm**, are fully supported in TT-NN.
 
 #### Implementations of Normalization Operations
 
@@ -54,7 +54,6 @@ TT-NN includes two primary implementations of normalization operations to handle
 1. **Non-Distributed Norm**
 2. **Distributed Norm**
 
----
 
 #### 1. Non-Distributed Norm
 
@@ -104,7 +103,7 @@ ttnn_output = ttnn.rms_norm(ttnn_input, epsilon=1e-5, weight=ttnn_gamma)
 
 **Optimization for Efficient Weight Reads from DRAM**
 
-In above example, weights were traditionally pushed to device in **TILE layout**. But in this case, padding is required to match the TILE_HEIGHT. This padding increased memory footprint and reduced DRAM access efficiency. To address this, weights are now wrapped into **TILE_WIDTH sticks** and converted to **ROW_MAJOR_LAYOUT** without any padding.
+In above example, weights were traditionally pushed to device in **TILE layout**. But in this case, padding is required to match the TILE_HEIGHT. This padding increased memory footprint and reduced DRAM access efficiency. To address this, weights are now wrapped into **TILE_WIDTH** sticks and converted to **ROW_MAJOR_LAYOUT** without requiring any padding.
 
 ```python
 # Optimized Weight Layout for DRAM
@@ -120,7 +119,6 @@ ttnn_gamma_rm = ttnn.as_tensor(
 
 
 
----
 
 #### 2. Distributed Norm
 
@@ -137,7 +135,7 @@ The distributed implementation is designed for cases where activations are **sha
    tt_distributed_stats = ttnn.rms_norm_pre_all_gather(tt_distributed_input_tensor)
    ```
 
-   - **Output**: A `stats` tensor of shape \([1, 1, \text{batch}, \text{TILE_WIDTH} \times \text{num_stats}]\).
+   - **Output**: A `stats` tensor of shape `([1, 1, batch, TILE_WIDTH * num_stats])`.
    - **Note**:
      - `num_stats=1` for RMSNorm.
      - `num_stats=2` for LayerNorm.
@@ -175,7 +173,6 @@ The distributed implementation is designed for cases where activations are **sha
    ```
    - **Output**: A tensor of shape `[1, 1, batch, embedding_dim // num_devices]`.
 
----
 
 #### Key Notes (Valid for Both Implementations):
 
@@ -187,7 +184,7 @@ The distributed implementation is designed for cases where activations are **sha
   For width-sharded inputs, the kernel splits the work across the embedding dimension.
   This design is more **optimal for decode cases**, where the sequence length is typically `seq_len=1`.
 
----
+
 #### References
 - Non-Distributed Norm Op Code [[1]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/layernorm) [[2]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/rmsnorm)
 - Distributed Norm Op Code [[3]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed) [[4]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed)
