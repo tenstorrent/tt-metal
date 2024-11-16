@@ -166,8 +166,8 @@ class Program {
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
-    
-    void dump_circular_buffer_info(std::string opath);
+
+    void dump_circular_buffer_info(std::string opath) const;
 
    private:
     std::unique_ptr<detail::Program_> pimpl_;

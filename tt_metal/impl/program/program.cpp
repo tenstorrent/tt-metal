@@ -1880,9 +1880,9 @@ void v1::UpdateDynamicCircularBufferAddress(
     v0::UpdateDynamicCircularBufferAddress(program, static_cast<v0::CBHandle>(cb_handle), *buffer);
 }
 
-void Program::dump_circular_buffer_info(std::string opath) {
+void Program::dump_circular_buffer_info(std::string opath) const {
     nlohmann::json cb_log;
-    for (const auto& cb : circular_buffers_) {// TODO: may move it to circular buffer (define to_json_t)
+    for (const auto& cb : circular_buffers()) {// TODO: may move it to circular buffer (define to_json_t)
         nlohmann::json cb_info;
         // core range
         // nlohmann::json cb_core_ranges;
@@ -1918,6 +1918,4 @@ void Program::dump_circular_buffer_info(std::string opath) {
     out << summaries << std::endl;
     out.close();
 }
-
-Program::~Program() {}
 }  // namespace tt::tt_metal
