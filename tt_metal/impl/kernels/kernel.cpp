@@ -13,7 +13,7 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/kernel.hpp"
 #include "tt_metal/common/utils.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -500,6 +500,39 @@ std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processo
         default: TT_THROW("Unknown data movement processor");
     }
     return os;
+}
+
+void v1::SetRuntimeArgs(
+    ProgramHandle &program, KernelHandle kernel, const CoreRangeSet &core_spec, RuntimeArgs runtime_args) {
+    if (runtime_args.empty()) {
+        return;
+    }
+
+    const auto kernel_ptr = detail::GetKernel(program, static_cast<tt_metal::KernelHandle>(kernel));
+
+    for (const auto &core_range : core_spec.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
+                kernel_ptr->set_runtime_args(CoreCoord(x, y), runtime_args);
+            }
+        }
+    }
+}
+
+void v1::SetCommonRuntimeArgs(ProgramHandle &program, KernelHandle kernel, RuntimeArgs runtime_args) {
+    if (runtime_args.empty()) {
+        return;
+    }
+
+    const auto kernel_ptr = detail::GetKernel(program, static_cast<tt_metal::KernelHandle>(kernel));
+
+    kernel_ptr->set_common_runtime_args(runtime_args);
+}
+
+v1::RuntimeArgs v1::GetRuntimeArgs(ProgramHandle &program, KernelHandle kernel, CoreCoord logical_core) {
+    const auto kernel_ptr = detail::GetKernel(program, static_cast<tt_metal::KernelHandle>(kernel));
+
+    return kernel_ptr->runtime_args(logical_core);
 }
 
 }  // namespace tt_metal

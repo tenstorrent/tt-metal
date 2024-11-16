@@ -16,8 +16,10 @@
 #include "allocator/allocator.hpp"
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
+#include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
+#include "tt_metal/command_queue.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -3480,6 +3482,40 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         default: TT_THROW("Invalid command type");
     }
     log_trace(LogDispatch, "{} running {} complete", this->name(), command.type);
+}
+
+v1::CommandQueueHandle v1::GetCommandQueue(DeviceHandle device, std::uint8_t cq_id) {
+    return v1::CommandQueueHandle{device, cq_id};
+}
+
+v1::CommandQueueHandle v1::GetDefaultCommandQueue(DeviceHandle device) { return GetCommandQueue(device, 0); }
+
+void v1::EnqueueReadBuffer(CommandQueueHandle cq, BufferHandle buffer, std::byte *dst, bool blocking) {
+    v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
+}
+
+void v1::EnqueueWriteBuffer(CommandQueueHandle cq, BufferHandle buffer, const std::byte *src, bool blocking) {
+    v0::EnqueueWriteBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, src, blocking);
+}
+
+void v1::EnqueueProgram(CommandQueueHandle cq, ProgramHandle &program, bool blocking) {
+    v0::EnqueueProgram(GetDevice(cq)->command_queue(GetId(cq)), program, blocking);
+}
+
+void v1::Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    v0::Finish(GetDevice(cq)->command_queue(GetId(cq)));
+}
+
+void v1::SetLazyCommandQueueMode(bool lazy) {
+    detail::SetLazyCommandQueueMode(lazy);
+}
+
+v1::DeviceHandle v1::GetDevice(CommandQueueHandle cq) {
+    return cq.device;
+}
+
+std::uint8_t v1::GetId(CommandQueueHandle cq) {
+    return cq.id;
 }
 
 }  // namespace tt::tt_metal
