@@ -112,9 +112,6 @@ Tensor::Tensor(Storage storage, const ttnn::Shape& shape, DataType dtype, Layout
 }
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec) {
-    auto storage_memory_config = CMAKE_UNIQUE_NAMESPACE::extract_memory_config(storage);
-    TT_FATAL(storage_memory_config == tensor_spec.tensor_layout().get_memory_config(),
-        "Incompatible memory config {} and {}", storage_memory_config, tensor_spec.tensor_layout().get_memory_config());
     init(std::move(storage), std::move(tensor_spec));
 }
 
