@@ -43,7 +43,6 @@ Authors:
   - Iterative update system
   - When to use our fused op
 ### 2.3 Norm
----
 
 Normalization is a critical operation in Large Language Models (LLMs), ensuring stable training and efficient inference. Two widely adopted normalization techniques in modern LLMs, **LayerNorm** and **RMSNorm**, are fully supported in TT-NN.
 
@@ -135,7 +134,7 @@ The distributed implementation is designed for cases where activations are **sha
    tt_distributed_stats = ttnn.rms_norm_pre_all_gather(tt_distributed_input_tensor)
    ```
 
-   - **Output**: A `stats` tensor of shape `([1, 1, batch, TILE_WIDTH * num_stats])`.
+   - **Output**: A `stats` tensor of shape `[1, 1, batch, TILE_WIDTH * num_stats]`.
    - **Note**:
      - `num_stats=1` for RMSNorm.
      - `num_stats=2` for LayerNorm.
