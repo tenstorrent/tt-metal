@@ -48,21 +48,20 @@ void kernel_main() {
 
     // channel size in bytes, multiple of 32
     const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
-    const uint32_t in_nbytes_c_log2 = get_compile_time_arg_val(5);
 
     // input tensor height / width / channels
-    const int32_t in_w = get_compile_time_arg_val(6);
-    const uint32_t in_cb_nsticks = get_compile_time_arg_val(7);
+    const int32_t in_w = get_compile_time_arg_val(5);
+    const uint32_t in_cb_nsticks = get_compile_time_arg_val(6);
 
-    const uint32_t in_c = get_compile_time_arg_val(8);
+    const uint32_t in_c = get_compile_time_arg_val(7);
 
-    const uint32_t split_reader = get_compile_time_arg_val(10);
-    const uint32_t reader_id = get_compile_time_arg_val(11);
+    const uint32_t split_reader = get_compile_time_arg_val(9);
+    const uint32_t reader_id = get_compile_time_arg_val(10);
 
     // value of 1 in bf16 in a uin32_t
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 

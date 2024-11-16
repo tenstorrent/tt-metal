@@ -20,11 +20,6 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
 
-    // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in reader to generic one.
-    uint32_t in_nbytes_c = (input.get_legacy_shape()[3]) * (input.get_dtype() == DataType::BFLOAT16 ? 2 : 1);
-    bool is_pow2 = (in_nbytes_c & (in_nbytes_c - 1)) == 0;
-    TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
-
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
 
