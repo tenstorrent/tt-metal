@@ -35,6 +35,9 @@ public:
     Layout layout() const {
         return tensor_layout_.get_layout();
     }
+    PageConfig page_config() const {
+        return tensor_layout_.get_page_config();
+    }
     const ttnn::SimpleShape& padded_shape() const {
         return cached_padded_shape_;
     }
