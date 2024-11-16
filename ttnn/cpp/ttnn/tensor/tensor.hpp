@@ -47,8 +47,7 @@ struct Tensor {
         bool deallocated = false;      // Set to true if device side storage was deallocated
         bool dynamic_storage = false;  // Storage type can change, depending on op behaviour
         bool track_ref_count = false;
-        TensorAttributes(const Storage storage, const TensorSpec& tensor_spec);
-        TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile = std::array<uint32_t, 2>{32, 32});
+        TensorAttributes(Storage storage, TensorSpec tensor_spec);
         TensorAttributes();
         ~TensorAttributes() = default;
 
@@ -84,15 +83,11 @@ struct Tensor {
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
-    explicit Tensor() :
-        tensor_id(std::nullopt),
-        tensor_attributes(nullptr),
-        workers(std::vector<Device *>{}),
-        deallocate_through_destructor(false) {}
+    explicit Tensor() = default;
 
-    Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
-    Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
-    Tensor(const Storage storage, const TensorSpec& tensor_spec);
+    Tensor(Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+    Tensor(Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+    Tensor(Storage storage, TensorSpec tensor_spec);
 
     // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
@@ -207,6 +202,7 @@ struct Tensor {
     //                                      Setters
     // ======================================================================================
     inline void set_storage(const Storage &storage) { this->tensor_attributes->storage = storage; }
+    // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
     inline void set_tensor_spec(const TensorSpec& tensor_spec) {
         this->tensor_attributes->tensor_spec = tensor_spec;
         this->tensor_attributes->metadata_populated = true;
@@ -251,8 +247,8 @@ struct Tensor {
         }
     }
 
-    const MemoryConfig memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
-    const std::optional<ShardSpec> shard_spec() const { return this->memory_config().shard_spec; }
+    const MemoryConfig& memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
+    const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec; }
 
     const bool is_sharded() const;
 
@@ -281,6 +277,9 @@ struct Tensor {
         while (not this->tensor_attributes->metadata_populated) {
         }
     }
+
+private:
+    void init(Storage storage, TensorSpec tensor_spec);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, Device *device);
