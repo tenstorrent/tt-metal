@@ -168,7 +168,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     tt_decode_input = pt_decode_input
     decode_input = tt_model.args.prepare_inputs_ttnn_decode(
         tt_decode_input,
-        ttnn.DRAM_MEMORY_CONFIG,
+        tt_model.args.model_config["DEC_SKIP_OUTPUT"],
     )
 
     current_pos = ttnn.from_torch(
