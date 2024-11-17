@@ -8,7 +8,7 @@ import ttnn
 from models.utility_functions import (
     is_wormhole_b0,
 )
-from models.demos.yolov4.tests.yolov4_test_infra import create_test_infra
+from models.demos.yolov4.tests.yolov4_test_infra import create_test_infra_v2 as create_test_infra
 from models.demos.yolov4.demo.demo import YoloLayer
 
 
@@ -296,7 +296,7 @@ class Yolov4Trace2CQ:
         #    signpost(header="start")
 
     def get_region_boxes(self, boxes_and_confs):
-        print("Getting boxes from boxes and confs ...")
+        # print("Getting boxes from boxes and confs ...")
         boxes_list = []
         confs_list = []
 
@@ -322,17 +322,27 @@ class Yolov4Trace2CQ:
         ttnn.record_event(0, self.op_event)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_devices(self.device)
+
+        # Get the bbox and confs directly from the ttnn mode
+        y1, y2, y3 = self.test_infra.output_tensor
+        print("new code")
+
+        # Original post-processing in Torch
+        """
         output = self.test_infra.output_tensor
 
         output_tensor1 = ttnn.to_torch(output[0])
+        output_tensor1 = output_tensor1[:,:,:,:255]
         output_tensor1 = output_tensor1.reshape(1, 40, 40, 255)
         output_tensor1 = torch.permute(output_tensor1, (0, 3, 1, 2))
 
         output_tensor2 = ttnn.to_torch(output[1])
+        output_tensor2 = output_tensor2[:,:,:,:255]
         output_tensor2 = output_tensor2.reshape(1, 20, 20, 255)
         output_tensor2 = torch.permute(output_tensor2, (0, 3, 1, 2))
 
         output_tensor3 = ttnn.to_torch(output[2])
+        output_tensor3 = output_tensor3[:,:,:,:255]
         output_tensor3 = output_tensor3.reshape(1, 10, 10, 255)
         output_tensor3 = torch.permute(output_tensor3, (0, 3, 1, 2))
 
@@ -365,6 +375,14 @@ class Yolov4Trace2CQ:
         y1 = yolo1(output_tensor1)
         y2 = yolo2(output_tensor2)
         y3 = yolo3(output_tensor3)
+
+        # print(y1[0].shape, y1[1].shape)
+        # print(y2[0].shape, y2[1].shape)
+        # print(y3[0].shape, y3[1].shape)
+        # torch.Size([1, 4800, 1, 4]) torch.Size([1, 4800, 80])
+        # torch.Size([1, 1200, 1, 4]) torch.Size([1, 1200, 80])
+        # torch.Size([1, 300, 1, 4]) torch.Size([1, 300, 80])
+        """
 
         output = self.get_region_boxes([y1, y2, y3])
 

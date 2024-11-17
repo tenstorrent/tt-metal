@@ -21,6 +21,7 @@ from models.demos.yolov4.ttnn.downsample4 import Down4
 from models.demos.yolov4.ttnn.downsample5 import Down5
 from models.demos.yolov4.ttnn.neck import TtNeck
 from models.demos.yolov4.ttnn.head import TtHead
+from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 
 
 class TtYOLOv4:
@@ -39,6 +40,10 @@ class TtYOLOv4:
         self.neck = TtNeck(self)
         self.head = TtHead(self)
 
+        self.boxes_confs_0 = TtGenBoxes()
+        self.boxes_confs_1 = TtGenBoxes()
+        self.boxes_confs_2 = TtGenBoxes()
+
         self.downs = []  # [self.down1]
 
     def __call__(self, device, input_tensor):
@@ -52,7 +57,15 @@ class TtYOLOv4:
         x20, x13, x6 = self.neck(device, [d5, d4, d3])
         x4, x5, x6 = self.head(device, [x20, x13, x6])
 
-        return x4, x5, x6
+        orig = 0
+        if orig:
+            return x4, x5, x6
+        else:
+            x4_boxes_confs = self.boxes_confs_0(device, x4)
+            x5_boxes_confs = self.boxes_confs_1(device, x5)
+            x6_boxes_confs = self.boxes_confs_2(device, x6)
+
+            return x4_boxes_confs, x5_boxes_confs, x6_boxes_confs
 
     def __str__(self) -> str:
         this_str = ""
