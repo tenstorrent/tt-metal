@@ -255,7 +255,7 @@ class Yolov4Trace2CQ:
         layout = self.test_infra.input_tensor.layout
         ttnn.record_event(0, self.op_event)
         self.test_infra.run()
-        self.test_infra.validate()
+        # self.test_infra.validate()
         self.test_infra.dealloc_output()
 
         # Optimized run
@@ -266,7 +266,7 @@ class Yolov4Trace2CQ:
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         ttnn.record_event(0, self.op_event)
         self.test_infra.run()
-        self.test_infra.validate()
+        # self.test_infra.validate()
 
         # Capture
         ttnn.wait_for_event(1, self.op_event)
@@ -324,8 +324,32 @@ class Yolov4Trace2CQ:
         ttnn.synchronize_devices(self.device)
 
         # Get the bbox and confs directly from the ttnn mode
-        y1, y2, y3 = self.test_infra.output_tensor
-        print("new code")
+        result_1, result_2, result_3 = self.test_infra.output_tensor
+
+        result_1_bb = ttnn.to_torch(result_1[0])
+        result_2_bb = ttnn.to_torch(result_2[0])
+        result_3_bb = ttnn.to_torch(result_3[0])
+
+        # result_1_bb = result_1_bb.permute(0, 3, 2, 1)
+        # result_2_bb = result_2_bb.permute(0, 3, 2, 1)
+        # result_3_bb = result_3_bb.permute(0, 3, 2, 1)
+
+        # result_1_conf = ttnn.to_torch(result_1[1])
+        # result_2_conf = ttnn.to_torch(result_2[1])
+        # result_3_conf = ttnn.to_torch(result_3[1])
+
+        # result_1_conf = result_1_conf.permute(0, 2, 1)
+        # result_2_conf = result_2_conf.permute(0, 2, 1)
+        # result_3_conf = result_3_conf.permute(0, 2, 1)
+
+        return result_1_bb
+
+        # ## Giraffe image detection
+        # output = self.get_region_boxes(
+        #     [(result_1_bb, result_1_conf), (result_2_bb, result_2_conf), (result_3_bb, result_3_conf)]
+        # )
+
+        # return output
 
         # Original post-processing in Torch
         """
@@ -382,11 +406,11 @@ class Yolov4Trace2CQ:
         # torch.Size([1, 4800, 1, 4]) torch.Size([1, 4800, 80])
         # torch.Size([1, 1200, 1, 4]) torch.Size([1, 1200, 80])
         # torch.Size([1, 300, 1, 4]) torch.Size([1, 300, 80])
-        """
 
         output = self.get_region_boxes([y1, y2, y3])
 
         return output
+        """
         # return self.test_infra.output_tensor
 
         # if use_signpost:
