@@ -8,6 +8,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 from models.demos.yolov4.demo.demo import YoloLayer
+from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, post_processing, plot_boxes_cv2, load_class_names
 
 import pytest
 import os
@@ -71,9 +72,9 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator):
     ref2 = yolo2(torch_input_2)
     ref3 = yolo3(torch_input_3)
 
-    boxes_confs_1 = TtGenBoxes()
-    boxes_confs_2 = TtGenBoxes()
-    boxes_confs_3 = TtGenBoxes()
+    boxes_confs_1 = TtGenBoxes(device)
+    boxes_confs_2 = TtGenBoxes(device)
+    boxes_confs_3 = TtGenBoxes(device)
 
     result_1 = boxes_confs_1(device, ttnn_input_1)
     result_2 = boxes_confs_2(device, ttnn_input_2)
@@ -117,3 +118,7 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator):
     assert_with_pcc(ref1[1], result_1_conf, 0.99)
     assert_with_pcc(ref2[1], result_2_conf, 0.99)
     assert_with_pcc(ref3[1], result_3_conf, 0.99)
+
+    output = get_region_boxes(
+        [(result_1_bb, result_1_conf), (result_2_bb, result_2_conf), (result_3_bb, result_3_conf)]
+    )

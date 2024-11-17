@@ -23,7 +23,7 @@ def create_conv_bias_tensor(torch_tensor, N, K, pad=0):
 
 
 class TtGenBoxes:
-    def __init__(self) -> None:
+    def __init__(self, device) -> None:
         self.thresh = 0.6
         self.num_classes = 80
         self.num_anchors = 3
@@ -31,24 +31,35 @@ class TtGenBoxes:
         self.grid_x = []
         self.grid_y = []
         for H in (40, 20, 10):
-            grid_x_i = torch.flatten(
-                torch.from_numpy(
-                    np.expand_dims(
-                        np.expand_dims(np.expand_dims(np.linspace(0, H - 1, H), axis=0).repeat(H, 0), axis=0),
-                        axis=0,
+            grid_x_i = torch.reshape(
+                torch.flatten(
+                    torch.from_numpy(
+                        np.expand_dims(
+                            np.expand_dims(np.expand_dims(np.linspace(0, H - 1, H), axis=0).repeat(H, 0), axis=0),
+                            axis=0,
+                        )
                     )
-                )
+                ),
+                (1, 1, 1, H * H),
             )
-            grid_y_i = torch.flatten(
-                torch.from_numpy(
-                    np.expand_dims(
-                        np.expand_dims(np.expand_dims(np.linspace(0, H - 1, H), axis=1).repeat(H, 1), axis=0),
-                        axis=0,
+
+            grid_y_i = torch.reshape(
+                torch.flatten(
+                    torch.from_numpy(
+                        np.expand_dims(
+                            np.expand_dims(np.expand_dims(np.linspace(0, H - 1, H), axis=1).repeat(H, 1), axis=0),
+                            axis=0,
+                        )
                     )
-                )
+                ),
+                (1, 1, 1, H * H),
             )
-            self.grid_x.append(ttnn.from_torch(grid_x_i, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))  # , 1, H*H))
-            self.grid_y.append(ttnn.from_torch(grid_y_i, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))  # , 1, H*H))
+            self.grid_x.append(
+                ttnn.from_torch(grid_x_i, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            )  # , 1, H*H))
+            self.grid_y.append(
+                ttnn.from_torch(grid_y_i, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            )  # , 1, H*H))
 
     def __call__(self, device, input_tensor):
         B, __, HW, dim = input_tensor.shape
@@ -193,8 +204,8 @@ class TtGenBoxes:
         """
         ####
 
-        grid_x = self.grid_x[group].to(device, mem_config=ttnn.L1_MEMORY_CONFIG)
-        grid_y = self.grid_y[group].to(device, mem_config=ttnn.L1_MEMORY_CONFIG)
+        grid_x = self.grid_x[group]  # .to(device, mem_config=ttnn.L1_MEMORY_CONFIG)
+        grid_y = self.grid_y[group]  # .to(device, mem_config=ttnn.L1_MEMORY_CONFIG)
 
         # print(bx_a.shape, grid_x.shape)
 

@@ -25,7 +25,7 @@ from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 
 
 class TtYOLOv4:
-    def __init__(self, path) -> None:
+    def __init__(self, path, device) -> None:
         if type(path) is str:
             self.torch_model = torch.load(path)
         else:
@@ -40,9 +40,9 @@ class TtYOLOv4:
         self.neck = TtNeck(self)
         self.head = TtHead(self)
 
-        self.boxes_confs_0 = TtGenBoxes()
-        self.boxes_confs_1 = TtGenBoxes()
-        self.boxes_confs_2 = TtGenBoxes()
+        self.boxes_confs_0 = TtGenBoxes(device)
+        self.boxes_confs_1 = TtGenBoxes(device)
+        self.boxes_confs_2 = TtGenBoxes(device)
 
         self.downs = []  # [self.down1]
 
@@ -65,7 +65,33 @@ class TtYOLOv4:
             x5_boxes_confs = self.boxes_confs_1(device, x5)
             x6_boxes_confs = self.boxes_confs_2(device, x6)
 
-            return x4_boxes_confs, x5_boxes_confs, x6_boxes_confs
+            # print(x4_boxes_confs[1].shape, x5_boxes_confs[1].shape, x6_boxes_confs[1].shape)
+            # confs = ttnn.concat([x4_boxes_confs[1], x5_boxes_confs[1], x6_boxes_confs[1]], dim=1)
+            confs_1 = ttnn.to_layout(x4_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
+            confs_2 = ttnn.to_layout(x5_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
+            confs_3 = ttnn.to_layout(x6_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
+            confs = ttnn.concat([confs_1, confs_2, confs_3], dim=1)
+            # print(confs.shape)
+
+            # print(x4_boxes_confs[0].shape, x5_boxes_confs[0].shape, x6_boxes_confs[0].shape)
+            boxes_1 = ttnn.to_layout(x4_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
+            boxes_2 = ttnn.to_layout(x5_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
+            boxes_3 = ttnn.to_layout(x6_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
+            boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
+            boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
+            boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
+            # print(boxes_1.shape, boxes_2.shape, boxes_3.shape)
+            boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
+            # print(boxes_1.shape, boxes_2.shape, boxes_3.shape)
+            boxes_1 = ttnn.permute(boxes_1, (0, 2, 3, 1))
+            boxes_2 = ttnn.permute(boxes_2, (0, 2, 3, 1))
+            boxes_3 = ttnn.permute(boxes_3, (0, 2, 3, 1))
+            # print(boxes_1.shape, boxes_2.shape, boxes_3.shape)
+            boxes = ttnn.concat([boxes_1, boxes_2, boxes_3], dim=2)
+            # print(boxes.shape)
+
+            # return x4_boxes_confs, x5_boxes_confs, x6_boxes_confs
+            return boxes, confs
 
     def __str__(self) -> str:
         this_str = ""

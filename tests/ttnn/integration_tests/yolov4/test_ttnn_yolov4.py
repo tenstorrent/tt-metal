@@ -66,7 +66,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    ttnn_model = TtYOLOv4(weights_pth)
+    ttnn_model = TtYOLOv4(weights_pth, device)
 
     imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
     width = 320
@@ -98,8 +98,28 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     torch_model.eval()
 
     torch_output_tensor = torch_model(torch_input)
-    ref1, ref2, ref3 = gen_yolov4_boxes_confs(torch_output_tensor)
 
+    ref1, ref2, ref3 = gen_yolov4_boxes_confs(torch_output_tensor)
+    ref_boxes, ref_confs = get_region_boxes([ref1, ref2, ref3])
+
+    ttnn_output_tensor = ttnn_model(device, ttnn_input)
+    result_boxes_padded = ttnn.to_torch(ttnn_output_tensor[0])
+    result_confs = ttnn.to_torch(ttnn_output_tensor[1])
+
+    result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
+    result_boxes_list = []
+    result_boxes_list.append(result_boxes_padded[:, 0:6100])
+    result_boxes_list.append(result_boxes_padded[:, 6128:6228])
+    result_boxes_list.append(result_boxes_padded[:, 6256:6356])
+    result_boxes = torch.cat(result_boxes_list, dim=1)
+
+    print(ref_boxes.shape, ref_confs.shape)
+    print(result_boxes.shape, result_confs.shape)
+
+    assert_with_pcc(ref_boxes, result_boxes, 0.99)
+    assert_with_pcc(ref_confs, result_confs, 0.71)
+
+    """
     ttnn_output_tensor = ttnn_model(device, ttnn_input)
     result_1 = ttnn_output_tensor[0]
     result_2 = ttnn_output_tensor[1]
@@ -109,9 +129,13 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     result_2_bb = ttnn.to_torch(result_2[0])
     result_3_bb = ttnn.to_torch(result_3[0])
 
-    result_1_bb = result_1_bb.permute(0, 3, 2, 1)
-    result_2_bb = result_2_bb.permute(0, 3, 2, 1)
-    result_3_bb = result_3_bb.permute(0, 3, 2, 1)
+    result_1_bb = result_1_bb.permute(0, 2, 3, 1)
+    result_2_bb = result_2_bb.permute(0, 2, 3, 1)
+    result_3_bb = result_3_bb.permute(0, 2, 3, 1)
+
+    result_1_bb = result_1_bb.reshape(1, 4800, 1, 4)
+    result_2_bb = result_2_bb.reshape(1, 1200, 1, 4)
+    result_3_bb = result_3_bb.reshape(1, 300, 1, 4)
 
     result_1_conf = ttnn.to_torch(result_1[1])
     result_2_conf = ttnn.to_torch(result_2[1])
@@ -129,14 +153,16 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     # assert_with_pcc(ref2[1], result_2_conf, 0.99)
     # assert_with_pcc(ref3[1], result_3_conf, 0.99)
 
-    ## Giraffe image detection
     output = get_region_boxes(
         [(result_1_bb, result_1_conf), (result_2_bb, result_2_conf), (result_3_bb, result_3_conf)]
     )
+    """
+
+    ## Giraffe image detection
     conf_thresh = 0.3
     nms_thresh = 0.4
-    output = [output[0].to(torch.float16), output[1].to(torch.float16)]
-    print(output)
+    output = [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
+
     boxes = post_processing(img, conf_thresh, nms_thresh, output)
     namesfile = "models/demos/yolov4/demo/coco.names"
     class_names = load_class_names(namesfile)

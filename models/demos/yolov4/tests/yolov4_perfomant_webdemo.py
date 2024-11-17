@@ -8,7 +8,7 @@ import ttnn
 from models.utility_functions import (
     is_wormhole_b0,
 )
-from models.demos.yolov4.tests.yolov4_test_infra import create_test_infra_v2 as create_test_infra
+from models.demos.yolov4.tests.yolov4_test_infra import create_test_infra
 from models.demos.yolov4.demo.demo import YoloLayer
 
 
@@ -255,7 +255,7 @@ class Yolov4Trace2CQ:
         layout = self.test_infra.input_tensor.layout
         ttnn.record_event(0, self.op_event)
         self.test_infra.run()
-        # self.test_infra.validate()
+        self.test_infra.validate()
         self.test_infra.dealloc_output()
 
         # Optimized run
@@ -266,7 +266,7 @@ class Yolov4Trace2CQ:
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         ttnn.record_event(0, self.op_event)
         self.test_infra.run()
-        # self.test_infra.validate()
+        self.test_infra.validate()
 
         # Capture
         ttnn.wait_for_event(1, self.op_event)
@@ -323,12 +323,28 @@ class Yolov4Trace2CQ:
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_devices(self.device)
 
+        ttnn_output_tensor = self.test_infra.output_tensor
+
+        result_boxes_padded = ttnn.to_torch(ttnn_output_tensor[0])
+        result_confs = ttnn.to_torch(ttnn_output_tensor[1])
+
+        result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
+        result_boxes_list = []
+        result_boxes_list.append(result_boxes_padded[:, 0:6100])
+        result_boxes_list.append(result_boxes_padded[:, 6128:6228])
+        result_boxes_list.append(result_boxes_padded[:, 6256:6356])
+        result_boxes = torch.cat(result_boxes_list, dim=1)
+
+        return [result_boxes, result_confs]
+
         # Get the bbox and confs directly from the ttnn mode
+        """
         result_1, result_2, result_3 = self.test_infra.output_tensor
 
         result_1_bb = ttnn.to_torch(result_1[0])
         result_2_bb = ttnn.to_torch(result_2[0])
         result_3_bb = ttnn.to_torch(result_3[0])
+        """
 
         # result_1_bb = result_1_bb.permute(0, 3, 2, 1)
         # result_2_bb = result_2_bb.permute(0, 3, 2, 1)
@@ -342,7 +358,7 @@ class Yolov4Trace2CQ:
         # result_2_conf = result_2_conf.permute(0, 2, 1)
         # result_3_conf = result_3_conf.permute(0, 2, 1)
 
-        return result_1_bb
+        # return result_1_bb
 
         # ## Giraffe image detection
         # output = self.get_region_boxes(
