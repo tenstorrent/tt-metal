@@ -136,14 +136,20 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto compited_output_shape = compute_output_shapes(args, tensor_args);
-        const auto preallocated_output_shape = preallocated_output_tensor->get_shape();
+        const auto computed_output_shape = compute_output_shapes(args, tensor_args);
+        const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
         TT_FATAL(
-            preallocated_output_shape == compited_output_shape,
+            preallocated_output_shape == computed_output_shape,
             "When preallocted output tensor is used, Unary operation requires its shape to match the computed "
             "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            compited_output_shape,
+            computed_output_shape,
             preallocated_output_shape);
+
+        if(!input_tensor.is_sharded()){
+            TT_FATAL(
+                (preallocated_output_tensor.value().get_layout() == Layout::TILE),
+                "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
+        }
     }
 }
 
