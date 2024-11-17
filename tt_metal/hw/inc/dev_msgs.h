@@ -10,9 +10,49 @@
 
 #pragma once
 
-#include "core_config.h"
+#include <cstdint>
+
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+
+enum ProgrammableCoreType {
+    TENSIX     = 0,
+    ACTIVE_ETH = 1,
+    IDLE_ETH   = 2,
+    COUNT      = 3,
+};
+
+enum class AddressableCoreType : std::uint8_t {
+    TENSIX    = 0,
+    ETH       = 1,
+    PCIE      = 2,
+    DRAM      = 3,
+    HARVESTED = 4,
+    UNKNOWN   = 5,
+    COUNT     = 6,
+};
+
+enum class TensixProcessorTypes : uint8_t {
+    DM0    = 0,
+    DM1    = 1,
+    MATH0  = 2,
+    MATH1  = 3,
+    MATH2  = 4,
+    COUNT  = 5
+};
+
+enum class EthProcessorTypes : uint8_t {
+    DM0    = 0,
+    DM1    = 1,
+    COUNT  = 2
+};
+
+enum class DramProcessorTypes : uint8_t {
+    DM0     = 0,
+    COUNT   = 1
+};
+
+constexpr std::uint8_t MaxProcessorsPerCoreType = 5;
 
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -21,6 +61,7 @@
 // We don't want to pollute host code with those
 // Including them here within the guard to make FW/KERNEL happy
 // The right thing to do, would be "include what you use" in the other header files
+#include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
 

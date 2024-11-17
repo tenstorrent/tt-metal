@@ -10,8 +10,6 @@
 
 #pragma once
 
-#include "core_config.h"
-
 // DataFormat comes from tt_backend_api_types.hpp for SW, and tensix_types.h for HW...
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
@@ -24,6 +22,7 @@ typedef DataFormat CommonDataFormat;
 
 
 #include <cstddef>
+#include <cstdint>
 
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
 // TODO: when device specific headers specify number of processors
