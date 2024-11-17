@@ -151,7 +151,7 @@ jobs:
           cat build/ccache.stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
       - name: 'Tar files'
-        run: tar -cvhf ttm_${{ matrix.arch }}.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train runtime
+        run: tar -cvhf ttm_${{ matrix.arch }}.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train build/data runtime
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
