@@ -84,7 +84,7 @@ class TtLlamaMLP(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_1,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=x.memory_config(),
         )
 
         w3_out = ttnn.linear(
@@ -96,16 +96,16 @@ class TtLlamaMLP(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=x.memory_config(),
         )
 
         ttnn.deallocate(x)
         w2_in = ttnn.multiply(
             w1_out,
             w3_out,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat8_b,
+            memory_config=w1_out.memory_config(),
         )
         if mode == "decode":
             # w2 may use a different core grid, this is a no-op if they already match
@@ -114,14 +114,6 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
 
-        # This uses HiFi2 for full precision as it is dram-bound and uses bfp8 inputs
-        if mode == "prefill":
-            w2_out_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        elif self.args.is_multichip:
-            w2_out_mem_cfg = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG  # input to reduce_scatter
-        else:
-            w2_out_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]  # direct to residual
-
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
@@ -129,15 +121,10 @@ class TtLlamaMLP(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_2,
-            memory_config=w2_out_mem_cfg,
+            memory_config=w2_in.memory_config(),
         )
 
         ttnn.deallocate(w2_in)
-
-        # if mode == "decode":
-        #     w2_out = ttnn.sharded_to_interleaved(
-        #         w2_out, ttnn.L1_MEMORY_CONFIG
-        #     )  # FIXME: When h is L1 interleaved in decoder, this call corrupts it!
 
         if seq_len >= 1024:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
@@ -149,11 +136,14 @@ class TtLlamaMLP(LightweightModule):
                 scatter_dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
-                memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
-                if mode == "decode"
-                else ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=w2_out.memory_config(),
             )
             ttnn.deallocate(w2_out)
-            return w2_out_reduced
+            result = w2_out_reduced
         else:
-            return w2_out
+            result = w2_out
+
+        # reshard to residual, no-op if already correct
+        if mode == "decode":
+            result = ttnn.to_memory_config(result, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
+        return result

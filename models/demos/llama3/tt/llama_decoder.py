@@ -97,6 +97,9 @@ class TtTransformerBlock(LightweightModule):
             if mode == "decode"
             else ttnn.DRAM_MEMORY_CONFIG
         )
+        assert (
+            x.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs
@@ -111,8 +114,7 @@ class TtTransformerBlock(LightweightModule):
         )
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
-        # TODO: This deallocate may cause ND output. The reason seems to be related to either the input being on DRAM/L1 and the sharded spec in MLP using 32 cores instead of 16.
-        # ttnn.deallocate(attn_out)
+        ttnn.deallocate(attn_out)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode)
@@ -120,5 +122,4 @@ class TtTransformerBlock(LightweightModule):
         ff_out = self.feed_forward.forward(ff_in, mode)
         # ff_out and h are both fractured across devices
         out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
-
         return out  # fractured across devices

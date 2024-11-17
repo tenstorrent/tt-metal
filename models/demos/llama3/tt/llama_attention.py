@@ -240,7 +240,7 @@ class TtLlamaAttention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
 
         ttnn.deallocate(xqkv_fused)
@@ -310,7 +310,7 @@ class TtLlamaAttention(LightweightModule):
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
         ttnn.deallocate(q_heads_1BQD)
@@ -326,31 +326,29 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_1G4D)
 
         if self.is_multichip and self.use_fused_all_gather_matmul:
+            attn_output_cat = ttnn.to_memory_config(
+                attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
+            )
             _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
                 attn_output_cat,
                 self.wo,
                 dim=3,
                 all_gather_core_grid_offset=(0, 4),
                 num_links=1,
-                program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"],
+                program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 memory_config_mm=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
             )
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
         else:
+            # program config matched to output of nlp_concat_heads_decode
             dense_out_sharded = ttnn.linear(
                 attn_output_cat,
                 self.wo,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
-                memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
+                memory_config=attn_output_cat.memory_config(),
             )  # seqlen, 1, batch, hidden_size
-            if not self.is_multichip:
-                # FIXME: this should not be necessary but is for 3B/N150 - linear ignores output shard spec
-                dense_out_sharded = ttnn.to_memory_config(
-                    dense_out_sharded, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
-                )
 
         ttnn.deallocate(attn_output_cat)
 
@@ -361,11 +359,14 @@ class TtLlamaAttention(LightweightModule):
                 scatter_dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
-                memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
+                memory_config=self.model_config[
+                    "DEC_SKIP_OUTPUT_MEMCFG"
+                ],  # Unlike matmuls, CCL ops can reshard to any valid output sharding for free
             )
             ttnn.deallocate(dense_out_sharded)
             return dense_out_reduced
         else:
+            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
             return dense_out_sharded
 
     def forward_prefill(self, x_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):
