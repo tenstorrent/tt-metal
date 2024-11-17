@@ -2517,6 +2517,8 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
     tt_w1 = as_sharded_tensor(w1.t(), ttnn.bfloat8_b, dim=-1, mem_config=w1_w3_mem_config)
     tt_w2 = as_sharded_tensor(w2.t(), ttnn.bfloat8_b, dim=-2, mem_config=w2_mem_config)
     ## MLP takes replicated inputs and produces fractured outputs
+    logger.info(f"tt_input shape: {tt_input.shape}")
+    logger.info(f"tt_input memory config: {tt_input.memory_config()}")
     w1_out = ttnn.linear(
         tt_input,
         tt_w1,
@@ -2536,6 +2538,8 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
         program_config=pc_2,
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
     )
+    logger.info(f"w2_out shape: {w2_out.shape}")
+    logger.info(f"w2_out memory config: {w2_out.memory_config()}")
     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.L1_MEMORY_CONFIG)
     tt_input = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
 

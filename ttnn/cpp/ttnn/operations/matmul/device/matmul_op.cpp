@@ -1182,6 +1182,7 @@ void Matmul::validate(
 
                 // No padding
                 TT_FATAL(M == per_core_M, "Error");
+                TT_FATAL(M == in0_tile_shape[0], "currently only support in0 tensor height of tile height");
                 TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
                 TT_FATAL(K % program_config.in0_block_w == 0, "Error");
                 TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
@@ -1423,7 +1424,6 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     auto grid_size = CoreCoord{end_core.x + 1, end_core.y + 1};
                     CoreRangeSet all_cores =
                         num_cores_to_corerangeset(num_cores, grid_size, true);
-                    tt::log_info("all_cores: {}", all_cores);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
