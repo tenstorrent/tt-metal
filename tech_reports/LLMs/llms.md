@@ -538,8 +538,10 @@ The MLP for the Llama models is implemented in the the `TtLlamaMLP` module class
 
 As an overview, the MLP performs the following operations on an input `x`:
 ```
-x = SiLU(FF1(x)) * FF3(x)
-x = FF2(x)
+w1_out = FF1(x)
+w3_out = FF3(x)
+w2_in = SiLU(w1_out) * w3_out
+y = FF2(w2_in)
 ```
 where FF1, FF2, and FF3 are linear transformations (matmuls) with weights `w1`, `w2`, and `w3` respectively. Since FF1 and FF3 share the same inputs, their optimizations are shared as well.
 
@@ -547,7 +549,7 @@ where FF1, FF2, and FF3 are linear transformations (matmuls) with weights `w1`, 
 Let's dive into our implementation of MLP, and discuss what makes it performant across different WH systems.
 
 #### 0. Setup
-When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialzed at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in section 3.3 Multi-Device. Let's assume that for this example, our weights are 1D fractured.
+When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialzed at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in section 3.3 Multi-Device. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
 
 ```py
 self.feed_forward = TtLlamaMLP(
@@ -562,7 +564,7 @@ self.feed_forward = TtLlamaMLP(
 ```
 
 #### 1. Inputs
-Then, at runtime, the `forward` function of `TtLlamaMLP` is called with a mode (*'prefill'* or *'decode'*), with inputs that are replicated across devices. Note, in the actual model, the input `ff_in` is the output of the `norm` step prior to MLP (See norm section below).
+Then, at runtime, the `forward` function of `TtLlamaMLP` is called with a mode (*'prefill'* or *'decode'*), with inputs that are replicated across devices, for all WH system configurations. Note, in the actual model, the input `ff_in` is the output of the `norm` step prior to MLP (See norm section below).
 
 **Decode mode**
 
@@ -661,7 +663,7 @@ def matmul_config(
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=fuse_batch,
-        )
+    )
 
 
 _, _, m, k = ff_in.shape
@@ -678,7 +680,12 @@ pc1 = matmul_config(
 
 
 #### 3. FF1/FF3 matmul
-Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the ouputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to ensure that the model retains it's accuracy. We also enable `packer_l1_acc`, which...
+The first set of operations in the MLP are:
+```py
+w1_out = FF1(x)
+w3_out = FF3(x)
+```
+Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the ouputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performance. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
 
 ```py
 compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -707,39 +714,103 @@ w3_out = ttnn.linear(
     program_config=pc_1,
     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
 )
-
-
 ```
-*Note: In the case of n300 and T3000 systems, FF1 and FF2 are implemented as 1D fractured matmuls. However, in the case of TG systems, where have have access to a 2D device mesh, 2D weight fracturing leads to better performance.*
+
+#### 3.1 FF1/FF3 Matmul with 2D Weight Fracturing
+
+In the case of TG systems, where have have access to a 2D device mesh, we can leverage 2D weight fracturing. For a weight tensor with shape `[1, 1, K, N]`, using 2D weight fracturing on a `(8, 4)` device mesh, the resulting shape on each device would be: `[1, 1, K / 4, N / 8]`. In other words, the inner dimension (K) of the matmul is spread out across 4 devices, and to complete the entire matmul operation, a reduction step across the partials is necessary. We do this using an all-reduce operation along the 4 devices in `cluster_axis=1` of the device mesh.
 ```py
-#TODO: Add code for the all reduce that takes place for TG MLP
+  w1_out = tt_all_reduce(
+      w1_out,
+      self.mesh_device,
+      cluster_axis=1,
+      num_links=2,
+      sharded=True if mode == "decode" else False,
+      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+  )
+  w3_out = tt_all_reduce(
+      w3_out,
+      self.mesh_device,
+      cluster_axis=1,
+      num_links=2,
+      sharded=True if mode == "decode" else False,
+      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+  )
 ```
 
 #### 4. Multiply + fused SiLU activation
 
-- Talk about how fused activation is helpful
+The output of the FF1/FF3 matmuls are column fractured tensors (the extra all-reduce operation for TG systems ensures this). The next operation is:
+```py
+w2_in = SiLU(w1_out) * w3_out
+```
+In ttnn, we have access to binary operations that can apply activations to any of the inputs, in a fused manner, leading to better performance as the inputs are only getting loaded/processed once. As such, the fused SiLU operation with the element-wise multiplication can be performed as follows:
+```py
+w2_in = ttnn.multiply(
+    w1_out,
+    w3_out,
+    memory_config=(
+        self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] if TG else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+    if mode == "decode"
+    else ttnn.DRAM_MEMORY_CONFIG,
+    input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+    dtype=ttnn.bfloat8_b,
+)
+```
+
+Following our pattern mentioned before, the outputs are L1 sharded in `decode` mode and DRAM interleaved in `prefill` mode.
 
 #### 5. FF2 Matmul
+The last computation in MLP is:
+```py
+y = FF2(w2_in)
+```
+FF2 is a row-parallel matmul, meaning that that the weights are fractured across devices in the inner dim. The inputs of FF2, produced by FF1/FF3, are also fractured across devices in the same dimension and as a result, FF2 produces partial outputs across all devices.
 
-- Give code for ff2 matmul
-- Talk about the potential reshard that's needed before this matmul for decode mode, to make sure that matmul is as efficient as possible
+Here's what the call for the FF2 matmul looks like. Note, that once the matmul operations are completed, we can undo the reshape operation we performed on the inputs of MLP to fit the matmuls on device in `prefill`.
+```py
+w2_out = ttnn.linear(
+    w2_in,
+    self.w2,
+    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+    core_grid=ttnn.CoreGrid(y=1, x=8) if not pc_2 else None,
+    dtype=ttnn.bfloat16,
+    program_config=pc_2,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+)
 
-#### 6. Output from MLP
+# Undo the reshape operation used to fit the matmul on device
+if seq_len >= 1024:  # Reshape back to intended shape
+    w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
+```
 
-- In prefill, undo the workaround for seq_len
-- Talk about the All reduce that needs to happen, but we only do a reduce scatter and the all gather part is pushed into the norm
+5.1 Accumulating the partial outputs of FF2
 
+Since the output of FF2 is the correct shape, but only a partial on each device. The output of the MLP module is required to be fractured, where each device has fully accumulated the inner dim of the matmul, but only has a fraction of the outer dim. There are two different cases to handle this, depending on if the WH system has a 1D or 2D device mesh.
 
-
-
-
-
-
-
-
-
-
-
+1. 1D Device Mesh (n300, T3000): reduce-scatter operation across all devices, resulting in outputs fractued in the outer dim.
+    ```py
+    w2_out_reduced = ttnn.reduce_scatter(
+        w2_out,
+        scatter_dim=3,
+        math_op=ttnn.ReduceType.Sum,
+        num_links=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
+    )
+    ```
+2. 2D Device Mesh (TG): all-reduce operation along the same cluster axis as which the inner dimension is fractured on. The FF2 matmul inner dim is fractured across cluster axis 0 (row-parallel across 8 device), and the outer dim is fractured across cluster axis 1 (4 devices). Then an all-reduce performed on cluster axis 0 will accumulate the partials across the inner dim of the matmul and replicate them along all the devices in that axis, while still keeping them fractured across cluster axis 1 (4 devices).
+    ```py
+    w2_out_reduced = tt_all_reduce(
+        w2_out,
+        self.mesh_device,
+        cluster_axis=0,
+        num_links=2,
+        dim=0,
+        memory_config=(self.model_config["FF2_OUT_GATHERED_MEMCFG"],
+        sharded=(mode == "decode"),
+    )
+    ```
 
 ### 2.6 Decoder
 <div align="center">
