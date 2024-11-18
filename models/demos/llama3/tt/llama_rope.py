@@ -19,6 +19,7 @@ class TtLlamaRotarySetup(LightweightModule):
     def __init__(
         self,
         device,
+        batch_size: int,
         head_dim: int,
         max_seq_len: int,
         rope_theta: float = 10000,
@@ -58,13 +59,22 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
+        batch_grid = (
+            ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True).bounding_box().grid_size()
+        )
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
-            1, 1, num_cores, 1
+            1,
+            1,
+            batch_size,
+            1
+            # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, 1, ttnn.TILE_SIZE * num_cores, ttnn.TILE_SIZE),
-            core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+            shape=(1, 1, ttnn.TILE_SIZE * batch_size, ttnn.TILE_SIZE),
+            # shape=(1, 1, ttnn.TILE_SIZE * num_cores, ttnn.TILE_SIZE),
+            # core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+            core_grid=ttnn.CoreGrid(y=batch_grid.y, x=batch_grid.x),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
@@ -81,7 +91,7 @@ class TtLlamaRotarySetup(LightweightModule):
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
         return self.transformation_mat
 
-    def get_rot_idxs(self, position_idxs):
+    def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
 
         batch = position_idxs.shape[0]
@@ -89,12 +99,22 @@ class TtLlamaRotarySetup(LightweightModule):
         assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
-        rot_idxs = ttnn.as_tensor(
-            position_idxs,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
-        )
+        if on_host:
+            rot_idxs = ttnn.as_tensor(
+                position_idxs,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+            )
+        else:  # On device
+            rot_idxs = ttnn.as_tensor(
+                position_idxs,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+            )
 
         return rot_idxs
 
@@ -114,7 +134,6 @@ class TtLlamaRotarySetup(LightweightModule):
         batch = rot_idxs.shape[1]
 
         use_rm = batch % ttnn.TILE_SIZE != 0  # Use row major is batch size is not a multiple of TILE_SIZE
-        breakpoint()
         embedding_layout = ttnn.ROW_MAJOR_LAYOUT if use_rm else ttnn.TILE_LAYOUT
 
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
