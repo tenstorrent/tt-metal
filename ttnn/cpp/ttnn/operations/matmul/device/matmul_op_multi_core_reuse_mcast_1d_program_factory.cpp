@@ -1690,6 +1690,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     constexpr bool row_major = true;
     CoreRangeSet all_cores = a.shard_spec().value().grid;
     const uint32_t num_cores = all_cores.num_cores();
+    const uint32_t ring_size = num_cores;
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
@@ -1698,12 +1699,13 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* in1 */
     uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
-    uint32_t in1_CB_tiles = in1_shard_height_in_tiles * per_core_N;
+    uint32_t in1_shard_width_in_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
+    uint32_t in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
-    uint32_t in2_CB_tiles = (num_cores - 1) * in0_CB_tiles;  // All shards except local
+    uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
     uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
 
     /* out */
@@ -1723,12 +1725,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         (std::uint32_t) in0_shard_width_in_tiles,
         (std::uint32_t) per_core_M, // in0_shard_height_in_tiles
         (std::uint32_t) B,  // batch
-        (std::uint32_t) num_cores, // ring_size
+        (std::uint32_t) ring_size, // ring_size
         (std::uint32_t) in0_signal_semaphore_id,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        (std::uint32_t) per_core_N, // in1_shard_width_in_tiles
+        (std::uint32_t) in1_shard_width_in_tiles, // in1_shard_width_in_tiles
         (std::uint32_t) in1_shard_height_in_tiles,
         (std::uint32_t) B,  // batch
     };
@@ -1817,7 +1819,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .defines = mm_kernel_defines});
 
     /* Create circular buffers */
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
@@ -1825,7 +1827,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
@@ -1833,15 +1835,15 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_globally_allocated_address(*in1_buffer);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    uint32_t src2_cb_index = 2;
+    uint32_t src2_cb_index = CB::c_in2;
     tt_metal::CircularBufferConfig src2_cb_config =
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
-    uint32_t interm0_cb_index = 24;
+    uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
+    uint32_t interm0_cb_index = CB::c_intermed0;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
@@ -2070,6 +2072,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             "Number of blocks must equal number of cores for gather_in0 mode: {} blocks != {} cores",
             num_blocks_total,
             num_cores_x * num_cores_y
+        );
+
+        TT_FATAL(
+            !untilize_out,
+            "Untilize out is not suported wit gather_in0 mode"
         );
     }
 
