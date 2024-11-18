@@ -13,7 +13,7 @@ However, said inversion point depends on the size and crossover point of each ca
 Therefore, the peak achieved flops changes based on the datatype, the size of the data, and the layout of the data.
 
 
-# Test it yourself!
+## Test it yourself!
 
 The matrix multiply TFLOPS results can be tested on N150 card using:
 
