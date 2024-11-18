@@ -124,7 +124,7 @@ def test_qwen_attention_inference(mesh_device, use_program_cache, reset_seeds, e
         # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
-        check_kv_cache = False
+        check_kv_cache = True
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------
             pytorch_layer_present = [
