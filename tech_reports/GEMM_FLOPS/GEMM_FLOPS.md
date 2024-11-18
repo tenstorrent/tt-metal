@@ -56,9 +56,9 @@ If the input matrices fed into the engine are "shorter" than 8x16, for example 1
 Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOP per matrix engine.
 
 MATH_FIDELITY is used for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
-- LoFi ->  ~4 TFLOPs \
-- HiFi2 -> ~2 TFLOPs \
-- HiFi3 -> ~1.33 TFLOPs \
+- LoFi ->  ~4 TFLOPs 
+- HiFi2 -> ~2 TFLOPs 
+- HiFi3 -> ~1.33 TFLOPs 
 - HiFi4 -> ~1 TFLOPs
 
 
