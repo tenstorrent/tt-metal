@@ -51,6 +51,17 @@ struct RingTopology {
     bool is_linear;
 };
 
+struct TensorPartition {
+    TensorPartition(
+        uint32_t partition_size,
+        uint32_t partition_index)
+        : partition_size(partition_size),
+          partition_index(partition_index) {}
+
+    uint32_t partition_size;
+    uint32_t partition_index;
+};
+
 class CclOpTensorConfig {
    public:
     static std::unique_ptr<CclOpTensorConfig> build_all_gather_tensor_config(Tensor const& tensor);
@@ -262,6 +273,16 @@ struct InterleavedTensorWorkerSlice {
 
     std::size_t get_worker_slice_num_pages() const {
         return worker_slice_shape.x * worker_slice_shape.y;
+    }
+
+    void print() const {
+        tt::log_info("----- printing worker slice -----");
+        tt::log_info("tensor_shape: ({},{})", tensor_shape.x, tensor_shape.y);
+        tt::log_info("tensor_slice_shape: ({},{})", tensor_slice_shape.x, tensor_slice_shape.y);
+        tt::log_info("worker_slice_shape: ({},{})", worker_slice_shape.x, worker_slice_shape.y);
+        tt::log_info("worker_slice_offset: ({},{})", worker_slice_offset.x, worker_slice_offset.y);
+        tt::log_info("worker_slice_is_wrapped: {}", worker_slice_is_wrapped);
+        tt::log_info("worker_slice_num_pages: {}", get_worker_slice_num_pages());
     }
 
     tt_xy_pair tensor_shape;
@@ -501,6 +522,59 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
+
+
+class GenericWrappedTensorSlicer {
+public:
+    GenericWrappedTensorSlicer(
+        const Tensor& input_tensor,
+        const Tensor& output_tensor,
+        int slice_dim,
+        uint32_t partition_index,
+        uint32_t partition_size,
+        uint32_t total_num_workers,
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
+
+    ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index);
+
+    // method to compute offsets in a wrapped layout
+    std::vector<tt_xy_pair> compute_worker_slice_offsets(
+        const std::vector<tt_xy_pair>& worker_slice_shapes,
+        tt_xy_pair const& tensor_slice_shape);
+
+    // method to create worker slice shapes in a tile layout
+    std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+        const tt::tt_metal::LegacyShape& tensor_shape,
+        tt_xy_pair const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers,
+        uint32_t max_slice_size_in_pages,
+        uint32_t half_cb_n_pages);
+
+private:
+    void initialize(
+        const Tensor& input_tensor,
+        const Tensor& output_tensor,
+        int slice_dim,
+        uint32_t partition_index,
+        uint32_t partition_size,
+        uint32_t total_num_workers,
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
+
+    tt_xy_pair calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size);
+
+    // Class member variables
+    tt_xy_pair flattened_tensor_shape;
+    tt_xy_pair tensor_slice_shape;
+    std::vector<tt_xy_pair> worker_slice_shapes;
+    std::vector<tt_xy_pair> worker_slice_offsets;
+    uint32_t input_page_size;
+    bool row_major;
+    uint32_t partition_index;
+    uint32_t partition_size;
+};
+
 
 }  // namespace ccl
 }  // namespace ttnn

@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "debug/dprint.h"
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::UNINITIALIZED_VALUE_U16;
@@ -535,7 +536,7 @@ template <typename AddrGen>
 FORCE_INLINE void write_wrapped_chunk(
     uint32_t& curr_page_idx,
     uint32_t& offset_into_worker_slice,
-     ttnn::ccl::coord_t& offset_worker_slice,
+    const  ttnn::ccl::coord_t& offset_worker_slice,
     const  ttnn::ccl::coord_t& worker_slice_shape,
 
     // In tiles for tile layout
