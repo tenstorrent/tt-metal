@@ -203,6 +203,8 @@ CoreRangeSet::CoreRangeSet(std::vector<CoreRange> &&core_ranges) : ranges_(std::
     this->validate_no_overlap();
 }
 
+bool CoreRangeSet::empty() const { return this->ranges_.empty(); }
+
 size_t CoreRangeSet::size() const { return ranges_.size(); }
 
 template <typename T>
@@ -292,6 +294,18 @@ bool CoreRangeSet::intersects(const CoreRangeSet &other) const {
         }
     }
     return false;
+}
+
+CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet &other) const {
+    std::vector<CoreRange> intersection;
+    for (const auto& local_cr : this->ranges_) {
+        for (const auto& other_cr : other.ranges()) {
+            if (auto intersect = local_cr.intersection(other_cr); intersect.has_value()) {
+                intersection.push_back(*intersect);
+            }
+        }
+    }
+    return CoreRangeSet(std::move(intersection));
 }
 
 bool CoreRangeSet::contains(const CoreCoord &other) const {

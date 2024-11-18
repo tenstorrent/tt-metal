@@ -17,6 +17,7 @@ constexpr uint32_t cb_wr_ptr = get_compile_time_arg_val(1);
 constexpr uint32_t cb_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
 constexpr uint32_t num_layers = get_compile_time_arg_val(4);
+constexpr bool global_sems = get_compile_time_arg_val(5);
 
 tt_l1_ptr uint32_t* noc_x;
 tt_l1_ptr uint32_t* noc_y;
@@ -74,8 +75,14 @@ FORCE_INLINE void setup_remote_sender_cb_interface() {
     remote_cb_interface.num_receivers = num_receivers;
 
     for (uint32_t i=0; i < num_receivers; ++i) {
-        remote_cb_interface.pages_acked[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(pages_acked_semaphore_addr[i]));
-        remote_cb_interface.pages_sent[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(pages_sent_semaphore_addr[i]));
+        // Global semaphores return an actual address instead of an index
+        if constexpr (global_sems) {
+            remote_cb_interface.pages_acked[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pages_acked_semaphore_addr[i]);
+            remote_cb_interface.pages_sent[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pages_sent_semaphore_addr[i]);
+        } else {
+            remote_cb_interface.pages_acked[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(pages_acked_semaphore_addr[i]));
+            remote_cb_interface.pages_sent[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(pages_sent_semaphore_addr[i]));
+        }
     }
 
     remote_cb_interface.aligned_page_size = aligned_page_size;

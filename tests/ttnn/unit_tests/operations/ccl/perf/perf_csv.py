@@ -6,6 +6,7 @@ import pandas as pd
 import os
 import re
 import time
+import shutil
 
 
 def perf_report(file_path):
@@ -168,6 +169,8 @@ def perf_report(file_path):
                 link_bw = input_tensor_volume / longest_erisc_fw_time
         return round(op_bw, 2), round(link_bw, 2)
 
+    utilization_data = []
+
     for i, (group, group_df) in enumerate(grouped, start=1):
         group_df = group_df.iloc[2 * group_df["n_chips"].iloc[0] :]
 
@@ -211,16 +214,54 @@ def perf_report(file_path):
 
             group_data[column] = f"{min_val} - {avg_val} - {max_val}"
 
+        link_bw_str = group_data["Link BW [GB/s]"]
+        link_bw_values = [float(x.strip()) for x in link_bw_str.split(" - ")]
+
+        link_bw_min, link_bw_avg, link_bw_max = link_bw_values
+
+        link_bw = 12.5 if group_df["topology"].iloc[0] == "Linear" else 25.0  # GB/s
+        num_links = int(group_df["num_links"].iloc[0]) if "num_links" in group_df else 0
+
+        theoretical_peak = num_links * link_bw
+        min_utilization = round((link_bw_min / theoretical_peak) * 100, 2)
+        avg_utilization = round((link_bw_avg / theoretical_peak) * 100, 2)
+        max_utilization = round((link_bw_max / theoretical_peak) * 100, 2)
+
+        utilization_summary = {
+            "Input Shape": group_df["Input Shape"].iloc[0],
+            "OP CODE": group_df["OP CODE"].iloc[0],
+            "dim": group_df["dim"].iloc[0] if "dim" in group_df else "",
+            "num_links": group_df["num_links"].iloc[0] if "num_links" in group_df else "",
+            "output_mem_config": group_df["output_mem_config"].iloc[0] if "output_mem_config" in group_df else "",
+            "topology": group_df["topology"].iloc[0],
+            "Layout": group_df["Layout"].iloc[0] if "Layout" in group_df else "",
+            "Data Type": group_df["Data Type"].iloc[0] if "Data Type" in group_df else "",
+            "Link BW [GB/s]": f"{group_df['Link BW [GB/s]'].min()} - {group_df['Link BW [GB/s]'].mean():.2f} - {group_df['Link BW [GB/s]'].max()}",
+            "Theoretical Peak [GB/s]": f"{theoretical_peak}",
+            "Utilization [%]": f"{min_utilization} - {avg_utilization} - {max_utilization}",
+        }
+        utilization_data.append(utilization_summary)
         averages_data.append(group_data)
 
+    utilization_df = pd.DataFrame(utilization_data)
     averages_df = pd.DataFrame(averages_data)
+    op_code = averages_df.iloc[0]["OP CODE"]
 
     today = time.strftime("%Y_%m_%d")
-    ccl_perf_file_path = f"CCL_Perf_{today}.csv"
-    os.rename(file_path, ccl_perf_file_path)
+    if op_code == "AllGather":
+        ccl_perf_file_path = f"CCL_all_gather_Perf_{today}.csv"
+    elif op_code == "ReduceScatter":
+        ccl_perf_file_path = f"CCL_reduce_scatter_Perf_{today}.csv"
+    else:
+        ccl_perf_file_path = f"CCL_Perf_{today}.csv"
+    utilization_file_path = file_path.replace(".csv", f"_utilization_{i}.csv")
+
+    shutil.copy(file_path, ccl_perf_file_path)
 
     averages_df.to_csv(ccl_perf_file_path, index=False)
+    utilization_df.to_csv(utilization_file_path, index=False)
 
     print(f"CCL Perf report CSV saved to: {ccl_perf_file_path}")
+    print(f"CCL Perf Utilization report CSV saved to: {utilization_file_path}")
 
-    return averages_df
+    return averages_df, utilization_df

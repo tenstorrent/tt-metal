@@ -38,6 +38,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool transpose_mcast,
@@ -89,23 +91,37 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    uint32_t in0_block_tiles = per_core_M * in0_block_w;
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+
+    uint32_t in0_block_h = out_block_h;
+    uint32_t in1_block_w = out_block_w;
+    uint32_t in0_num_blocks_y = per_core_M / out_block_h;
+    uint32_t in1_num_blocks_x = per_core_N / out_block_w;
+    uint32_t out_num_blocks_x = in1_num_blocks_x;
+    uint32_t out_num_blocks_y = in0_num_blocks_y;
+
+    uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
-    uint32_t in1_block_tiles = per_core_N * in0_block_w;
+    uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
-    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_block_tiles = out_block_h * out_block_w;
+    uint32_t out_shard_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    if (output_is_sharded) {
+        out_CB_tiles = out_shard_tiles;
+    }
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
-    uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
+    uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -113,13 +129,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in0_is_sharded) {
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
         in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
-        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
+        in2_block_tiles = out_block_h * in0_shard_width_in_tiles;
     }
 
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
-    uint32_t in3_block_tiles = per_core_N;
+    uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
@@ -285,8 +301,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
+    uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+
+    TT_FATAL(
+        out_block_h % out_subblock_h == 0 and out_block_h >= out_subblock_h,
+        "out_block_h must be multiple of out_subblock_h");
+    TT_FATAL(
+        out_block_w % out_subblock_w == 0 and out_block_w >= out_subblock_w,
+        "out_block_w must be multiple of out_subblock_w");
 
     std::vector<uint32_t> in0_sender_compile_time_args;
 
@@ -312,6 +335,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
+            (std::uint32_t)out_num_blocks_x,
+            (std::uint32_t)out_num_blocks_y,
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -323,6 +348,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_shard_width_in_tiles,
             (std::uint32_t)in0_shard_height_in_tiles,
             (std::uint32_t)in0_block_w,
+            (std::uint32_t)in0_block_h,
             // batch args
             (std::uint32_t)B  // batch
         };
@@ -334,16 +360,19 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0 tensor args
             (std::uint32_t)1,            // in0_tensor_stride_w
             (std::uint32_t)K,            // in0_tensor_stride_h
-            (std::uint32_t)in0_block_w,  // in0_tensor_next_block_stride
+            (std::uint32_t)in0_block_w,  // in0_tensor_next_inner_dim_block_stride
+            (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
             // in0 block args
             (std::uint32_t)in0_block_w,          // in0_block_w
-            (std::uint32_t)per_core_M,           // in0_block_h
+            (std::uint32_t)in0_block_h,           // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
             (std::uint32_t) false,               // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)0,                    // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
+            (std::uint32_t)out_num_blocks_x,
+            (std::uint32_t)out_num_blocks_y,
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -366,12 +395,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)1,                // in1_tensor_stride_w
         (std::uint32_t)N,                // in1_tensor_stride_h
         (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
+        (std::uint32_t)in1_block_w,       // in1_tensor_next_w_dim_block_stride
         // in1 block args
-        (std::uint32_t)per_core_N,                // in1_block_w
+        (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,               // in1_block_h
-        (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
+        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)out_num_blocks_x,
+        (std::uint32_t)out_num_blocks_y,
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -388,6 +420,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -411,9 +445,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
-        (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
+        (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)out_num_blocks_x,
+        (std::uint32_t)out_num_blocks_y,
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -426,9 +462,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
         // READER
         // in1 block args
-        (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
+        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
+        (std::uint32_t)out_num_blocks_x,
+        (std::uint32_t)out_num_blocks_y,
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
@@ -441,6 +479,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)N,                   // out_tensor_stride_h
         (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
         (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * N,          // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -449,7 +489,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)M * N  // MtNt
     };
     if (bias_buffer != nullptr) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)per_core_N);
+        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
     }
 
     std::map<string, string> mm_kernel_defines;
@@ -627,7 +667,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
 
-    uint32_t in1_num_subblocks = (per_core_N / out_subblock_w);
+    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
     uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
 
@@ -644,6 +684,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_per_core_w,       // in1_per_core_w
 
         num_blocks,  // num_blocks
+        out_num_blocks_x,
+        out_num_blocks_y,
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -734,7 +776,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
-    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+    if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // output
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format},
@@ -799,20 +841,22 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     // Parameters for last row, col, or block
-    uint32_t last_block_h = M % per_core_M == 0 ? per_core_M : M % per_core_M;
-    uint32_t last_block_w = N % per_core_N == 0 ? per_core_N : N % per_core_N;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_block_h - 1) / out_subblock_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_block_w - 1) / out_subblock_w + 1;
+    uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
     uint32_t last_subblock_of_last_block_h =
-        last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
+        last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w =
-        last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip =
         output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =
-        (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip =
-        (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
+        (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
         if (in0_noc == NOC::NOC_1) {
@@ -928,9 +972,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             };
             if (in0_idx == in0_end_idx) {
                 // padding args (READER)
-                mm_in0_sender_args.push_back(last_block_h);  // last_block_h
+                mm_in0_sender_args.push_back(last_out_block_h);  // last_out_block_h
             } else {
-                mm_in0_sender_args.push_back(per_core_M);
+                mm_in0_sender_args.push_back(out_block_h);
             }
 
             if (fuse_op) {
@@ -979,25 +1023,27 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 if (in1_idx == in1_end_idx) {
                     // padding args (READER)
-                    mm_in1_sender_writer_args.push_back(last_block_w);
+                    mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(per_core_M / out_subblock_h);
+                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_sender_writer_args.push_back(out_subblock_h);
                     mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
                     mm_in1_sender_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_sender_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else {
                     // padding args (READER)
-                    mm_in1_sender_writer_args.push_back(per_core_N);
+                    mm_in1_sender_writer_args.push_back(out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(per_core_M / out_subblock_h);
+                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_sender_writer_args.push_back(out_subblock_h);
                     mm_in1_sender_writer_args.push_back(0);
-                    mm_in1_sender_writer_args.push_back(per_core_N / out_subblock_w);
+                    mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
+                    mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
                     mm_in1_sender_writer_args.push_back(0);
                     mm_in1_sender_writer_args.push_back(0);
@@ -1071,7 +1117,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             worker_core_stride = stride;
                         }
                     }
-                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 19, num_iter);
+                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 20, num_iter);
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
@@ -1095,37 +1141,45 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {
                     // padding args (WRITER)
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else if (in0_idx == in0_end_idx) {
                     // padding args (WRITER)
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
-                    mm_in1_receiver_writer_args.push_back(per_core_N / out_subblock_w);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
                 } else if (in1_idx == in1_end_idx) {
                     // padding args (WRITER)
-                    mm_in1_receiver_writer_args.push_back(per_core_M / out_subblock_h);
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else {
                     // padding args (WRITER)
-                    mm_in1_receiver_writer_args.push_back(per_core_M / out_subblock_h);
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(per_core_N / out_subblock_w);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
@@ -1202,7 +1256,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 writer_runtime_args[0] = src_buffer_b->address();
                 writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    writer_runtime_args[16] = (*bias_buffer)->address();
+                    writer_runtime_args[17] = (*bias_buffer)->address();
                 }
             }
 
@@ -1249,6 +1303,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
@@ -1365,6 +1421,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
+        out_block_h,
+        out_block_w,
         per_core_M,
         per_core_N,
         transpose_mcast,
@@ -1396,6 +1454,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
@@ -1418,6 +1478,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
+        out_block_h,
+        out_block_w,
         per_core_M,
         per_core_N,
         fuse_batch,
@@ -1453,6 +1515,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
         config.in0_block_w,
         config.out_subblock_h,
         config.out_subblock_w,
+        config.out_block_h,
+        config.out_block_w,
         config.per_core_M,
         config.per_core_N,
         config.fuse_batch,

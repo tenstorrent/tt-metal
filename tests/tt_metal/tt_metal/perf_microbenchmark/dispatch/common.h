@@ -13,6 +13,8 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "noc/noc_parameters.h"
 
+#include "tt_metal/llrt/hal.hpp"
+
 extern bool debug_g;
 extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;
@@ -488,15 +490,15 @@ void configure_kernel_variant(
     const auto& grid_size = device->grid_size();
 
     std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, phys_my_core.x))},
-        {"MY_NOC_Y", std::to_string(NOC_0_Y(my_noc_index, grid_size.y, phys_my_core.y))},
+        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, phys_my_core.x))},
+        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, phys_my_core.y))},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(upstream_noc_index, grid_size.x, phys_upstream_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, 0xff))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, 0xff))}, // todo, add testing with dispatch_s once it processes more than go signals
+        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, phys_upstream_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
+        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, 0xff))},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, 0xff))}, // todo, add testing with dispatch_s once it processes more than go signals
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
     compile_args.push_back(is_dram_variant);

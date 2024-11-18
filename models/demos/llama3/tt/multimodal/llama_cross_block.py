@@ -114,9 +114,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def compute_xattn_kv_cache(self, xattn_tokens):
-        return self.attention.compute_xattn_kv_cache(xattn_tokens)
-
     def forward(
         self,
         x_11SH,
@@ -126,16 +123,17 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         full_text_row_masked_out_mask_1NSH,
         xattn_cache,
         mode,
+        user_id=0,
+        vision_tokens=None,
     ):
-        seq_len = x_11SH.shape[-2]
-        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-
         attn_out = self.attention(
             x_11SH=self.attention_norm(x_11SH, mode=mode),
             xattn_mask=xattn_mask,
             xattn_cache=xattn_cache,
             full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
             mode=mode,
+            user_id=user_id,
+            vision_tokens=vision_tokens,
         )
         attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 

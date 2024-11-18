@@ -20,6 +20,7 @@
 #include "common/bfloat16.hpp"
 #include "common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "third_party/umd/device/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
@@ -35,6 +36,8 @@ class Device;
 
 }  // namespace v0
 
+class Allocator;
+
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;
@@ -46,12 +49,27 @@ struct ShardSpec {
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
 
+    // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt
+    ShardMode mode = ShardMode::PHYSICAL;
+    std::optional<std::array<uint32_t, 2>> physical_shard_shape = std::nullopt;
+
     ShardSpec(
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
+        const bool &halo_ = false,
+        const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
+    }
+
+    ShardSpec(
+        const CoreRangeSet &core_sets_,
+        const std::array<uint32_t, 2> &shard_shape_,
+        const std::array<uint32_t, 2> &physical_shard_shape_,
+        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_) {
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
+        TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
     }
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
@@ -60,9 +78,9 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo");
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo);
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo, this->mode);
     }
 };
 
@@ -156,7 +174,8 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
-        std::optional<bool> bottom_up = std::nullopt);
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
         Device *device,
         DeviceAddr address,
@@ -165,7 +184,8 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
-        std::optional<bool> bottom_up = std::nullopt);
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
     Buffer(const Buffer &other) = delete;
     Buffer &operator=(const Buffer &other) = delete;
@@ -173,6 +193,7 @@ class Buffer final {
     Buffer &operator=(Buffer &&other) = delete;
 
     Device *device() const { return device_; }
+    Allocator *allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -223,6 +244,8 @@ class Buffer final {
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
+    std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
+    std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
 
     Buffer(
         Device *device,
@@ -232,6 +255,7 @@ class Buffer final {
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
         std::optional<bool> bottom_up,
+        std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
         Private);
 
@@ -256,7 +280,11 @@ class Buffer final {
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;
+    const std::optional<SubDeviceId> sub_device_id_;
     const bool owns_data_;
+
+    std::optional<SubDeviceManagerId> sub_device_manager_id_;
+    Allocator * allocator_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;
