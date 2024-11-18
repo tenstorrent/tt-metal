@@ -100,6 +100,29 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn
 
 }
 
+ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape) {
+    //Apply the correct padding metadata to the target shape
+    auto padded = shape.with_tile_padding();
+    auto rank = shape.rank();
+    const int8_t correction_1 =(ttnn::types::TILE_SIZE - (int)padded[-1] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
+    const int8_t correction_2 =(ttnn::types::TILE_SIZE - (int)padded[-2] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
+    switch(rank)
+    {
+        case 1:
+            return ttnn::Shape({shape[0]},{padded[0]+correction_1});
+        case 2:
+            return ttnn::Shape({shape[0],shape[1]},{padded[0]+correction_2,padded[1]+correction_1});
+            break;
+        case 3:
+            return ttnn::Shape({shape[0],shape[1],shape[2]},{padded[0],padded[1]+correction_2,padded[2]+correction_1});
+            break;
+        case 4:
+            return ttnn::Shape({shape[0],shape[1],shape[2],shape[3]},{padded[0],padded[1],padded[2]+correction_2,padded[3]+correction_1});
+            break;
+
+    }
+    return shape;
+}
 
 ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     auto layout = tensor.get_layout();
@@ -109,11 +132,24 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     if (tensor_shape == shape) {
         return tensor;
     }
-    bool this_is_view = tensor_shape[-1] == shape[-1];
+    //For view the following cases work:
+    //RM: The last dimension is the same
+    //Tiled: The last two dimensions are the same or there is no padding on the second last dimension
+    bool this_is_view = (tensor_shape[-1] == shape[-1]) &&
+        ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
+        (tensor_shape[-2]==shape[-2]) || //Second last dimension is the same
+        (shape[-2]%ttnn::types::TILE_SIZE==0 && tensor_shape[-2]%ttnn::types::TILE_SIZE==0)); //There is no padding on the second last dimension
 
-    // For Tensors already on host or if the page size matches, we can do a view
+    // For Tensors already on host or if this is a view op
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or this_is_view) {
+        if (tensor.get_layout() == ttnn::TILE_LAYOUT &&(shape[-1]%ttnn::types::TILE_SIZE!=0 || shape[-2]%ttnn::types::TILE_SIZE!=0 ))
+        {
+            //Correct the output shape to add padding metadata before reshape (view)
+            return tensor.reshape(tiling_reshape_corrector(shape));
+        }
+        //Perform a reshape (view)
         return tensor.reshape(shape);
+
     }
 
     // Catch-all
