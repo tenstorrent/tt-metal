@@ -88,12 +88,9 @@ def run_conv(
     conv_config = ttnn.Conv1dConfig(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
     )
     compute_config = ttnn.GetComputeKernelConfig(
         math_fidelity=math_fidelity,

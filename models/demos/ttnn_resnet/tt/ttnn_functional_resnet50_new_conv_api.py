@@ -244,14 +244,12 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
-                packer_l1_accum_enabled=packer_l1_acc,
             ),
             compute_config=ttnn.GetComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -382,13 +380,11 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
-                packer_l1_accum_enabled=packer_l1_acc,
             ),
             compute_config=ttnn.GetComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
