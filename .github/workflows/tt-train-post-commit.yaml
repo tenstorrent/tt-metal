@@ -47,7 +47,7 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      TEST_DATA_DIR: ${{ github.workspace }}/tt-train/tests/test_data
+      TEST_DATA_DIR: ${{ github.workspace }}/build/data
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
