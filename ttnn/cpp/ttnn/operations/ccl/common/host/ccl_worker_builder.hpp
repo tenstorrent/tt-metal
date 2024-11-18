@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cstdint>
+#include <optional>
 
 namespace tt {
 namespace tt_metal {
@@ -23,6 +24,7 @@ class Device;
 namespace ttnn {
 namespace ccl {
 class WorkerEdmInterfaceArgs;
+class SenderWorkerAdapterSpec;
 
 namespace worker_detail {
 
@@ -43,10 +45,19 @@ struct CCLWorkerArgBuilder {
         uint32_t worker_slice_index) const;
 
     std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
+        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
+        const size_t sender_worker_forward_flow_control_semaphore_id,
+        const size_t sender_worker_forward_buffer_index_semaphore_id,
+        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
+        const size_t sender_worker_backward_flow_control_semaphore_id,
+        const size_t sender_worker_backward_buffer_index_semaphore_id,
+        const size_t forward_direction_distance_to_end_of_line,
+        const size_t backward_direction_distance_to_end_of_line,
         ttnn::ccl::InterleavedTensorWorkerSlice worker_slice,
         std::size_t operating_dim,
         uint32_t num_pages_per_packet,
-        uint32_t worker_slice_index) const;
+        uint32_t worker_slice_index,
+        std::optional<ttnn::ccl::SyncModeSpec> sync_details) const;
 
     std::vector<uint32_t> generate_sender_reader_kernel_ct_args() const;
 

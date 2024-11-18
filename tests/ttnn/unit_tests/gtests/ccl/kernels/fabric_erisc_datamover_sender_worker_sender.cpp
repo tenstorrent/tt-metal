@@ -158,7 +158,7 @@ void kernel_main() {
         packet_header.reserved = 0xE;
         packet_header.reserved2 = 0xFFFF;
         packet_header.to_atomic_inc();
-        packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{1});
+        packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{2});
         packet_header.to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader(
                 reinterpret_cast<size_t>(last_message_semaphore_address),
                 1,
@@ -191,7 +191,7 @@ void kernel_main() {
             reinterpret_cast<volatile uint32_t*>(a_packet_header_addr)[sizeof(tt::fabric::PacketHeader) >> 2] = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
             sender.wait_for_empty_write_slot();
             packet_header.to_write()
-                .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{static_cast<uint8_t>(distance - 1)})
+                .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{static_cast<uint8_t>(distance/* - 1*/)})
                 .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
                     termination_addr,
                     sizeof(tt::fabric::PacketHeader) + sizeof(uint32_t),

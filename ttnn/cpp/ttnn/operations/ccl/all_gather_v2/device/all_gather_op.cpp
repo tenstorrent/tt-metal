@@ -16,8 +16,6 @@ namespace ccl{
 namespace all_gather_detail{
 
 AllGatherV2 create_all_gather_struct(
-    const std::vector<Program*>& programs,
-    const ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -27,17 +25,23 @@ AllGatherV2 create_all_gather_struct(
 ) {
     uint32_t num_devices = devices.size();
 
+    std::optional<Device*> forward_device = std::nullopt;
+    std::optional<Device*> backward_device = std::nullopt;
     uint32_t device_index = 0; // Initialize device index
-    Program* program = nullptr;
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
-            program = programs.at(i);
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            }
+            if (i != num_devices - 1) {
+                forward_device = devices.at(i + 1);
+            }
         }
     }
 
     return ttnn::AllGatherV2{
-        program, line_fabric, /*devices,*/ dim, num_links, num_devices, device_index, memory_config.value_or(input_tensor.memory_config()), topology};
+        forward_device, backward_device, dim, num_links, num_devices, device_index, memory_config.value_or(input_tensor.memory_config()), topology};
 }
 } // namespace all_gather_v2_detail
 } // namespace ccl
@@ -79,23 +83,27 @@ std::vector<ttnn::SimpleShape> AllGatherV2::compute_output_shapes(const std::vec
 
 std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
+    auto output_tensors = std::vector<Tensor>();
+    output_tensors.reserve(1);
     if(this->output_mem_config.is_sharded()) {
-        return {create_device_tensor(
+        output_tensors.push_back(create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config,
             input_tensor.get_tile()
-            )};
+            ));
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
+        output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
     }
+    log_info(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
+    return output_tensors;
 }
 
 operation::ProgramWithCallbacks AllGatherV2::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
     tt::log_info(tt::LogOp, "DEBUG: create_program is called");
-    return all_gather_multi_core_with_workers_new(*this->program, input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->topology);
+    return all_gather_multi_core_with_workers_new(input_tensors[0], this->forward_device, this->backward_device, output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->topology);
 }
 
 const operation::Hash AllGatherV2::compute_program_hash(
@@ -135,28 +143,35 @@ Tensor all_gather_v2(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     // Make programs vector persist by moving it to heap or making it static
-    static auto programs = std::vector<Program>(devices.size());
-    auto program_ptrs = std::vector<Program*>(devices.size());
-    std::transform(programs.begin(), programs.end(), program_ptrs.begin(),
-        [](auto& program) {
-            program = tt::tt_metal::Program{}; // Initialize each Program
-            return &program;
-        });
+    // static auto programs = std::vector<Program>(devices.size());
+    // auto program_ptrs = std::vector<Program*>(devices.size());
+    // std::transform(programs.begin(), programs.end(), program_ptrs.begin(),
+    //     [](auto& program) {
+    //         program = tt::tt_metal::Program{}; // Initialize each Program
+    //         return &program;
+    //     });
     TT_FATAL(num_links == 1, "all_gather op is only supported for num_links == 1, but has {}", num_links);
     tt::log_info(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
-    auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, num_links);
     tt::log_info(tt::LogOp, "DEBUG: line_fabric is created");
 
     operation::launch_op(
-        [dim, num_links, memory_config, devices, ccl_topology, line_fabric, program_ptrs](
+        [dim, num_links, num_devices, memory_config, devices, ccl_topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
+            auto drain_sync_core = CoreCoord(8,8);
+            ttnn::ccl::SyncModeSpec {
+                num_devices,
+                drain_sync_core,
+                {CreateGlobalSemaphore(input_tensor.device(), {drain_sync_core}, 0)},
+                {num_devices}
+            };
+
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_struct(program_ptrs, line_fabric, input_tensor, dim, num_links, memory_config, devices, ccl_topology),
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices, ccl_topology),
                 {input_tensor});
         },
         {input_tensor},
@@ -213,6 +228,8 @@ Tensor all_gather_v2(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
+
+
             const auto& input_device_tensor = input_tensors.at(0);
 
             const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
@@ -230,8 +247,7 @@ Tensor all_gather_v2(
             };
 
             return operation::run(
-                ttnn::AllGatherV2{
-                    program_ptrs[device_index], line_fabric, /*devices,*/ dim, num_links, num_devices, device_index, memory_config.value_or(input_device_tensor.memory_config()), topology},
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_device_tensor, dim, num_links, memory_config, devices, topology),
                 {input_device_tensor});
         },
         {input_tensor},

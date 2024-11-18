@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ccl_common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cstdint>
 #include <cmath>
@@ -12,6 +12,59 @@
 
 namespace ttnn {
 namespace ccl {
+
+
+void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
+    this->sem_ids.push_back(sem_id);
+    this->wait_counts.push_back(wait_count);
+    this->num_signals++;
+}
+
+LineTopology::LineTopology(
+    size_t line_size,
+    size_t line_index) : _line_size(line_size), _line_index(line_index) {}
+
+bool LineTopology::is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
+        return _line_index == 0;
+    } else {
+        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+        return _line_index == _line_size - 1;
+    }
+}
+bool LineTopology::is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) {
+        return _line_index == 0;
+    } else {
+        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        return _line_index == _line_size - 1;
+    }
+}
+
+bool LineTopology::is_at_end_of_line() const {
+    return _line_index == 0 || _line_index == _line_size - 1;
+}
+
+size_t LineTopology::line_size() const {
+    return _line_size;
+}
+
+size_t LineTopology::line_index() const {
+    return _line_index;
+}
+
+size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
+        return (_line_size - _line_index) - 1;
+    } else {
+        return _line_index;
+    }
+}
+
+ttnn::ccl::Topology LineTopology::topology() const {
+    return ttnn::ccl::Topology::Linear;
+}
+
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,

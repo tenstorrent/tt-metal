@@ -53,6 +53,7 @@ union RoutingFields {
 static_assert(sizeof(RoutingFields) == sizeof(UnicastRoutingCommandHeader), "RoutingFields size is not 1 bytes");
 
 struct NocUnicastCommandHeader {
+    // TODO: just encode the noc_addr as uint64_t directly
     uint32_t address;
     uint32_t size;
     uint8_t noc_x;

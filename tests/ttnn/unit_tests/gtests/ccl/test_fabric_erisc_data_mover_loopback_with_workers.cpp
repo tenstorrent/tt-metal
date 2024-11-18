@@ -417,7 +417,7 @@ bool RunLoopbackTest(
         sender_device,
         worker_core,
         chip0_worker_fabric_connection,
-        unicast_send{1},
+        unicast_send{2}, // 2 hops because we are looping back to ourselves
         edm_buffer_size,
         page_plus_header_size,
         num_pages_total,
@@ -542,7 +542,7 @@ bool RunLineFabricTest(
         devices[0],
         worker_core,
         chip0_worker_fabric_connection,
-        mcast_send{mcast_first_chip - 1, mcast_last_chip - mcast_first_chip},
+        mcast_send{mcast_first_chip, mcast_last_chip - mcast_first_chip},
         edm_buffer_size,
         page_plus_header_size,
         num_pages_total,

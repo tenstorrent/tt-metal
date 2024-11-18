@@ -14,9 +14,19 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+struct SyncModeSpec {
+    uint32_t num_signals = 0;
+    CoreCoord core;
+    std::vector<uint32_t> sem_ids;
+    std::vector<uint32_t> wait_counts;
+
+    void add_signal(uint32_t sem_id, uint32_t wait_count);
+};
 
 class FabricEriscDatamoverBuilder;
 class EriscDatamoverBuilder;
@@ -25,6 +35,32 @@ std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_dev
     const Tensor& input_tensor,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology& topology);
+
+
+class LineTopology {
+   public:
+    LineTopology(
+        size_t line_size,
+        size_t line_index);
+
+    bool is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+    bool is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+
+    bool is_at_end_of_line() const;
+
+    size_t line_size() const;
+
+    size_t line_index() const;
+
+    size_t get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+
+    ttnn::ccl::Topology topology() const;
+
+   private:
+    size_t _line_size;
+    size_t _line_index;
+};
+
 
 // Eventual home: ccl_topology_descriptors
 struct RingTopology {

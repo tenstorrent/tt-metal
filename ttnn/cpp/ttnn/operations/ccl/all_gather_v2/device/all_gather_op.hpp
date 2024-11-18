@@ -20,16 +20,14 @@
 
 #include <optional>
 #include <vector>
-#include <algorithm>
 
 namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
 struct AllGatherV2 {
-    Program* program;
-    const ttnn::ccl::EdmLineFabricOpInterface line_fabric;
-    // const std::vector<Device*>& devices;
+    std::optional<Device*> forward_device;
+    std::optional<Device*> backward_device;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -38,22 +36,22 @@ struct AllGatherV2 {
     const ccl::Topology topology;
 
     AllGatherV2(
-        Program* prog,
-        ttnn::ccl::EdmLineFabricOpInterface fabric,
-        uint32_t d,
-        uint32_t nl,
-        uint32_t rs,
-        uint32_t ri,
-        MemoryConfig mc,
-        ccl::Topology topo)
-        : program(prog)
-        , line_fabric(std::move(fabric))
-        , dim(d)
-        , num_links(nl)
-        , ring_size(rs)
-        , ring_index(ri)
-        , output_mem_config(mc)
-        , topology(topo) {}
+        std::optional<Device*> forward_device,
+        std::optional<Device*> backward_device,
+        uint32_t dim,
+        uint32_t num_links,
+        uint32_t ring_size,
+        uint32_t ring_index,
+        MemoryConfig output_mem_config,
+        ccl::Topology topology) :
+        forward_device(forward_device),
+        backward_device(backward_device),
+        dim(dim),
+        num_links(num_links),
+        ring_size(ring_size),
+        ring_index(ring_index),
+        output_mem_config(output_mem_config),
+        topology(topology) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -80,8 +78,6 @@ struct AllGatherV2 {
 namespace ccl{
 namespace all_gather_v2_detail{
 AllGatherV2 create_all_gather_struct(
-    const std::vector<Program*>& programs,
-    const ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -94,8 +90,9 @@ AllGatherV2 create_all_gather_struct(
 
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
-    Program& program,
     const Tensor& input_tensor,
+    std::optional<Device*> forward_device,
+    std::optional<Device*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
