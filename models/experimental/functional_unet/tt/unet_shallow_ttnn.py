@@ -114,10 +114,8 @@ class UNetConv2D:
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            packer_l1_accum_enabled=False,
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
             ),
@@ -127,6 +125,11 @@ class UNetConv2D:
             output_layout=output_layout,
             input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
+        )
+        self.compute_config = ttnn.GetComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         config_override = conv.conv_blocking_and_parallelization_config_override
         if config_override and "act_block_h" in config_override:
@@ -157,6 +160,7 @@ class UNetConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
+            compute_config=self.compute_config,
             conv_op_cache=self.cache,
             groups=2,
         )
