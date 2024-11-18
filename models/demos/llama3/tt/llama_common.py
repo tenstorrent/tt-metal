@@ -319,3 +319,27 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
             ),
             pt_out,
         )
+def get_padded_prefill_len(seq_len):
+    """
+    If seq_len is less than 32, pad to 32
+    If seq_len is more than 32, pad to whichever is smaller: a power of 2 or a multiple of 1024
+    TODO: Generalize for max_mm_seq_len different from 1024
+    """
+    if seq_len <= 32:
+        return 32
+    pow_2_pad = nearest_pow_2(seq_len)
+    mult_1024_pad = 1024 * math.ceil(seq_len / 1024)
+    min_extended_pad = min(pow_2_pad, mult_1024_pad)
+    return min_extended_pad
+
+
+def get_block_size(kv_cache):
+    return kv_cache[0][0].shape[2]
+
+
+def num_blocks_in_seq(seq_len, block_size):
+    return math.ceil(seq_len / block_size)
+
+
+def nearest_pow_2(x):
+    return 2 ** math.ceil(math.log2(x))
