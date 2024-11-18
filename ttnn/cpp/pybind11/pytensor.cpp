@@ -1505,12 +1505,23 @@ void pytensor_module(py::module &m_tensor) {
 
         )doc")
         .def(
+            // TODO: Rename to physical_volume
             "volume", [](const Tensor &self) { return self.volume(); }, R"doc(
             Get the volume of the tensor.
 
             .. code-block:: python
 
                 volume = tt_tensor.volume()
+
+        )doc")
+        .def(
+            // TODO: Rename to volume
+            "logical_volume", [](const Tensor &self) { return self.get_logical_volume(); }, R"doc(
+            Get the logical volume of the tensor.
+
+            .. code-block:: python
+
+                volume = tt_tensor.logical_volume()
 
         )doc")
         .def(

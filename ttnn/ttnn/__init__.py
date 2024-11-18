@@ -124,6 +124,7 @@ from ttnn.types import (
     L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
+    ShardMode,
     ShardSpec,
     CoreRangeSet,
     CoreRange,

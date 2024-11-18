@@ -18,7 +18,7 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     auto width = input_tensor_a.get_legacy_shape()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = input_tensor_a.volume() / width;
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::FLOAT32, "data type must be bfloat16 or float32");
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 
