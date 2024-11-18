@@ -28,7 +28,7 @@ using ccl::EriscDatamoverBuilder;
 
 struct AllGatherV2 {
     Program* program;
-    // const ttnn::ccl::EdmLineFabricOpInterface& line_fabric;
+    const ttnn::ccl::EdmLineFabricOpInterface& line_fabric;
     // const std::vector<Device*>& devices;
     const uint32_t dim;
     const uint32_t num_links;
@@ -41,7 +41,7 @@ struct AllGatherV2 {
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    // const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 namespace ccl{
