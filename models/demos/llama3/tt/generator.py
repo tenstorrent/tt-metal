@@ -44,12 +44,9 @@ class LlamaGenerator:
         user_id,
         last_token_idx,
     ):
-        """
-        Performs vision encode step then text prefill.
-        Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
-        """
         prefill_input, rot_mats_prefill, page_table_tt = self.model.prepare_inputs_prefill(
-            tokens, page_table=page_table
+            tokens,
+            page_table=page_table,
         )
 
         tt_logits = self.model.ttnn_prefill_forward(
