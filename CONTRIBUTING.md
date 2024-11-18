@@ -251,7 +251,7 @@ The new fangled way we run our tests is with Googletest. The way we generally
 structure our tests with this framework is to bundle it into a single
 executable.
 
-You can use `--gtest_filter_test` to filter out the specific test you'd like.
+You can use `--gtest_filter` to filter out the specific test you'd like.
 For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
