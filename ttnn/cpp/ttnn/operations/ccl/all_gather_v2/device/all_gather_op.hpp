@@ -27,12 +27,13 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 struct AllGatherV2 {
+    Program* program;
+    // const ttnn::ccl::EdmLineFabricOpInterface& line_fabric;
+    // const std::vector<Device*>& devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
-    const std::optional<chip_id_t> receiver_device_id;
-    const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
 
@@ -40,11 +41,14 @@ struct AllGatherV2 {
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 namespace ccl{
 namespace all_gather_v2_detail{
 AllGatherV2 create_all_gather_struct(
+    const std::vector<Program*>& programs,
+    const ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -57,14 +61,13 @@ AllGatherV2 create_all_gather_struct(
 
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
+    Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology);
 
 

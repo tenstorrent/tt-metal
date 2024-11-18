@@ -35,14 +35,13 @@ using namespace ccl;
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
+    Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology) {
 
     // Sleep for 5 * ring_index seconds (for DEBUG only)
@@ -52,9 +51,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     // // Log device id and ring index
     // log_info(tt::LogOp, "Generating log for Ring Index: {}", ring_index);
 
-    tt::tt_metal::Program program{};
-
-    TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
+    // tt::tt_metal::Program program{};
 
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
