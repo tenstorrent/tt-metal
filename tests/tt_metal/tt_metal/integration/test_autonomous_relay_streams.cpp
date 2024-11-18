@@ -10,9 +10,9 @@
 #include <random>
 #include <tuple>
 
-#include "device/tt_arch_types.h"
 #include "gtest/gtest.h"
-#include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
+#include "device/tt_arch_types.h"
+#include "command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "impl/device/device.hpp"
 #include "impl/buffers/circular_buffer.hpp"

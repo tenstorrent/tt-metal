@@ -35,6 +35,7 @@ class CommandQueueFixture : public DispatchFixture {
             tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
+        this->slow_dispatch_ = false;
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         const chip_id_t device_id = 0;
@@ -71,6 +72,7 @@ class CommandQueueSingleCardFixture : virtual public DispatchFixture {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
+        this->slow_dispatch_ = false;
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -113,6 +115,7 @@ class CommandQueueMultiDeviceFixture : public DispatchFixture {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
+        this->slow_dispatch_ = false;
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
@@ -486,6 +489,7 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
+        this->slow_dispatch_ = false;
         auto num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
         if (num_cqs != 2) {
             TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
@@ -524,6 +528,7 @@ class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
+        this->slow_dispatch_ = false;
         auto num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
         if (num_cqs != 2) {
             TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");

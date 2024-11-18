@@ -1,6 +1,9 @@
 set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_free_list_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_l1_banking_allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_allocation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_non_blocking.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_adjacent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_contains.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_intersects.cpp
@@ -17,6 +20,9 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_noc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_semaphores.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sharded_l1_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_simple_dram_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_simple_l1_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_soc_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tilize_untilize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_worker_config_buffer.cpp

@@ -156,7 +156,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore){
 }
 
 TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+    if (!this->IsSlowDispatch()){
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }

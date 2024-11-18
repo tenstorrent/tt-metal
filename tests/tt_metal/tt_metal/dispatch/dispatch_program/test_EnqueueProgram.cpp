@@ -111,6 +111,41 @@ bool cb_config_successful(Device* device, Program &program, const DummyProgramMu
     return pass;
 }
 
+bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord& eth_core_coord) {
+    Program program;
+    bool pass = true;
+    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
+
+    constexpr uint32_t num_runtime_args0 = 9;
+    constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    std::map<string, string> dummy_defines0 = {{"DATA_MOVEMENT", "1"},
+                                               {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
+                                               {"RESULTS_ADDR", std::to_string(rta_base0)}};
+    auto dummy_kernel0 = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+        eth_core_coord,
+        tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .defines = dummy_defines0});
+
+    vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
+
+    tt::tt_metal::detail::CompileProgram(device, program);
+    auto& cq = device->command_queue();
+    EnqueueProgram(cq, program, false);
+    Finish(cq);
+
+    vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
+        device->id(),
+        eth_noc_xy,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        dummy_kernel0_args.size() * sizeof(uint32_t));
+
+    pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
+
+    return pass;
+}
+
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
     Program program;
 
@@ -815,6 +850,14 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanitySin
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
+    }
+}
+
+TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
+    for (const auto& device : devices_) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
+            ASSERT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core));
+        }
     }
 }
 

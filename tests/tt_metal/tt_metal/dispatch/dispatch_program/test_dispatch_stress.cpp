@@ -4,7 +4,7 @@
 
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include "host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
 using std::vector;
@@ -113,7 +113,7 @@ void RunTest(Device *device) {
     }
 }
 
-TEST(Common, TensixRunManyTimes) {
+TEST(DispatchStress, TensixRunManyTimes) {
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     // Skip fast dispatch until it's supported for remote device.
     if (!slow_dispatch)
@@ -141,5 +141,4 @@ TEST(Common, TensixRunManyTimes) {
         // Close all devices
         tt::tt_metal::detail::CloseDevices(reserved_devices_);
     }
-
 }

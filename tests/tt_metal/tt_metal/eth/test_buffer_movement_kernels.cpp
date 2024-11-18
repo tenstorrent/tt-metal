@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
+#include "command_queue_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -17,6 +18,8 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t MAX_BUFFER_SIZE =
     (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
@@ -24,10 +27,12 @@ struct BankedConfig {
     size_t num_pages = 1;
     size_t size_bytes = 1 * 2 * 32 * 32;
     size_t page_size_bytes = 2 * 32 * 32;
-    BufferType input_buffer_type = BufferType::L1;
-    BufferType output_buffer_type = BufferType::L1;
+    tt_metal::BufferType input_buffer_type = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type = tt_metal::BufferType::L1;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}
 
 namespace unit_tests::erisc::kernels {
 
@@ -163,7 +168,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::Device* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
-    const BankedConfig& cfg,
+    const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,
     const uint32_t& max_transfer_size) {
     bool pass = true;
 
@@ -311,6 +316,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
 }
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
@@ -363,9 +369,98 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
 }
 
 TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
+                continue;
+            }
+            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
+                if (receiver_device->id() != device_id) {
+                    continue;
+                }
+
+                log_info(
+                    tt::LogTest,
+                    "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
+                    sender_device->id(),
+                    receiver_device->id(),
+                    sender_eth_core.str(),
+                    receiver_eth_core.str());
+                BankedConfig test_config = BankedConfig{
+                    .num_pages = 200,
+                    .size_bytes = 200 * 2 * 32 * 32,
+                    .page_size_bytes = 2 * 32 * 32,
+                    .input_buffer_type = BufferType::L1,
+                    .output_buffer_type = BufferType::DRAM};
+
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    test_config,
+                    test_config.page_size_bytes));
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+                test_config = BankedConfig{
+                    .num_pages = 200,
+                    .size_bytes = 200 * 2 * 32 * 32,
+                    .page_size_bytes = 2 * 32 * 32,
+                    .input_buffer_type = BufferType::DRAM,
+                    .output_buffer_type = BufferType::L1};
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    test_config,
+                    test_config.page_size_bytes));
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+            }
+        }
+    }
+}
+
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllConnectedChips) {
+    for (const auto& sender_device : devices_) {
+        for (const auto& receiver_device : devices_) {
+            if (sender_device->id() >= receiver_device->id()) {
+                continue;
+            }
+            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
+                if (receiver_device->id() != device_id) {
+                    continue;
+                }
+                log_info(
+                    tt::LogTest,
+                    "Sending dram buffer from device {} to device {}, using eth core {} and {}",
+                    sender_device->id(),
+                    receiver_device->id(),
+                    sender_eth_core.str(),
+                    receiver_eth_core.str());
+
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
+                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
+                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
+                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+                ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
+                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+            }
+        }
+    }
+}
+
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    for (const auto& sender_device : devices_) {
+        for (const auto& receiver_device : devices_) {
+            if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {

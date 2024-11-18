@@ -1,4 +1,5 @@
 set(UNIT_TESTS_DISPATCH_PROGRAM_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatch_stress.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueProgram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sub_device.cpp

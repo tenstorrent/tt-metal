@@ -4,8 +4,9 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "test_buffer_utils.hpp"
-#include "tt_metal/host_api.hpp"
+#include "buffer_test_utils.hpp"
+#include "host_api.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
 
 using tt::tt_metal::Device;
 using namespace tt::test_utils;

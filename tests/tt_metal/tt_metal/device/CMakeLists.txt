@@ -1,9 +1,13 @@
 set(UNIT_TESTS_DEVICE_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_banked.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device_cluster_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device_init_and_teardown.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_direct.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_galaxy_cluster_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_dram_to_l1_multicast.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_dram.cpp
 )
 
 add_executable(unit_tests_device ${UNIT_TESTS_DEVICE_SRC})

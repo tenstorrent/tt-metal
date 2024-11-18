@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_fixture.hpp"
+#include "command_queue_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
@@ -182,6 +183,133 @@ bool flatten(DispatchFixture *fixture, tt_metal::Device *device, uint32_t num_ti
     return pass;
 }
 
+bool flatten_stress(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+    // Test Simulating Program Caching with Async Command Queues
+    bool pass = true;
+    // Create a program used across all loops
+    Program program = CreateProgram();
+
+    CoreCoord core = {0, 0};
+
+    uint32_t single_tile_size = 2 * 1024;
+
+    uint32_t num_tiles = num_tiles_r * num_tiles_c;
+    uint32_t num_bytes_per_tensor_row = num_tiles_c * 64;
+    uint32_t num_bytes_per_tile = num_tiles * single_tile_size;
+
+    uint32_t dram_buffer_size = single_tile_size * num_tiles * 32;
+
+    InterleavedBufferConfig dram_config{
+                .device=device,
+                .size = dram_buffer_size,
+                .page_size = dram_buffer_size,
+                .buffer_type = BufferType::DRAM
+                };
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 8;
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+        .set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
+
+    uint32_t ouput_cb_index = 16;
+    uint32_t num_output_tiles = 1;
+    CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+        .set_page_size(ouput_cb_index, single_tile_size);
+    auto cb_output = CreateCircularBuffer(program, core, cb_output_config);
+
+    auto flatten_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/flatten.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto unary_writer_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    vector<uint32_t> compute_kernel_args = {
+        num_tiles * 32
+    };
+
+    auto eltwise_unary_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
+        core,
+        ComputeConfig{.compile_args = compute_kernel_args}
+    );
+
+    // Inside the loop, run async runtime functions
+    for (int i = 0; i < 1000; i++) {
+        // Create Device Buffers Asynchronously
+        auto src_dram_buffer = CreateBuffer(dram_config);
+        auto dst_dram_buffer = CreateBuffer(dram_config);
+
+        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        // Create the source vector
+        std::shared_ptr<std::vector<uint32_t>> src_vec = std::make_shared<std::vector<uint32_t>>(create_random_vector_of_bfloat16(
+            dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count()));
+
+        std::vector<uint32_t> golden = gold_standard_flatten(*src_vec, {num_tiles_r * 32, num_tiles_c * 32});
+        // Set the runtime args asynchronously
+        std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
+        std::shared_ptr<RuntimeArgs> compute_runtime_args = std::make_shared<RuntimeArgs>();
+        *compute_runtime_args = {
+            src_dram_buffer.get(),
+            (std::uint32_t)dram_src_noc_xy.x,
+            (std::uint32_t)dram_src_noc_xy.y,
+            num_tiles_r,
+            num_tiles_c,
+            num_bytes_per_tensor_row
+        };
+        *writer_runtime_args = {
+            dst_dram_buffer.get(),
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            num_tiles * 32
+        };
+
+        SetRuntimeArgs(
+            device,
+            detail::GetKernel(program, flatten_kernel),
+            core,
+            compute_runtime_args);
+
+        SetRuntimeArgs(
+            device,
+            detail::GetKernel(program, unary_writer_kernel),
+            core,
+            writer_runtime_args);
+        // Async write input
+        EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
+        // Share ownership of buffer with program
+        AssignGlobalBufferToProgram(src_dram_buffer, program);
+        // Main thread gives up ownership of buffer and src data (this is what python does)
+        src_dram_buffer.reset();
+        src_vec.reset();
+        // Queue up program
+        EnqueueProgram(device->command_queue(), program, false);
+        // Blocking read
+        std::vector<uint32_t> result_vec;
+        EnqueueReadBuffer(device->command_queue(), dst_dram_buffer, result_vec, true);
+
+        // Validation of data
+        TT_FATAL(golden.size() == result_vec.size(), "Size mismatch between golden {} and result vec {}.", golden.size(), result_vec.size());
+        pass &= (golden == result_vec);
+
+        if (not pass) {
+            std::cout << "GOLDEN" << std::endl;
+            print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles * 32);
+
+            std::cout << "RESULT" << std::endl;
+            print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles * 32);
+        }
+    }
+    return pass;
+}
+
 }
 
 TEST_F(DispatchFixture, TensixFlatten){
@@ -200,4 +328,18 @@ TEST_F(DispatchFixture, TensixFlatten){
             continue;
         ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
+}
+
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncFlattenStress) {
+    auto &command_queue = this->device_->command_queue();
+    auto current_mode = CommandQueue::default_mode();
+    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
+    uint32_t num_tiles_r = 2;
+    uint32_t num_tiles_c = 2;
+    if (!this->IsSlowDispatch()) {
+        num_tiles_r = 1;
+        num_tiles_c = 1;
+    }
+    ASSERT_TRUE(test_flatten::flatten_stress(this->device_, num_tiles_r, num_tiles_c));
+    command_queue.set_mode(current_mode);
 }
