@@ -28,7 +28,7 @@ using ccl::EriscDatamoverBuilder;
 
 struct AllGatherV2 {
     Program* program;
-    const ttnn::ccl::EdmLineFabricOpInterface& line_fabric;
+    const ttnn::ccl::EdmLineFabricOpInterface line_fabric;
     // const std::vector<Device*>& devices;
     const uint32_t dim;
     const uint32_t num_links;
@@ -37,11 +37,44 @@ struct AllGatherV2 {
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
 
+    AllGatherV2(
+        Program* prog,
+        ttnn::ccl::EdmLineFabricOpInterface fabric,
+        uint32_t d,
+        uint32_t nl,
+        uint32_t rs,
+        uint32_t ri,
+        MemoryConfig mc,
+        ccl::Topology topo)
+        : program(prog)
+        , line_fabric(std::move(fabric))
+        , dim(d)
+        , num_links(nl)
+        , ring_size(rs)
+        , ring_index(ri)
+        , output_mem_config(mc)
+        , topology(topo) {}
+
+    // Add attributes method for reflection
+    auto attributes() const {
+        using tt::stl::reflection::Attribute;
+        std::vector<std::tuple<std::string, Attribute>> attrs;
+
+        attrs.emplace_back("dim", dim);
+        attrs.emplace_back("num_links", num_links);
+        attrs.emplace_back("ring_size", ring_size);
+        attrs.emplace_back("ring_index", ring_index);
+        attrs.emplace_back("output_mem_config", output_mem_config);
+        attrs.emplace_back("topology", topology);
+
+        return attrs;
+    }
+
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    // const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 namespace ccl{

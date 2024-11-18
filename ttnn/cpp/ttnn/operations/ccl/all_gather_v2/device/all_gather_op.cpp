@@ -98,16 +98,16 @@ operation::ProgramWithCallbacks AllGatherV2::create_program(const std::vector<Te
     return all_gather_multi_core_with_workers_new(*this->program, input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->topology);
 }
 
-// const operation::Hash AllGatherV2::compute_program_hash(
-//     const std::vector<Tensor> &input_tensors) const {
-//     return operation::hash_operation<AllGatherV2>(
-//         this->dim,
-//         this->num_links,
-//         this->ring_size,
-//         this->ring_index,
-//         this->output_mem_config,
-//         this->topology);
-// }
+const operation::Hash AllGatherV2::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    return operation::hash_operation<AllGatherV2>(
+        this->dim,
+        this->num_links,
+        this->ring_size,
+        this->ring_index,
+        this->output_mem_config,
+        this->topology);
+}
 
 namespace operations {
 namespace ccl {
