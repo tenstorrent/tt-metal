@@ -33,7 +33,7 @@ Alignment legacyShapeToAlignment(const ttnn::Shape& shape, const PageConfig& pag
     // SHARDED
     if (memory_config.shard_spec.has_value()) {
         TT_FATAL(alignment_can_be_2D, "Tensor with shape {} cannot be sharded because alignment will have rank greater than 2!", shape);
-        if (page_config.is_row_major()) {
+        if (page_config.get_layout() == Layout::ROW_MAJOR) {
             const auto& shard_spec = memory_config.shard_spec.value();
             if (shard_spec.physical_shard_shape.has_value()) {
                 return Alignment{shard_spec.physical_shard_shape.value()[1]};
@@ -98,7 +98,7 @@ TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const 
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape) {
     auto result =  TensorLayout(dtype, page_config, memory_config);
-    result.alignment_ = CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape);
+    result.alignment_ = CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape, page_config, memory_config);
     return result;
 }
 
