@@ -80,13 +80,9 @@ class Conv:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=False,
             act_block_w_div=1,
-            packer_l1_accum_enabled=False,
             input_channels_alignment=16 if self.input_params[3] < 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
@@ -97,9 +93,7 @@ class Conv:
             output_layout=self.output_layout,
         )
         compute_config = ttnn.GetComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
