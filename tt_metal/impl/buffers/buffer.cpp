@@ -522,11 +522,22 @@ DeviceAddr ShardSpecBuffer::size() const {
 
 namespace tt::stl::json {
 tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann::json &json_object) const {
+    const auto& shard_mode = from_json<tt_metal::ShardMode>(json_object.at("mode"));
+    const auto& physical_shard_shape = from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
+    if (physical_shard_shape.has_value()) {
+        TT_FATAL(shard_mode == ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
+        return tt_metal::ShardSpec{
+            from_json<CoreRangeSet>(json_object.at("grid")),
+            from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
+            physical_shard_shape.value(),
+            from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
+            from_json<bool>(json_object.at("halo"))};
+    }
     return tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
         from_json<bool>(json_object.at("halo")),
-        from_json<tt_metal::ShardMode>(json_object.at("mode"))};
+        shard_mode};
 }
 }
