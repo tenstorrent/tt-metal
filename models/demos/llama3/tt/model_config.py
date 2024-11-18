@@ -102,12 +102,16 @@ class TtModelArgs:
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
+        max_seq_len=1024 * 128,
         optimizations=LlamaOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
+        self.max_seq_len = max_seq_len
+        self.kv_seq_len = max_seq_len
+        self.sliding_window = max_seq_len
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
