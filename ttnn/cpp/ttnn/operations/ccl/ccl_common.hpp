@@ -524,6 +524,18 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     EriscDataMoverTerminationMode termination_mode);
 
 
+// Add this declaration after the existing generate_slice_sequence_on_dim declaration (around line 235)
+std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
+    TensorSlice::ords_t tensor_shape,
+    TensorSlice::ords_t worker_slice_shape,
+    TensorSlice::ords_t worker_slice_offset,
+    std::size_t fracture_dim,
+    std::size_t num_slices,
+    std::int64_t start_slice_index,
+    std::int64_t end_slice_index_exclusive,
+    std::size_t worker_index
+);
+
 class GenericWrappedTensorSlicer {
 public:
     GenericWrappedTensorSlicer(

@@ -192,19 +192,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel);
-
 
 
 namespace operations {

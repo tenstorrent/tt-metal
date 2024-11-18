@@ -43,9 +43,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    ccl::Topology topology) {
 
     // Sleep for 5 * ring_index seconds (for DEBUG only)
     // std::chrono::seconds sleep_duration(5 * ring_index);
