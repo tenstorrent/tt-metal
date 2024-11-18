@@ -15,7 +15,12 @@ from llama_models.llama3.reference_impl.generation import (
     TokenResult,
     sample_top_p,
 )
-from models.demos.llama3.tt.llama_common import copy_host_to_device
+from models.demos.llama3.tt.llama_common import (
+    copy_host_to_device,
+    get_padded_prefill_len,
+    num_blocks_in_seq,
+    get_block_size,
+)
 
 
 class LlamaGenerator:
@@ -37,13 +42,47 @@ class LlamaGenerator:
         self.tokenizer = tokenizer
         self.formatter = formatter
 
-    def prefill_forward_single_user_text(
-        self,
-        tokens,
-        page_table,
-        user_id,
-        last_token_idx,
-    ):
+    def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+        batch, batch_seq_len = tokens.shape
+        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
+        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+
+        if page_table is not None:
+            assert isinstance(
+                page_table, torch.Tensor
+            ), "page_table must be a torch.Tensor when passing into prefill_forward"
+
+        for user_id in range(batch):
+            seq_len = prompt_lens[user_id]
+            last_token_idx = seq_len - 1
+
+            prefill_seq_len = get_padded_prefill_len(seq_len)
+            prefill_ids = torch.cat(
+                [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            )
+            if page_table is not None:
+                block_size = get_block_size(kv_cache)
+                num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(
+                    seq_len, block_size
+                )
+                page_table_user = torch.cat(
+                    [page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1
+                )
+
+            logits = self.prefill_forward_single_user_text(
+                prefill_ids,
+                page_table=page_table_user if page_table is not None else None,
+                user_id=user_id,
+                last_token_idx=last_token_idx,
+                kv_cache=kv_cache,
+            )
+
+            # Since we give unpadded_seq_len, only the tile containing the last token is returned
+            output_logits[user_id] = logits
+
+        return output_logits
+
+    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
         prefill_input, rot_mats_prefill, page_table_tt = self.model.prepare_inputs_prefill(
             tokens,
             page_table=page_table,

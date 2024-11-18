@@ -129,30 +129,19 @@ def preprocess_inputs_prefill(
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
     logger.info(f"# of users: {len(encoded_prompts)}")
-    input_tokens_prefill = []
-    decoding_pos = []
-    prefill_lens = []
-
-    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
-    # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
+    # Create a tensor to hold the prefill tokens, padded up to the max seq len in the batch
+    input_tokens_prefill = torch.zeros(len(encoded_prompts), max_prompt_len, dtype=torch.int32)
+    prompt_lens = torch.zeros(len(encoded_prompts), dtype=torch.int32)
     for i, encoded in enumerate(encoded_prompts):
-        # Prefill size is nearest power of 2
-        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
-
-        # Initial prefill tensors full of pad tokens
-        input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)
-        input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
-        input_tokens_prefill.append(input_tokens_prefill_i)
+        input_tokens_prefill[i, : len(encoded)] = torch.tensor(encoded[:])
 
         # Keep the correct decoding position of each user
-        decoding_pos.append(len(encoded))
-        prefill_lens.append(prefill_seq_len)
+        prompt_lens[i] = len(encoded)
 
     return (
         input_tokens_prefill,
         encoded_prompts,
-        decoding_pos,
-        prefill_lens,
+        prompt_lens,
     )
 
 
@@ -211,7 +200,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         state_dict = model_args.load_state_dict()
 
     page_table = None
-    page_table_tt = None
+    # page_table_tt = None
     paged_attention_config = None
     if paged_attention:
         paged_attention_config = model_args.paged_attention_config if paged_attention else None
@@ -222,13 +211,6 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
             model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     # Load TTNN Llama3.1 model
@@ -259,8 +241,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             (
                 input_tokens_prefill_pt,
                 encoded_prompts,
-                decoding_pos,
-                prefill_lens,
+                prompt_lens,
             ) = preprocess_inputs_prefill(
                 input_prompts,
                 tokenizer,
@@ -278,40 +259,13 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
         logger.info(f"Starting prefill...")
 
-        # Do not count the first user for prefill time and instead log it as compile time
-        num_users_generated_prefill = batch_size - 1 if batch_size > 1 else 1
+        logits = generator.prefill_forward_text(input_tokens_prefill_pt, page_table=page_table, prompt_lens=prompt_lens)
+        pt_out_batched = logits.squeeze()
 
-        pt_out = []
-
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        for batch_id in range(batch_size):
-            prefill_seq_len = prefill_lens[batch_id]
-
-            if batch_id == 0:  # First user prefill accounts for compile time
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-
-            logits = generator.prefill_forward_single_user_text(
-                tokens=input_tokens_prefill_pt[batch_id],
-                page_table=page_table,
-                user_id=batch_id,
-                last_token_idx=(decoding_pos[batch_id] - 1),
-            )
-            pt_out.append(logits)
-
-            if (
-                batch_id == 0
-            ):  # First user prefill accounts for compile time (which will be removed from the full prefill inference time)
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-
-        # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices):
-            ttnn.synchronize_device(mesh_device.get_devices()[i])
-        profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
         # Preparing first decode token
         with profiler(f"prepare_first_decode_token_{batch_idx}"):
-            pt_out_batched = torch.stack(pt_out, dim=-2)
             pt_out_batched = torch.argmax(pt_out_batched, dim=-1)
             # Pad the output tensor to be tile sized
             pt_out_padded = torch.nn.functional.pad(
@@ -319,7 +273,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
             )
 
         # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
+        all_outputs = [encoded_prompts[b] for b in range(batch_size)]
         for user in range(batch_size):
             user_tok = int(pt_out_batched[user].item())
             all_outputs[user].append(user_tok)
@@ -329,8 +283,8 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         logger.info("Starting decode...")
 
         # Initial positions
-        # Colman: current_pos
-        current_pos = torch.tensor(decoding_pos)
+        # Note: current_pos starts as prompt_lens because prefill generates one token, pushing idx to len.
+        current_pos = torch.tensor(prompt_lens)
 
         # Compile and Capture Trace
         logger.info(f"Capturing model trace...")
@@ -349,7 +303,6 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         profiler.start(f"inference_decode", iteration=batch_idx)
         out_tok = pt_out_padded
 
-        # ttnn.record_event(1, write_event)
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -457,56 +410,56 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
     profiler.end("run")
 
     # Prepare profile benchmark metrics for batch 0
-    compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
-    inference_prefill_time = profiler.get_duration("inference_prefill")
-    inference_decode_time = profiler.get_duration("inference_decode")
-    log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(max_generated_tokens))
-    log_saving_file_time = profiler.get_duration(f"log_saving_file")
+    # compile_prefill_time = profiler.get_duration("compile_prefill")
+    # compile_decode_time = profiler.get_duration("compile_decode")
+    # # inference_prefill_time = profiler.get_duration("inference_prefill")
+    # inference_decode_time = profiler.get_duration("inference_decode")
+    # log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(max_generated_tokens))
+    # log_saving_file_time = profiler.get_duration(f"log_saving_file")
 
-    # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
-    inference_decode_time = inference_decode_time - compile_decode_time - log_printing_time - log_saving_file_time
-    # Correct the inference prefill time to remove the time spent on compile (1st iteration)
-    inference_prefill_time = inference_prefill_time - compile_prefill_time
-    # Average prefill time for each user
-    prefill_time_to_first = inference_prefill_time / num_users_generated_prefill
+    # # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
+    # inference_decode_time = inference_decode_time - compile_decode_time - log_printing_time - log_saving_file_time
+    # # Correct the inference prefill time to remove the time spent on compile (1st iteration)
+    # inference_prefill_time = inference_prefill_time - compile_prefill_time
+    # # Average prefill time for each user
+    # prefill_time_to_first = inference_prefill_time / num_users_generated_prefill
 
-    measurements = {
-        # Required measurements
-        "compile_prefill": compile_prefill_time,
-        "compile_decode": compile_decode_time,
-        "inference_prefill": inference_prefill_time,
-        "inference_decode": inference_decode_time,
-        "prefill_time_to_token": prefill_time_to_first,
-        "prefill_t/s": num_users_generated_prefill / inference_prefill_time * prefill_seq_len,  # tokens/s
-        "decode_t/s/u": num_tokens_generated_decode[0] / inference_decode_time,  # tokens/s/u
-        "decode_t/s": num_tokens_generated_decode[0] / inference_decode_time * batch_size,  # tokens/s
-        # Optional measurements
-        "loading_inputs": profiler.get_duration("loading_inputs"),
-        "weight_loading": profiler.get_duration("weight_loading"),
-        "prepare_first_decode_token": profiler.get_duration("prepare_first_decode_token_0"),
-        "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
-        "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
-        "capture_trace": profiler.get_duration("capture_trace_0"),  # Only for batch 0
-        "Total compile time": compile_prefill_time + compile_decode_time,
-        "Full demo runtime": profiler.get_duration("run"),
-    }
+    # measurements = {
+    #     # Required measurements
+    #     # "compile_prefill": compile_prefill_time,
+    #     "compile_decode": compile_decode_time,
+    #     # "inference_prefill": inference_prefill_time,
+    #     "inference_decode": inference_decode_time,
+    #     "prefill_time_to_token": prefill_time_to_first,
+    #     "prefill_t/s": num_users_generated_prefill / inference_prefill_time * prompt_lens.max().item(),  # tokens/s
+    #     "decode_t/s/u": num_tokens_generated_decode[0] / inference_decode_time,  # tokens/s/u
+    #     "decode_t/s": num_tokens_generated_decode[0] / inference_decode_time * batch_size,  # tokens/s
+    #     # Optional measurements
+    #     "loading_inputs": profiler.get_duration("loading_inputs"),
+    #     "weight_loading": profiler.get_duration("weight_loading"),
+    #     "prepare_first_decode_token": profiler.get_duration("prepare_first_decode_token_0"),
+    #     "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
+    #     "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
+    #     "capture_trace": profiler.get_duration("capture_trace_0"),  # Only for batch 0
+    #     "Total compile time": compile_prefill_time + compile_decode_time,
+    #     "Full demo runtime": profiler.get_duration("run"),
+    # }
 
-    # Print some of the perf metrics
-    logger.info("")
-    logger.info(f"Performance metrics for batch 0")
-    logger.info(f"Prefill compile time: {round(measurements['compile_prefill'], 4)}s")
-    logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
-    logger.info(f"Prefill inference time per user: {round(inference_prefill_time/num_users_generated_prefill, 4)}s")
-    logger.info(
-        f"Total Decode inference time ({max_generated_tokens-1} iterations): {round(measurements['inference_decode'], 4)}s"
-    )
-    logger.info("")
-    logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 2)}ms")
-    logger.info(
-        f"Average speed: {round(inference_decode_time / num_tokens_generated_decode[0] * 1000, 2)}ms @ {round(measurements['decode_t/s/u'], 2)} tok/s/user ({round(measurements['decode_t/s'], 2)} tok/s throughput)"
-    )
-    logger.info("")
+    # # Print some of the perf metrics
+    # logger.info("")
+    # logger.info(f"Performance metrics for batch 0")
+    # logger.info(f"Prefill compile time: {round(measurements['compile_prefill'], 4)}s")
+    # logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
+    # logger.info(f"Prefill inference time per user: {round(inference_prefill_time/num_users_generated_prefill, 4)}s")
+    # logger.info(
+    #     f"Total Decode inference time ({max_generated_tokens-1} iterations): {round(measurements['inference_decode'], 4)}s"
+    # )
+    # logger.info("")
+    # logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 2)}ms")
+    # logger.info(
+    #     f"Average speed: {round(inference_decode_time / num_tokens_generated_decode[0] * 1000, 2)}ms @ {round(measurements['decode_t/s/u'], 2)} tok/s/user ({round(measurements['decode_t/s'], 2)} tok/s throughput)"
+    # )
+    # logger.info("")
 
     supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
     supported_devices = ["N150", "N300", "T3K"]
@@ -571,20 +524,20 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
     # Save benchmark data for CI dashboard
     # if is_ci_env:
-    if True:
-        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.prep_csvs(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=llama_model_name,
-            ml_model_type="llm",
-            num_layers=model_args.n_layers,
-            batch_size=batch_size,
-            input_sequence_length=prefill_seq_len,
-            output_sequence_length=1,
-            # config_params=,
-            # precision=,
-        )
+    # if True:
+    #     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
+    #     benchmark_data.prep_csvs(
+    #         profiler,
+    #         run_type=f"{tt_device_name}-demo",
+    #         ml_model_name=llama_model_name,
+    #         ml_model_type="llm",
+    #         num_layers=model_args.n_layers,
+    #         batch_size=batch_size,
+    #         input_sequence_length=prefill_seq_len,
+    #         output_sequence_length=1,
+    #         # config_params=,
+    #         # precision=,
+    #     )
 
 
 @pytest.mark.parametrize(
