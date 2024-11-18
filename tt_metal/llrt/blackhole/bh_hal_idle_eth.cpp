@@ -33,6 +33,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     std::vector<DeviceAddr> mem_map_bases;
 
     mem_map_bases.resize(utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::COUNT));
+    mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::BASE)] = MEM_ETH_BASE;
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_BASE;
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch);
@@ -47,6 +48,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::COUNT));
+    mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::BASE)] = MEM_ETH_SIZE;
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::BARRIER)] = sizeof(uint32_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);

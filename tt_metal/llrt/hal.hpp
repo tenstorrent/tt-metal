@@ -41,6 +41,7 @@ enum class HalProcessorClassType : uint8_t {
 };
 
 enum class HalL1MemAddrType : uint8_t {
+    BASE,
     BARRIER,
     MAILBOX,
     LAUNCH,
@@ -137,7 +138,7 @@ class Hal {
 
     void initialize(tt::ARCH arch);
 
-    tt::ARCH get_arch() {return arch_;}
+    tt::ARCH get_arch() const {return arch_;}
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const -> decltype(noc_size - 1 - coord) {
@@ -263,3 +264,16 @@ extern Hal hal;
 
 }  // namespace tt_metal
 }  // namespace tt
+
+
+#define HAL_MEM_L1_BASE tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_SIZE tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+
+#define HAL_MEM_ETH_BASE \
+    ((tt::tt_metal::hal.get_arch() == tt::ARCH::GRAYSKULL) ? 0 : \
+    tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, \
+                                   tt::tt_metal::HalL1MemAddrType::BASE))
+#define HAL_MEM_ETH_SIZE \
+    ((tt::tt_metal::hal.get_arch() == tt::ARCH::GRAYSKULL) ? 0 : \
+    tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, \
+                                   tt::tt_metal::HalL1MemAddrType::BASE))
