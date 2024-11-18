@@ -41,7 +41,7 @@ void py_bind_typecast(py::module& module) {
             [] (const decltype(ttnn::experimental::typecast)& self,
                 const ttnn::Tensor& input_tensor,
                 const ttnn::DataType dtype,
-                const std::optional<ttnn::MemoryConfig> memory_config,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
                 const std::optional<ttnn::Tensor> &optional_output_tensor,
                 uint8_t queue_id) {
                     return self(queue_id, input_tensor, dtype, memory_config, optional_output_tensor);

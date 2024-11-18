@@ -103,7 +103,7 @@ Result conv_transpose2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const conv2d::Conv2dConfig> conv_config_)   {
+    const std::optional<const conv2d::Conv2dConfig>& conv_config_)   {
         conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
 
         //Inverse of sliding_window.get_output_shape()

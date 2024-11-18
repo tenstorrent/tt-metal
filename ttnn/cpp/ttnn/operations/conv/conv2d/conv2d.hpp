@@ -212,8 +212,8 @@ Result conv2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-    std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-    const std::optional<const MemoryConfig> memory_config = std::nullopt);
+    const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
 
 struct Conv2dOperation{

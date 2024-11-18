@@ -172,11 +172,11 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def("__eq__", [](const LegacyShape& self, const LegacyShape& other) { return self == other; })
         .def("__eq__", [](const LegacyShape& self, const std::vector<uint32_t>& other) { return self == LegacyShape{other}; })
         .def("__eq__", [](const LegacyShape& self, const std::array<uint32_t, 4>& other) { return self == LegacyShape{other}; })
-        .def("__eq__", [](const LegacyShape& self, const py::none) { return false; })
+        .def("__eq__", [](const LegacyShape& self, const py::none&) { return false; })
         .def("__getitem__", [](const LegacyShape& self, const std::int64_t index) { return self[index]; })
         .def(
             "__getitem__",
-            [](const LegacyShape& self, const py::slice slice) {
+            [](const LegacyShape& self, const py::slice& slice) {
                 size_t start = 0, stop = 0, step = 0, slicelength = 0;
                 if (!slice.compute(self.rank(), &start, &stop, &step, &slicelength)) {
                     throw std::runtime_error("Invalid slice");

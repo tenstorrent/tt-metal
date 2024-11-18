@@ -57,7 +57,7 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
-                const std::optional<const MemoryConfig> memory_config,
+                const std::optional<const MemoryConfig>& memory_config,
                 const uint8_t& queue_id) -> Result {
                 return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
@@ -96,7 +96,7 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
-                const std::optional<const MemoryConfig> memory_config,
+                const std::optional<const MemoryConfig>& memory_config,
                 const uint8_t& queue_id) -> Result {
                 return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },

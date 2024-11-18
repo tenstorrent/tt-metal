@@ -825,8 +825,8 @@ Result conv2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config) {
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const MemoryConfig>& memory_config) {
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =

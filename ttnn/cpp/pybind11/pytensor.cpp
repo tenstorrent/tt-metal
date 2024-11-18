@@ -787,7 +787,7 @@ void pytensor_module_types(py::module &m_tensor) {
 void pytensor_module(py::module &m_tensor) {
     m_tensor.def(
         "decorate_external_operation",
-        [](const py::function &function, std::optional<std::string> function_name) -> py::function {
+        [](const py::function &function, const std::optional<std::string>& function_name) -> py::function {
             return py::cpp_function(std::function([function, function_name](
                                                         const py::args &args, const py::kwargs &kwargs) {
                 ZoneScopedN("TT_DNN_FALLBACK_OP");

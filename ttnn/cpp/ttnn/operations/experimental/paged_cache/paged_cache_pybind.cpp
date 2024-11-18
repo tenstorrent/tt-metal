@@ -27,10 +27,10 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             [] (const PagedUpdateCacheType& self,
                 const ttnn::Tensor& cache_tensor,
                 const ttnn::Tensor& input_tensor,
-                const std::vector<uint32_t> update_idxs,
-                const std::optional<const ttnn::Tensor> update_idxs_tensor,
+                const std::vector<uint32_t>& update_idxs,
+                const std::optional<const ttnn::Tensor>& update_idxs_tensor,
                 const std::optional<bool> share_cache,
-                const std::optional<const ttnn::Tensor> page_table,
+                const std::optional<const ttnn::Tensor>& page_table,
                 const uint32_t batch_offset,
                 std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
                     return self(cache_tensor, input_tensor, update_idxs, update_idxs_tensor, share_cache, page_table, batch_offset, compute_kernel_config);
