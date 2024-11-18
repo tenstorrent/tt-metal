@@ -1182,7 +1182,7 @@ void Matmul::validate(
 
                 // No padding
                 TT_FATAL(M == per_core_M, "Error");
-                TT_FATAL(M == in0_tile_shape[0], "currently only support in0 tensor height of tile height");
+                TT_FATAL(M == 1, "currently only support in0 tensor height of tile height");
                 TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
                 TT_FATAL(K % program_config.in0_block_w == 0, "Error");
                 TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
