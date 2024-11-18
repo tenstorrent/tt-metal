@@ -16,33 +16,58 @@ set(BH_HAL_SRC
     blackhole/bh_hal_idle_eth.cpp
 )
 
+set(HAL_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd
+)
+
 add_library(gs_hal OBJECT ${GS_HAL_SRC})
 add_library(HAL::grayskull ALIAS gs_hal)
 target_include_directories(
     gs_hal
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/grayskull
+    PRIVATE
+        ${HAL_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/grayskull
 )
-target_link_directories(gs_hal PRIVATE hw)
+target_link_libraries(
+    gs_hal
+    PRIVATE
+        hw
+        fmt::fmt-header-only
+)
 
 add_library(wh_hal OBJECT ${WH_HAL_SRC})
 add_library(HAL::wormhole ALIAS wh_hal)
 target_include_directories(
     wh_hal
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
-    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+    PRIVATE
+        ${HAL_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
 )
-target_link_directories(wh_hal PRIVATE hw)
+target_link_libraries(
+    wh_hal
+    PRIVATE
+        hw
+        fmt::fmt-header-only
+)
 
 add_library(bh_hal OBJECT ${BH_HAL_SRC})
 add_library(HAL::blackhole ALIAS bh_hal)
 target_include_directories(
     bh_hal
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
+    PRIVATE
+        ${HAL_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
 )
-target_link_directories(bh_hal PRIVATE hw)
+target_link_libraries(
+    bh_hal
+    PRIVATE
+        hw
+        fmt::fmt-header-only
+)
 
 set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
