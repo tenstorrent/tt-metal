@@ -593,7 +593,7 @@ void insert_buffer_and_shape_for_device(
     Device* target_device, const Tensor& shard, Tensor& tensor_to_modify, std::optional<int> buffer_index) {
     ZoneScopedN("InsertBufferAndShapeForDevice");
     std::visit(
-        [target_device, &shard, &tensor_to_modify, buffer_index](auto&& s) {
+        [target_device, &shard, buffer_index](auto&& s) {
             using T = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 s.insert_buffer_and_shape_for_device(

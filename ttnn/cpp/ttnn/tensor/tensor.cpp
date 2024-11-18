@@ -818,8 +818,7 @@ Tensor allocate_tensor_on_device(
     Layout layout,
     distributed::MeshDevice* mesh_device,
     const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile
-    ) {
+    const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (multi-device)
     Tensor device_tensor = Tensor(mesh_device->get_devices());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
@@ -828,21 +827,22 @@ Tensor allocate_tensor_on_device(
 
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
         auto& worker = workers[worker_index];
-        worker->push_work([shape, data_type, layout, worker, memory_config, tile, device_tensor, worker_index]() mutable {
-            auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config, tile);
-            insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
+        worker->push_work(
+            [shape, data_type, layout, worker, memory_config, tile, device_tensor, worker_index]() mutable {
+                auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config, tile);
+                insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
 
-            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
-                device_tensor.set_shape(ttnn::Shape(shape));
-                device_tensor.set_dtype(data_type);
-                device_tensor.set_layout(layout);
-                if (tile.has_value()) {
-                    device_tensor.set_tile(tile.value());
+                uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
+                if (not num_workers_completed) {
+                    device_tensor.set_shape(ttnn::Shape(shape));
+                    device_tensor.set_dtype(data_type);
+                    device_tensor.set_layout(layout);
+                    if (tile.has_value()) {
+                        device_tensor.set_tile(tile.value());
+                    }
+                    device_tensor.tensor_attributes->metadata_populated = true;
                 }
-                device_tensor.tensor_attributes->metadata_populated = true;
-            }
-        });
+            });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
     return device_tensor;
