@@ -57,7 +57,7 @@ static Tensor reduce_impl(
             rank);
     }
 
-    if (dim.size() == 1) {
+    if (dim.size() == 1 && rank == 4) {
         if (dim[0] == rank - 3) {
             // Pad before running the op to only pay cost of formatting once
             auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), true);
