@@ -76,7 +76,6 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 
 ## Microbenchmarks
 - [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
-- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
     
 ---
 
