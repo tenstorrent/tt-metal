@@ -117,18 +117,19 @@ def run_full(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=None,
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=enable_subblock_padding,
     )
-
+    compute_config = ttnn.GetComputeKernelConfig(
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+    )
     if override_sharding_config:
         if len(core_grid) == 2:
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core_grid[0], core_grid[1])})
@@ -152,6 +153,7 @@ def run_full(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         groups=groups,
     )
 
