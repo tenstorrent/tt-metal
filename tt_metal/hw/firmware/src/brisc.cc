@@ -306,9 +306,9 @@ inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
 inline void set_ncrisc_kernel_resume_deassert_address() {
 #ifdef NCRISC_HAS_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    WAYPOINT("INW");
+    WAYPOINT("INRW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
-    WAYPOINT("IND");
+    WAYPOINT("INRD");
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 #endif
 }
