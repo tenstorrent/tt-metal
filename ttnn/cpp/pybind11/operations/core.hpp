@@ -22,12 +22,14 @@ void py_module_types(py::module& module) {
 
     py::class_<GrayskullComputeKernelConfig>(module, "GrayskullComputeKernelConfig")
         .def(
-            py::init<MathFidelity, bool>(),
+            py::init<MathFidelity, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
-            py::arg("math_approx_mode") = true)
+            py::arg("math_approx_mode") = true,
+            py::arg("dst_full_sync_en") = false)
         .def_readwrite("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
-        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode);
+        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode)
+        .def_readwrite("dst_full_sync_en", &GrayskullComputeKernelConfig::dst_full_sync_en);
 
     py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
         .def(

@@ -140,6 +140,10 @@ def is_grayskull(device):
     return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
 
 
+def is_blackhole(device):
+    return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+
+
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 format_input_tensor = ttnn._ttnn.device.format_input_tensor
@@ -148,5 +152,27 @@ pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
+
+def GetComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=False,
+    dst_full_sync_en=False,
+):
+    device = ttnn.GetDefaultDevice()
+    if is_wormhole_b0(device) or is_blackhole(device):
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
+            math_approx_mode=math_approx_mode,
+            dst_full_sync_en=dst_full_sync_en,
+        )
+    else:
+        return ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=math_fidelity, math_approx_mode=math_approx_mode, dst_full_sync_en=dst_full_sync_en
+        )
+
 
 __all__ = []
