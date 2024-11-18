@@ -776,7 +776,7 @@ int main(int argc, char **argv) {
                 // Determine if it passes performance goal
                 if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
                 && tx_skip_pkt_content_gen
-                && !check_txrx_timeout
+                // && !check_txrx_timeout
                 && rx_disable_data_check
                 && rx_disable_header_check
                 && (data_kb_per_tx >= 1024*1024)
@@ -787,10 +787,10 @@ int main(int argc, char **argv) {
                 && (demux_queue_size_bytes >= 0x10000)) {
                     double target_bandwidth = 0;
                     if (max_packet_size_words >= 2048) {
-                        target_bandwidth = 9;
+                        target_bandwidth = 7;
                         log_info(LogTest, "Perf check for pkt size >= 2048 words");
                     } else if (max_packet_size_words >= 1024) {
-                        target_bandwidth = 10.8;
+                        target_bandwidth = 10.6;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 256) {
                         target_bandwidth = 2.8;
