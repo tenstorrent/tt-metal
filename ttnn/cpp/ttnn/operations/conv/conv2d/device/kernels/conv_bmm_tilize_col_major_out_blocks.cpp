@@ -26,6 +26,8 @@
 // SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
 
+volatile uint32_t* pmon_mem = (volatile uint32_t*)(0x00015200);
+
 inline void tilize_in(
     uint32_t in_cb_id,
     uint32_t in_subblock_h,
@@ -102,6 +104,7 @@ void MAIN {
     constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
 
+    *pmon_mem = 0x12345678;
 
     #ifdef WIDTH_SHARDED
     constexpr uint32_t in0_nblocks_w_tilize   = get_compile_time_arg_val(17);
