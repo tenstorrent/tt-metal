@@ -99,7 +99,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=x.memory_config(),
         )
 
-        ttnn.deallocate(x)
+        # ttnn.deallocate(x)
         w2_in = ttnn.multiply(
             w1_out,
             w3_out,
@@ -111,8 +111,8 @@ class TtLlamaMLP(LightweightModule):
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
+        # ttnn.deallocate(w3_out)
+        # ttnn.deallocate(w1_out)
 
         w2_out = ttnn.linear(
             w2_in,
@@ -124,7 +124,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=w2_in.memory_config(),
         )
 
-        ttnn.deallocate(w2_in)
+        # ttnn.deallocate(w2_in)
 
         if seq_len >= 1024:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
@@ -138,8 +138,8 @@ class TtLlamaMLP(LightweightModule):
                 num_links=1,
                 memory_config=w2_out.memory_config(),
             )
-            ttnn.deallocate(w2_out)
-            result = w2_out_reduced
+            # ttnn.deallocate(w2_out)
+            return w2_out_reduced
         else:
             result = w2_out
 
