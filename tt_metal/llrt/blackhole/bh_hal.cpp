@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_config.h"
+#include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "llrt/hal.hpp"
 #include "llrt/blackhole/bh_hal.hpp"
