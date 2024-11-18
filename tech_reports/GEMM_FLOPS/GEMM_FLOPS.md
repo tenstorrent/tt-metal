@@ -15,24 +15,27 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 
 # Test it yourself!
 
-Assuming you have access to a device (if not, they're available for purchase at Tenstorrent.com!), you can test and see the matrix multiply TFLOPS results for yourself by running:
+The matrix multiply TFLOPS results can be tested on N150 card using:
 
-`pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf` (available in the tt-metal repository) on a N150 card.
+```bash
+pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+```
 
 Alternatively, to test on an N300 card, use the following command:
 
-`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf` on a N300 card.
+```bash
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+``` 
 
-To do so, make sure to have followed the setup instructions guide available at https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md
 
-NB: You'll need to comment out `#@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")` line.
-
-## Points of interest in the tests
+## Design of Experiments
 
 The parameters of interest are 3 fold:
 1. Dimensions: the sizes of the matrix on each edge, denoted as m, n and k
 2. The fidelity of the computation, referred to as lofi, hifi2, hifi3, and hifi4. This affects how many bits of each input datatype is actually ingested during the computation.
 3. Datatype of input/output space. It has been shown that a network layer need not always use all of the bits of a given datatype. But some layers do need the full resolution provided by a given data type, and its higher memory footprint.
+
+For more details please refer to the tech reports [Matrix Engine](tech_reports/matrix_engine/matrix_engine.md) and [Data Formats](tech_reports/data_formats/data_formats.md)
 
 For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different.
 
@@ -40,43 +43,74 @@ For example, when changing the precision of the matrix, for a given size of matr
 
 
 
-## Operations
+## MicroBenchmarks
 
-### Matrix Multiplication
+### Matrix Multiplication TFLOPs on Wormhole (WH)
 
-The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle. \
-This is 2*8\*16\*16 = 4096 muladds in a single cycle. At 1GHz, this is 4 TFLOPs per matrix engine. \
-The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the
-smallest matrix that can be fed into in1.
+The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle. 
+- This is 2*8\*16\*16 = 4096 muladds in a single cycle. 
+- At 1GHz, this is 4 TFLOPs per matrix engine. 
+- The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
 
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
 Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOP per matrix engine.
 
 MATH_FIDELITY is used for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
+- LoFi ->  ~4 TFLOPs \
+- HiFi2 -> ~2 TFLOPs \
+- HiFi3 -> ~1.33 TFLOPs \
+- HiFi4 -> ~1 TFLOPs
 
-LoFi ->  ~4 TFLOPs \
-HiFi2 -> ~2 TFLOPs \
-HiFi3 -> ~1.33 TFLOPs \
-HiFi4 -> ~1 TFLOPs
 
-### Peak Machine FLOPS
+### Utilization derivation formula
 
-Each N300s card is made up of 2 Wormhole ASICs. Each ASIC provides a usable grid of 8 * 8 tensix Cores.
+```
+Utilization = ideal cycles / actual cycles. 
+Ideal cycles = (m * k * n) / (tile_height * tile_width * tile_height) * (cycle_per_tile / num_cores)
+```
+- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64). 
+- For utilization of user-specified grid size, num_cores is the user-specified number of cores. In this microbenchmark, it's 8x8.
+- For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max available is 8x8, but will be extended to 8x9 soon.
+
+
+### Resuls: Peak FLOPS
 
 Depending on the fidelity, datatype, and matrix shape chosen, different peak teraflop values can be achieved.
 
-Below is the table generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using square matrices of sizes ranging from 512x512x512 to 16384x16384x16384. The results include evaluations across various data formats, paired with different levels of math fidelity (bfloat16-HiFi2, bfloat16-HiFi4, bfloat8_b-LoFi, and bfloat4_b-LoFi).
+Below is the results generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using square matrices of sizes ranging from 512x512x512 to 16384x16384x16384. The results include evaluations across various data formats, paired with different levels of math fidelity (bfloat16-HiFi2, bfloat16-HiFi4,  bfloat8_b-HiFi2, bfloat8_b-LoFi, and bfloat4_b-LoFi).
 
 We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
 
 Finally, we present the results in terms of device time, device throughput in TFLOPs, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with 
 
-Utilization = ideal cycles / actual cycles. 
 
-Ideal cycles = (m * k * n) / (tile_height * tile_width * tile_height) * (cycle_per_tile / num_cores). 
+#### TFLOPS plot across all matrix sizes and configurations
 
-Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64). For utilization of user-specified grid size, num_cores is the user-specified number of cores. For utilization of full grid size, num_cores is the maximum number of cores available for compute. 
+![](images/matmul_tflops_5_exp.png)
 
+
+#### Utilization plot across all matrix sizes and configurations, based on the Chip TFLOPs calculated per each Math Fidelity
+
+![](images/matmul_utilization_5_exp.png)
+
+
+#### TFLOPS table, the yellow highlight is for the cases where inputs are read from DRAM instead of SRAM
+
+![](images/matmul_tflops_table_5_exp.png)
+
+
+#### Utilization table, the yellow highlight is for the cases where inputs are read from DRAM instead of SRAM
+
+![](images/matmul_utilization_table_5_exp.png)
+
+
+#### TFLOPS ratio between the results with trace and without-trace. The trace mode has signficiant impact (i.e. higher ratio) when running a sequence of smaller/faster OPs, because the OP dispatch time will be comparable to the OP device runtime.
+
+![](images/mamtul_trace_nontrace_ratio_5_exp.png)
+
+
+
+#### Row table
 
 |     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
