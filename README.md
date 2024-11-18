@@ -76,6 +76,7 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 
 ## Benchmarks
 - [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
+
   
 ---
 
