@@ -745,11 +745,11 @@ void noc_async_read_one_packet(
         Read responses - assigned VCs dynamically
     */
 
-    WAYPOINT("RPW");
+    WAYPOINT("RP2W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RPD");
+    WAYPOINT("RP2D");
 
-    WAYPOINT("NARW");
+    WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
 
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
@@ -767,7 +767,7 @@ void noc_async_read_one_packet(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     noc_reads_num_issued[noc] += 1;
 
-    WAYPOINT("NARD");
+    WAYPOINT("NAOD");
 }
 
 // TODO: write docs
@@ -779,11 +779,11 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
         Read responses - assigned VCs dynamically
     */
 
-    WAYPOINT("RPW");
+    WAYPOINT("RP3W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RPD");
+    WAYPOINT("RP3D");
 
-    WAYPOINT("NARW");
+    WAYPOINT("NASW");
 
 #ifdef ARCH_BLACKHOLE
     // Handles reading from PCIe
@@ -796,7 +796,7 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
         (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
 
-    WAYPOINT("NARD");
+    WAYPOINT("NASD");
 }
 
 // TODO: write docs
@@ -809,11 +809,11 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read responses - assigned VCs dynamically
     */
 
-    WAYPOINT("RPW");
+    WAYPOINT("RP4W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RPD");
+    WAYPOINT("RP4D");
 
-    WAYPOINT("NARW");
+    WAYPOINT("NATW");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, src_noc_addr, dst_local_l1_addr);
@@ -826,7 +826,7 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         noc_reads_num_issued[noc] += 1;
     }
 
-    WAYPOINT("NARD");
+    WAYPOINT("NATD");
 }
 
 // TODO: write docs
@@ -837,10 +837,11 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
         Read responses - assigned VCs dynamically
     */
 
-    WAYPOINT("NARW");
-    WAYPOINT("RPW");
+    WAYPOINT("RP5W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RPD");
+    WAYPOINT("RP5D");
+
+    WAYPOINT("NAUW");
 
 #ifdef ARCH_BLACKHOLE
     // Handles reading from PCIe
@@ -852,7 +853,7 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
         NOC_TARG_ADDR_COORDINATE,
         (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 
-    WAYPOINT("NARD");
+    WAYPOINT("NAUD");
 }
 
 // TODO: write docs
@@ -863,15 +864,15 @@ FORCE_INLINE void noc_async_read_with_state(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    WAYPOINT("NARW");
+    WAYPOINT("NAVW");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc, src_noc_addr, dst_local_l1_addr, size);
 
     while (size > NOC_MAX_BURST_SIZE) {
-        WAYPOINT("RPW");
+        WAYPOINT("RP6W");
         while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-        WAYPOINT("RPD");
+        WAYPOINT("RP6D");
 
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_noc_addr);
@@ -886,9 +887,9 @@ FORCE_INLINE void noc_async_read_with_state(
     }
 
     // left-over packet
-    WAYPOINT("RPW");
+    WAYPOINT("RP7W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RPD");
+    WAYPOINT("RP7D");
 
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_noc_addr);
@@ -898,7 +899,7 @@ FORCE_INLINE void noc_async_read_with_state(
         noc_reads_num_issued[noc] += 1;
     }
 
-    WAYPOINT("NARD");
+    WAYPOINT("NAVD");
 }
 
 FORCE_INLINE
@@ -954,7 +955,7 @@ void noc_async_write_multicast_one_packet(
     bool linked = false,
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
-    WAYPOINT("NMPW");
+    WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
@@ -1253,9 +1254,9 @@ struct InterleavedPow2AddrGenFast {
         uint32_t src_addr = this->get_addr(id, bank_offset_index, bank_index, offset);
         uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
 
-        WAYPOINT("RPW");
+        WAYPOINT("RP1W");
         while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-        WAYPOINT("RPD");
+        WAYPOINT("RP1D");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, size);
 
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
@@ -1549,7 +1550,7 @@ inline void noc_semaphore_set_multicast(
     bool linked = false,
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
-    WAYPOINT("NSMW");
+    WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
         noc,
@@ -1562,7 +1563,7 @@ inline void noc_semaphore_set_multicast(
         linked,
         num_dests,
         multicast_path_reserve);
-    WAYPOINT("NSMD");
+    WAYPOINT("NSND");
 }
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
@@ -1598,7 +1599,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
     bool linked = false,
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
-    WAYPOINT("NSMW");
+    WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len_loopback_src<proc_type, noc_mode>(
         noc,
@@ -1611,7 +1612,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         linked,
         num_dests,
         multicast_path_reserve);
-    WAYPOINT("NSMD");
+    WAYPOINT("NSLD");
 }
 
 inline void noc_async_write_multicast_loopback_src(
