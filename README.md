@@ -54,7 +54,7 @@
 | [ViT (224x224)](./models/demos/wormhole/vit)                                          | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 912     | 1,600      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
 | [Yolo V4 (320x320)](./models/demos/yolov4)                           | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 95      | 300        |             |
-
+| [Segformer Semantic Segmentation (512x512)](./models/demos/segformer)                           | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 90      | 300        |             |
 
 ## NLPs
 | Model                                               | Batch | Hardware                                           | sen/sec | Target sen/sec | Release |
@@ -74,9 +74,10 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th)
 - [YOLOv4 Implementation in TT-NN on WH](./tech_reports/YoloV4-TTNN/yolov4.md)  (updated November 8th)
 
-## Benchmarks
+## Microbenchmarks
 - [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
-  
+- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
+    
 ---
 
 <div align="center">
