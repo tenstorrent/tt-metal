@@ -139,13 +139,20 @@ class TtModelArgs:
         # Reduce full 128k context length for combinations with memory constraints
         # Currently: n150 8b and t3k 70b with 8b/8b/8b MLPs
         # Default folder location for weights and cached files
-        # TODO Generalize for all llama3 weights
-        is_8b = self.dim == 4096 and self.n_layers == 32
-        is_70b = self.dim == 8192 and self.n_layers == 80
-        if self.num_devices == 1 and is_8b or is_70b:
-            self.max_seq_len = 8192 * 4  # 32k
-            self.kv_seq_len = 8192 * 4  # 32k
-            self.sliding_window = 8192 * 4  # 32k
+        # FIXME: Setup the max cache size accordingly depending on the target model, architecture and test type.
+        if (
+            self.num_devices <= 2
+        ):  # for 1-chip or 2-chip devices limit the seqlen to 4K (to avoid OoO on N150/N300 CI tests)
+            self.max_seq_len = 1024 * 4
+            self.kv_seq_len = 1024 * 4
+            self.sliding_window = 1024 * 4
+
+        if (
+            self.n_layers == 1
+        ):  # When running a single layer just reduce the seq len to 128, since we won't be decoding that many iterations
+            self.max_seq_len = 128
+            self.kv_seq_len = 128
+            self.sliding_window = 128
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
