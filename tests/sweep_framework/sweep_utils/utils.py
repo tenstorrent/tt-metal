@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 import random
 from loguru import logger
 from itertools import product
@@ -247,3 +248,41 @@ def complex_from_torch(torch_tensor, dtype, layout, memory_config, device):
         memory_config=memory_config,
     )
     return ttnn.complex_tensor(tt_real, tt_imag)
+
+
+def get_device_grid_size():
+    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
+    assert device_name in ["wormhole_b0", "grayskull"]
+    if device_name == "grayskull":
+        y, x = 9, 12
+    else:
+        y, x = 8, 8
+
+    return y, x
+
+
+def get_sharded_config(input_shape, sharding_strategy, device_grid_size, shard_orientation, tensor_hw_as_shard_shape):
+    assert sharding_strategy in ["block", "width", "height"]
+    assert shard_orientation in ["col_major", "row_major"]
+
+    if shard_orientation == "col_major":
+        orientation = ttnn.ShardOrientation.COL_MAJOR
+    else:
+        orientation = ttnn.ShardOrientation.ROW_MAJOR
+
+    if sharding_strategy == "block":
+        strategy = ttnn.ShardStrategy.BLOCK
+    elif sharding_strategy == "width":
+        strategy = ttnn.ShardStrategy.WIDTH
+    else:
+        strategy = ttnn.ShardStrategy.HEIGHT
+
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape=input_shape,
+        core_grid=device_grid_size,
+        strategy=strategy,
+        orientation=orientation,
+        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+    )
+
+    return sharded_config

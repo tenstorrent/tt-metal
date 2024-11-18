@@ -24,7 +24,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import (
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-
 TIMEOUT = 120
 
 Y, X = get_device_grid_size()
@@ -146,18 +145,18 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                     True,
                     "Innermost dimension must be divisible by the y coordinate of coregrid when using block sharding",
                 )
-            if (pre_sharded_height // Y) // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if (pre_sharded_width // X) // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
+            if (pre_sharded_height // Y) % 32 != 0:
+                return True, "Shard height must be a multiple of input tile size"
+            if (pre_sharded_width // X) % 32 != 0:
+                return True, "Shard width must be a multiple of input tile size"
 
         if sharding_strategy == "width":
             if pre_sharded_width % (Y * X) != 0:
                 return True, "Last dimension must be divisible by a total number of cores when using width sharding"
-            if pre_sharded_height // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if (pre_sharded_width // (X * Y)) // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
+            if pre_sharded_height % 32 != 0:
+                return True, "Shard height must be a multiple of input tile size"
+            if (pre_sharded_width // (X * Y)) % 32 != 0:
+                return True, "Shard width must be a multiple of input tile size"
 
         else:
             if pre_sharded_height % (Y * X) != 0:
@@ -165,22 +164,20 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                     True,
                     "Prod of all dimensions except the innermost must be divisible by a total number of cores when using width sharding",
                 )
-            if (pre_sharded_height // (X * Y)) // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if pre_sharded_width // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
+            if (pre_sharded_height // (X * Y)) % 32 != 0:
+                return True, "Shard height must be a multiple of input tile size"
+            if pre_sharded_width % 32 != 0:
+                return True, "Shard width must be a multiple of input tile size"
 
     else:
-        if input_shape[-2] // 32 <= 0 or input_shape[-1] // 32 <= 0:
+        if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
             return (
                 True,
-                "Last two dimensions must be alteast 32",
+                "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
             )
 
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Input to eltwise binary must be tilized"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row Major layout and bfloat8_b are not supported"
 
     return False, None
 
@@ -212,11 +209,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    low = -(input_shape[-2] - 2)
-    high = input_shape[-1]
-    diagonal = torch.randint(low, high, (1,)).item()
-
-    torch_output_tensor = torch.triu(torch_input_tensor_a, diagonal)
+    golden_function = ttnn.get_golden_function(ttnn.hardtanh)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -227,7 +221,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.triu(input_tensor_a, diagonal=diagonal, memory_config=sharded_config)
+    output_tensor = ttnn.hardtanh(input_tensor_a, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
