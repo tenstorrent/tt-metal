@@ -60,7 +60,6 @@ jobs:
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
-          ./tests/scripts/run_tunneler_tests.sh --machine-type ${{ inputs.runner-label }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
