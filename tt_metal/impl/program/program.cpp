@@ -119,7 +119,7 @@ class Program_ {
 
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
 
-    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core) const;
+    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
     size_t num_semaphores () const;
     void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
@@ -777,18 +777,18 @@ void detail::Program_::validate_circular_buffer_region(const Device *device) {
     }
 }
 
-size_t Program::num_semaphores(const CoreCoord &core) const { return semaphores_on_core(core).size(); }
+size_t Program::num_semaphores(const CoreCoord &core, CoreType core_type) const { return semaphores_on_core(core, core_type).size(); }
 
 size_t detail::Program_::num_semaphores() const { return semaphores_.size(); }
 
 size_t Program::num_semaphores() const { return pimpl_->num_semaphores(); }
 
 void detail::Program_::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
-    auto semaphores_on_core = this->semaphores_on_core(logical_core);
 
     uint64_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
+    auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
         llrt::write_hex_vec_to_core(
             device.id(),
@@ -1658,18 +1658,18 @@ void detail::Program_::release_buffers() { owned_buffer_pool = {}; }
 
 void Program::release_buffers() { pimpl_->release_buffers(); }
 
-std::vector<std::reference_wrapper<const Semaphore>> detail::Program_::semaphores_on_core(const CoreCoord &core) const {
+std::vector<std::reference_wrapper<const Semaphore>> detail::Program_::semaphores_on_core(const CoreCoord &core, CoreType core_type) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
     for (const Semaphore &s : this->semaphores_) {
-        if (s.initialized_on_logical_core(core)) {
+        if (s.initialized_on_logical_core(core) && s.core_type() == core_type) {
             semaphores.emplace_back(std::cref(s));
         }
     }
     return semaphores;
 }
 
-std::vector<std::reference_wrapper<const Semaphore>> Program::semaphores_on_core(const CoreCoord &core) const {
-    return pimpl_->semaphores_on_core(core);
+std::vector<std::reference_wrapper<const Semaphore>> Program::semaphores_on_core(const CoreCoord &core, CoreType core_type) const {
+    return pimpl_->semaphores_on_core(core, core_type);
 }
 
 bool detail::Program_::is_finalized() const { return this->finalized_; }

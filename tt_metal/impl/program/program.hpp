@@ -122,9 +122,9 @@ class Program {
 
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
 
-    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core) const;
+    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
-    size_t num_semaphores ( const CoreCoord & core ) const;
+    size_t num_semaphores ( const CoreCoord & core, CoreType core_type ) const;
     size_t num_semaphores () const;
     void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
