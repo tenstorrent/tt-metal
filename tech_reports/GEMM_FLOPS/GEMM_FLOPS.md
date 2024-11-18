@@ -110,7 +110,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 
 
 
-#### Row table
+#### The full results table
 
 |     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
