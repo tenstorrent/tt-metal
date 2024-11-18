@@ -12,38 +12,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from torch.nn import functional as F
 
 
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        [[4, 12, 64, 64], [12, 1, 1]],
-        [[4, 16, 64, 64], [16, 1, 1]],
-        [[64, 3, 64, 64], [3, 1, 1]],
-        [[64, 4, 64, 64], [4, 1, 1]],
-        [[16, 6, 64, 64], [6, 1, 1]],
-        [[16, 8, 64, 64], [8, 1, 1]],
-        [[1, 1], [1, 1, 32]],
-    ],
-)
-def test_unequal_ranks(device, shapes):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor_a * torch_input_tensor_b
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
-
-
 # fmt: off
 @pytest.mark.parametrize("scalar", [3.0])
 # fmt: on

@@ -104,33 +104,9 @@ inline Tensor binary_impl(
 }
 
 template <BinaryOpType binary_op_type>
-auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_tensor_b_arg, const std::optional<Tensor> &optional_output_tensor) {
+auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_tensor_b_arg) {
     Tensor input_tensor_a = input_tensor_a_arg;
     Tensor input_tensor_b = input_tensor_b_arg;
-
-    auto rank_a = input_tensor_a.get_shape().rank();
-    auto rank_b = input_tensor_b.get_shape().rank();
-
-    if(rank_a != rank_b){
-
-        auto max_rank = std::max(rank_a, rank_b);
-        auto min_rank = std::min(rank_a, rank_b);
-
-        if(optional_output_tensor.has_value()) {
-            auto opt_rank = optional_output_tensor.value().get_shape().rank();
-            TT_FATAL( max_rank == opt_rank,
-            "Output Tensor rank {} doesn't match input tensor rank {}.", opt_rank, max_rank );
-        }
-
-        std::vector<int32_t> shape_vector(max_rank, 1);
-        auto& reshaped_tensor = (rank_a > rank_b) ? input_tensor_b : input_tensor_a;
-        auto s_b = reshaped_tensor.get_shape();
-        for(int i=0; i < min_rank; ++i){
-            shape_vector[(max_rank - min_rank) + i] = s_b[i];
-        }
-        reshaped_tensor = ttnn::reshape(reshaped_tensor, shape_vector);
-
-    }
 
     // TODO: #7731 (Remove calls to repeat )
     auto repeat_smaller = [](const auto &first, auto &second) {
@@ -178,9 +154,8 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-
     auto [input_tensor_a, input_tensor_b] =
-        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor);
+        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
 
     return ttnn::prim::binary(
         queue_id,
@@ -275,7 +250,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     }
 
     auto [input_tensor_a, input_tensor_b] =
-        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor);
+        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
 
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
