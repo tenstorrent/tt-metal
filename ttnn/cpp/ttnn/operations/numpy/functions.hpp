@@ -69,6 +69,7 @@ static Tensor full(
             }
             return output;
         } else {
+            // TODO
             auto device_buffer = std::get<DeviceStorage>(optional_output_tensor.value().tensor_attributes->storage).get_buffer();
             bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 

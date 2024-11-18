@@ -352,17 +352,35 @@ def test_arange(device, start, end, step):
     ],
 )
 def test_empty(device, input_shapes):
-    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
-    torch_output_tensor = torch.empty(torch_input_tensor.shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert list(torch_output_tensor.shape) == list(output_tensor.shape)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 1, 32, 32],
+        [1, 1, 320, 384],
+        [1, 3, 320, 384],
+        [2, 640, 64, 64],
+        [2, 1280, 64, 64],
+    ],
+)
+def test_empty(mesh_device, input_shapes):
+    torch_output_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
+
+    output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(mesh_device))
+    for output_tensor in output_tensors:
+        assert list(torch_output_tensor.shape) == list(output_tensor.shape)
 
 
 @pytest.mark.parametrize(

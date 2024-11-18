@@ -233,7 +233,10 @@ struct Empty {
         const Layout& layout,
         distributed::MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
+        Tensor device_tensor = allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
+        device_tensor.wait_for_tensor_metadata_populated();
+        device_tensor.wait_for_tensor_data_populated();
+        return device_tensor;
     }
 };
 
