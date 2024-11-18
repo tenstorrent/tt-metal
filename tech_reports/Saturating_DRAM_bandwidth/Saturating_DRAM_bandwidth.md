@@ -1,6 +1,21 @@
 # Saturating DRAM bandwidth
 This document explains how we achieved over 92% DRAM bandwidth utilization on Tenstorrent Wormhole and Grayskull cards. On Grayskull, there are 8 DRAM banks placed on the grid, and on Wormhole there are 12 DRAM banks placed on the grid. We use DRAM reader kernels (RISC-V cores) to access the DRAM bank and issue read requests through NoC APIs. When receiving data from DRAM banks, the readers wait on a barrier until all data are returned.
 
+To test the dram bandwidth achievable on the Wormhole device, build the tt-metal repo with
+
+```
+./build_metal.sh --enable-profiler --build-tests
+```
+
+and run with 
+
+```
+pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_all_core -k wormhole_b0
+```
+
+The achieved bandwidth will show on the output.
+
+
 ## Reader data movement kernel saturating DRAM bandwidth of a single bank
 To achieve maximum bandwidth, the first step is saturating a single DRAM bank using one DRAM reader kernel. The DRAM reader issues read requests to the NoC, and the NoC transfers the request to a single DRAM bank. Once the bank receives the requests, it sends back the data to the reader core. 
 
