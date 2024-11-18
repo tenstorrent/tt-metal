@@ -7,7 +7,7 @@ import torch
 import ttnn
 import ttnn
 
-"""
+
 def test_tile_major_reshape(device):
     torch.manual_seed(0)
 
@@ -109,23 +109,4 @@ def test_tile_major_reshape_var(device):
     x = x.reshape(final_shape)
     eq = torch.equal(x, tt_got_back)
 
-    assert eq
-"""
-
-
-def test_1d_issue(device):
-    torch.manual_seed(0)
-
-    N = 1
-    C = 32
-    H = 32
-    W = 32
-    final_shape = [N, C, H, W]
-    x = torch.randn((1, 1, 1, 32768), dtype=torch.float32)
-
-    xtt = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
-    xtt = ttnn.reshape(xtt, final_shape)
-    xtt = ttnn.reshape(xtt, [1, 1, 1, 32768])
-    tt_got_back = ttnn.to_torch(xtt)
-    eq = torch.equal(x, tt_got_back)
     assert eq
