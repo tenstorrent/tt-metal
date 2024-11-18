@@ -104,18 +104,20 @@ def run_conv_transpose2d(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    compute_config = ttnn.GetComputeKernelConfig(
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -139,6 +141,7 @@ def run_conv_transpose2d(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         groups=groups,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
