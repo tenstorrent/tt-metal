@@ -2,43 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdlib>
-
 #include "hal.hpp"
 
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/third_party/umd/device/cluster.h"
 
+#include "get_platform_architecture.hpp"
 namespace tt {
 
 namespace tt_metal {
 
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
-Hal::Hal() {
-    this->arch_ = tt::ARCH::Invalid;
-    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
-        auto arch_env = std::getenv("ARCH_NAME");
-        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
-        this->arch_ = tt::get_arch_from_string(arch_env);
-    }else {
-        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        //TT_FATAL(physical_mmio_device_ids.size() > 0, "Could not detect any devices");
-        if (physical_mmio_device_ids.size() > 0) {
-            this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-            for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
-                chip_id_t device_id = physical_mmio_device_ids.at(i);
-                tt::ARCH detected_arch = detect_arch(device_id);
-                TT_FATAL(
-                    this->arch_ == detected_arch,
-                    "Expected all devices to be {} but device {} is {}",
-                    get_arch_str(this->arch_),
-                    device_id,
-                    get_arch_str(detected_arch));
-            }
-        }
-    }
+Hal::Hal() : arch_(get_platform_architecture()) {
+
     switch (this->arch_) {
         case tt::ARCH::GRAYSKULL: initialize_gs();
         break;

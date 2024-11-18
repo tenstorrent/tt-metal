@@ -51,6 +51,8 @@
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tt_metal/common/core_coord.hpp"
 
+#include "get_platform_architecture.hpp"
+
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 
@@ -81,26 +83,11 @@ Cluster::Cluster() {
 }
 
 void Cluster::detect_arch_and_target() {
-    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
-        this->target_type_ = TargetDevice::Simulator;
-        auto arch_env = getenv("ARCH_NAME");
-        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
-        this->arch_ = tt::get_arch_from_string(arch_env);
-    }else {
-        this->target_type_ = TargetDevice::Silicon;
-        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-        for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
-            chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
-            tt::ARCH detected_arch = detect_arch(device_id);
-            TT_FATAL(
-                this->arch_ == detected_arch,
-                "Expected all devices to be {} but device {} is {}",
-                get_arch_str(this->arch_),
-                device_id,
-                get_arch_str(detected_arch));
-        }
-    }
+
+    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR_EN")) ? TargetDevice::Simulator : TargetDevice::Silicon;
+
+    this->arch_ = tt_metal::get_platform_architecture();
+
 #ifdef ARCH_GRAYSKULL
     TT_FATAL(
         this->arch_ == tt::ARCH::GRAYSKULL,
