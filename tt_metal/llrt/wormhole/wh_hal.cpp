@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <cstdint>
 
 #include "core_config.h" // ProgrammableCoreType
+#include "noc/noc_parameters.h"
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"

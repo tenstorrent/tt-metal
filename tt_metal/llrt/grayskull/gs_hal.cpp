@@ -8,16 +8,19 @@
 #include <numeric>
 #include <vector>
 
-#include "hal.hpp"
-
 #include "core_config.h" // ProgrammableCoreType
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
+
+#include "hal.hpp"
+
 #include "hal_asserts.hpp"
 
 // FIXME: Eventually this file will be gone
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h" // L1_KERNEL_CONFIG_BASE
+
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // CoreType
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 
