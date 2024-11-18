@@ -244,14 +244,11 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         )
 
         generator = LlamaGenerator(tt_model, model_args, mesh_device)
-        embd = HostEmbedding(model_args)
-        state_dict_prefix = model_args.get_state_dict_prefix("", None)
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     logger.info("Finished loading weights to device.")
 
     # TODO Change this back to 100
-    max_generated_tokens = 2048  # Maximum number of tokens to generate per user
+    max_generated_tokens = 100  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -271,11 +268,6 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
                 instruct_mode,
                 max_generated_tokens,
             )
-            # TODO: Move prefill embedding op to device. Can be in prepare_inputs_prefill
-            # Prefill embeddings are on host since we need to mask out the tokens after the prefill length after embeddings are computed
-            pt_prefill_input = [
-                embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(batch_size)
-            ]
 
         # set kv cache to zeros if not first batch, to avoid context leaking when doing multiple batches
         if batch_idx != 0:
@@ -299,7 +291,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
                 profiler.start(f"compile_prefill", iteration=batch_idx)
 
             logits = generator.prefill_forward_single_user_text(
-                tokens=pt_prefill_input[batch_id],
+                tokens=input_tokens_prefill_pt[batch_id],
                 page_table=page_table,
                 user_id=batch_id,
                 last_token_idx=(decoding_pos[batch_id] - 1),
@@ -336,41 +328,14 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
         logger.info("Starting decode...")
 
-        # Create events
-        profiler.start(f"compile_trace_{batch_idx}")
-        op_event = ttnn.create_event(mesh_device)
-        write_event = ttnn.create_event(mesh_device)
-
         # Initial positions
         # Colman: current_pos
         current_pos = torch.tensor(decoding_pos)
 
-        # Compile
-        logger.info(f"Compiling model trace...")
-        # decode_input, current_pos_tensor, rot_mats, page_table_tt = tt_model.prepare_inputs_decode(
-        #     pt_out_padded, current_pos, page_table
-        # )
-        # tt_out = tt_model.ttnn_decode_forward(
-        #     decode_input,
-        #     current_pos_tensor,
-        #     rot_mats=rot_mats,
-        #     page_table=page_table_tt,
-        # )
-        # logits = tt_model.process_output_decode(tt_out)
-        logits = generator.decode_forward_text(pt_out_padded, current_pos, page_table)
-        out_tokens = torch.argmax(logits, dim=-1)
-
-        profiler.end(f"compile_trace_{batch_idx}")
-
-        # Capture Trace
+        # Compile and Capture Trace
         logger.info(f"Capturing model trace...")
-        host_inputs = tt_model.prepare_decode_inputs_host(pt_out_padded, current_pos, page_table)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
         profiler.start(f"capture_trace_{batch_idx}")
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        transformed_inputs = tt_model.transform_decode_inputs_device(*device_inputs)
-        tt_out_trace = tt_model.ttnn_decode_forward(*transformed_inputs)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        trace_id, tt_out_trace, *device_inputs = generator.capture_trace_text(pt_out_padded, current_pos, page_table)
 
         profiler.end(f"capture_trace_{batch_idx}")
 
@@ -384,27 +349,20 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         profiler.start(f"inference_decode", iteration=batch_idx)
         out_tok = pt_out_padded
 
-        ttnn.record_event(1, write_event)
+        # ttnn.record_event(1, write_event)
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             iteration_time_start = time()
-            host_inputs = tt_model.prepare_decode_inputs_host(out_tok, current_pos, page_table)
-            device_inputs = copy_host_to_device(host_inputs, device_inputs, mesh_device=mesh_device)
 
-            # Execute trace
-            ttnn.wait_for_event(0, write_event)
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-            ttnn.record_event(0, op_event)
+            logits = generator.decode_forward_trace_text(
+                trace_id, device_inputs, tt_out_trace, out_tok, current_pos, page_table
+            )
 
             # Update current_pos torch tensor
             current_pos += 1
 
-            # Write to host
-            ttnn.wait_for_event(1, op_event)
-            # TODO: fix this, it should slice into batch on dim 2
-            logits_torch = tt_model.process_output_decode(tt_out_trace)[0, 0, :batch_size]
-            ttnn.record_event(1, write_event)
+            logits_torch = logits[0, 0, :batch_size]
             tokens_torch = torch.argmax(logits_torch, dim=-1)
             out_tok = tokens_torch.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
@@ -529,7 +487,6 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
         "prepare_first_decode_token": profiler.get_duration("prepare_first_decode_token_0"),
         "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
         "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
-        "compile_trace": profiler.get_duration("compile_trace_0"),  # Only for batch 0
         "capture_trace": profiler.get_duration("capture_trace_0"),  # Only for batch 0
         "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),

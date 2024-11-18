@@ -14,7 +14,7 @@ from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.demos.llama3.tt.lm_head import LMHead
-from models.demos.llama3.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.llama3.tt.llama_common import copy_host_to_device, get_prefill_rot_mat, HostEmbedding
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 
@@ -103,11 +103,21 @@ class TtTransformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
-        tt_tokens = self.args.prepare_inputs_ttnn_prefill(
+        tokens = tokens.reshape(1, 1, 1, -1)
+        S = tokens.shape[-1]
+
+        tokens = ttnn.from_torch(
             tokens,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+
+        tokens_embd = self.embd(tokens)
+
         tt_rot_mats_prefill = get_prefill_rot_mat(
-            self.args.head_dim, self.args.max_seq_len, self.mesh_device, seq_len=tokens.shape[-2]
+            self.args.head_dim, self.args.max_seq_len, self.mesh_device, seq_len=S
         )
 
         if page_table is not None:
@@ -121,7 +131,7 @@ class TtTransformer(LightweightModule):
         else:
             tt_page_table = None
 
-        return tt_tokens, tt_rot_mats_prefill, tt_page_table
+        return tokens_embd, tt_rot_mats_prefill, tt_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
