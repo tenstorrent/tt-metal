@@ -909,7 +909,7 @@ def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
     [None, float("-inf")],
 )
 def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
-    if pad_value is not None and is_blackhole:
+    if pad_value is not None and is_blackhole():
         pytest.skip("Blackhole reduce is needed for the full test to work")
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(dims[0], dims[1])

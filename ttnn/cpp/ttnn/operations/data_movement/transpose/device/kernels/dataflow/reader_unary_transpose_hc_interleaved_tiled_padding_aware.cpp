@@ -4,13 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    for (uint32_t i = 0; i < n; ++i) {
-        ptr[i] = val;
-    }
-}
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -55,7 +49,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(tt::CB::c_in1);
         // Fill with padding value
         // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
-        fill_with_val(l1_write_addr, num_writes, padding_val_packed);
+        tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         cb_push_back(tt::CB::c_in1, 1);
     }
 }

@@ -3,15 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
-// Utility functions
-FORCE_INLINE constexpr uint32_t div_up(uint32_t a, uint32_t b) {
-    return static_cast<uint32_t>((a + b - 1) / b);
-}
-
-FORCE_INLINE constexpr uint32_t round_up(uint32_t a, uint32_t b) {
-    return b * div_up(a, b);
-}
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
 
@@ -40,9 +32,9 @@ void kernel_main() {
     constexpr uint8_t NUM_FACES_H = TILE_HEIGHT / FACE_HEIGHT;
     constexpr uint8_t NUM_FACES_W = TILE_WIDTH / FACE_WIDTH;
 
-    constexpr uint32_t C_p = round_up(C, TILE_HEIGHT);
-    constexpr uint32_t H_p = round_up(H, TILE_HEIGHT);
-    constexpr uint32_t W_p = round_up(W, TILE_WIDTH);
+    constexpr uint32_t C_p = tt::data_movement::common::round_up(C, TILE_HEIGHT);
+    constexpr uint32_t H_p = tt::data_movement::common::round_up(H, TILE_HEIGHT);
+    constexpr uint32_t W_p = tt::data_movement::common::round_up(W, TILE_WIDTH);
 
     constexpr uint32_t W_t = W_p / TILE_WIDTH;
     constexpr uint32_t H_t = H_p / TILE_HEIGHT;
