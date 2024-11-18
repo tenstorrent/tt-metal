@@ -690,7 +690,11 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
 
     if in0_height_sharded:
         compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-        device_grid_size = ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+        device_grid_size = (
+            ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+            if num_cores == 64
+            else ttnn.CoreGrid(y=1, x=1)
+        )
 
         tt_in0_height_sharded = ttnn.to_memory_config(
             tt_in0_dram,
