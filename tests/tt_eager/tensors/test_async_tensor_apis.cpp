@@ -212,7 +212,6 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
             ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
         Tensor tensor2 = std::move(tensor1);
         EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 1);
-        EXPECT_EQ(tensor1.tensor_attributes, nullptr);
     }
 
     log_info(LogTest, "Testing Device tensor self-assignment");

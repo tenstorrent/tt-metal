@@ -25,7 +25,7 @@ public:
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-    Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
+    Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
 
     const Tile& get_tile() const;
@@ -51,7 +51,7 @@ public:
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-    Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
+    Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
 
     const Tile& get_tile() const;
@@ -79,7 +79,7 @@ public:
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-    Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const;
+    Size get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
 
     Tile get_tile() const;

@@ -18,6 +18,17 @@ set(TYPES
     kernel
 )
 
+include(FetchContent)
+FetchContent_Declare(
+    sfpi
+    URL
+        https://github.com/tenstorrent/sfpi/releases/download/v5.0.0/sfpi-release.tgz
+    URL_HASH MD5=10cacabe92846076cb4d7596e46d06be
+    SOURCE_DIR
+    ${PROJECT_SOURCE_DIR}/runtime/sfpi
+)
+FetchContent_MakeAvailable(sfpi)
+
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
@@ -63,7 +74,7 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 

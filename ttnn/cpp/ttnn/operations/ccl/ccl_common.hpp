@@ -18,6 +18,9 @@
 namespace ttnn {
 namespace ccl {
 
+class FabricEriscDatamoverBuilder;
+class EriscDatamoverBuilder;
+
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,
     const std::vector<Device*>& devices,
@@ -472,7 +475,14 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     Device const* device,
-    ccl::EriscDatamoverBuilder const& edm_builder,
+    FabricEriscDatamoverBuilder const& edm_builder,
+    CoreCoord const& eth_core,
+    NOC noc_id);
+
+KernelHandle generate_edm_kernel(
+   tt::tt_metal::Program& program,
+    Device const* device,
+    EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 

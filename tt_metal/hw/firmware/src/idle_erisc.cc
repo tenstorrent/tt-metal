@@ -98,8 +98,13 @@ int main() {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
-    do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
+    uint32_t *local_mem_ptr = (uint32_t *)__ldm_data_start;
+    uint32_t *l1_data_ptr = (uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
     uint32_t heartbeat = 0;
+    for (int32_t i = 0; i < num_words; i++) {
+        local_mem_ptr[i] = l1_data_ptr[i];
+    }
 
     risc_init();
 
@@ -164,7 +169,7 @@ int main() {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr =
                     NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                        NOC_Y(mailboxes->go_message.master_x), DISPATCH_MESSAGE_ADDR);
+                        NOC_Y(mailboxes->go_message.master_x), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);

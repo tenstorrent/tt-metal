@@ -86,7 +86,9 @@ SECTIONS
   __kernel_init_local_l1_base = .;
 #endif
 
+#if defined(TYPE_FIRMWARE)
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
+#endif
   .data DATA_START : ALIGN(4)
   {
      . = .; /* Force section emission.  */

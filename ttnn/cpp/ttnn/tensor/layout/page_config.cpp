@@ -56,8 +56,8 @@ void PageConfig::validate_alignment(const Alignment& alignment, DataType dtype, 
     std::visit([&](const auto& config) constexpr { config.validate_alignment(alignment, dtype, memory_config); }, config_);
 }
 
-Size PageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, dtype, memory_config); }, config_);
+Size PageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const {
+    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, dtype, memory_config, physical_shard_size); }, config_);
 }
 
 size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
@@ -81,7 +81,13 @@ TilePageConfig::TilePageConfig(const Tile& tile)
  : tile_(tile) {
 }
 
-Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryConfig&) const {
+Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
+    if (memory_config.shard_spec.has_value()) {
+        const auto& shard_spec = memory_config.shard_spec.value();
+        if (shard_spec.physical_shard_shape.has_value()) {
+            return Alignment(shard_spec.physical_shard_shape.value());
+        }
+    }
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
@@ -95,7 +101,7 @@ void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dty
         "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, tile_.get_height());
 }
 
-Size TilePageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
+Size TilePageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>&) const {
     if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK && physical_size.width() != 0 && physical_size.height() != 0) {
         return physical_size;
     }
@@ -119,20 +125,23 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
     const auto element_size = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     auto width_alignment = sizeof(uint32_t) / element_size;
 
-    if(memory_config.shard_spec.has_value() && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (memory_config.shard_spec.has_value()) {
         const auto& shard_spec = memory_config.shard_spec.value();
-        const auto& shard_shape = shard_spec.shape;
-        const auto shard_width = shard_shape[1];
-        TT_FATAL(
-            (shard_width % width_alignment) == 0,
-            "Invalid sharding configuration: For Row Major layout with element size of {} bytes, the innermost dimension must align to {} bytes. "
-            "Buffer data is packed as uint32_t (4 bytes), so the provided shard shape {} does not meet alignment requirements.",
-            element_size, width_alignment, shard_shape
-        );
+        if (shard_spec.physical_shard_shape.has_value()) {
+           return Alignment(shard_spec.physical_shard_shape.value());
+        }
+        if (shard_spec.mode == ShardMode::PHYSICAL && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+            const auto& physical_shard_shape = shard_spec.shape;
+            const auto physical_shard_width = physical_shard_shape[1];
+            TT_FATAL(
+                (physical_shard_width % width_alignment) == 0,
+                "For Row Major layout and shard mode {}, the width of shard shape {} is treated as physical shard width and must be aligned to {} since we pack buffer data as uint32_t.",
+                    shard_spec.mode, physical_shard_shape, width_alignment
+                );
 
-        width_alignment = shard_width;
+            width_alignment = physical_shard_width;
+        }
     }
-
     return Alignment({width_alignment});}
 }
 
@@ -143,21 +152,21 @@ void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType
     const uint32_t page_alignment = sizeof(uint32_t) / element_size;
 
     TT_FATAL((width_alignment % page_alignment) == 0,
-        "Incorrect alignment configuration for Row Major layout: alignment {} requires innermost dimension alignment of {} bytes due to uint32_t (4-byte) packing, but the current alignment size is {}.",
-        alignment, element_size, page_alignment);
+        "Incorrect alignment configuration for Row Major layout: innermost dimension alignment must be aligned to {} bytes since we pack buffer data as uint32_t. With element size of {} byte(s), alignment {} must be a multiple of alignment {}.",
+        sizeof(uint32_t), element_size, alignment, page_alignment);
 
-    if(memory_config.shard_spec.has_value() && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        const auto& shard_spec = memory_config.shard_spec.value();
-        const auto& shard_shape = shard_spec.shape;
-        const auto shard_width = shard_shape[1];
+    // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as width_alignment
+    if (memory_config.shard_spec.has_value() && memory_config.shard_spec.value().mode == ShardMode::PHYSICAL && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto& physical_shard_shape = memory_config.shard_spec.value().shape;
+        const auto physical_shard_width = physical_shard_shape[1];
         TT_FATAL(
-            width_alignment % shard_width == 0,
-            "Alignment mismatch for sharded tensor: Expected alignment width of {} to match shard shape {} for Row Major layout.",
-            width_alignment, shard_shape);
+            physical_shard_width % width_alignment == 0,
+            "Alignment mismatch for sharded tensor: Expected physical shard shape {} to be aligned to {} along the width for Row Major layout.",
+            physical_shard_width, width_alignment);
     }
 }
 
-Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
+Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
         return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
     }
@@ -167,10 +176,9 @@ Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtyp
     }
 
     if (memory_config.shard_spec.has_value() && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        const auto& shard_spec = memory_config.shard_spec.value();
-        const auto& shard_shape = shard_spec.shape;
+        TT_FATAL(physical_shard_size.has_value(), "For width or block sharded tensors, Row Major page width comes from physical shard size so it must be provided!");
 
-        return Size(1, shard_shape[1]);
+        return Size(1, physical_shard_size.value().width());
     }
 
     return Size(1, physical_size.width());

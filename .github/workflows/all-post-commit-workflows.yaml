@@ -168,6 +168,26 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+  code-analysis:
+    needs: build-docker-image-2204
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04-amd64
+  tt-train-cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/tt-train-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
   profiler-regression:
     needs: build-artifact-profiler
     uses: ./.github/workflows/run-profiler-regression.yaml
