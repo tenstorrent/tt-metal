@@ -95,7 +95,7 @@ class TtLayerNorm(LightweightModule):
             if out_sharded:
                 return x
             x_interleaved = ttnn.sharded_to_interleaved(x)
-            x.deallocate(True)
+            # x.deallocate(True)
             return x_interleaved
         else:  # Interleaved rmsnorm does not need program or memory configs
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"

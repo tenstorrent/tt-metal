@@ -200,7 +200,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
     # TODO Miguel: Setup max sequence length depending on the model being used to actually fit on device
     # Reduce max seq len and KV cache seq_len params to speed up the test
-    model_args.max_seq_len = 512
+    model_args.max_seq_len = 4096
     model_args.kv_seq_len = model_args.max_seq_len
 
     if single_layer:
@@ -251,7 +251,7 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
     logger.info("Finished loading weights to device.")
 
     # TODO Change this back to 100
-    max_generated_tokens = 20  # Maximum number of tokens to generate per user
+    max_generated_tokens = 2048  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -347,21 +347,19 @@ def run_llama3_demo(user_input, single_layer, mesh_device, instruct_mode, is_ci_
 
         # Compile
         logger.info(f"Compiling model trace...")
-        decode_input, current_pos_tensor, rot_mats, page_table_tt = tt_model.prepare_inputs_decode(
-            pt_out_padded, current_pos, page_table
-        )
-        tt_out = tt_model.ttnn_decode_forward(
-            decode_input,
-            current_pos_tensor,
-            rot_mats=rot_mats,
-            page_table=page_table_tt,
-        )
-        logits = tt_model.process_output_decode(tt_out)
-        # logits = generator.decode_forward_text(
+        # decode_input, current_pos_tensor, rot_mats, page_table_tt = tt_model.prepare_inputs_decode(
         #     pt_out_padded, current_pos, page_table
         # )
+        # tt_out = tt_model.ttnn_decode_forward(
+        #     decode_input,
+        #     current_pos_tensor,
+        #     rot_mats=rot_mats,
+        #     page_table=page_table_tt,
+        # )
+        # logits = tt_model.process_output_decode(tt_out)
+        logits = generator.decode_forward_text(pt_out_padded, current_pos, page_table)
         out_tokens = torch.argmax(logits, dim=-1)
-        print(f"{out_tokens=}")
+
         profiler.end(f"compile_trace_{batch_idx}")
 
         # Capture Trace
