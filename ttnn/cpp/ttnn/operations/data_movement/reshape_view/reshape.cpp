@@ -55,7 +55,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn
     auto tensor_shape_with_padding = tensor_shape.padded_shape();
 
     //Constraint in device kernel
-    uint32_t ROW_MAJOR_WIDTH = 8;
+    uint32_t ROW_MAJOR_WIDTH = 32/tensor.element_size();
     ttnn::Tensor reshaped_rm_tensor;
     if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0)) {
         auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
@@ -109,7 +109,6 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     if (tensor_shape == shape) {
         return tensor;
     }
-
     bool this_is_view = tensor_shape[-1] == shape[-1];
 
     // For Tensors already on host or if the page size matches, we can do a view
