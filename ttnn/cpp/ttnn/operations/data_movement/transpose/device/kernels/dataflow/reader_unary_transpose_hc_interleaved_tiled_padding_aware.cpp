@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
@@ -60,5 +58,4 @@ void kernel_main() {
         fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         cb_push_back(tt::CB::c_in1, 1);
     }
-
 }

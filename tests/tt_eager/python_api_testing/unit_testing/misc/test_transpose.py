@@ -9,7 +9,7 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, is_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -874,5 +874,52 @@ def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 17, 1, 1],
+        [1, 1, 16, 1],
+        [1, 1, 17, 1],
+        [1, 1, 1, 17],
+        [2, 1, 1, 1],
+        [2, 33, 33, 33],
+    ],
+)
+@pytest.mark.parametrize(
+    "dims",
+    [
+        (1, 2),
+        (0, 2),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.float32, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "pad_value",
+    [None, float("-inf")],
+)
+def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
+    if pad_value is not None and is_blackhole:
+        pytest.skip("Blackhole reduce is needed for the full test to work")
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(dims[0], dims[1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, dims[0], dims[1], pad_value=pad_value)
+    if pad_value is not None:
+        a = ttnn.min(
+            tt_output
+        )  # if min becomes padding aware, this will fail, so feel free to delete this test then @future op writer
+        assert ttnn.to_torch(a) == float("-inf")
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)

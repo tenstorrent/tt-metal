@@ -33,6 +33,7 @@ void kernel_main() {
     constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(7);
     constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(8);
     constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(9);
+    constexpr bool needs_padding = get_compile_time_arg_val(10) == 1;
 
     // Derived compile-time constants
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
@@ -170,8 +171,9 @@ void kernel_main() {
     }
 
     // add padding
-    if constexpr (C_p > C) {
+    if constexpr (needs_padding) {
         cb_wait_front(tt::CB::c_in1, 1);
+
         uint32_t l1_read_ptr = get_read_ptr(tt::CB::c_in1);
 
         constexpr uint32_t c_t = C_t - 1;

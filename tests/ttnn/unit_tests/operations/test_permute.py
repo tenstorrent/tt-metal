@@ -146,3 +146,17 @@ def test_permute_5d(shape, perm, device):
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize("pad_value", [float("-inf"), None])
+def test_permute_pad_value(device, pad_value):
+    input_a = torch.randn((2, 11, 33, 17), dtype=torch.bfloat16)
+    torch_output = torch.permute(input_a, (3, 2, 1, 0))
+
+    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_output = ttnn.permute(tt_input, (3, 2, 1, 0), pad_value=pad_value)
+    if pad_value is not None:
+        a = ttnn.min(tt_output)
+        assert ttnn.to_torch(a) == float("-inf")
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)

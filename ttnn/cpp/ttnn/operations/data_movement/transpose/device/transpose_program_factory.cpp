@@ -545,7 +545,7 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     }
 }
 
-operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const Tensor &a, Tensor &output) {
+operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const Tensor &a, Tensor &output, const std::optional<float>& pad_value) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
@@ -556,7 +556,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     uint32_t num_tensor_tiles = a.volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t num_output_tiles = output.volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1], N = a.get_logical_shape()[0];
-    bool needs_padding = C % TILE_HEIGHT != 0;
+    bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
     uint32_t padded_num_tensor_tiles = num_output_tiles / (output.get_padded_shape()[2] / tile_shape[0]); // only last row of Ct should have padding
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -587,19 +587,20 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     tt::tt_metal::Buffer *src_buffer = a.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    float pad_value = 0.0f;
     uint32_t element_size = a.element_size();
     uint32_t padding_val_packed = 0;
     uint32_t num_writes = 0;
-    if (C % TILE_HEIGHT != 0) {
-        uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-        num_writes = face_shape[1]/num_packed_values;
-        if (a.get_dtype() == DataType::BFLOAT16) {
-            padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-        } else if (num_packed_values == 2) {
-            padding_val_packed = static_cast<uint32_t>(pad_value) | (static_cast<uint32_t>(pad_value) << 16);
-        } else {
-            padding_val_packed = std::bit_cast<uint32_t>(pad_value);;
+    if (pad_value.has_value()) {
+        if (C % tile_shape[1] != 0) {
+            uint32_t num_packed_values = sizeof(uint32_t) / element_size;
+            num_writes = face_shape[1]/num_packed_values;
+            if (a.get_dtype() == DataType::BFLOAT16) {
+                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
+            } else if (num_packed_values == 2) {
+                padding_val_packed = static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
+            } else {
+                padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());;
+            }
         }
     }
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, num_writes, padding_val_packed, (uint32_t) needs_padding};
@@ -615,7 +616,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args =
-    {(std::uint32_t)dst_is_dram, a.element_size(), tt::CB::c_in0, C, H, W, tile_shape[0], tile_shape[1], face_shape[0], face_shape[1]};
+    {(std::uint32_t)dst_is_dram, a.element_size(), tt::CB::c_in0, C, H, W, tile_shape[0], tile_shape[1], face_shape[0], face_shape[1], (uint32_t) needs_padding};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -658,11 +659,11 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
 
 }
 
-operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output) {
+operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output, const std::optional<float> &pad_value) {
 
     const auto shape = a.get_legacy_shape();
     if (a.get_layout() == Layout::TILE && !a.is_sharded()) {
-        return transpose_hc_multi_core_tiled_interleaved(a, output);
+        return transpose_hc_multi_core_tiled_interleaved(a, output, pad_value);
     }
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
