@@ -62,6 +62,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             groups         (int): the number of groups for grouped convolution.
             bias_tensor    (ttnn.Tensor, optional): the bias tensor. Defaults to `None`.
             conv_config    (ttnn.Conv2dConfig, optional): the configuration for the convolution operation. Defaults to `None`.
+            compute_config (ttnn.DeviceComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
             queue_id       (int): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
@@ -84,6 +85,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                     input_height=input_height,
                     input_width=input_width,
                     conv_config=conv_config,
+                    compute_config=compute_config,
                     groups=groups,
                 )
         )doc",
@@ -104,8 +106,9 @@ void py_bind_conv_transpose2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const conv2d::Conv2dConfig> conv_config,
+                std::optional<const DeviceComputeKernelConfig> compute_config,
                 const uint8_t& queue_id) -> Result {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, compute_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -124,6 +127,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("compute_config") = std::nullopt,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -143,8 +147,9 @@ void py_bind_conv_transpose2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const conv2d::Conv2dConfig> conv_config,
+                std::optional<const DeviceComputeKernelConfig> compute_config,
                 const uint8_t& queue_id) -> Result {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, compute_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -163,6 +168,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("compute_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
 }

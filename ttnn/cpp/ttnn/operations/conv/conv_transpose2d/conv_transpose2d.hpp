@@ -32,7 +32,9 @@ struct ConvTranpose2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt);
+        std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt,
+        std::optional<const DeviceComputeKernelConfig> compute_config_ = std::nullopt
+        );
 
     static Result invoke(
         uint8_t queue_id,
@@ -51,7 +53,9 @@ struct ConvTranpose2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt);
+        std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt,
+        std::optional<const DeviceComputeKernelConfig> compute_config_ = std::nullopt
+        );
 };
 
 }  // namespace conv_transpose2d

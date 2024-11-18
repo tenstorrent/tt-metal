@@ -173,6 +173,7 @@ from ttnn.device import (
     format_input_tensor,
     format_output_tensor,
     pad_to_tile_shape,
+    GetComputeKernelConfig,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
