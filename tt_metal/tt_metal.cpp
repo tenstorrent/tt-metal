@@ -742,7 +742,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                 std::vector<uint32_t> circular_buffer_config_vec(program.get_program_config(index).cb_size / sizeof(uint32_t));
 
                 auto cbs_on_core = program.circular_buffers_on_core(logical_core);
-                for (auto circular_buffer : cbs_on_core) {
+                for (const auto& circular_buffer : cbs_on_core) {
                     for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                         uint32_t addr_in_bytes = circular_buffer->address();
                         uint32_t size_in_bytes = circular_buffer->size();

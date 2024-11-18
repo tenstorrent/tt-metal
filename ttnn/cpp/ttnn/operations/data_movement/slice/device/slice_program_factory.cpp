@@ -498,7 +498,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         tt::log_debug("num_cores: {}", core_stick_map.size());
 
-        for (auto core_stick_pair : core_stick_map) {
+        for (const auto& core_stick_pair : core_stick_map) {
             auto xy_pair = core_stick_pair.first;
             if (row_major) {
                 reader_kernel_args.push_back(xy_pair.second); // noc x
@@ -521,7 +521,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             reader_kernel_args.push_back(stick_chunks.size()); // num_chunks for current core
             tt::log_debug("chunk_size: {}", stick_chunks.size());
         }
-        for (auto stick_chunks : stick_chunks_per_core) {
+        for (const auto& stick_chunks : stick_chunks_per_core) {
             for (auto chunk : stick_chunks) {
                 reader_kernel_args.push_back(chunk[0]); // start id of a chunk
                 tt::log_debug("chunk_start_id: {}", chunk[0]);

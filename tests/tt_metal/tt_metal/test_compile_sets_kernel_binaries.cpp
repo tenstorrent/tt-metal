@@ -166,7 +166,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 3; i++) {
             std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
             for (auto build_key : build_keys) {
-                for (auto kernel_name : kernel_names) {
+                for (const auto& kernel_name : kernel_names) {
                     std::filesystem::remove_all(jit_build_get_kernel_compile_outpath(build_key) + kernel_name);
                 }
             }

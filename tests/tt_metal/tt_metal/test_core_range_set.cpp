@@ -35,10 +35,10 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                         TT_FATAL(kernel_compile_time_args == compute_kernel_args, "Error");
                     }
                 }
-                for (auto cb : program.circular_buffers()) {
+                for (const auto& cb : program.circular_buffers()) {
                     TT_FATAL(cb->is_on_logical_core(logical_core), "Error");
                 }
-                for (auto semaphore : program.semaphores() ){
+                for (const auto& semaphore : program.semaphores() ){
                     TT_FATAL(semaphore.initialized_on_logical_core(logical_core), "Error");
                 }
             }

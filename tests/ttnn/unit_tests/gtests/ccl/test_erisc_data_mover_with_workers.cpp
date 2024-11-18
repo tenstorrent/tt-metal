@@ -395,10 +395,10 @@ bool RunWriteBWTest(
     }
 
     bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
-    for (auto buffer_id : local_output_buffers) {
+    for (const auto& buffer_id : local_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
-    for (auto buffer_id : remote_output_buffers) {
+    for (const auto& buffer_id : remote_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
 
