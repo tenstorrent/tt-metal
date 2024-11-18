@@ -156,7 +156,12 @@ def test_llama_model_inference(
 
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
-        mesh_device, model_args.head_dim, model_args.max_seq_len, model_args.rope_theta, model_args.use_scaled_rope
+        mesh_device,
+        model_args.max_batch_size,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta,
+        model_args.use_scaled_rope,
     )
     transformation_mats = rope_setup.get_trans_mats()
     transformation_mats = {"decode": transformation_mats}
@@ -350,7 +355,7 @@ def test_llama_model_inference(
                                     :batch, ...
                                 ]
                             )
-                            for cache in tt_model.layer_past
+                            for cache in tt_model.layers[l].attention.layer_past
                         ]
                     else:
                         for layer_past in tt_model.layers[l].attention.layer_past:

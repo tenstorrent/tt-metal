@@ -68,8 +68,14 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
 
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
-        mesh_device, model_args.head_dim, model_args.max_seq_len, model_args.rope_theta, model_args.use_scaled_rope
+        mesh_device,
+        batch,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta,
+        model_args.use_scaled_rope,
     )
+
     transformation_mats = rope_setup.get_trans_mats()
     transformation_mats = {"decode": transformation_mats}
 

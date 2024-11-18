@@ -63,7 +63,12 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
 
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
-        mesh_device, model_args.head_dim, model_args.max_seq_len, model_args.rope_theta, model_args.use_scaled_rope
+        mesh_device,
+        model_args.max_batch_size,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta,
+        model_args.use_scaled_rope,
     )
     transformation_mats = rope_setup.get_trans_mats()
     transformation_mats = {"decode": transformation_mats}

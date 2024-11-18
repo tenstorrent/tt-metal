@@ -359,7 +359,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
-    def forward_prefill(self, x_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):
+    def forward_prefill(self, x_11SH, rot_mats, user_id: int = 0, page_table=None):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -425,40 +425,22 @@ class TtLlamaAttention(LightweightModule):
         keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        # ttnn.deallocate(k_heads_1KSD)
-        # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        else:
-            k_fill = k_heads_1KSD_8b
-
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
 
-        # ttnn.deallocate(v_heads_1VSD)
-        # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        else:
-            v_fill = v_heads_1VSD_8b
-
         if page_table:
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_heads_1KSD_8b, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_heads_1VSD_8b, page_table, batch_idx=user_id)
         else:
             ttnn.fill_cache(
                 keys_BKSD,
-                k_fill,
+                k_heads_1KSD_8b,
                 user_id,
             )
             ttnn.fill_cache(
                 values_BKSD,
-                v_fill,
+                v_heads_1VSD_8b,
                 user_id,
             )
-
-        # if seq_len >= self.min_kv_prefill_shard_seqlen:
-        #     ttnn.deallocate(k_fill)
-        #     ttnn.deallocate(v_fill)
 
         self.layer_past = [keys_BKSD, values_BKSD]
 
@@ -541,10 +523,8 @@ class TtLlamaAttention(LightweightModule):
             return output_11SH
 
     # TODO Miguel: Remove transformation_mats input (send at initialization instead)
-    def forward(
-        self, x, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode", page_table=None
-    ):
+    def forward(self, x, current_pos, rot_mats=None, user_id=0, mode="decode", page_table=None):
         if mode == "prefill":
-            return self.forward_prefill(x, rot_mats, transformation_mats, user_id, page_table)
+            return self.forward_prefill(x, rot_mats, user_id, page_table)
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table)

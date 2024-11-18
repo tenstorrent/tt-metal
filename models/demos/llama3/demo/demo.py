@@ -241,10 +241,9 @@ def run_llama3_demo(
     transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
 
     page_table_tt = None
-    paged_attention_config = None
-    if paged_attention:
-        paged_attention_config = model_args.paged_attention_config if paged_attention else None
+    paged_attention_config = model_args.paged_attention_config if paged_attention else None
 
+    if paged_attention:
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical

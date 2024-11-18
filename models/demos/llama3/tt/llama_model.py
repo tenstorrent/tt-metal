@@ -81,7 +81,6 @@ class TtTransformer(LightweightModule):
         x: ttnn.Tensor,
         current_pos,
         rot_mats=None,
-        transformation_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -92,7 +91,7 @@ class TtTransformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         for layer in self.layers:
-            x = layer(x, current_pos, rot_mats, transformation_mats, user_id, mode, page_table)
+            x = layer(x, current_pos, rot_mats, user_id, mode, page_table)
 
         if mode == "prefill" and get_last_token == -1:
             return x

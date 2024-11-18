@@ -38,12 +38,17 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "paged_attention",
+    (True, False),
+    ids=("paged_attention", "non_paged_attention"),
+)
+def test_llama_decoder_inference(mesh_device, seq_len, paged_attention, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=1)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -52,7 +57,8 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    batch = 1
+    batch = model_args.max_batch_size  # 1
+
     reference_model = TransformerBlock(layer_id=0, args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
@@ -63,26 +69,48 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats = ttnn.as_tensor(
+    transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    transformation_mats = {"prefill": transformation_mats_prefill}
+
+    # Setup page table
+    page_table_tt = None
+    paged_attention_config = model_args.paged_attention_config if paged_attention else None
+
+    if paged_attention:
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
-        args=model_args,
         mesh_device=mesh_device,
-        dtype=dtype,
         state_dict=state_dict,
-        layer_num=0,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        layer_num=0,
+        dtype=dtype,
+        transformation_mats=transformation_mats,
+        args=model_args,
+        paged_attention_config=paged_attention_config,
     )
 
-    # TODO Update start_pos (check llama test for reference)
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
@@ -100,7 +128,14 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
+        tt_out = tt_model(
+            decode_input,
+            current_pos=None,
+            rot_mats=rot_mats,
+            user_id=0,
+            mode="prefill",
+            page_table=page_table_tt,
+        )
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
             0, :, :, : model_args.dim
         ].view(
