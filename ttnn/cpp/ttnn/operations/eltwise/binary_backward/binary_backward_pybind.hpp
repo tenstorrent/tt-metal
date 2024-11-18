@@ -771,12 +771,12 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
+            round_mode (str, optional): Round mode for the operation ( when input tensors are not ComplexTensor type ). Defaults to `None`.
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor`. Defaults to `None`.
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `other_tensor`. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
-            round_mode (str, optional): Round mode for the operation. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -799,10 +799,10 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
         Example:
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2/scalar)
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = ttnn.div_bw(grad_tensor, tensor1, tensor2, round_mode = "None")
 
         )doc",
         operation.base_name(),
@@ -1079,7 +1079,7 @@ void py_module(py::module& module) {
     detail::bind_binary_bw_div(
         module,
         ttnn::div_bw,
-        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`round_mode`,  with given :attr:`grad_tensor`. :attr:`round_mode` can be  "None", "trunc", "floor".)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_backward_overload(

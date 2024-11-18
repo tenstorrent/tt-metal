@@ -125,6 +125,8 @@ def _golden_function_backward_with_string(
             golden_tensor = [sum_result.grad, sum_result.grad]
         return golden_tensor
     elif torch_op == torch.div:
+        if value == "None":
+            value = None
         pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
     else:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, value=value)
