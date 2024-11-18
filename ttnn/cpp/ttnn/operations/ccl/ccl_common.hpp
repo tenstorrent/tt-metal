@@ -419,7 +419,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
             auto output_shape = output_tensor.get_legacy_shape();
             auto input_tile = input_tensor.tensor_spec().tile();
             auto output_tile = output_tensor.tensor_spec().tile();
-            this->num_cols = input_shape[-1] / input_tensor.tensor_spec().tile().get_width();
+            this->num_cols = input_shape[-1] / input_tile.get_width();
             uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / output_tile.get_width();
             this->num_rows =
                 std::accumulate(
