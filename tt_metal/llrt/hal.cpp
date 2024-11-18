@@ -69,7 +69,7 @@ uint32_t Hal::get_num_risc_processors() const {
 
 HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
                                  CoreType core_type,
-                                 const std::vector<std::vector<uint8_t>> &processor_classes,
+                                 const std::vector<std::vector<HalJitBuildConfig>> &processor_classes,
                                  const std::vector<DeviceAddr>& mem_map_bases,
                                  const std::vector<uint32_t>& mem_map_sizes,
                                  bool supports_cbs) :
