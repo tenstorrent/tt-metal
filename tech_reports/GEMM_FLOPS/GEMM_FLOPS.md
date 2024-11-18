@@ -35,7 +35,7 @@ The parameters of interest are 3 fold:
 2. The fidelity of the computation, referred to as lofi, hifi2, hifi3, and hifi4. This affects how many bits of each input datatype is actually ingested during the computation.
 3. Datatype of input/output space. It has been shown that a network layer need not always use all of the bits of a given datatype. But some layers do need the full resolution provided by a given data type, and its higher memory footprint.
 
-For more details please refer to the tech reports [Matrix Engine](tech_reports/matrix_engine/matrix_engine.md) and [Data Formats](tech_reports/data_formats/data_formats.md)
+For more details please refer to the tech reports [Matrix Engine](../matrix_engine/matrix_engine.md) and [Data Formats](../data_formats/data_formats.md)
 
 For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different.
 
@@ -79,7 +79,7 @@ Depending on the fidelity, datatype, and matrix shape chosen, different peak ter
 
 Below is the results generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using square matrices of sizes ranging from 512x512x512 to 16384x16384x16384. The results include evaluations across various data formats, paired with different levels of math fidelity (bfloat16-HiFi2, bfloat16-HiFi4,  bfloat8_b-HiFi2, bfloat8_b-LoFi, and bfloat4_b-LoFi).
 
-We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
+We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
 
 Finally, we present the results in terms of device time, device throughput in TFLOPs, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with 
 
