@@ -720,7 +720,6 @@ def _gen_reshape_args_from_volume(volume, step, out_dims=4):
         shapes.append({"reshape_dims": (volume,)})
     else:
         shapes.append({"reshape_dims": []})
-
     return shapes
 
 
