@@ -74,8 +74,10 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th)
 - [YOLOv4 Implementation in TT-NN on WH](./tech_reports/YoloV4-TTNN/yolov4.md)  (updated November 8th)
 
-## Benchmarks
+## Microbenchmarks
 - [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
+- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
+
   
 ---
 
