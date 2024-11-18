@@ -83,10 +83,12 @@ from tabulate import tabulate
 
 try:
     # Generate the report and convert it to a DataFrame
-    average_df = perf_report('$csv_path')
+    average_df, utilization = perf_report('$csv_path')
     # Print the DataFrame in a pretty table format
     print('Min - Avg - Max by Common Runs:')
     print(tabulate(average_df, headers='keys', tablefmt='pretty'))
+    print('Device Utilization:')
+    print(tabulate(utilization, headers='keys', tablefmt='pretty'))
 except Exception as e:
     print(f'Error in performance report generation: {e}', file=sys.stderr)
     sys.exit(1)
