@@ -1,7 +1,10 @@
 #!/bin/bash
 
 LOG_FILE1="$TT_METAL_HOME/tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_golden.log"
-LOG_FILE2="results.log"
+TIMESTAMP=$(date +"%H:%M:%S")
+LOG_FILE2="results_$TIMESTAMP.log"
+
+echo "Results file: $LOG_FILE2"
 
 # Run the pgm dispatch sweep with trace mode
 cd $TT_METAL_HOME
@@ -54,5 +57,7 @@ while IFS= read -r line1 && IFS= read -r line2 <&3; do
     done
     line_count=$((line_count+1))
 done < "$LOG_FILE1" 3< "$LOG_FILE2"
+
+cat $LOG_FILE2
 
 exit $exit_code
