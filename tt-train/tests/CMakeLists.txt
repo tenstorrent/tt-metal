@@ -20,7 +20,7 @@ add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location
 set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
-set(TOKENIZER_FILE "${CMAKE_BINARY_DIR}/data/tokenizer.json")
+set(TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/tokenizer.json")
 
 # Check if the file already exists before downloading
 if(NOT EXISTS "${TOKENIZER_FILE}")
