@@ -4,7 +4,6 @@
 
 #pragma once
 #include <cstdint>
-#include <deque>
 #include "host_api.hpp"
 #include "impl/kernels/kernel.hpp"
 

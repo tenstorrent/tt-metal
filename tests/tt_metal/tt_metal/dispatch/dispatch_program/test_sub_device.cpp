@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "sub_device_test_utils.hpp"
+#include "dispatch_test_utils.hpp"
 
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
     uint32_t local_l1_size = 3200;

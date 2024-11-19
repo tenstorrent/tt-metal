@@ -5,7 +5,8 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
-#include "test_utils.hpp"
+#include "multi_command_queue_fixture.hpp"
+#include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"

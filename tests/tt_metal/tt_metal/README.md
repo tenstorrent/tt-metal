@@ -7,6 +7,7 @@ Table of Contents
 
 - [Table of Contents](#table-of-contents)
   - [Test Naming](#test-naming)
+  - [Test Organization](#test-organization)
   - [Fixture Naming](#fixture-naming)
   - [Fixture Organization](#fixture-organization)
   - [File Naming](#file-naming)
@@ -27,7 +28,7 @@ Table of Contents
 <!-- tocstop -->
 
 ## Test Naming
-Prefix test names with the core type(s) that the test is using.
+Prefix test names with the core type(s) that the test is using:
  - If it's using Tensix cores, prefix it with `Tensix`
  - If it's using active ethernet cores, prefix it with `ActiveEth`
  - If it's using idle ethernet cores, prefix it with `IdleEth`
@@ -35,13 +36,21 @@ Prefix test names with the core type(s) that the test is using.
  - If it's using multiple core types, prefix it with each core type, eg. `TensixActiveEth`, `TensixIdleEth`, `TensixEth`, etc.
  - If it isn't using any core type, don't prefix it with anything
 
+## Test Organization
+Every test should belong to either a test suite or a test fixture. Use the TEST macro for tests in test suites and the TEST_F or TEST_P macros for tests in test fixtures.
+
+Test suites are ideal for grouping related tests that don’t require shared code. Test fixtures are better suited for related tests that need shared code, which can be defined in the fixture.
+
+Keep related tests grouped together to make it easier to understand the overall test coverage.
+
 ## Fixture Naming
- - All fixture names should end in `Fixture`
+All fixture names should end in `Fixture`.
 
 ## Fixture Organization
 Before creating a new fixture, check if an existing fixture meets your needs. If you need to create a new fixture, consider subclassing an existing fixture to avoid duplicating functionality already provided by another fixture.
 
 ## File Naming
+File names should include specific prefixes or suffixes based on their content:
  - Files that contain fixtures should have their names end with `_fixture`
  - Files that contain helper functions and/or test utilities should have their names end with `_test_utils`
  - Files that contain tests should have their names start with `test_`

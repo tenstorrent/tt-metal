@@ -9,7 +9,7 @@
 #include "host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "random_program_fixture.hpp"
 #include "command_queue_fixture.hpp"
 
 class SingleDeviceTraceFixture : public ::testing::Test {

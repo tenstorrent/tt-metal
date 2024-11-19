@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "trace_fixture.hpp"
-#include "test_utils.hpp"
+#include "dispatch_test_utils.hpp"
 #include "detail/tt_metal.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "gtest/gtest.h"

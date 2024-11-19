@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include "command_queue_fixture.hpp"
-#include "test_utils.hpp"
+#include "multi_command_queue_fixture.hpp"
+#include "random_program_fixture.hpp"
+#include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"
@@ -13,7 +15,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "test_utils.hpp"
 #include "tt_soc_descriptor.h"
 
 using std::vector;

@@ -78,10 +78,6 @@ add_custom_target(
         unit_tests_api
         unit_tests_debug_tools
         unit_tests_device
-        #unit_tests_dispatch_buffer
-        #unit_tests_dispatch_event
-        #unit_tests_dispatch_program
-        #unit_tests_dispatch_trace
         unit_tests_dispatch
         unit_tests_eth
         unit_tests_integration

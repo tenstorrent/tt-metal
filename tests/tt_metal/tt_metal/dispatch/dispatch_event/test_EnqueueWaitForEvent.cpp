@@ -4,11 +4,11 @@
 
 #include <memory>
 
-#include "command_queue_fixture.hpp"
+#include "multi_command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
-#include "test_utils.hpp"
+#include "dispatch_test_utils.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
