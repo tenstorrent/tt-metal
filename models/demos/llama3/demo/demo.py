@@ -177,7 +177,7 @@ def run_llama3_demo(
     # Miguel - parametrize this
     paged_attention = True
     batch_size = 32
-    assert batch_size <= 32, "Batch size cannot be greater than 32"
+    assert batch_size <= 32, "Batch size cannot be greater than 32"  # FIXME
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
     N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}

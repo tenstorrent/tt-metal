@@ -11,11 +11,11 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     sample,
     HostEmbedding,
-    get_single_rot_mat,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
@@ -45,12 +45,34 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
     ],
     indirect=True,
 )
-def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "paged_attention",
+    (
+        True,
+        # False
+    ),
+    ids=(
+        "paged_attention",
+        # "non_paged_attention"
+    ),
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+def test_llama_model_perf(
+    mesh_device, kv_cache_len, expected_compile_time, paged_attention, use_program_cache, reset_seeds, ensure_gc
+):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, optimizations=LlamaOptimizations.performance)
+    model_args = TtModelArgs(mesh_device, optimizations=LlamaOptimizations.performance, max_batch_size=1, max_seq_len=2048)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if "3.2-1B" in model_args.DEFAULT_CACHE_PATH:
@@ -86,6 +108,37 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
     generation_start_pos = kv_cache_len
     generation_length = 1
 
+    # Setup RoPE transformation matrices
+    rope_setup = TtLlamaRotarySetup(
+        mesh_device,
+        model_args.max_batch_size,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta,
+        model_args.use_scaled_rope,
+    )
+    transformation_mats_decode = rope_setup.get_trans_mats()
+    transformation_mats = {"decode": transformation_mats_decode}
+
+    page_table_tt = None
+    paged_attention_config = model_args.paged_attention_config if paged_attention else None
+
+    if paged_attention:
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     profiler.start("TtLlama_model_setup")
 
     # Load TTNN model
@@ -95,6 +148,8 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        transformation_mats=transformation_mats,
+        paged_attention_config=paged_attention_config,
     )
     # Load TTNN embedding module
     tt_embd = TtLlamaEmbedding(
@@ -108,7 +163,9 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
 
     # Call the function
     profiler.start(f"end_to_end_inference_with_compile")
-    run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
+    run_inference(
+        tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length, rope_setup, page_table_tt
+    )
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
@@ -119,7 +176,9 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
         signpost("Model perf run")
 
     profiler.start(f"end_to_end_inference")
-    run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
+    run_inference(
+        tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length, rope_setup, page_table_tt
+    )
     profiler.end(f"end_to_end_inference")
     profiler.print()
     iter_time = profiler.get("end_to_end_inference")
@@ -145,18 +204,12 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
     )
 
 
-def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length):
+def run_inference(
+    tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length, rope_setup, page_table
+):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
     mesh_device = tt_model.mesh_device
-
-    # pre-compute the rotational embedding matrix and send to device
-    current_rot_mat, rot_matrix = get_single_rot_mat(
-        tt_model.args.head_dim,
-        tt_model.mesh_device,
-        tt_model.args.num_devices,
-        start_pos=0,
-    )
 
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
@@ -172,12 +225,16 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     )
 
     # Send first input to device
-    current_pos = ttnn.from_torch(
-        torch.tensor([generation_start_pos] * batch),
+    current_pos = torch.tensor([generation_start_pos] * batch)
+    current_pos_tensor = ttnn.from_torch(
+        current_pos,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+    # Get cos/sin matrices for the current position of each user
+    rot_mats = rope_setup.get_rot_mats(current_pos)
 
     for i in range(generation_length):
         # Run TT model
@@ -185,16 +242,29 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
-        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+        tt_out = tt_model(
+            decode_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table,
+        )
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
         ttnn.deallocate(tt_out)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(
+            tt_out_rm,
+            dim=3,
+            use_multicore=True if tt_model.args.max_batch_size == 1 else False,
+            output_tensor=tt_out_tok,
+        )
         ttnn.deallocate(tt_out_rm)
 
         # Update the rotation matrix for the next iteration
-        new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
-        current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
-        ttnn.plus_one(current_pos)
+        ttnn.plus_one(current_pos_tensor)
+
+        # Update rot_mats for next iteration
+        current_pos += 1
+        rot_mats = rope_setup.get_rot_mats(current_pos)
 
         profiler.end(f"model_run_for_inference_{i}")
 

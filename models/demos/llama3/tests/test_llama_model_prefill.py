@@ -71,7 +71,7 @@ def test_llama_model_inference(
         assert optimizations == LlamaOptimizations.performance
         pcc = 0.90
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     # Use instruct weights instead of general weights
     instruct = True
