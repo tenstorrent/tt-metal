@@ -537,6 +537,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad, input, approximate, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor.push_back(gelu_result[0].value());
+        grad_tensor.push_back(gelu_result[0].value());
     }
     return grad_tensor;
 }
