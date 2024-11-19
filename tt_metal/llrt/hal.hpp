@@ -41,6 +41,7 @@ enum class HalProcessorClassType : uint8_t {
 };
 
 enum class HalL1MemAddrType : uint8_t {
+    BASE,
     BARRIER,
     MAILBOX,
     LAUNCH,
@@ -70,6 +71,11 @@ enum class HalMemType : uint8_t {
 
 using DeviceAddr = std::uint64_t;
 
+struct HalJitBuildConfig {
+    DeviceAddr fw_base_addr;
+    DeviceAddr local_init_addr;
+};
+
 class Hal;
 
 // Core information instanced once per core type
@@ -79,14 +85,14 @@ class HalCoreInfoType {
   private:
     HalProgrammableCoreType programmable_core_type_;
     CoreType core_type_;
-    // index represents processor class position, value is the specific processor class
-    std::vector<std::vector<uint8_t>> processor_classes_;
+    // indices represents processor class and type positions, value is build configuration params
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     bool supports_cbs_;
 
   public:
-    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, const std::vector<std::vector<uint8_t>> &processor_classes,
+    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, const std::vector<std::vector<HalJitBuildConfig>> &processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases, const std::vector<uint32_t>& mem_map_sizes, bool supports_cbs);
 
     template <typename T = DeviceAddr>
@@ -94,6 +100,10 @@ class HalCoreInfoType {
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
+    template <typename T = DeviceAddr>
+    T get_base_firmware_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    template <typename T = DeviceAddr>
+    T get_binary_local_init_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
 template <typename T>
@@ -116,6 +126,20 @@ inline uint32_t HalCoreInfoType::get_processor_classes_count() const {
 inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_class_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
     return this->processor_classes_[processor_class_idx].size();
+}
+
+template <typename T>
+inline T HalCoreInfoType::get_base_firmware_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const {
+    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
+    TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
+    return this->processor_classes_[processor_class_idx][processor_type_idx].fw_base_addr;
+}
+
+template <typename T>
+inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const {
+    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
+    TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
+    return this->processor_classes_[processor_class_idx][processor_type_idx].local_init_addr;
 }
 
 class Hal {
@@ -166,6 +190,11 @@ class Hal {
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors() const;
+
+    template <typename T = DeviceAddr>
+    T get_base_firmware_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    template <typename T = DeviceAddr>
+    T get_binary_local_init_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const {
@@ -255,6 +284,18 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
 }
 
+template <typename T>
+inline T Hal::get_base_firmware_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
+    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
+    return this->core_info_[programmable_core_type_index].get_base_firmware_addr(processor_class_idx, processor_type_idx);
+}
+
+template <typename T>
+inline T Hal::get_binary_local_init_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
+    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
+    return this->core_info_[programmable_core_type_index].get_binary_local_init_addr(processor_class_idx, processor_type_idx);
+}
+
 class HalSingleton : public Hal {
 private:
     HalSingleton() = default;
@@ -276,3 +317,16 @@ inline auto& hal = HalSingleton::getInstance(); // inline variable requires C++1
 
 }  // namespace tt_metal
 }  // namespace tt
+
+
+#define HAL_MEM_L1_BASE tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_SIZE tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+
+#define HAL_MEM_ETH_BASE \
+    ((tt::tt_metal::hal.get_arch() == tt::ARCH::GRAYSKULL) ? 0 : \
+    tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, \
+                                   tt::tt_metal::HalL1MemAddrType::BASE))
+#define HAL_MEM_ETH_SIZE \
+    ((tt::tt_metal::hal.get_arch() == tt::ARCH::GRAYSKULL) ? 0 : \
+    tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, \
+                                   tt::tt_metal::HalL1MemAddrType::BASE))

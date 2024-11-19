@@ -15,6 +15,7 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 
+// FIXME: Don't do this in header files
 using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
@@ -212,7 +213,7 @@ struct dispatch_constants {
         uint32_t prefetch_dispatch_unreserved_base = device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
         cmddat_q_base_ = prefetch_dispatch_unreserved_base + ((prefetch_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
         scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
-        const uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
+        const uint32_t l1_size = core_type == CoreType::WORKER ? HAL_MEM_L1_SIZE : HAL_MEM_ETH_SIZE;
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
         dispatch_buffer_base_ = ((prefetch_dispatch_unreserved_base - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
         dispatch_buffer_block_size_pages_ =

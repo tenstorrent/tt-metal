@@ -16,6 +16,9 @@ Size::Size(const std::pair<size_t, size_t>& size)
 Size::Size(const std::array<size_t, 2>& size)
     : Size(size[0], size[1]) {}
 
+Size::Size(const std::array<uint32_t, 2>& size)
+    : Size(size[0], size[1]) {}
+
 Size Size::operator*(size_t scalar) const {
     return Size(height_ * scalar, width_ * scalar);
 }

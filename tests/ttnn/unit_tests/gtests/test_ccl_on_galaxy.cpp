@@ -39,7 +39,7 @@ std::vector<Tensor> run_operation(
     std::vector<Tensor> outputs(output_shapes_size);
     // Populate the workers of the output tensors, based on the input tensors. This is needed for the async engine.
     for (int i = 0; i < outputs.size(); i++) {
-        outputs[i] = Tensor(operation::get_workers_for_op_output(std::move(input_tensors), std::move(optional_input_tensors)));
+        outputs[i] = Tensor(operation::get_workers_for_op_output(input_tensors, optional_input_tensors));
     }
     // Send the operation to the async engine, which will populate the output tensors.
     for (auto worker : outputs.at(0).workers) {
