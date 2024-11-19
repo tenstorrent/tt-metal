@@ -21,16 +21,8 @@ CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
 // Dynamic circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec, const Buffer &buffer) :
-    total_size_(total_size), dynamic_cb_(true), max_size_(buffer.size()) {
-    if (not buffer.is_l1()) {
-        TT_THROW("Only L1 buffers can have an associated circular buffer!");
-    }
-    if (total_size > buffer.size()) {
-        TT_THROW(
-            "Requested {} B but dynamic circular buffer cannot be larger than allocated L1 buffer of {} B",
-            total_size,
-            buffer.size());
-    }
+    total_size_(total_size) {
+
     this->set_globally_allocated_address(buffer);
     this->set_config(data_format_spec);
 }
@@ -60,12 +52,31 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
 }
 
 CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) {
-    if (dynamic_cb_ and total_size > this->max_size_.value()) {
-        TT_THROW(
-            "Cannot grow circular buffer to {} B. This is larger than associated dynamically allocated L1 buffer "
-            "of {} B",
-            total_size,
-            this->max_size_.value());
+    if (dynamic_cb_) {
+        if (total_size > this->max_size_) {
+            TT_ASSERT(
+                false,
+                "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
+                "L1 buffer bank size of {} B",
+                total_size,
+                this->max_size_);
+#ifndef DEBUG
+            log_warning(
+                "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
+                "L1 buffer bank size of {} B and may allow this circular buffer to write outside the allocated "
+                "buffer space.",
+                total_size,
+                this->max_size_);
+            if (total_size > this->buffer_size_) {
+                TT_THROW(
+                    "Cannot set circular buffer size to {}. This is larger than the associated dynamically "
+                    "allocated L1 buffer size"
+                    "of {} B",
+                    total_size,
+                    this->buffer_size_);
+            }
+#endif
+        }
     }
     if (total_size == 0) {
         TT_THROW("Total size for circular buffer must be non-zero!");
@@ -80,8 +91,31 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
     }
     this->globally_allocated_address_ = buffer.address();
     this->dynamic_cb_ = true;
-    this->max_size_ = buffer.size();
+    this->max_size_ = buffer.aligned_size_per_bank();
+    this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
+    if (this->total_size_ > this->max_size_) {
+        TT_ASSERT(
+            false,
+            "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer bank "
+            "size of {} B",
+            this->total_size_,
+            this->max_size_);
+#ifndef DEBUG
+        log_warning(
+            "Circular buffer size {} B exceeds allocated L1 buffer bank size of {} B. This may allow this circular "
+            "buffer to write outside the allocated buffer space.",
+            this->total_size_,
+            this->max_size_);
+        if (this->total_size_ > this->buffer_size_) {
+            TT_THROW(
+                "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer "
+                "size of {} B",
+                this->total_size_,
+                this->buffer_size_);
+        }
+#endif
+    }
     return *this;
 }
 
