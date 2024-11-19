@@ -29,7 +29,7 @@ def convnet_mnist(
     )
     compute_config = ttnn.GetComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_made=True,
+        math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
