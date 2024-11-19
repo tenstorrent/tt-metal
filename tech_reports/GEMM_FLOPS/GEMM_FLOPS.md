@@ -25,7 +25,7 @@ Alternatively, to test on an N300 card, use the following command:
 
 ```bash
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
-``` 
+```
 
 
 ## Design of Experiments
@@ -47,28 +47,28 @@ For example, when changing the precision of the matrix, for a given size of matr
 
 ### Matrix Multiplication TFLOPs on Wormhole (WH)
 
-The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle. 
-- This is 2*8\*16\*16 = 4096 muladds in a single cycle. 
-- At 1GHz, this is 4 TFLOPs per matrix engine. 
+The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+- This is 2*8\*16\*16 = 4096 muladds in a single cycle.
+- At 1GHz, this is 4 TFLOPs per matrix engine.
 - The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
 
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
 Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOP per matrix engine.
 
 MATH_FIDELITY is used for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
-- LoFi ->  ~4 TFLOPs 
-- HiFi2 -> ~2 TFLOPs 
-- HiFi3 -> ~1.33 TFLOPs 
+- LoFi ->  ~4 TFLOPs
+- HiFi2 -> ~2 TFLOPs
+- HiFi3 -> ~1.33 TFLOPs
 - HiFi4 -> ~1 TFLOPs
 
 
 ### Utilization derivation formula
 
 ```
-Utilization = ideal cycles / actual cycles. 
+Utilization = ideal cycles / actual cycles.
 Ideal cycles = (m * k * n) / (tile_height * tile_width * tile_height) * (cycle_per_tile / num_cores)
 ```
-- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64). 
+- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
 - For utilization of user-specified grid size, num_cores is the user-specified number of cores. In this microbenchmark, it's 8x8.
 - For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max available is 8x8, but will be extended to 8x9 soon.
 
@@ -84,7 +84,7 @@ Below is the results generated from running the benchmark script, showcasing the
 
 We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
 
-Finally, we present the results in terms of device time, device throughput in TFLOPs, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with 
+Finally, we present the results in terms of device time, device throughput in TFLOPs, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with
 
 
 #### TFLOPS plot across all matrix sizes and configurations
@@ -284,7 +284,7 @@ Given input matrix A of 512x1024 and B of 1024x2048 to produce output matrix 512
 |     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
 |   512 |  1024 |  2048 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           52824           |          40.65 | 31.02%                       | 31.02%                           |
-|  1024 |  1024 |  1024 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           36845.2         |          58.28 | 44.47%                       | 44.47%       
+|  1024 |  1024 |  1024 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           36845.2         |          58.28 | 44.47%                       | 44.47%
 
 ![A simple bar chart of the TFLOPS on WH when using square vs rectangular matrcies](images/effects_of_shapes.png "Square vs rectangular Matrix TFLOPS on WH from SRAM")
 
