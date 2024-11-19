@@ -160,13 +160,13 @@ Tensor all_gather_v2(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            auto drain_sync_core = CoreCoord(8,8);
-            ttnn::ccl::SyncModeSpec {
-                num_devices,
-                drain_sync_core,
-                {CreateGlobalSemaphore(input_tensor.device(), {drain_sync_core}, 0)},
-                {num_devices}
-            };
+            // auto drain_sync_core = CoreCoord(8,8);
+            // ttnn::ccl::SyncModeSpec {
+            //     num_devices,
+            //     drain_sync_core,
+            //     {CreateGlobalSemaphore(input_tensor.device(), {drain_sync_core}, 0)},
+            //     {num_devices}
+            // };
 
             const auto& input_tensor = input_tensors.at(0);
 

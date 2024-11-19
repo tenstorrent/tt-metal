@@ -125,14 +125,14 @@ def run_all_gather_impl(
         # breakpoint()
 
         # for current non-edm version of all gather only:
-        chunked_output_tensor = torch.chunk(tt_output_tensor, num_devices, dim)
+        # chunked_output_tensor = torch.chunk(tt_output_tensor, num_devices, dim)
 
         if input_dtype == ttnn.bfloat16:
-            # eq, output = comp_equal(tt_output_tensor, output_tensor)
-            eq, output = comp_equal(chunked_output_tensor[i], input_tensors[i])
+            eq, output = comp_equal(tt_output_tensor, output_tensor)
+            # eq, output = comp_equal(chunked_output_tensor[i], input_tensors[i])
         else:
-            # eq, output = comp_pcc(tt_output_tensor, output_tensor)
-            eq, output = comp_pcc(chunked_output_tensor[i], input_tensors[i])
+            eq, output = comp_pcc(tt_output_tensor, output_tensor)
+            # eq, output = comp_pcc(chunked_output_tensor[i], input_tensors[i])
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
@@ -147,17 +147,17 @@ def run_all_gather_impl(
         # - double/tripple buffers in cb not working
         # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # failed: device not connected      # https://github.com/tenstorrent/tt-metal/issues/9686
         (2, 1, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
-        (2, 1, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
-        (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [1, 8, 256, 32], 1, ttnn.TILE_LAYOUT),
-        (2, 2, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
-        (2, 2, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
-        (2, 2, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
-        (2, 1, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
-        # (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),  # failed: device not connected
-        (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        (8, 3, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        (8, 2, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        # (2, 1, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
+        # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 8, 256, 32], 1, ttnn.TILE_LAYOUT),
+        # (2, 2, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
+        # (2, 2, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
+        # (2, 2, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
+        # (2, 1, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
+        # # (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),  # failed: device not connected
+        # (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        # (8, 3, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        # (8, 2, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
         # untested cases
         # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686

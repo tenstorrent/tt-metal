@@ -15,6 +15,7 @@
 #include "debug/dprint.h"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 
@@ -142,8 +143,8 @@ void kernel_main() {
 
     constexpr size_t num_args_per_sync_signal_sender = 3;
     const bool must_send_sync_signals = get_arg_val<uint32_t>(arg_idx++) != 0;
+    auto num_sync_signals = must_send_sync_signals ? get_arg_val<uint32_t>(arg_idx++) : 0;
     auto sync_details_arg_idx = arg_idx;
-    auto num_sync_signals = must_send_sync_signals ? get_arg_val<uint32_t>(sync_details_arg_idx++) : 0;
     arg_idx += num_sync_signals * num_args_per_sync_signal_sender;
 
     auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, dest_address, page_size, tt::CB::c_in0);
@@ -163,7 +164,7 @@ void kernel_main() {
 
 
     #ifdef DEBUG_PRINT_ENABLED
-    // DPRINT << "ccl_send_writer has " << (uint32_t)num_commands << " commands" << ENDL();
+    DPRINT << "ccl_send_writer has " << (uint32_t)num_commands << " commands" << ENDL();
     #endif
 
     size_t some_buffering_addr = 0;
@@ -203,6 +204,8 @@ void kernel_main() {
             uint32_t offset_into_worker_slice = 0;
             bool last_page_of_worker = false;
             DPRINT << "Outside loop\n";
+            DPRINT << "worker_pages_per_slice: " << command_tensor.worker_pages_per_slice << ENDL();
+            // DPRINT << "packet_size_in_pages: " << packet_size_in_pages << ENDL();
             for (uint32_t p = 0; p < command_tensor.worker_pages_per_slice; p += packet_size_in_pages) {
                 DPRINT << "Packet loop\n";
                 uint32_t n_pages = std::min<uint32_t>(packet_size_in_pages, command_tensor.worker_pages_per_slice - p);
@@ -227,7 +230,7 @@ void kernel_main() {
 
                 size_t contig_pages_advanced = 1;
                 for (size_t i = 0; i < n_pages; i += contig_pages_advanced) {
-                    DPRINT << "Contig loop\n";
+                    // DPRINT << "Contig loop\n";
                     auto const [noc_addr, contig_pages] = get_noc_addr_and_contiguous_pages<tensor_layout, page_layout>(
                         curr_page_idx,
                         offset_into_worker_slice,
@@ -235,7 +238,7 @@ void kernel_main() {
                         tensor_addrgen,
                         command_tensor.tensor_slice_shape);
 
-                    DPRINT << "CHKPT\n";
+                    // DPRINT << "CHKPT\n";
                     contig_pages_advanced = std::min<size_t>(contig_pages, n_pages);
 
                     // Perform the local write and also the mcast packet writes
@@ -247,13 +250,13 @@ void kernel_main() {
                         size_t payload_size_bytes = contig_pages_advanced * page_size;
                         // local chip write
                         noc_async_write(payload_l1_address, noc_addr, payload_size_bytes);
-                        DPRINT << "CHKPT2\n";
+                        // DPRINT << "CHKPT2\n";
                         // Write the mcast packet (forward)
                         const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc_addr);
-                        DPRINT << "CHKPT3\n";
+                        // DPRINT << "CHKPT3\n";
                         size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
                         if (has_forward_fabric_connection) {
-                            DPRINT << "Forward fabric connection\n";
+                            // DPRINT << "Forward fabric connection\n";
                             static_assert(((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0, "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
                             // ASSERT(l1_read_addr & (sizeof(tt::fabric::PacketHeader) - 1) == 0);
                             auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
@@ -264,30 +267,30 @@ void kernel_main() {
                                 });
                             forward_fabric_sender.wait_for_empty_write_slot();
                             forward_fabric_sender.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
-                            DPRINT << "FWD_PKT @ " << (uint64_t)l1_read_addr << "\n";
-                            DPRINT << "FWD_PKT " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(l1_read_addr) << "\n";
+                            // DPRINT << "FWD_PKT @ " << (uint64_t)l1_read_addr << "\n";
+                            // DPRINT << "FWD_PKT " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(l1_read_addr) << "\n";
                         }
 
                         // Write the mcast packet (backward)
                         if (has_backward_fabric_connection) {
-                            DPRINT << "Backward fabric connection\n";
+                            // DPRINT << "Backward fabric connection\n";
                             auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
                             pkt_hdr.to_write()
                                 .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(backward_direction_num_hops/* - 1*/)})
                                 .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
                                     dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)
                                 });
-                            DPRINT << "Backward waiting for empty write slot\n";
+                            // DPRINT << "Backward waiting for empty write slot\n";
                             backward_fabric_sender.wait_for_empty_write_slot();
-                            DPRINT << "Backward sending payload\n";
+                            // DPRINT << "Backward sending payload\n";
                             backward_fabric_sender.send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
                             // Commit to memory
-                            DPRINT << "BWD_PKT @ " << (uint64_t)l1_read_addr << "\n";
-                            DPRINT << "BWD_PKT " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(l1_read_addr) << "\n";
+                            // DPRINT << "BWD_PKT @ " << (uint64_t)l1_read_addr << "\n";
+                            // DPRINT << "BWD_PKT " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(l1_read_addr) << "\n";
                         }
                     }
 
-                    DPRINT << "advance_worker_global_page\n";
+                    // DPRINT << "advance_worker_global_page\n";
                     ttnn::ccl::v2::advance_worker_global_page(
                         curr_page_idx, // Updated internally
                         offset_into_worker_slice,
@@ -301,7 +304,7 @@ void kernel_main() {
 
 
                     // // build headers and write to the output cb
-                    DPRINT << "noc_async_write_barrier\n";
+                    // DPRINT << "noc_async_write_barrier\n";
                     noc_async_write_barrier(); // since our last call to
                     DPRINT << "cb_pop_front\n";
                     cb_pop_front(cb_id, packet_size_in_pages);
@@ -320,6 +323,7 @@ void kernel_main() {
     if (must_send_sync_signals) {
         DPRINT << "ccl_send_writer Sending payload completion sync signals\n";
         ASSERT(some_buffering_addr != 0);
+        some_buffering_addr = (some_buffering_addr + (sizeof(tt::fabric::PacketHeader))) & ~(sizeof(tt::fabric::PacketHeader) - 1);
         auto send_sync_signal = [](
             size_t pkt_addr,
             tt::fabric::WorkerToFabricEdmSender &fabric_connection,
@@ -327,7 +331,7 @@ void kernel_main() {
             size_t remote_sem_l1_addr,
             size_t directional_num_hops) {
             static_assert(((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0, "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
-            ASSERT(pkt_addr & (sizeof(tt::fabric::PacketHeader) - 1) == 0);
+            ASSERT((pkt_addr & (sizeof(tt::fabric::PacketHeader) - 1)) == 0);
 
             auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(pkt_addr);
             pkt_hdr.to_atomic_inc()
@@ -335,6 +339,7 @@ void kernel_main() {
                 .to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
                     remote_sem_l1_addr, 1, 32, static_cast<uint8_t>(remote_sem_noc_x), static_cast<uint8_t>(remote_sem_noc_y)
                 });
+            print_pkt_header(&pkt_hdr);
             fabric_connection.wait_for_empty_write_slot();
             fabric_connection.send_payload_flush_blocking_from_address(pkt_addr, pkt_hdr.get_payload_size_including_header());
         };
@@ -347,6 +352,11 @@ void kernel_main() {
             auto sem_inc_noc_addr = get_noc_addr(dest_noc_x, dest_noc_y, dest_sem_addr);
             noc_semaphore_inc(sem_inc_noc_addr, 1);
             DPRINT << "Send sync signal to " << (uint64_t)sem_inc_noc_addr << "\n";
+            DPRINT << "dest_sem_addr: " << (uint32_t)dest_sem_addr << "\n";
+            DPRINT << "dest_noc_x: " << (uint32_t)dest_noc_x << "\n";
+            DPRINT << "dest_noc_y: " << (uint32_t)dest_noc_y << "\n";
+            DPRINT << "forward_direction_num_hops: " << (uint32_t)forward_direction_num_hops << "\n";
+            DPRINT << "backward_direction_num_hops: " << (uint32_t)backward_direction_num_hops << "\n";
 
             if (has_forward_fabric_connection) {
                 const size_t pkt_addr = some_buffering_addr;

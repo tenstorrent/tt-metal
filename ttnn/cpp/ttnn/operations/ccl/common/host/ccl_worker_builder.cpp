@@ -344,10 +344,10 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
     }
 
-    log_trace(tt::LogOp, "ccl_send_writer Generating {} ccl send commands", slices.size());
+    log_info(tt::LogOp, "ccl_send_writer Generating {} ccl send commands", slices.size());
     emit_ccl_send_slice_sequence_commands(slices, args);
 
-    log_trace(tt::LogOp, "ccl_send_writer Sender Worker has {} RT Args: {}", args.size(), args);
+    log_info(tt::LogOp, "ccl_send_writer Sender Worker has {} RT Args: {}", args.size(), args);
 
     return args;
 }

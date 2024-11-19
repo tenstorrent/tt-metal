@@ -190,7 +190,7 @@ void execute_chip_multicast_to_local_chip(volatile tt::fabric::PacketHeader *con
     ASSERT(false);
 }
 
-bool packet_must_be_consumed_locally(tt::fabric::PacketHeader const& packet_header) {
+bool packet_must_be_consumed_locally(volatile tt::fabric::PacketHeader const& packet_header) {
     switch (packet_header.chip_send_type) {
         case tt::fabric::ChipSendType::CHIP_UNICAST: {
             return packet_header.routing_fields.chip_unicast.distance_in_hops == DESTINATION_HOP_COUNT;
@@ -206,13 +206,13 @@ bool packet_must_be_consumed_locally(tt::fabric::PacketHeader const& packet_head
 }
 
 
-bool packet_must_be_forwarded_to_next_chip(tt::fabric::PacketHeader const& packet_header) {
+bool packet_must_be_forwarded_to_next_chip(volatile tt::fabric::PacketHeader const& packet_header) {
     switch (packet_header.chip_send_type) {
         case tt::fabric::ChipSendType::CHIP_UNICAST:
             return packet_header.routing_fields.chip_unicast.distance_in_hops != DESTINATION_HOP_COUNT;
 
         case tt::fabric::ChipSendType::CHIP_MULTICAST:
-            return packet_header.routing_fields.chip_mcast.range_hops != 0;
+            return packet_header.routing_fields.chip_mcast.range_hops != 1;
 
         default:
             ASSERT(false);

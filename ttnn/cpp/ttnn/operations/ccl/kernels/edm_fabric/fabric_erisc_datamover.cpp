@@ -449,7 +449,7 @@ FORCE_INLINE void receiver_send_completion_ack(
 }
 
 
-PacketLocalForwardType get_packet_local_forward_type(const tt::fabric::PacketHeader &packet_header) {
+PacketLocalForwardType get_packet_local_forward_type(const volatile tt::fabric::PacketHeader &packet_header) {
     const bool local_chip_is_packet_destination = packet_must_be_consumed_locally(packet_header);
     const bool packet_needs_forwarding = packet_must_be_forwarded_to_next_chip(packet_header);
     PacketLocalForwardType forward_type =
@@ -458,7 +458,7 @@ PacketLocalForwardType get_packet_local_forward_type(const tt::fabric::PacketHea
 }
 
 FORCE_INLINE bool can_forward_packet_completely(
-    const tt::fabric::PacketHeader &packet_header, tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface) {
+    const volatile tt::fabric::PacketHeader &packet_header, tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface) {
     auto forward_status = get_packet_local_forward_type(packet_header);
     bool can_send = true;
     switch (forward_status) {
@@ -593,7 +593,8 @@ void run_receiver_channel_state_machine_step(
                 bool can_ack = !eth_txq_is_busy();
                 if (can_ack) {
                     DPRINT << "EDMR got pkt @: " << (uint32_t)reinterpret_cast<volatile uint64_t *>(local_receiver_channel.get_current_packet_header()) << "\n";
-                    DPRINT << "EDMR got pkt : " << (uint64_t)*reinterpret_cast<volatile uint64_t *>(local_receiver_channel.get_current_packet_header()) << "\n";
+                    DPRINT << "EDMR got pkt 0 : " << (uint64_t) reinterpret_cast<volatile uint64_t *>(local_receiver_channel.get_current_packet_header())[0] << "\n";
+                    DPRINT << "EDMR got pkt 1: " << (uint64_t) reinterpret_cast<volatile uint64_t *>(local_receiver_channel.get_current_packet_header())[1] << "\n";
                     ASSERT(tt::fabric::is_valid(
                         *const_cast<tt::fabric::PacketHeader *>(local_receiver_channel.get_current_packet_header())));
                     receiver_send_received_ack(remote_sender_channnels, local_receiver_channel);
@@ -611,8 +612,7 @@ void run_receiver_channel_state_machine_step(
         } break;
 
         case ReceiverState::RECEIVER_SENDING_PAYLOAD: {
-            auto packet_header =
-                *const_cast<tt::fabric::PacketHeader *>(local_receiver_channel.get_current_packet_header());
+            auto& packet_header = *local_receiver_channel.get_current_packet_header();
             bool can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(packet_header, downstream_edm_interface);
             if (can_send_to_all_local_chip_receivers) {

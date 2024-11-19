@@ -52,12 +52,14 @@ void build_sync_kernels(
 
     if (terminate_fabric) {
         auto termination_infos = fabric_interface.generate_local_chip_fabric_termination_infos(device);
+        rt_args.push_back(termination_infos.size());
         for (auto& info : termination_infos) {
             if (info.distance != 0) {
                 continue;
             }
             rt_args.push_back(info.termination_addr);
-            rt_args.push_back(1);
+            rt_args.push_back(info.edm_noc_x);
+            rt_args.push_back(info.edm_noc_y);
         }
     }
 
@@ -81,6 +83,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     // std::optional<ccl::SyncModeSpec> sync_details)
      {
     tt::tt_metal::Program program{};
+
+    // Sleep for ring_index * 5 seconds to stagger startup
+    std::this_thread::sleep_for(std::chrono::seconds(ring_index * 5));
 
     auto drain_sync_core = CoreCoord(4,4);
     std::optional<ccl::SyncModeSpec> sync_details = ttnn::ccl::SyncModeSpec {

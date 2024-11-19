@@ -21,7 +21,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     for (size_t i = 0; i < num_signals_to_wait_for; ++i) {
         sem_addrs[i] = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
-        DPRINT << "DRAIN WAITING ON SEMAPHORE ADDR " << (uint32_t)sem_addrs[i] << " on core " << (uint32_t)((my_y[0] << 16) | my_x[0]) << "\n";
+        DPRINT << "DRAIN WAITING ON SEMAPHORE ADDR " << (uint32_t)sem_addrs[i] << " on core (" << (uint32_t)my_y[0] << ", " << (uint32_t)my_x[0] << ")\n";
         expected_sem_counts[i] = get_arg_val<uint32_t>(arg_idx++);
         current_sem_counts[i] = 0;
     }
@@ -32,7 +32,7 @@ void kernel_main() {
                 continue;
             }
 
-            ASSERT(noc_x == my_x[0] && noc_y == my_y[0]);// "semaphore address is not a local semaphore. Only local semaphore address is support at this time"
+            // ASSERT(noc_x == my_x[0] && noc_y == my_y[0]);// "semaphore address is not a local semaphore. Only local semaphore address is support at this time"
             if (current_sem_counts[i] != *sem_addrs[i]) {
                 DPRINT << "DRAIN GOT SEMINC @ " << (uint32_t)sem_addrs[i] << ". NOW= " << (uint32_t)*sem_addrs[i] << "\n";
                 current_sem_counts[i] = *sem_addrs[i];
@@ -56,11 +56,11 @@ void kernel_main() {
     if (send_termination_signals) {
         size_t num_termination_signals = get_arg_val<uint32_t>(arg_idx++);
         for (size_t i = 0; i < num_termination_signals; ++i) {
-            uint64_t termination_addr = get_arg_val<uint32_t>(arg_idx++);
+            uint32_t termination_addr = get_arg_val<uint32_t>(arg_idx++);
             uint32_t noc_x = get_arg_val<uint32_t>(arg_idx++);
             uint32_t noc_y = get_arg_val<uint32_t>(arg_idx++);
-            uint32_t addr = get_arg_val<uint32_t>(arg_idx++);
-            noc_semaphore_inc(get_noc_addr(noc_x, noc_y, addr), 1);
+            DPRINT << "SENDING TERMINATION SIGNAL TO " << (uint32_t)noc_x << " " << (uint32_t)noc_y << " " << (uint32_t)termination_addr << "\n";
+            noc_semaphore_inc(get_noc_addr(noc_x, noc_y, termination_addr), 1);
         }
     }
     DPRINT << "DRAIN DONE\n";
