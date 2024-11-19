@@ -90,10 +90,6 @@ def ttnn_vgg16(
             conv_config = ttnn.Conv2dConfig(
                 dtype=model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode_enabled=True,
-                fp32_dest_acc_enabled=False,
-                packer_l1_accum_enabled=False,
                 activation="relu",
                 deallocate_activation=False,
                 input_channels_alignment=32,
@@ -105,6 +101,12 @@ def ttnn_vgg16(
                 ),
                 reshard_if_not_optimal=True,
                 enable_weights_double_buffer=True,
+            )
+            compute_config = ttnn.GetComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
             )
 
             tt_weight = parameters.features[conv_feature_ids[iter_conv_id]].weight
@@ -126,6 +128,7 @@ def ttnn_vgg16(
                 input_height=conv_ttnn_params[iter_conv_id][2],
                 input_width=conv_ttnn_params[iter_conv_id][3],
                 conv_config=conv_config,
+                compute_config=compute_config,
                 conv_op_cache=conv_op_cache,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
@@ -213,9 +216,6 @@ def ttnn_vgg11(
             conv_config = ttnn.Conv2dConfig(
                 dtype=model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode_enabled=True,
-                fp32_dest_acc_enabled=True,
                 activation="relu",
                 deallocate_activation=False,
                 input_channels_alignment=32,
@@ -227,7 +227,11 @@ def ttnn_vgg11(
                 ),
                 enable_weights_double_buffer=True,
             )
-
+            compute_config = ttnn.GetComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+            )
             tt_weight = parameters.features[conv_feature_ids_2[iter_conv_id]].weight
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)
             tt_bias = parameters.features[conv_feature_ids_2[iter_conv_id]].bias
@@ -248,6 +252,7 @@ def ttnn_vgg11(
                 input_height=conv_ttnn_params_2[iter_conv_id][2],
                 input_width=conv_ttnn_params_2[iter_conv_id][3],
                 conv_config=conv_config,
+                compute_config=compute_config,
                 conv_op_cache=conv_op_cache,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
