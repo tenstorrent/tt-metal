@@ -1,5 +1,5 @@
 # LLMs in TT-NN
-Authors: Mark O'Connor,
+Authors: Mark O'Connor, Djordje Ivanovic
 
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
@@ -65,7 +65,55 @@ Other useful resources:
     - which dims are parallelized
 ### 2.5 MLP
 ### 2.6 Decoder
+<div align="center">
+<img src="decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
+<figcaption>Llama3.1 Decoder</figcaption>
+</div> <br>
+If the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward. According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass. Only thing to worry about is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM. <br><br> Decode forward pass implementation below follows diagram above and has nothing that is not already explained in previous sections. Also, it's crucial to deallocate tensors after their usage to optimize memory. However, in this explanation, tensor deallocation has been omitted for clarity and to keep the code as straightforward as possible.
+<br><br><br>
+
+```py
+def forward(
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mat=None,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
+        page_table=None,
+    ) -> ttnn.Tensor:
+        if mode == "prefill":
+            skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        elif mode == 'decode':
+            skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
+        # Attention RMSNorm
+        attn_norm = self.attention_norm(x)
+        # Attention
+        r = self.attention.forward(
+            attn_norm,
+            current_pos,
+            rot_mat,
+            transformation_mats,
+            user_id,
+            mode,
+            page_table,
+        )
+        # Residual add of inputs and attention output
+        h = ttnn.add(x, r, memory_config=skip_mem_cfg)
+        # MLP and RMSNorm
+        r = self.feed_forward.forward(self.ffn_norm(h), mode)
+        # Residual add of attention output and mlp output
+        out = ttnn.add(h, r, memory_config=skip_mem_cfg)
+
+        return out
+```
+
 ### 2.7 LM Head
+
+
+
+
 ## 3. Features
 ### 3.1 Generative Decoding
 ### 3.2 Prefill and Decode
