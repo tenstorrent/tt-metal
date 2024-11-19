@@ -148,13 +148,13 @@ void Validate_transform (const ttnn::Shape& input_shape, const ttnn::Shape& outp
     //Reshape should not be adding or removing data
     uint32_t input_volume = 1;;
     uint32_t output_volume = 1;
-    for (int i=0; i <tensor_shape.rank(); i++)
+    for (int i=0; i <input_shape.rank(); i++)
     {
-        input_volume = input_volume * tensor_shape[i];
+        input_volume = input_volume * input_shape[i];
     }
-    for (int i=0; i <shape.rank(); i++)
+    for (int i=0; i <output_shape.rank(); i++)
     {
-        output_volume = output_volume * shape[i];
+        output_volume = output_volume * output_shape[i];
     }
     TT_FATAL(input_volume == output_volume, "Invalid Reshape, input and output volume must match");
 }
