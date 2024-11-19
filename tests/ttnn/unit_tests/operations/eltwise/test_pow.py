@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -28,3 +29,45 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor], pcc=0.9)
     assert comp_pass
+
+
+@pytest.mark.parametrize("n", [2])
+@pytest.mark.parametrize("c", [3])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [128])
+def test_binary_sfpu_pow_4D(device, n, c, h, w):
+    torch_input_tensor_a = torch.ones((n, c, h, w), dtype=torch.float32) * 10
+    torch_input_tensor_b = torch.ones((n, c, h, w), dtype=torch.float32) * 2.5
+    torch_output_tensor = torch.pow(torch_input_tensor_b, torch_input_tensor_a)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("input", [10.0, 5.5])
+def test_binary_pow_scalar_input(input_shapes, input, device):
+    torch_input_tensor_b = torch.ones(input_shapes, dtype=torch.float32) * 2.5
+    torch_output_tensor = torch.pow(input, torch_input_tensor_b)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    golden_tensor = golden_fn(input, torch_input_tensor_b)
+
+    cq_id = 0
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.pow(input, input_tensor_b, queue_id=cq_id)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.99)

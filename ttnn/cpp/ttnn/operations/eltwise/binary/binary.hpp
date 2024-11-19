@@ -35,9 +35,9 @@ struct BinaryOperation {
         const Tensor& input_tensor_b_arg,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         uint8_t queue_id,
@@ -46,8 +46,8 @@ struct BinaryOperation {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         const ttnn::Tensor& input_tensor_a,
@@ -55,8 +55,8 @@ struct BinaryOperation {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -67,7 +67,7 @@ struct RelationalBinary {
         const Tensor& input_tensor_b_arg,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<unary::FusedActivations>& activations = std::nullopt,
         const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
@@ -76,9 +76,9 @@ struct RelationalBinary {
         const Tensor& input_tensor_b_arg,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         const ttnn::Tensor& input_tensor_a,
@@ -126,14 +126,36 @@ struct InplaceBinaryOperation {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
         const float scalar,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
+};
+
+template <BinaryOpType binary_op_type>
+struct BinaryOperationSfpu {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 };
 
 }  // namespace binary
@@ -226,6 +248,22 @@ constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::ne_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::NE>>();
+
+constexpr auto rsub_binary = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::rsub_binary",
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::RSUB>>();
+constexpr auto power_binary = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::power_binary",
+    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>>();
+constexpr auto bitwise_and_binary = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::bitwise_and_binary",
+    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>>();
+constexpr auto bitwise_or_binary = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::bitwise_or_binary",
+    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_OR>>();
+constexpr auto bitwise_xor_binary = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::bitwise_xor_binary",
+    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_XOR>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& input_tensor_a, InputBType scalar) {
