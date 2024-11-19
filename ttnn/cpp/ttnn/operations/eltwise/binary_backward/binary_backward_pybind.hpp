@@ -804,6 +804,11 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
             >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = ttnn.div_bw(grad_tensor, tensor1, tensor2, round_mode = "None")
 
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> scalar = 2
+            >>> output = ttnn.div_bw(grad_tensor, tensor, scalar, round_mode = "None")
+
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
