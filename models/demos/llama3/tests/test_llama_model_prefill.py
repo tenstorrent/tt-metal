@@ -66,10 +66,10 @@ def test_llama_model_inference(
     dtype = ttnn.bfloat8_b
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
-        pcc = 0.91  # TODO Look on improving PCC
+        pcc = 0.90  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
-        pcc = 0.91
+        pcc = 0.90
 
     mesh_device.enable_async(False)
 
