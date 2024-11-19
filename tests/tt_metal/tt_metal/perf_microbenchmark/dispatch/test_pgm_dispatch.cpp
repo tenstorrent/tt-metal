@@ -45,6 +45,7 @@ bool lazy_g;
 bool time_just_finish_g;
 bool use_global_g;
 bool use_trace_g;
+bool dispatch_from_eth_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -74,6 +75,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, " -tr: enable trace (default disabled)");
+        log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
         exit(0);
     }
 
@@ -94,6 +96,7 @@ void init(int argc, char **argv) {
     slow_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rs", 0);
     nfast_kernels_g = test_args::get_command_option_uint32(input_args, "-nf", 0);
     use_trace_g = test_args::has_command_option(input_args, "-tr");
+    dispatch_from_eth_g = test_args::has_command_option(input_args, "-de");
     if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -244,8 +247,9 @@ int main(int argc, char **argv) {
     bool pass = true;
     try {
         const chip_id_t device_id = 0;
-        tt_metal::Device* device;
-            device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000);
+        DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        tt_metal::Device* device =
+            tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, dispatch_core_type);
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
