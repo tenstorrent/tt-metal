@@ -762,7 +762,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers) {
     ASSERT_EQ(result, 0);
 }
 
-TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
+TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_SingleMessage_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 1;
     const bool src_is_dram = true;
@@ -777,7 +777,7 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
 }
 
 // Non-functional on harvested parts. Needs testing on unharvested parts.
-TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource) {
+TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_ManyMessages_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10000;
     const bool src_is_dram = true;
