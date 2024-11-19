@@ -8,7 +8,8 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, is_blackhole
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import is_blackhole
 
 torch.manual_seed(2005)
 
