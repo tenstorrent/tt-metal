@@ -846,7 +846,14 @@ Result conv2d(
             input_tensor.layout());
     }
 
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(DeviceComputeKernelConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or( init_device_compute_kernel_config(
+            device->arch(),
+            std::nullopt,
+            MathFidelity::HiFi4,
+            true,
+            false,
+            false
+    ));
     auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
         device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, mm_conv);
     if (tensor_manipulated) {
