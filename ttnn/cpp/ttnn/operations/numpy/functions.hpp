@@ -64,12 +64,10 @@ static Tensor full(
         if (!optional_output_tensor.has_value()){
             auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
             if (device != nullptr) {
-                // Creating a tensor with the device specified - incurs a copy?
                 output = output.to(device, output_mem_config);
             }
             return output;
         } else {
-            // TODO
             auto device_buffer = std::get<DeviceStorage>(optional_output_tensor.value().tensor_attributes->storage).get_buffer();
             bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
