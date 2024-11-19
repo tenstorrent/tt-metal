@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
@@ -124,6 +125,8 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    DPRINT << "llk_unpack_AB_matmul, " << base_address_a << ", " << base_address_b << ", " << tile_index_a << ", " << tile_index_b << ", " << tile_size_a << ", " << tile_size_b << ", " << static_cast<uint32_t>(partial_face_a) << ", " << static_cast<uint32_t>(partial_face_b) << ", " << ct_dim << ", " << rt_dim << ", " << kt_dim << ENDL();
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
