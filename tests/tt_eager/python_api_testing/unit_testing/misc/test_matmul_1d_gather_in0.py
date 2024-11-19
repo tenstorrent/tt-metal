@@ -20,11 +20,73 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b
 random.seed(10)
 
 
+def num_cores_to_rectangle_grid(num_cores, device):
+    """
+    Find a rectangular core grid size, given an number of cores.
+
+    Return None if rectangle grid is not possible.
+    """
+    x = device.compute_with_storage_grid_size().x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+
+    if x == 0:
+        return None
+
+    y = num_cores // x
+    return (x, y)
+
+
+def get_physical_to_logical_core_mapping(device):
+    """
+    Get a mapping from physical core coords to logical core coords
+
+    Returns a dictionary.
+    """
+    mapping = {}
+    grid = device.compute_with_storage_grid_size()
+    for x in range(grid.x):
+        for y in range(grid.y):
+            physical_core = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            mapping[(physical_core.x, physical_core.y)] = (x, y)
+    return mapping
+
+
+PREFETCHER_GRID = [
+    (8, 11),
+    (8, 9),
+    (8, 8),
+    (8, 7),
+    (8, 5),
+    (8, 3),
+    (8, 2),
+    (8, 1),
+    (7, 1),
+    (7, 2),
+    (7, 3),
+    (7, 5),
+    (7, 7),
+    (7, 8),
+    (7, 9),
+    (7, 11),
+    (3, 11),
+    (3, 7),
+    (3, 5),
+    (3, 1),
+    (2, 1),
+    (2, 5),
+    (2, 7),
+    (2, 11),
+]
+
+
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
+        # 32, 2304, 3840 (PREFETCHER), only works on TG
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_GRID),
         # 32, 2304, 3840
         (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
         # 32, 2304, 3840
@@ -58,7 +120,7 @@ random.seed(10)
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [True, False],
+    [False, True],
 )
 def test_multi_core_matmul_1d_wh(
     device,
@@ -78,10 +140,16 @@ def test_multi_core_matmul_1d_wh(
     function_level_defaults,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
+    if not isinstance(grid, tuple) and not use_arbitrary_cores:
+        pytest.skip("Grid is not a tuple and not using arbitrary cores")
 
     in0_shape = [1, B, M, K]
     in1_shape = [1, 1, K, N]
-    num_cores = grid[0] * grid[1]
+    num_cores = grid[0] * grid[1] if isinstance(grid, tuple) else len(grid)
+
+    storage_grid = num_cores_to_rectangle_grid(num_cores, device)
+    if storage_grid is None:
+        pytest.skip(f"Could not find a rectangle grid for num_cores: {num_cores}")
 
     M *= B  # Fuse batch always enabled
 
@@ -110,8 +178,12 @@ def test_multi_core_matmul_1d_wh(
 
     if use_arbitrary_cores:
         # x, y
-        CORE_RANGE = [(x, y) for y in range(grid[1]) for x in range(grid[0])]
-        random.shuffle(CORE_RANGE)
+        if isinstance(grid, tuple):  # Generate random grid
+            CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
+            random.shuffle(CORE_RANGE)
+        else:  # Use custom grid
+            mapping = get_physical_to_logical_core_mapping(device)
+            CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
 
         core_range_set = ttnn.CoreRangeSet(
             [
@@ -127,7 +199,7 @@ def test_multi_core_matmul_1d_wh(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(grid[0] - 1, grid[1] - 1),
+                    ttnn.CoreCoord(storage_grid[0] - 1, storage_grid[1] - 1),
                 ),
             }
         )
@@ -184,7 +256,7 @@ def test_multi_core_matmul_1d_wh(
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        compute_with_storage_grid_size=storage_grid,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

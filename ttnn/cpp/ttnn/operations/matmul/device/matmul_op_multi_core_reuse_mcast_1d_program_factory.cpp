@@ -23,19 +23,36 @@ using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_1d_optimized_helpers {
 
-uint32_t get_preferred_noc(const uint32_t src_x, const uint32_t dst_x, const tt_metal::Device* device) {
+uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst, const tt_metal::Device* device) {
     /*
         NOC0: Preferred +x -> +y
         NOC1: Preferred -y -> -x
     */
+
+    uint32_t src_x = src.x, src_y = src.y;
+    uint32_t dst_x = dst.x, dst_y = dst.y;
+
     uint32_t MAX_X = device->grid_size().x;
+    uint32_t MAX_Y = device->grid_size().y;
 
     // Get the wrapped distances
-    uint32_t dist_right = src_x < dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
+    uint32_t dist_right = src_x <= dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
     uint32_t dist_left =  src_x < dst_x ? src_x + MAX_X - dst_x : src_x - dst_x;
 
-    return dist_right < dist_left ? 0 : 1;
+    uint32_t dist_bottom = src_y <= dst_y ? dst_y - src_y : MAX_Y - src_y + dst_y;
+    uint32_t dist_top = src_y < dst_y ? src_y + MAX_Y - dst_y : src_y - dst_y;
+
+    uint32_t dist_noc_0 = dist_right + dist_bottom;
+    uint32_t dist_noc_1 = dist_top + dist_left;
+
+    uint32_t noc = dist_noc_0 < dist_noc_1 ? 0 : 1;
+
+    // Debug pring if needed
+    // std::cout << "src: (" << src_x << ", " << src_y << "), dst: (" << dst_x << ", " << dst_y << "), noc: " << noc << std::endl;
+
+    return noc;
 }
+
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program& program,
@@ -1890,7 +1907,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
         const auto& next_core = cores[next_i % num_cores];
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc.x, next_core_noc.x, device);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device);
 
         std::vector<uint32_t> mm_in0_args = {
             i, // ring_index
