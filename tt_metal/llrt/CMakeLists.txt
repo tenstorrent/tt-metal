@@ -1,30 +1,16 @@
 # Provide unique architecture specific translation units and include paths for each ARCH
 
-set(GS_HAL_SRC grayskull/gs_hal.cpp)
-
-set(WH_HAL_SRC
-    wormhole/wh_hal.cpp
-    wormhole/wh_hal_tensix.cpp
-    wormhole/wh_hal_active_eth.cpp
-    wormhole/wh_hal_idle_eth.cpp
-)
-
-set(BH_HAL_SRC
-    blackhole/bh_hal.cpp
-    blackhole/bh_hal_tensix.cpp
-    blackhole/bh_hal_active_eth.cpp
-    blackhole/bh_hal_idle_eth.cpp
-)
-
+# FIXME: Don't want to be reaching above to project dir
+# Prefer a library target to be explicit about the dependency in CMake
 set(HAL_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd
 )
 
-add_library(gs_hal OBJECT ${GS_HAL_SRC})
+add_library(gs_hal OBJECT)
 add_library(HAL::grayskull ALIAS gs_hal)
+target_sources(gs_hal PRIVATE grayskull/gs_hal.cpp)
 target_include_directories(
     gs_hal
     PRIVATE
@@ -36,10 +22,19 @@ target_link_libraries(
     PRIVATE
         hw
         fmt::fmt-header-only
+        umd::device
 )
 
-add_library(wh_hal OBJECT ${WH_HAL_SRC})
+add_library(wh_hal OBJECT)
 add_library(HAL::wormhole ALIAS wh_hal)
+target_sources(
+    wh_hal
+    PRIVATE
+        wormhole/wh_hal.cpp
+        wormhole/wh_hal_tensix.cpp
+        wormhole/wh_hal_active_eth.cpp
+        wormhole/wh_hal_idle_eth.cpp
+)
 target_include_directories(
     wh_hal
     PRIVATE
@@ -52,10 +47,19 @@ target_link_libraries(
     PRIVATE
         hw
         fmt::fmt-header-only
+        umd::device
 )
 
 add_library(bh_hal OBJECT ${BH_HAL_SRC})
 add_library(HAL::blackhole ALIAS bh_hal)
+target_sources(
+    bh_hal
+    PRIVATE
+        blackhole/bh_hal.cpp
+        blackhole/bh_hal_tensix.cpp
+        blackhole/bh_hal_active_eth.cpp
+        blackhole/bh_hal_idle_eth.cpp
+)
 target_include_directories(
     bh_hal
     PRIVATE
@@ -67,6 +71,7 @@ target_link_libraries(
     PRIVATE
         hw
         fmt::fmt-header-only
+        umd::device
 )
 
 set(LLRT_SRC
