@@ -151,7 +151,7 @@ void matmul_multicore_reuse(std::vector<bfloat16>& a, std::vector<bfloat16>& b, 
     uint32_t num_blocks_x = Nt / per_core_N;
     uint32_t num_blocks_total =  num_blocks_y * num_blocks_x;
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, compute_with_storage_grid_size, true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerangeset(num_blocks_x * num_blocks_y, compute_with_storage_grid_size, true));
 
     //////////////////////////////////////////////////
     /*

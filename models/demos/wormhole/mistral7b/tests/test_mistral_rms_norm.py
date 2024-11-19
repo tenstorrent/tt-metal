@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_mistral_rms_norm_inference(device, use_program_cache, reset_seeds):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)
     state_dict = torch.load(model_args.consolidated_weights_path)
@@ -43,7 +43,7 @@ def test_mistral_rms_norm_inference(device, use_program_cache, reset_seeds):
         input, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
     )  # , device, put_on_device=False)
 
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, mode="decode")
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)

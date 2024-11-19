@@ -10,9 +10,8 @@
 
 #pragma once
 
-#include "noc/noc_parameters.h"
+#include <cstdint>
 
-constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT; // for NOC PCIe alignemnt
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;          // for L1 alignment
 
 // Prefetcher CMD ID enums
@@ -50,7 +49,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 15,
     CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 16,
-    CQ_DISPATCH_SET_UNICAST_ONLY_CORES = 17,
+    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 17,
+    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 18,
     CQ_DISPATCH_CMD_MAX_COUNT,              // for checking legal IDs
 };
 
@@ -260,7 +260,9 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
 
 struct CQDispatchGoSignalMcastCmd {
     uint32_t go_signal;
-    uint8_t mcast_flag; // mcast or unicast or both
+    uint8_t num_mcast_txns;
+    uint8_t num_unicast_txns;
+    uint8_t noc_data_start_index;
     uint32_t wait_count;
     uint32_t wait_addr;
 } __attribute__((packed));
@@ -268,9 +270,21 @@ struct CQDispatchGoSignalMcastCmd {
 struct CQDispatchNotifySlaveGoSignalCmd {
     // sends a counter update to dispatch_s when it sees this cmd
     uint8_t wait; // if true, issue a write barrier before sending signal to dispatch_s
-    uint16_t pad2;
+    uint16_t index_bitmask;
     uint32_t pad3;
 } __attribute__((packed));
+
+struct CQDispatchSetNumWorkerSemsCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t num_worker_sems;
+} __attribute__ ((packed));
+
+struct CQDispatchSetGoSignalNocDataCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t num_words;
+} __attribute__ ((packed));
 
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
@@ -288,23 +302,14 @@ struct CQDispatchCmd {
         CQDispatchGoSignalMcastCmd mcast;
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
         CQDispatchNotifySlaveGoSignalCmd notify_dispatch_s_go_signal;
+        CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
+        CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
     } __attribute__((packed));
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-struct CQPrefetchHToPrefetchDHeader_s {
-    uint32_t length;
-};
-
-typedef union {
-    struct CQPrefetchHToPrefetchDHeader_s header;
-    unsigned char padding[CQ_PREFETCH_CMD_BARE_MIN_SIZE];
-} CQPrefetchHToPrefetchDHeader;
-
-
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
 static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);

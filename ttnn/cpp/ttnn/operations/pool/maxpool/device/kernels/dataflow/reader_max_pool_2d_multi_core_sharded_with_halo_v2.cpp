@@ -46,25 +46,22 @@ void kernel_main() {
 
     const int32_t pad_w = get_compile_time_arg_val(3);
 
-    // channel size in bytes, multiple of 32
+    // channel size in bytes
     const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
-    const uint32_t in_nbytes_c_log2 = get_compile_time_arg_val(5);
 
     // input tensor height / width / channels
-    const int32_t in_w = get_compile_time_arg_val(6);
-    const uint32_t in_cb_nsticks = get_compile_time_arg_val(7);
+    const int32_t in_w = get_compile_time_arg_val(5);
+    const uint32_t in_cb_nsticks = get_compile_time_arg_val(6);
 
-    const uint32_t in_c = get_compile_time_arg_val(8);
+    const uint32_t in_c = get_compile_time_arg_val(7);
 
-    const uint32_t split_reader = get_compile_time_arg_val(10);
-    const uint32_t reader_id = get_compile_time_arg_val(11);
+    const uint32_t split_reader = get_compile_time_arg_val(9);
+    const uint32_t reader_id = get_compile_time_arg_val(10);
 
     // value of 1 in bf16 in a uin32_t
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
-
-    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
     constexpr uint32_t TILE_WIDTH = 32;
 
@@ -101,7 +98,7 @@ void kernel_main() {
         uint32_t h_multiples = 0;
         for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
             uint32_t stick_offset = top_left_local_index + h_multiples;
-            uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
+            uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
             noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
             out_l1_write_addr += in_nbytes_c * window_w;
         }

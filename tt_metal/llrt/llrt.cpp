@@ -2,19 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
 
 #include "llrt.hpp"
+#include "llrt/rtoptions.hpp"
 #include "hal.hpp"
-#include "hostdevcommon/common_values.hpp"
 
 #include "jit_build/settings.hpp"
 
-#include "fmt/ranges.h"
+#include <fmt/base.h>
+#include <fmt/ranges.h>
 
-#include <unordered_set>
-#include <mutex>
-#include "dev_msgs.h"
+// FIXME: ARCH_NAME specific
+#include "dev_msgs.h" // RUN_MSG_DONE
+#include "eth_l1_address_map.h" // address_map
+
 
 namespace tt {
 
@@ -25,21 +44,9 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
+ll_api::memory get_risc_binary(string const &path,
+    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
     ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
-
-    static const uint32_t processor_to_fw_base_addr[] = {
-        MEM_BRISC_FIRMWARE_BASE,
-        MEM_NCRISC_FIRMWARE_BASE,
-        MEM_TRISC0_FIRMWARE_BASE,
-        MEM_TRISC1_FIRMWARE_BASE,
-        MEM_TRISC2_FIRMWARE_BASE,
-        eth_l1_mem::address_map::FIRMWARE_BASE,
-        MEM_IERISC_FIRMWARE_BASE,
-#ifdef ARCH_BLACKHOLE
-        MEM_SLAVE_IERISC_FIRMWARE_BASE,
-#endif
-    };
 
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
@@ -60,7 +67,7 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
           uint64_t data_start = MEM_LOCAL_BASE;
           uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
               0 :
-              processor_to_fw_base_addr[riscv_id];
+              tt::tt_metal::hal.get_base_firmware_addr(core_type_idx, processor_class_idx, processor_type_idx);
           ptr->pack_data_into_text(text_start, data_start);
       }
 
@@ -169,22 +176,11 @@ void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
+bool test_load_write_read_risc_binary(
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx) {
     assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr;
-    switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
-        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-#ifdef ARCH_BLACKHOLE
-        case 7: local_init_addr = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-#endif
-    }
+    uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
@@ -203,12 +199,6 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
     }
 
     return true;
-}
-
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
-
-    assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
 }
 
 void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {

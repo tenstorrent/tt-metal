@@ -39,13 +39,25 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
+    uint32_t alignment = src0_is_dram ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+
+    std::vector<uint32_t> reader_compile_time_args = {(
+        std::uint32_t) src0_is_dram,
+        alignment
+    };
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram
     };
+
+    if (alignment > (tt::constants::FACE_WIDTH * a.element_size())) {
+        uint32_t src1_cb_index = 1;
+        tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}})
+        .set_page_size(src1_cb_index, alignment);
+        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -134,15 +146,15 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_new_sticks_per_core = 0, num_old_sticks_per_core = 0;
         if (split_work_by_old_sticks) {
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_old_sticks_per_core = num_w_sticks_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_old_sticks_per_core = num_w_sticks_per_core_group_2;
             }
         } else {
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_new_sticks_per_core = num_w_sticks_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_new_sticks_per_core = num_w_sticks_per_core_group_2;
             }
         }

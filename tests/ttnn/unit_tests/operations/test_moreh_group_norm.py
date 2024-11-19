@@ -202,8 +202,6 @@ def make_input_tensors(input_shape, affine, do_backward=False):
 
 
 def run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
-    torch.manual_seed(2024)
-
     H, W = HW
     C, num_groups = C_num_groups
     input_shape = (N, C, H, W)
@@ -284,6 +282,8 @@ def run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rst
     ],
 )
 def test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
+    torch.manual_seed(2024)
+
     run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
 
 
@@ -343,7 +343,8 @@ def run_test_moreh_group_norm_backward(
     if not affine and (gamma_requires_grad or beta_requires_grad):
         pytest.skip("gamma_requires_grad and beta_requires_grad are only valid when affine is True.")
 
-    torch.manual_seed(2024)
+    if not (input_requires_grad or gamma_requires_grad or beta_requires_grad):
+        pytest.skip("at least one requires_grad should be True.")
 
     C, num_groups = C_num_groups
     input_shape = (N, C, H, W)
@@ -466,6 +467,7 @@ def run_test_moreh_group_norm_backward(
 def test_moreh_group_norm_backward(
     N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
 ):
+    torch.manual_seed(2024)
     run_test_moreh_group_norm_backward(
         N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
     )

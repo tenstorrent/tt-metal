@@ -14,8 +14,11 @@
 #include "third_party/json/json.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 
 using CoreCoord = tt_xy_pair;
+
+struct CoreRangeSet;
 
 template <>
 struct fmt::formatter<CoreCoord> {
@@ -50,16 +53,20 @@ struct CoreRange {
 
     CoreRange(const CoreRange &other) = default;
     CoreRange &operator=(const CoreRange &other) = default;
-    CoreRange(CoreRange &&other) = default;
-    CoreRange &operator=(CoreRange &&other) = default;
+    CoreRange(CoreRange &&other) noexcept = default;
+    CoreRange &operator=(CoreRange &&other) noexcept = default;
 
-    std::optional<CoreRange> intersects(const CoreRange &other) const;
+    bool intersects(const CoreRange &other) const;
+
+    std::optional<CoreRange> intersection(const CoreRange &other) const;
 
     bool adjacent(const CoreRange &other) const;
 
+    bool contains(const CoreCoord &other) const;
+
     bool contains(const CoreRange &other) const;
 
-    bool contains(const CoreCoord &other) const;
+    bool contains(const CoreRangeSet &other) const;
 
     // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
     std::optional<CoreRange> merge(const CoreRange &cr) const;
@@ -113,7 +120,7 @@ struct fmt::formatter<CoreRange> {
 
 class CoreRangeSet {
    public:
-    CoreRangeSet(const std::vector<CoreRange> &core_ranges);
+    CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges);
 
     CoreRangeSet(const std::set<CoreRange> &core_ranges);
 
@@ -127,20 +134,32 @@ class CoreRangeSet {
 
     CoreRangeSet &operator=(const CoreRangeSet &other);
 
-    CoreRangeSet(CoreRangeSet &&other);
+    CoreRangeSet(CoreRangeSet &&other) noexcept;
 
-    CoreRangeSet &operator=(CoreRangeSet &&other);
+    CoreRangeSet &operator=(CoreRangeSet &&other) noexcept;
 
     CoreRangeSet(std::vector<CoreRange> &&core_ranges);
+
+    bool empty() const;
 
     size_t size() const;
 
     template <typename T>
     CoreRangeSet merge(const T &other) const;
 
-    bool core_coord_in_core_ranges(const CoreCoord &core_coord) const;
+    bool intersects(const CoreCoord &other) const;
 
-    bool intersects(const CoreRange &cr) const;
+    bool intersects(const CoreRange &other) const;
+
+    bool intersects(const CoreRangeSet &other) const;
+
+    CoreRangeSet intersection(const CoreRangeSet &other) const;
+
+    bool contains(const CoreCoord &other) const;
+
+    bool contains(const CoreRange &other) const;
+
+    bool contains(const CoreRangeSet &other) const;
 
     const std::vector<CoreRange> &ranges() const;
 

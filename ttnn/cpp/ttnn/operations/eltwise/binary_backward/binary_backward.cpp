@@ -254,14 +254,13 @@ std::vector<ttnn::Tensor> ExecuteBackwardXlogy::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad1_result = ttnn::log(other, output_mem_config);
-    Tensor zero_tensor = ttnn::zeros_like(other, other.get_dtype(), other.get_layout(), std::nullopt, output_mem_config);
     grad1_result = ttnn::where(
         ttnn::logical_and(
             ttnn::eqz(input, output_mem_config),
-            ttnn::le(other, zero_tensor, std::nullopt, output_mem_config),
+            ttnn::le(other, 0.0f, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
-        zero_tensor,
+        0.0f,
         ttnn::where(ttnn::ltz(other, output_mem_config), std::nanf(" "), grad1_result, output_mem_config),
         output_mem_config);
     grad1_result =
@@ -537,6 +536,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad, input, approximate, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor.push_back(gelu_result[0].value());
+        grad_tensor.push_back(gelu_result[0].value());
     }
     return grad_tensor;
 }
@@ -557,7 +557,6 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
 template <bool min_or_max>
 std::vector<Tensor> _min_or_max_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor zeros_t = ttnn::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     std::vector<Tensor> grad_tensor;
     Tensor t_scale_grad = ttnn::multiply(grad, 0.5, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
@@ -728,8 +727,8 @@ const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& othe
     std::vector<ComplexTensor> grad_tensor;
     Tensor condition_nan = ttnn::logical_and(ttnn::eqz(other.real(),output_mem_config), ttnn::eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
     ComplexTensor grad_a = ttnn::operations::complex_binary::_div(grad, ttnn::conj(other,output_mem_config), output_mem_config);
-    Tensor grad_a_r = where(condition_nan, ttnn::operations::creation::full_like(grad.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::real(grad_a,output_mem_config),  output_mem_config);
-    Tensor grad_a_i = where(condition_nan, ttnn::operations::creation::full_like(grad.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::imag(grad_a,output_mem_config),  output_mem_config);
+    Tensor grad_a_r = where(condition_nan, std::nanf(""), ttnn::real(grad_a,output_mem_config),  output_mem_config);
+    Tensor grad_a_i = where(condition_nan, std::nanf(""), ttnn::imag(grad_a,output_mem_config),  output_mem_config);
     grad_a = ComplexTensor({grad_a_r, grad_a_i});
     grad_a_r.deallocate();
     grad_a_i.deallocate();
@@ -737,8 +736,8 @@ const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& othe
     ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
     ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::conj(ttnn::operations::complex_binary::_div(ttnn::operations::complex_binary::_div(input, other, output_mem_config), other, output_mem_config ),output_mem_config), output_mem_config);
     neg_grad.deallocate();
-    Tensor grad_b_r = where(condition_nan, ttnn::operations::creation::full_like(grad.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::real(grad_b,output_mem_config),  output_mem_config);
-    Tensor grad_b_i = where(condition_nan, ttnn::operations::creation::full_like(grad.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::imag(grad_b,output_mem_config),  output_mem_config);
+    Tensor grad_b_r = where(condition_nan, std::nanf(""), ttnn::real(grad_b,output_mem_config),  output_mem_config);
+    Tensor grad_b_i = where(condition_nan, std::nanf(""), ttnn::imag(grad_b,output_mem_config),  output_mem_config);
     grad_b = ComplexTensor({grad_b_r, grad_b_i});
     grad_b_r.deallocate();
     grad_b_i.deallocate();

@@ -364,11 +364,11 @@ int main(int argc, char** argv) {
         std::shared_ptr<tt::tt_metal::Buffer> input_buffer1;
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         SHAPE shape_in0 = {1, 1, M, K};
-        tt::deprecated::Tensor<bfloat16> tensor_in0_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt::deprecated::Tensor<float> tensor_in0_fp8 = tt::deprecated::initialize_tensor<float>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor_in0_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in0, tt::deprecated::Initialize::ONES, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_in0_fp8 = tt::deprecated::initialize_tensor<float>(shape_in0, tt::deprecated::Initialize::ONES, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
         SHAPE shape_in1 = {1, 1, K, N};
-        tt::deprecated::Tensor<bfloat16> tensor_in1_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt::deprecated::Tensor<float> tensor_in1_fp8 = tt::deprecated::initialize_tensor<float>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor_in1_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in1, tt::deprecated::Initialize::ONES, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_in1_fp8 = tt::deprecated::initialize_tensor<float>(shape_in1, tt::deprecated::Initialize::ONES, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
         if (single_core) {
             if (dtype == 1) {
@@ -386,7 +386,7 @@ int main(int argc, char** argv) {
 
                 // output
                 SHAPE output_hsape = {1, 1, M, N};
-                tt::deprecated::Tensor<bfloat16> out_tensor = tt::deprecated::initialize_tensor<bfloat16>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
+                tt::deprecated::Tensor<bfloat16> out_tensor = tt::deprecated::initialize_tensor<bfloat16>(output_hsape, tt::deprecated::Initialize::ZEROS, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
                 vector<uint32_t> outputs = pack_bfloat16_vec_into_uint32_vec(out_tensor.get_values());
                 output_buffer = create_and_transfer_data_sharded_cb(device, outputs, Mt, Nt);
 
@@ -403,7 +403,7 @@ int main(int argc, char** argv) {
 
                 // output
                 SHAPE output_hsape = {1, 1, M, N};
-                tt::deprecated::Tensor<float> out_tensor = tt::deprecated::initialize_tensor<float>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
+                tt::deprecated::Tensor<float> out_tensor = tt::deprecated::initialize_tensor<float>(output_hsape, tt::deprecated::Initialize::ZEROS, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
                 auto output_tilized = tilize(out_tensor.get_values(), M, N);
                 auto outputs = pack_fp32_vec_as_bfp8_tiles(output_tilized, true, false);
                 output_buffer = create_and_transfer_data_sharded_cb_fp8(device, outputs, Mt, Nt);
@@ -684,17 +684,21 @@ int main(int argc, char** argv) {
 uint32_t get_l1_size(tt::ARCH arch) {
     constexpr uint32_t GS_L1_SIZE = 1048576;
     constexpr uint32_t WH_L1_SIZE = 1499136;
+    constexpr uint32_t BH_L1_SIZE = 1499136;
 
     uint32_t l1_size = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         l1_size = WH_L1_SIZE;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         l1_size = GS_L1_SIZE;
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        l1_size = BH_L1_SIZE;
     }
     return l1_size;
 }
 
 double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_clock) {
+    constexpr double BH_FPU_BFP8_TFLOPS_PER_TENSIX = 2.97;
     constexpr double WH_FPU_BFP8_TFLOPS_PER_TENSIX = 2.05;
     constexpr double GS_FPU_BFP8_TFLOPS_PER_TENSIX = 0.58;
 
@@ -707,6 +711,9 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     } else if (arch == tt::ARCH::GRAYSKULL) {
         rpeak_tflops =
             GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        rpeak_tflops =
+            BH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     }
 
     log_debug(LogTest, "Rpeak {} TFLOPS", rpeak_tflops);
@@ -777,7 +784,7 @@ CoreCoord get_core_range(
 std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    if (arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE) {
         math_fidelity = MathFidelity::HiFi2;
         // TODO: apply packer_l1_acc
         // TODO: need to consider whether to set these variablias as arguments

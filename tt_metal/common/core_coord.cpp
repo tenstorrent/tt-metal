@@ -5,6 +5,7 @@
 #include "tt_metal/common/core_coord.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -47,7 +48,16 @@ CoreRange::CoreRange(const CoreCoord &start_coord, const CoreCoord &end_coord) {
     this->end_coord = end_coord;
 }
 
-std::optional<CoreRange> CoreRange::intersects(const CoreRange &other) const {
+bool CoreRange::intersects(const CoreRange &other) const {
+    bool first_core_left_of_second = this->end_coord.x < other.start_coord.x;
+    bool first_core_right_of_second = this->start_coord.x > other.end_coord.x;
+    bool first_core_above_second = this->end_coord.y < other.start_coord.y;
+    bool first_core_below_second = this->start_coord.y > other.end_coord.y;
+    return !(
+        first_core_left_of_second or first_core_right_of_second or first_core_above_second or first_core_below_second);
+}
+
+std::optional<CoreRange> CoreRange::intersection(const CoreRange &other) const {
     std::size_t x1 = std::max(this->start_coord.x, other.start_coord.x);
     std::size_t y1 = std::max(this->start_coord.y, other.start_coord.y);
     std::size_t x2 = std::min(this->end_coord.x, other.end_coord.x);
@@ -67,14 +77,23 @@ bool CoreRange::adjacent(const CoreRange &other) const {
     return ((x2 + 1 == x1 && y1 <= y2) || (y2 + 1 == y1 && x1 <= x2));
 }
 
+bool CoreRange::contains(const CoreCoord &other) const {
+    return (other.x >= this->start_coord.x) && (other.x <= this->end_coord.x) && (other.y >= this->start_coord.y) &&
+           (other.y <= this->end_coord.y);
+}
+
 bool CoreRange::contains(const CoreRange &other) const {
     return (other.start_coord.x >= this->start_coord.x) && (other.end_coord.x <= this->end_coord.x) &&
            (other.start_coord.y >= this->start_coord.y) && (other.end_coord.y <= this->end_coord.y);
 }
 
-bool CoreRange::contains(const CoreCoord &other) const {
-    return (other.x >= this->start_coord.x) && (other.x <= this->end_coord.x) && (other.y >= this->start_coord.y) &&
-           (other.y <= this->end_coord.y);
+bool CoreRange::contains(const CoreRangeSet &other) const {
+    for (const auto &cr : other.ranges()) {
+        if (!this->contains(cr)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
@@ -143,7 +162,7 @@ auto fmt::formatter<CoreRange>::format(const CoreRange &core_range, format_conte
     return fmt::format_to(ctx.out(), "{}", ss.str());
 }
 
-CoreRangeSet::CoreRangeSet(const std::vector<CoreRange> &core_ranges) :
+CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
     ZoneScoped;
     this->validate_no_overlap();
@@ -172,9 +191,9 @@ CoreRangeSet &CoreRangeSet::operator=(const CoreRangeSet &other) {
     return *this;
 }
 
-CoreRangeSet::CoreRangeSet(CoreRangeSet &&other) { swap(*this, other); }
+CoreRangeSet::CoreRangeSet(CoreRangeSet &&other) noexcept { swap(*this, other); }
 
-CoreRangeSet &CoreRangeSet::operator=(CoreRangeSet &&other) {
+CoreRangeSet &CoreRangeSet::operator=(CoreRangeSet &&other) noexcept {
     swap(*this, other);
     return *this;
 }
@@ -183,6 +202,8 @@ CoreRangeSet::CoreRangeSet(std::vector<CoreRange> &&core_ranges) : ranges_(std::
     ZoneScoped;
     this->validate_no_overlap();
 }
+
+bool CoreRangeSet::empty() const { return this->ranges_.empty(); }
 
 size_t CoreRangeSet::size() const { return ranges_.size(); }
 
@@ -252,19 +273,89 @@ CoreRangeSet CoreRangeSet::merge<CoreRangeSet>(const CoreRangeSet &other) const 
     return this->merge(other.ranges());
 }
 
-bool CoreRangeSet::core_coord_in_core_ranges(const CoreCoord &core_coord) const {
-    ZoneScoped;
-    for (const auto &cr : this->ranges_) {
-        if (cr.contains(core_coord))
+bool CoreRangeSet::intersects(const CoreCoord &other) const {
+    // For a CoreCoord, intersect and contains are equivalent
+    return this->contains(other);
+}
+
+bool CoreRangeSet::intersects(const CoreRange &other) const {
+    for (const auto &local_cr : this->ranges_) {
+        if (local_cr.intersects(other)) {
             return true;
+        }
     }
     return false;
 }
 
-bool CoreRangeSet::intersects(const CoreRange &cr) const {
-    for (const auto &local_cr : this->ranges_) {
-        if (local_cr.intersects(cr))
+bool CoreRangeSet::intersects(const CoreRangeSet &other) const {
+    for (const auto &cr : other.ranges()) {
+        if (this->intersects(cr)) {
             return true;
+        }
+    }
+    return false;
+}
+
+CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet &other) const {
+    std::vector<CoreRange> intersection;
+    for (const auto& local_cr : this->ranges_) {
+        for (const auto& other_cr : other.ranges()) {
+            if (auto intersect = local_cr.intersection(other_cr); intersect.has_value()) {
+                intersection.push_back(*intersect);
+            }
+        }
+    }
+    return CoreRangeSet(std::move(intersection));
+}
+
+bool CoreRangeSet::contains(const CoreCoord &other) const {
+    for (const auto &cr : this->ranges_) {
+        if (cr.contains(other)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CoreRangeSet::contains(const CoreRange &other) const {
+    uint32_t num_remaining_cores = other.size();
+    if (num_remaining_cores == 0) {
+        return true;
+    } else if(this->num_cores() < num_remaining_cores) {
+        return false;
+    }
+    uint32_t num_intersect_cores = 0;
+    for (const auto &cr : this->ranges_) {
+        const auto& intersection = cr.intersection(other);
+        if (intersection.has_value()) {
+            num_remaining_cores -= intersection->size();
+            // Early exit
+            if (num_remaining_cores == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool CoreRangeSet::contains(const CoreRangeSet &other) const {
+    uint32_t num_remaining_cores = other.num_cores();
+    if (num_remaining_cores == 0) {
+        return true;
+    } else if (this->num_cores() < num_remaining_cores) {
+        return false;
+    }
+    for (const auto &local_cr : this->ranges_) {
+        for (const auto& other_cr : other.ranges_) {
+            const auto& intersection = local_cr.intersection(other_cr);
+            if (intersection.has_value()) {
+                num_remaining_cores -= intersection->size();
+                // Early exit
+                if (num_remaining_cores == 0) {
+                    return true;
+                }
+            }
+        }
     }
     return false;
 }
@@ -311,15 +402,9 @@ void CoreRangeSet::validate_no_overlap() {
     }
     for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end() - 1; outer_it++) {
         for (auto inner_it = outer_it + 1; inner_it != this->ranges_.end(); inner_it++) {
-            CoreRange &first_core_range = *outer_it;
-            CoreRange &second_core_range = *inner_it;
-            bool first_core_left_of_second = first_core_range.end_coord.x < second_core_range.start_coord.x;
-            bool first_core_right_of_second = first_core_range.start_coord.x > second_core_range.end_coord.x;
-            bool first_core_above_second = first_core_range.end_coord.y < second_core_range.start_coord.y;
-            bool first_core_below_second = first_core_range.start_coord.y > second_core_range.end_coord.y;
-            auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
-                              first_core_below_second;
-            if (not no_overlap) {
+            const auto &first_core_range = *outer_it;
+            const auto &second_core_range = *inner_it;
+            if (first_core_range.intersects(second_core_range)) {
                 TT_THROW(
                     "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
                     first_core_range.str(),
@@ -354,11 +439,11 @@ std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_size_x, u
         grid_size_y);
     if (row_wise) {
         for (uint32_t i = 0; i < num_cores; ++i) {
-            cores.push_back({i % grid_size_x, i / grid_size_x});
+            cores.emplace_back(i % grid_size_x, i / grid_size_x);
         }
     } else {
         for (uint32_t i = 0; i < num_cores; ++i) {
-            cores.push_back({i / grid_size_y, i % grid_size_y});
+            cores.emplace_back(i / grid_size_y, i % grid_size_y);
         }
     }
     return cores;
@@ -373,14 +458,14 @@ std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wi
     if (row_wise) {
         for (uint32_t j = start.y; j < (end.y + 1); j++) {
             for (uint32_t i = start.x; i < (end.x + 1); i++) {
-                cores.push_back({i, j});
+                cores.emplace_back(i, j);
             }
         }
 
     } else {
         for (uint32_t i = start.x; i < (end.x + 1); i++) {
             for (uint32_t j = start.y; j < (end.y + 1); j++) {
-                cores.push_back({i, j});
+                cores.emplace_back(i, j);
             }
         }
     }
@@ -404,25 +489,25 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 
     if (row_wise) {
         for (uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
-            cores.push_back({i % box_size_x, i / box_size_x});
+            cores.emplace_back(i % box_size_x, i / box_size_x);
         }
     } else {
         for (uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
-            cores.push_back({i / box_size_y, i % box_size_y});
+            cores.emplace_back(i / box_size_y, i % box_size_y);
         }
     }
 
     // Right rectangle noops
     for (uint32_t x = box_size_x; x < grid_size_x; ++x) {
         for (uint32_t y = 0; y < grid_size_y; ++y) {
-            cores.push_back({x, y});
+            cores.emplace_back(x, y);
         }
     }
 
     // Bottom rectangle noops
     for (uint32_t y = box_size_y; y < grid_size_y; ++y) {
         for (uint32_t x = 0; x < box_size_x; ++x) {
-            cores.push_back({x, y});
+            cores.emplace_back(x, y);
         }
     }
 
@@ -430,18 +515,18 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 }
 
 std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet &crs, std::optional<uint32_t> max_cores, bool row_wise) {
-    uint32_t num_total_cores = 0;
     std::vector<CoreCoord> all_cores;
-    uint32_t offset = 0;
-
-    for (auto core_range : crs.ranges()) {
-        auto start_coord = core_range.start_coord;
-        auto end_coord = core_range.end_coord;
+    auto num_cores = crs.num_cores();
+    all_cores.reserve(max_cores.has_value() ? std::min(*max_cores, num_cores) : num_cores);
+    for (const auto &core_range : crs.ranges()) {
+        const auto &start_coord = core_range.start_coord;
+        const auto &end_coord = core_range.end_coord;
         auto cores = grid_to_cores(start_coord, end_coord, row_wise);
         if (max_cores.has_value()) {
-            if (all_cores.size() + cores.size() > max_cores.value()) {
-                uint32_t num_cores_to_add = max_cores.value() - all_cores.size();
+            if (all_cores.size() + cores.size() > *max_cores) {
+                uint32_t num_cores_to_add = *max_cores - all_cores.size();
                 all_cores.insert(all_cores.end(), cores.begin(), cores.begin() + num_cores_to_add);
+                break;
             } else {
                 all_cores.insert(all_cores.end(), cores.begin(), cores.end());
             }

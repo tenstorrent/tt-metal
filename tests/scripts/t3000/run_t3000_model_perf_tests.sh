@@ -37,6 +37,7 @@ run_t3000_mixtral_tests() {
   fi
 }
 
+# TODO [Deprecation notice] - Llama2-70B will be deprecated soon for the new Llama3-70B. The CI tests will be deprecated with it.
 run_t3000_llama2_70b_tests() {
   # Record the start time
   fail=0
@@ -50,6 +51,24 @@ run_t3000_llama2_70b_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama2_70b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_70b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
+
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_perf.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -123,6 +142,44 @@ run_t3000_resnet50_tests() {
   fi
 }
 
+run_t3000_ccl_all_gather_perf_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_ccl_all_gather_perf_tests"
+
+  tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t t3000
+  fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_ccl_all_gather_perf_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_ccl_reduce_scatter_perf_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_ccl_reduce_scatter_perf_tests"
+
+  tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t t3000
+  fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_ccl_reduce_scatter_perf_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llm_tests() {
   # Run falcon7b tests
   run_t3000_falcon7b_tests
@@ -130,8 +187,14 @@ run_t3000_llm_tests() {
   # Run mixtral tests
   run_t3000_mixtral_tests
 
+  # Run llama3-small (1B, 3B, 8B, 11B) tests
+  run_t3000_llama3_tests
+
   # Run llama2-70b tests
   run_t3000_llama2_70b_tests
+
+  # Run llama3-70b tests
+  run_t3000_llama3_70b_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests
@@ -146,6 +209,13 @@ run_t3000_cnn_tests() {
 
   # Merge all the generated reports
   env python models/perf/merge_perf_results.py
+}
+
+run_t3000_ccl_tests() {
+  # Run ccl performance tests
+  run_t3000_ccl_all_gather_perf_tests
+  run_t3000_ccl_reduce_scatter_perf_tests
+
 }
 
 fail=0
@@ -194,8 +264,10 @@ main() {
     run_t3000_llm_tests
   elif [[ "$pipeline_type" == "cnn_model_perf_t3000_device" ]]; then
     run_t3000_cnn_tests
+  elif [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
+    run_t3000_ccl_tests
   else
-    echo "$pipeline_type is invalid (supported: [cnn_model_perf_t3000_device, cnn_model_perf_t3000_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [cnn_model_perf_t3000_device, cnn_model_perf_t3000_device, ccl_perf_t3000_device])" 2>&1
     exit 1
   fi
 

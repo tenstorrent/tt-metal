@@ -4,10 +4,27 @@
 
 #include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+    ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor) {
+        auto shape = tensor.get_shape();
+        if (shape.rank() <= 4) {
+            return tensor;
+        }
+        else {
+            auto rank = shape.rank();
+            auto squeezed = tensor;
+            while (rank > 4) {
+                squeezed = ttnn::squeeze(squeezed, 0);
+                rank = squeezed.get_shape().rank();
+            }
+            return squeezed;
+        }
+    };
+
     ttnn::Tensor pad_to_tile_vol(uint8_t queue_id,
                                  const ttnn::Tensor& tensor,
                                  const float value,
@@ -16,7 +33,8 @@ namespace data_movement {
         auto logical_shape = tensor.get_logical_shape();
         auto padded_shape = tensor.get_padded_shape();
         auto rank = tensor.get_shape().rank();
-        if (padded_shape.volume() % tt::constants::TILE_HW != 0) {
+        if (padded_shape[-1] % tt::constants::TILE_WIDTH != 0
+            || padded_shape[-2] % tt::constants::TILE_HEIGHT != 0) {
             TT_ASSERT(rank >= 2, "rank of tensor to pad to tile must be at least 2.");
 
             auto padded_height = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
@@ -34,6 +52,9 @@ namespace data_movement {
                                             value,
                                             use_multicore,
                                             memory_config);
+            TT_FATAL(padded_output.get_padded_shape()[-1] % tt::constants::TILE_WIDTH == 0
+                       && padded_output.get_padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+                       "pad_to_tile_vol: output tensor must be divisible by tile size");
             return padded_output;
         }
         return tensor;

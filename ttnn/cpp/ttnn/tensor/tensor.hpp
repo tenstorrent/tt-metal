@@ -235,7 +235,29 @@ struct Tensor {
     }
 
     // TODO(arakhmati): clean up the methods below
-    Buffer *buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer().get(); }
+    std::vector<Buffer *> buffers() const {
+        auto storage_type = this->storage_type();
+        if (storage_type == tt::tt_metal::StorageType::DEVICE) {
+            auto storage = std::get<DeviceStorage>(this->get_storage());
+            return std::vector<Buffer *>{storage.get_buffer().get()};
+        } else if (storage_type == tt::tt_metal::StorageType::MULTI_DEVICE) {
+            std::vector<Buffer *> buffers;
+            auto storage = std::get<MultiDeviceStorage>(this->get_storage());
+            for (auto buffer : storage.get_buffers()) {
+                buffers.push_back(buffer.get());
+            }
+            return buffers;
+        } else {
+            TT_THROW("Cannot get buffers from a tensor with non-device storage.");
+        }
+    }
+    Buffer *buffer() const {
+        auto storage_type = this->storage_type();
+        TT_FATAL(storage_type == tt::tt_metal::StorageType::DEVICE,
+                        "ttnn::Tensor::buffer(): Expected Tensor with DeviceStorage, got {}",
+                        storage_type);
+        return std::get<DeviceStorage>(this->get_storage()).get_buffer().get();
+    }
     DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     Device *device() const {
@@ -368,5 +390,6 @@ bool validate_worker_modes(const std::vector<Device *> &workers);
 namespace ttnn {
 
 using Tensor = tt::tt_metal::Tensor;
+using TensorSpec = std::pair<ttnn::SimpleShape, tt::tt_metal::TensorLayout>;
 
 }  // namespace ttnn

@@ -136,20 +136,26 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto compited_output_shape = compute_output_shapes(args, tensor_args);
-        const auto preallocated_output_shape = preallocated_output_tensor->get_shape();
+        const auto computed_output_shape = compute_output_shapes(args, tensor_args);
+        const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
         TT_FATAL(
-            preallocated_output_shape == compited_output_shape,
+            preallocated_output_shape == computed_output_shape,
             "When preallocted output tensor is used, Unary operation requires its shape to match the computed "
             "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            compited_output_shape,
+            computed_output_shape,
             preallocated_output_shape);
+
+        if(!input_tensor.is_sharded()){
+            TT_FATAL(
+                (preallocated_output_tensor.value().get_layout() == Layout::TILE),
+                "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
+        }
     }
 }
 
 shape_return_value_t UnaryDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return {tensor_args.input.get_shape()};
+    return {tensor_args.input.get_logical_shape()};
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
@@ -158,13 +164,12 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
         return tensor_args.preallocated_output.value();
     }
 
-    const auto output_shape = compute_output_shapes(args, tensor_args);
-
     auto output_layout = Layout::TILE;
     if (args.output_memory_config.is_sharded()) {
         output_layout = tensor_args.input.get_layout();
     }
 
+    const auto output_shape = tensor_args.input.shape();
     return create_device_tensor(
         output_shape, args.output_dtype, output_layout, tensor_args.input.device(), args.output_memory_config);
 }
@@ -193,6 +198,7 @@ UnaryDeviceOperation::invoke(
     const MemoryConfig& output_memory_config,
     bool fp32_dest_acc_en,
     bool preserve_fp32_precision,
+    bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output) {
     return {
         operation_attributes_t{
@@ -201,6 +207,7 @@ UnaryDeviceOperation::invoke(
             .output_memory_config = output_memory_config,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .preserve_fp32_precision = preserve_fp32_precision,
+            .bfp8_pack_precise = bfp8_pack_precise,
         },
         tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
 }

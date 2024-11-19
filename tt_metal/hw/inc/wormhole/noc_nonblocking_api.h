@@ -9,6 +9,10 @@
 #include "noc_parameters.h"
 #include "dev_msgs.h"
 
+// Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
+#define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
+#define NOC_0_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
+
 ////
 
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
@@ -292,6 +296,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(uint32_t noc
 
   uint32_t be32 = be;
   uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES-1));
+  // If we're given a misaligned address, don't write to the bytes in the word below the address
   be32 = (be32 << be_shift);
 
   while (!noc_cmd_buf_ready(noc, cmd_buf));

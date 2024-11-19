@@ -77,7 +77,7 @@ std::vector<CoreRange> Kernel::logical_coreranges() const {
 }
 
 bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
-    return this->core_range_set_.core_coord_in_core_ranges(logical_core);
+    return this->core_range_set_.contains(logical_core);
 }
 
 CoreType Kernel::get_kernel_core_type() const {
@@ -175,7 +175,7 @@ std::string Kernel::compute_hash() const {
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        KernelDefinesHash{}(this->defines_),
+        tt::utils::DefinesHash{}(this->defines_),
         this->config_hash());
 }
 
@@ -213,6 +213,8 @@ RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
+    auto arch = hal.get_arch();
+    uint32_t idle_eth_max_runtime_args = (arch == tt::ARCH::GRAYSKULL) ? 0 : hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
@@ -314,6 +316,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
+    build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
@@ -366,7 +369,12 @@ void DataMovementKernel::read_binaries(Device *device) {
     ll_api::memory::Relocate relo_type =
         (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)) ?
         ll_api::memory::Relocate::NONE : ll_api::memory::Relocate::XIP;
-    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), riscv_id, ll_api::memory::PackSpans::PACK, relo_type);
+    ll_api::memory binary_mem = llrt::get_risc_binary(
+        build_state.get_target_out_path(this->kernel_full_name_),
+        // processor class is BRISC/NCRISC and each have one data movement processor type
+        tensix_core_type, riscv_id, dm_class_idx,
+        ll_api::memory::PackSpans::PACK, relo_type
+    );
     binaries.push_back(binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, binary_size);
@@ -387,7 +395,11 @@ void EthernetKernel::read_binaries(Device *device) {
     // TODO: fix when active eth supports relo
     ll_api::memory::Relocate relo_type = (this->config_.eth_mode == Eth::IDLE) ?
         ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::NONE;
-    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), risc_id, ll_api::memory::PackSpans::PACK, relo_type);
+    ll_api::memory binary_mem = llrt::get_risc_binary(
+        build_state.get_target_out_path(this->kernel_full_name_),
+        erisc_core_type, erisc_id, dm_class_idx,
+        ll_api::memory::PackSpans::PACK, relo_type
+    );
    binaries.push_back(binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);
@@ -401,7 +413,11 @@ void ComputeKernel::read_binaries(Device *device) {
     uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         const JitBuildState &build_state = device->build_kernel_state(tensix_core_type, compute_class_idx, trisc_id);
-        ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), trisc_id + 2, ll_api::memory::PackSpans::PACK, ll_api::memory::Relocate::XIP);
+        ll_api::memory binary_mem = llrt::get_risc_binary(
+            build_state.get_target_out_path(this->kernel_full_name_),
+            tensix_core_type, compute_class_idx, trisc_id,
+            ll_api::memory::PackSpans::PACK, ll_api::memory::Relocate::XIP
+        );
         binaries.push_back(binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
         log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, binary_size);
@@ -444,8 +460,10 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, ui
         uint32_t offset_idx = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(this->config_.processor);
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
-        int riscv_id = 5;
-        tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
+        uint32_t erisc_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+        int erisc_id = magic_enum::enum_integer(this->config_.processor);
+        tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, erisc_core_type, dm_class_idx, erisc_id);
     }
 
     return true;
@@ -474,13 +492,6 @@ std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processo
         default: TT_THROW("Unknown data movement processor");
     }
     return os;
-}
-
-size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
-    size_t hash_value = 0;
-    for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
-        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
-    return hash_value;
 }
 
 }  // namespace tt_metal

@@ -49,6 +49,7 @@ struct CCLOpConfig {
         std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
     uint32_t get_page_size() const;
+    Tile get_tile() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
@@ -64,6 +65,8 @@ struct CCLOpConfig {
     bool input_sharded;
     bool output_sharded;
     bool is_row_major;
+    tt::DataFormat df;
+    Tile tile;
 
     std::vector<Tensor> const* input_tensors;
     std::vector<Tensor> const* output_tensors;
@@ -233,7 +236,7 @@ class EriscDatamoverBuilder {
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> emit_compile_time_args() const {
+    std::vector<uint32_t> get_compile_time_args() const {
         return std::vector<uint32_t>{
             static_cast<uint32_t>(this->enable_sender ? 1 : 0),
             static_cast<uint32_t>(this->enable_receiver ? 1 : 0),
@@ -249,7 +252,7 @@ class EriscDatamoverBuilder {
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> emit_runtime_args() const {
+    std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
         uint32_t size = 3 + active_channels.size() * 6;
         for (auto const& channel : active_channels) {
@@ -286,7 +289,7 @@ class EriscDatamoverBuilder {
     }
 
     void dump_to_log() const {
-        auto const& rt_args = this->emit_runtime_args();
+        auto const rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
         for (auto const& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);

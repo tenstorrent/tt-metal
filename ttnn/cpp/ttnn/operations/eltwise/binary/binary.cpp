@@ -9,6 +9,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -26,6 +28,7 @@ inline Tensor binary_impl(
     BinaryOpType binary_op_type,
     const ttnn::Tensor &input_tensor,
     const float scalar,
+    const std::optional<const DataType> &dtype = std::nullopt,
     const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
     const std::optional<Tensor> &optional_output_tensor = std::nullopt) {
     auto output_memory_config = optional_output_tensor.has_value()
@@ -59,6 +62,8 @@ inline Tensor binary_impl(
     } else {
         TT_THROW("Unsupported operation");
     }
+    if(dtype.has_value())
+    output_tensor = ttnn::typecast(queue_id, output_tensor, dtype.value(), std::nullopt, optional_output_tensor);
     return output_tensor;
 }
 
@@ -295,7 +300,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     return detail::binary_impl(
-        DefaultQueueId, binary_op_type, input_tensor_a, scalar, memory_config, optional_output_tensor);
+        DefaultQueueId, binary_op_type, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor);
 }
 
 template <BinaryOpType binary_op_type>
@@ -309,7 +314,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     return detail::binary_impl(
-        DefaultQueueId, binary_op_type, input_tensor_a, scalar, memory_config, optional_output_tensor);
+        DefaultQueueId, binary_op_type, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor);
 }
 // scalar - tensor combination not available on Pytorch for this op
 template <BinaryOpType binary_op_type>

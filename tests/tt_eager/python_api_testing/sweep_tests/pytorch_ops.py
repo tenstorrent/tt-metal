@@ -129,7 +129,7 @@ def hypot(x, y, *args, **kwargs):
 
 
 def scatter(x, y, *args, **kwargs):
-    y[:, :, : x.shape[-2], : x.shape[-1]] = x
+    y[0:, 0:, : x.shape[-2], : x.shape[-1]] = x
     return y
 
 

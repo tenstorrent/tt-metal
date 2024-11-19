@@ -10,6 +10,7 @@
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
 /** @file */
@@ -39,6 +40,7 @@ class Trace;
 class CircularBuffer;
 class Event;
 class Buffer;
+class GlobalSemaphore;
 
 // ==================================================
 //                  HOST API: Device management
@@ -240,7 +242,7 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
  * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
  * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
- * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | Yes      |
+ * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | No       |
  */
 uint32_t CreateSemaphore(
     Program &program,
@@ -249,50 +251,106 @@ uint32_t CreateSemaphore(
     CoreType core_type = CoreType::WORKER);
 
 /**
-*  Allocates an interleaved DRAM or L1 buffer on device
+ * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
+ *
+ * Return value: std::unique_ptr<GlobalSemaphore>.
+ *
+ * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
+ * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device        | The device to create the semaphore on                | Device *                                                  |              | Yes      |
+ * | cores         | Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &                                      |              | Yes      |
+ * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
+ * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ */
+std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+
+/**
+ * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
+ *
+ * Return value: std::unique_ptr<GlobalSemaphore>.
+ *
+ * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
+ * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device        | The device to create the semaphore on                | Device *                                                  |              | Yes      |
+ * | cores         | Range of the Tensix co-ordinates using the semaphore | CoreRangeSet &&                                           |              | Yes      |
+ * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
+ * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ */
+std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+
+/**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Creates a pre-allocated interleaved DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
-*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
 */
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, SubDeviceId sub_device_id);
 
 /**
-*  Allocates a sharded DRAM or L1 buffer on device
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
+*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Creates a pre-allocated sharded DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
-*  | Argument        | Description                             | Type                     | Valid Range | Required |
-*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
-*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
+*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
+*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
+*  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
 */
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, SubDeviceId sub_device_id);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
@@ -452,72 +510,81 @@ RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kerne
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                                | Valid Range                            | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                        | Yes      |
- * | buffer       | The device buffer we are reading from                                  | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &                  |                                        | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
+ * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
+ * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
+ * | dst            | The vector where the results that are read will be stored                         | vector<uint32_t> &                  |                                        | Yes      |
+ * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 void EnqueueReadBuffer(
     CommandQueue &cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<uint32_t> &dst,
-    bool blocking);
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Reads a buffer from the device
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                                | Valid Range                            | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                        | Yes      |
- * | buffer       | The device buffer we are reading from                                  | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst          | The memory where the result will be stored                             | void*                               |                                        | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
+ * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
+ * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
+ * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
+ * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
  */
 void EnqueueReadBuffer(
     CommandQueue &cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void *dst,
-    bool blocking);
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a buffer to the device
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                                | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                    | Yes      |
- * | buffer       | The device buffer we are writing to                                    | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src          | The vector we are writing to the device                                | vector<uint32_t> &                  |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
+ * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
+ * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
+ * | src            | The vector we are writing to the device                                           | vector<uint32_t> &                  |                                    | Yes      |
+ * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
+
  */
 void EnqueueWriteBuffer(
     CommandQueue &cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<uint32_t> &src,
-    bool blocking);
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a buffer to the device
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                                | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                    | Yes      |
- * | buffer       | The device buffer we are writing to                                    | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src          | The memory we are writing to the device                                | HostDataType                        |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
+ * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
+ * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
+ * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
+ * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 void EnqueueWriteBuffer(
     CommandQueue &cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    bool blocking);
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a program to the device and launches it
@@ -537,11 +604,12 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
-void Finish(CommandQueue &cq);
+void Finish(CommandQueue &cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
@@ -632,12 +700,13 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
 /**
  * Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user.
  * Return value: void
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | event        | An event that will be populated by this function, and inserted in CQ   | std::shared_ptr<Event>        |                                    | Yes      |
+ * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
+ * | event          | An event that will be populated by this function, and inserted in CQ              | std::shared_ptr<Event>        |                                    | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
-void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
+void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
@@ -675,12 +744,13 @@ bool EventQuery(const std::shared_ptr<Event> &event);
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device to synchronize.                                             | Device *                      |                                    | Yes      |
- * | cq_id        | The specific command queue id to synchronize  .                        | uint8_t                       |                                    | No       |
+ * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device         | The device to synchronize.                                                        | Device *                      |                                    | Yes      |
+ * | cq_id          | The specific command queue id to synchronize  .                                   | uint8_t                       |                                    | No       |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
-void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt);
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace v0
 }  // namespace tt_metal

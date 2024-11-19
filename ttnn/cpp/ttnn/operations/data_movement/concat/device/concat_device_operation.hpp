@@ -13,6 +13,7 @@ enum class ConcatOpParallelizationStrategy { MULTI_CORE, SHARDED_MULTI_CORE };
 
 struct ConcatDeviceOperation {
     uint32_t dim;
+    unsigned int groups;
     const MemoryConfig output_mem_config;
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -25,8 +26,9 @@ struct ConcatDeviceOperation {
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat
 // Notes: Non-empty tensors provided must have the same shape, except in the cat dimension.
 Tensor concat_impl(
-    std::vector<Tensor> &input_tensors,
+    const std::vector<Tensor> &input_tensors,
     const std::int64_t dim = 0,
+    unsigned int groups = 1,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace ttnn::operations::data_movement

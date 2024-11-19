@@ -8,19 +8,15 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose
-
 from tests.ttnn.unit_tests.operations.test_utils import (
-    get_compute_kernel_options,
-    compute_kernel_options,
-    compute_kernel_ids,
     TILE_HEIGHT,
     TILE_WIDTH,
     check_dim,
+    compute_kernel_ids,
+    compute_kernel_options,
+    create_ttnn_tilized_tensor,
+    get_compute_kernel_options,
 )
-
-
-def create_ttnn_tilized_tensor(torch_tensor, device, dtype):
-    return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
 
 def run_moreh_mean(

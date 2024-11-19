@@ -10,11 +10,16 @@ import torch.nn as nn
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.llama_model import LMHead
+from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
+
+from models.utility_functions import (
+    nearest_32,
+)
 
 
 def _get_full_row_masked_out_mask(
@@ -62,14 +67,20 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             {k[len(tok_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(tok_embedding_prefix)}
         )
 
-        self.norm = RMSNorm(
-            device=mesh_device,
-            dim=configuration.dim,
-            state_dict=state_dict,
-            state_dict_prefix=configuration.get_state_dict_prefix("", None),
-            weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
-            weight_key="norm",
+        self.norm = DistributedNorm(
+            RMSNorm(
+                device=mesh_device,
+                dim=configuration.dim,
+                state_dict=state_dict,
+                state_dict_prefix=configuration.get_state_dict_prefix("", None),
+                weight_cache_path=weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="norm",
+                is_distributed=configuration.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+            ),
+            configuration,
         )
 
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
@@ -208,8 +219,30 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             full_text_row_masked_out_mask,
         )
 
-    def setup_cache(self, max_batch_size, dtype):
+    def setup_cache(self, max_batch_size):
         self.cache_is_setup = True
+
+        # Prepare xattn_caches
+        chunk_length = nearest_32(self.configuration.vision_chunk_ntok)
+        vision_seq_len = self.configuration.vision_max_num_chunks * chunk_length
+        xattn_cache = [
+            [
+                ttnn.from_torch(
+                    torch.zeros(
+                        max_batch_size, self.configuration.n_heads, vision_seq_len, self.configuration.head_dim
+                    ),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                )
+                for _ in range(2)
+            ]
+            for l in range(len(self.cross_attention_layers))
+        ]
+
+        return xattn_cache
 
     def forward(
         self,
@@ -226,6 +259,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         page_table=None,
         # get_last_token=-1,
         text_only_inference=False,
+        vision_tokens=None,
     ):
         for idx, (
             layer,
@@ -240,6 +274,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,
+                    user_id=user_id,
+                    vision_tokens=vision_tokens,
                 )
             h = layer(
                 h,
@@ -250,7 +286,10 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 mode=mode,
             )
 
-        h = self.norm(h)
+        h = self.norm(h, mode=mode)
+
+        if mode == "decode":  # h is expected to be interleaved for the lm head
+            h = ttnn.sharded_to_interleaved(h)
 
         seq_len = h.shape[2]
         MAX_MM_SEQ_LEN = 1024
@@ -276,5 +315,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             outputs.append(output)
 
         output = ttnn.concat(outputs, dim=-1)
+        output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output

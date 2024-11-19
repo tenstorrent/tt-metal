@@ -909,9 +909,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 
 
         uint32_t num_sticks_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_sticks_per_core = num_w_sticks_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_sticks_per_core = num_w_sticks_per_core_group_2;
         } else {
             //no-op
@@ -1281,7 +1281,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         tt::log_debug("num_cores: {}", core_stick_map.size());
 
-        for (auto core_stick_pair : core_stick_map) {
+        for (const auto& core_stick_pair : core_stick_map) {
             auto xy_pair = core_stick_pair.first;
             if (row_major) {
                 reader_kernel_args.push_back((std::uint32_t) xy_pair.second); // noc x
@@ -1304,7 +1304,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             reader_kernel_args.push_back(stick_chunks.size()); // num_chunks for current core
             tt::log_debug("chunk_size: {}", stick_chunks.size());
         }
-        for (auto stick_chunks : stick_chunks_per_core) {
+        for (const auto& stick_chunks : stick_chunks_per_core) {
             for (auto chunk : stick_chunks) {
                 reader_kernel_args.push_back(chunk[0]); // start id of a chunk
                 tt::log_debug("chunk_start_id: {}", chunk[0]);

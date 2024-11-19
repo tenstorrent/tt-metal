@@ -18,6 +18,17 @@ set(TYPES
     kernel
 )
 
+include(FetchContent)
+FetchContent_Declare(
+    sfpi
+    URL
+        https://github.com/tenstorrent/sfpi/releases/download/v5.0.0/sfpi-release.tgz
+    URL_HASH MD5=10cacabe92846076cb4d7596e46d06be
+    SOURCE_DIR
+    ${PROJECT_SOURCE_DIR}/runtime/sfpi
+)
+FetchContent_MakeAvailable(sfpi)
+
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
@@ -49,24 +60,9 @@ foreach(ARCH IN LISTS ARCHS)
 
             # add output file to the custom target
             list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
-        endforeach(
-            TYPE
-            IN
-            LISTS
-            TYPES
-        )
-    endforeach(
-        PROC
-        IN
-        LISTS
-        PORCS
-    )
-endforeach(
-    ARCH
-    IN
-    LISTS
-    ARCHS
-)
+        endforeach()
+    endforeach()
+endforeach()
 
 # Function appends b0 if its wormhole
 function(get_alias INPUT_STRING OUTPUT_VAR)
@@ -78,7 +74,7 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -193,18 +189,8 @@ foreach(ARCH IN LISTS ARCHS)
             VERBATIM
         )
         list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
-    endforeach(
-        HWLIB
-        IN
-        LISTS
-        HWLIBS
-    )
-endforeach(
-    ARCH
-    IN
-    LISTS
-    ARCHS
-)
+    endforeach()
+endforeach()
 
 # custom target that depends on all the output files
 add_custom_target(
@@ -213,4 +199,17 @@ add_custom_target(
     DEPENDS
         ${PREPROCESSED_LD_FILES}
         ${PREPROCESSED_O_FILES}
+)
+
+add_library(hw INTERFACE)
+add_library(Metalium::Metal::Hardware ALIAS hw)
+
+set(currentArch "$ENV{ARCH_NAME}")
+string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
+target_include_directories(
+    hw
+    INTERFACE
+        inc
+        inc/${currentArch}
+        $<$<STREQUAL:${currentArch},wormhole>:${CMAKE_CURRENT_SOURCE_DIR}/inc/wormhole/wormhole_b0_defines>
 )

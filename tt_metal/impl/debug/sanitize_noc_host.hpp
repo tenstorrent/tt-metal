@@ -2,15 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
+#include <cstdint>
+
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
-#pragma once
+#include "llrt/hal.hpp"
 
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
-#define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + MEM_L1_SIZE))
+#define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
 // what's the size of the NOC<n> address space?  using 0x1000 for now
 #define DEBUG_VALID_REG_ADDR(a)                                                        \
@@ -22,7 +26,7 @@ namespace tt {
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
-#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
+#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE))
 
 static bool coord_found_p(std::vector<CoreCoord>coords, CoreCoord core) {
     for (CoreCoord item : coords) {

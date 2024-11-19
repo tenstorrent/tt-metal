@@ -3,26 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <climits>
+#include <magic_enum.hpp>
 #include <mutex>
 
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/impl/dispatch/memcpy.hpp"
 #include "tt_metal/llrt/hal.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
-#include <magic_enum.hpp>
-
+// FIXME: Don't do this in header files
 using namespace tt::tt_metal;
+
+namespace tt::tt_metal {
 
 // todo consider moving these to dispatch_addr_map
 static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
 static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28; // 256 MB;
 static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE; // 256 MB;
-
-static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
 
 enum class CommandQueueDeviceAddrType : uint8_t {
     PREFETCH_Q_RD = 0,
@@ -34,8 +35,9 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     // Max of 2 CQs. COMPLETION_Q*_LAST_EVENT_PTR track the last completed event in the respective CQs
     COMPLETION_Q0_LAST_EVENT = 4,
     COMPLETION_Q1_LAST_EVENT = 5,
-    DISPATCH_MESSAGE = 6,
-    UNRESERVED = 7
+    DISPATCH_S_SYNC_SEM = 6,
+    DISPATCH_MESSAGE = 7,
+    UNRESERVED = 8
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -64,8 +66,18 @@ struct dispatch_constants {
         return *inst;
     }
 
+    using prefetch_q_entry_type = uint16_t;
+
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
-    typedef uint16_t prefetch_q_entry_type;
+    // Currently arbitrary, can be adjusted as needed at the cost of more L1 memory
+    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 16;
+    static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max();
+    static_assert(dispatch_constants::DISPATCH_MESSAGE_ENTRIES <= sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
+    // Currently arbitrary, can be adjusted as needed at the cost of more static memory
+    static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
+    static constexpr uint32_t GO_SIGNAL_BITS_PER_TXN_TYPE = 4;
+    static constexpr uint32_t GO_SIGNAL_MAX_TXNS_PER_TYPE = 1 << GO_SIGNAL_BITS_PER_TXN_TYPE - 1;
+
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
 
     static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
@@ -128,6 +140,12 @@ struct dispatch_constants {
         return tt::utils::underlying_type<CommandQueueHostAddrType>(host_addr) * tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
     }
 
+    uint32_t get_dispatch_message_offset(uint32_t index) const {
+        TT_ASSERT(index < DISPATCH_MESSAGE_ENTRIES);
+        uint32_t offset = index * hal.get_alignment(HalMemType::L1);
+        return offset;
+    }
+
    private:
     dispatch_constants(const CoreType &core_type, const uint32_t num_hw_cqs) {
         TT_ASSERT(core_type == CoreType::WORKER or core_type == CoreType::ETH);
@@ -160,6 +178,7 @@ struct dispatch_constants {
         TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
         TT_ASSERT(scratch_db_size_ % 2 == 0);
         TT_ASSERT((dispatch_buffer_block_size & (dispatch_buffer_block_size - 1)) == 0);
+        TT_ASSERT(DISPATCH_MESSAGE_ENTRIES <= DISPATCH_MESSAGES_MAX_OFFSET / L1_ALIGNMENT + 1, "Number of dispatch message entries exceeds max representable offset");
 
         uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
         uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
@@ -170,11 +189,13 @@ struct dispatch_constants {
             if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
                 device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
             } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
-                device_cq_addr_sizes_[dev_addr_idx] = L1_ALIGNMENT - sizeof(uint32_t);
+                device_cq_addr_sizes_[dev_addr_idx] = l1_alignment - sizeof(uint32_t);
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
+                device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
-                device_cq_addr_sizes_[dev_addr_idx] = 32; // Should this be 2x L1_ALIGNMENT?
+                device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
             } else {
-                device_cq_addr_sizes_[dev_addr_idx] = L1_ALIGNMENT;
+                device_cq_addr_sizes_[dev_addr_idx] = l1_alignment;
             }
         }
 
@@ -192,7 +213,7 @@ struct dispatch_constants {
         uint32_t prefetch_dispatch_unreserved_base = device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
         cmddat_q_base_ = prefetch_dispatch_unreserved_base + ((prefetch_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
         scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
-        const uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
+        const uint32_t l1_size = core_type == CoreType::WORKER ? HAL_MEM_L1_SIZE : HAL_MEM_ETH_SIZE;
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
         dispatch_buffer_base_ = ((prefetch_dispatch_unreserved_base - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
         dispatch_buffer_block_size_pages_ =
@@ -310,64 +331,6 @@ inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     return recv;
 }
 
-// Ideally would work by cachelines, but the min size is less than that
-// TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
-// TODO: ditto alignment isues
-template <bool debug_sync = false>
-static inline void memcpy_to_device(void *__restrict dst, const void *__restrict src, size_t n) {
-    TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
-    TT_ASSERT(n % sizeof(uint32_t) == 0);
-
-    static constexpr uint32_t inner_loop = 8;
-    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);
-
-    uint8_t *src8 = (uint8_t *)src;
-    uint8_t *dst8 = (uint8_t *)dst;
-
-    if (size_t num_lines = n / inner_blk_size) {
-        for (size_t i = 0; i < num_lines; ++i) {
-            for (size_t j = 0; j < inner_loop; ++j) {
-                __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
-                _mm256_stream_si256((__m256i *)dst8, blk);
-                src8 += sizeof(__m256i);
-                dst8 += sizeof(__m256i);
-            }
-            n -= inner_blk_size;
-        }
-    }
-
-    if (n > 0) {
-        if (size_t num_lines = n / sizeof(__m256i)) {
-            for (size_t i = 0; i < num_lines; ++i) {
-                __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
-                _mm256_stream_si256((__m256i *)dst8, blk);
-                src8 += sizeof(__m256i);
-                dst8 += sizeof(__m256i);
-            }
-            n -= num_lines * sizeof(__m256i);
-        }
-        if (size_t num_lines = n / sizeof(__m128i)) {
-            for (size_t i = 0; i < num_lines; ++i) {
-                __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-                _mm_stream_si128((__m128i *)dst8, blk);
-                src8 += sizeof(__m128i);
-                dst8 += sizeof(__m128i);
-            }
-            n -= n / sizeof(__m128i) * sizeof(__m128i);
-        }
-        if (n > 0) {
-            for (size_t i = 0; i < n / sizeof(int32_t); ++i) {
-                _mm_stream_si32((int32_t *)dst8, *(int32_t *)src8);
-                src8 += sizeof(int32_t);
-                dst8 += sizeof(int32_t);
-            }
-        }
-    }
-    if constexpr (debug_sync) {
-        tt_driver_atomics::sfence();
-    }
-}
-
 struct SystemMemoryCQInterface {
     // CQ is split into issue and completion regions
     // Host writes commands and data for H2D transfers in the issue region, device reads from the issue region
@@ -449,17 +412,13 @@ class SystemMemoryManager {
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
 
-    tt::tt_metal::WorkerConfigBufferMgr config_buffer_mgr;
-
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
         device_id(device_id),
         num_hw_cqs(num_hw_cqs),
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         bypass_enable(false),
-        bypass_buffer_write_offset(0),
-        config_buffer_mgr() {
-
+        bypass_buffer_write_offset(0) {
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
         this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -530,12 +489,6 @@ class SystemMemoryManager {
         }
         std::vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
-
-        for (uint32_t index = 0; index < tt::tt_metal::hal.get_programmable_core_type_count(); index++) {
-            this->config_buffer_mgr.init_add_core(
-                tt::tt_metal::hal.get_dev_addr(tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-                tt::tt_metal::hal.get_dev_size(tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
-        }
     }
 
     uint32_t get_next_event(const uint8_t cq_id) {
@@ -600,7 +553,7 @@ class SystemMemoryManager {
 
     bool get_bypass_mode() { return this->bypass_enable; }
 
-    std::vector<uint32_t> get_bypass_data() { return std::move(this->bypass_buffer); }
+    std::vector<uint32_t>& get_bypass_data() { return this->bypass_buffer; }
 
     uint32_t get_issue_queue_size(const uint8_t cq_id) const { return this->cq_interfaces[cq_id].issue_fifo_size << 4; }
 
@@ -844,9 +797,6 @@ class SystemMemoryManager {
         this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
-
-    tt::tt_metal::WorkerConfigBufferMgr& get_config_buffer_mgr() { return config_buffer_mgr; }
-
 };
 
 struct LaunchMessageRingBufferState {
@@ -884,3 +834,5 @@ struct LaunchMessageRingBufferState {
     uint32_t multicast_cores_launch_message_wptr = 0;
     uint32_t unicast_cores_launch_message_wptr = 0;
 };
+
+}  // namespace tt::tt_metal

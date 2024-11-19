@@ -246,11 +246,6 @@
    (((uint64_t)(y_end))   << (NOC_ADDR_LOCAL_BITS+NOC_ADDR_NODE_ID_BITS)) |     \
    ((uint64_t)(addr)))
 
-
-
-#define PCIE_NOC_X 0
-#define PCIE_NOC_Y 4
-
 // GS address encoding is 32 bits of address followed by coordinate. First address goes into lo register, coordinates are in the mid register
 #define NOC_COORD_REG_OFFSET 0 // offset (from LSB) in register holding x-y coordinate
 

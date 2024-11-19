@@ -149,11 +149,19 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     auto shard_shape = a.shard_spec().value().shape;
 
+    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
+    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
+    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
+    if(input_cores.num_cores() > output_cores.num_cores()) {
+        all_cores = input_cores;
+    }
+    auto input_num_cores = input_cores.num_cores();
+    auto output_num_cores = output_cores.num_cores();
+
     // parallelization config
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
-    uint32_t total_num_cores = p_config.num_cores_c;
     TT_FATAL(num_cores_x < 13, "Error");
     TT_FATAL(num_cores_y < 10, "Error");
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
@@ -162,7 +170,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     // uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t input_channels_padded = shard_shape[1] * total_num_cores;
+    uint32_t input_channels_padded = shard_shape[1] * input_num_cores;
     // TT_FATAL(conv_act_c_blocks == p_config.num_cores_c, "Error");
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -190,6 +198,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
 
+
+
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
@@ -202,7 +212,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t input_size_h = conv_act_size_h + (pad_h*2);
     uint32_t input_size_w = conv_act_size_w + (pad_w*2);
-
+    if(sliding_window_config.is_transpose) {
+        auto input_shape = sliding_window_config.get_transposed_full_input_shape();
+        input_size_h = input_shape[1];
+        input_size_w = input_shape[2];
+    }
 
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
@@ -250,18 +264,18 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
     uint32_t act_matrix_width_ntiles = act_matrix_width / TILE_WIDTH;
 
-    TT_FATAL(act_matrix_height_ntiles % act_block_h_ntiles == 0, "Error");
-    TT_FATAL(act_matrix_width_ntiles % act_block_w_ntiles == 0, "Error");
-    TT_FATAL(weight_matrix_width_ntiles % weight_block_w_ntiles == 0, "Error");
-    TT_FATAL(act_matrix_height_ntiles % out_block_h_ntiles == 0, "Error");
+    TT_FATAL(act_matrix_height_ntiles % act_block_h_ntiles == 0, "act_matrix_height_ntiles {} should be divisible by act_block_h_ntiles {}", act_matrix_height_ntiles, act_block_h_ntiles);
+    TT_FATAL(act_matrix_width_ntiles % act_block_w_ntiles == 0, "act_matrix_width_ntiles {} should be divisible by act_block_w_ntiles {}", act_matrix_width_ntiles, act_block_w_ntiles);
+    TT_FATAL(weight_matrix_width_ntiles % weight_block_w_ntiles == 0, "weight_+matrix_width_ntiles {} should be divisible by weight_block_w_ntiles {}", weight_matrix_width_ntiles, weight_block_w_ntiles);
+    TT_FATAL(act_matrix_height_ntiles % out_block_h_ntiles == 0, "act_matrix_height_ntiles {} should be divisible by out_block_h_ntiles {}", act_matrix_height_ntiles, out_block_h_ntiles);
 
     uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
     uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
-    TT_FATAL(num_blocks_act_w%total_num_cores==0, "{} {}", num_blocks_act_w, total_num_cores);
-    uint32_t per_core_num_blocks_act_w = num_blocks_act_w/total_num_cores;
+    TT_FATAL(num_blocks_act_w % input_num_cores == 0, "Number of Act Blocks along the Width {} should be divisible by the number of cores {}", num_blocks_act_w, input_num_cores);
+    uint32_t per_core_num_blocks_act_w = num_blocks_act_w / input_num_cores;
 
 
     // act block info
@@ -304,29 +318,29 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
-    TT_FATAL(weight_block_w_ntiles % out_subblock_w_ntiles == 0, "Error");
+    TT_FATAL(weight_block_w_ntiles % out_subblock_w_ntiles == 0, "weight_block_w_ntiles {} should be divisible by out_subblock_w_ntiles {}", weight_block_w_ntiles, out_subblock_w_ntiles);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
     uint32_t weight_block_h_ntiles = act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
-    uint32_t weight_block_in_channels_ntiles = input_channels_padded/(32*total_num_cores*per_core_num_blocks_act_w);
-    TT_FATAL(input_channels_padded>=(TILE_HEIGHT*total_num_cores), "Error");
-    TT_FATAL(input_channels_padded%(TILE_HEIGHT*total_num_cores)==0, "Error");
+    uint32_t weight_block_in_channels_ntiles = input_channels_padded/(32 * input_num_cores * per_core_num_blocks_act_w);
+    TT_FATAL(input_channels_padded >= (TILE_HEIGHT * input_num_cores), "input_channels_padded {} should be greater than or equal to TILE_HEIGHT * input_num_cores {}", input_channels_padded, TILE_HEIGHT * input_num_cores);
+    TT_FATAL(input_channels_padded % (TILE_HEIGHT * input_num_cores) == 0, "input_channels_padded {} should be divisible by TILE_HEIGHT * input_num_cores {}", input_channels_padded, TILE_HEIGHT * input_num_cores);
 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
     uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
-    TT_FATAL(output_channels_padded_to_tile_width <= weight_matrix_width, "Error");
+    TT_FATAL(output_channels_padded_to_tile_width <= weight_matrix_width, "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}", output_channels_padded_to_tile_width, weight_matrix_width);
     uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
     uint32_t num_blocks_output_w =
         (uint32_t) std::ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
                                            ? weight_block_w_datums
                                            : (output_channels_padded_to_tile_width % weight_block_w_datums);
-    TT_FATAL(last_block_width_datums % TILE_WIDTH == 0, "Error");
+    TT_FATAL(last_block_width_datums % TILE_WIDTH == 0, "last_block_width_datums {} should be divisible by TILE_WIDTH {}", last_block_width_datums, TILE_WIDTH);
 
     // sanity check
-    TT_FATAL(num_blocks_output_w == num_blocks_weight_w, "Error");
+    TT_FATAL(num_blocks_output_w == num_blocks_weight_w, "num_blocks_output_w {} should be equal to num_blocks_weight_w {}", num_blocks_output_w, num_blocks_weight_w);
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
 
@@ -347,8 +361,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t act_noc_x = act_dram_noc_xy.x;
     uint32_t act_noc_y = act_dram_noc_xy.y;
 
-    TT_FATAL(act_matrix_width_ntiles % act_block_w_ntiles == 0, "Error");
-    TT_FATAL(act_block_h_ntiles % out_subblock_h_ntiles == 0, "Error");
+    TT_FATAL(act_block_h_ntiles % out_subblock_h_ntiles == 0, "act_block_h_ntiles {} should be divisible by out_subblock_h_ntiles {}", act_block_h_ntiles, out_subblock_h_ntiles);
     // TT_FATAL(out_block_h_ntiles % out_subblock_h_ntiles == 0, "Error");
     uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
     uint32_t act_block_num_tiles = act_block_h_ntiles * act_block_w_ntiles;
@@ -388,7 +401,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
     uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
-    TT_FATAL(output_height_num_tiles <= act_matrix_height_ntiles, "Error");
+    TT_FATAL(output_height_num_tiles <= act_matrix_height_ntiles, "output_height_num_tiles {} should be less than or equal to act_matrix_height_ntiles {}", output_height_num_tiles, act_matrix_height_ntiles);
 
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
@@ -399,11 +412,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
 
     //Number of bytes to be read from the channel dimension in one block.
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (total_num_cores*per_core_num_blocks_act_w);
-
-    //Compute only on cores that have an input shard.
-    CoreRangeSet all_cores = a.memory_config().shard_spec.value().grid;
-
+    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
     // log info for debugging opts
     {
@@ -495,7 +504,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, 0); //0==INVALID.
 
     CoreCoord act_mcast_start_core_logical(0,0);
-    CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,p_config.grid_size.y-1);
+    CoreCoord act_mcast_end_core_logical(all_cores.bounding_box().end_coord.x, all_cores.bounding_box().end_coord.y);
     auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
@@ -512,7 +521,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)filter_w, //Input filter window width
         (uint32_t)act_block_h_datums,
         (uint32_t)act_block_num_tiles,
-        (uint32_t)total_num_cores,
+        (uint32_t)input_num_cores,
         (uint32_t)per_core_num_blocks_act_w,
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
@@ -521,7 +530,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)act_mcast_end.x,
         (uint32_t)act_mcast_end.y,
         (uint32_t)act_block_num_tiles*tt_metal::detail::TileSize(tilized_act_df),
-        (uint32_t)total_num_cores
+        (uint32_t)output_num_cores
     };
     weights_kernel_compile_args = {
         weight_cb,                                                  //cb_id_weight
@@ -534,7 +543,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_this_core_stride_h
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles* //weight_next_block_other_core_stride_h
                                          per_core_num_blocks_act_w,
-        total_num_cores,                                            //other_core_weight_height_blocks
+        input_num_cores,                                            //other_core_weight_height_blocks
         per_core_num_blocks_act_w,                                  //this_core_weight_height_blocks
         bias_cb,
         bias_in_dram
@@ -555,7 +564,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         writer_defines["SHARDED_OUT"] = "1";
         writer_mcast_sender_defines["SHARDED_OUT"] = "1";
     }
-    if (total_num_cores == 1) {
+    if (output_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
@@ -607,7 +616,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         num_output_tiles,
         use_non_tile_height,
 
-        total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
+        input_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
 
     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
@@ -766,7 +775,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     {
         bias_base_address = bias.value().buffer()->address();
     }
-
+    auto total_num_cores = std::max(input_num_cores, output_num_cores);
     for(uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
         uint32_t core_x = core_index % full_core_grid.x;
         uint32_t core_y = core_index / full_core_grid.x;
@@ -791,11 +800,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         );
 
         SetRuntimeArgs(program, act_kernel_id, CoreCoord(core_x, core_y), rt_args);
-
         SetRuntimeArgs(program, weights_kernel_id, CoreCoord(core_x, core_y), {
             core_index * weight_block_w_ntiles,
             b.buffer()->address(),
-            bias_base_address
+            bias_base_address,
+            (uint32_t)(core_index < output_num_cores)
         });
     }
 

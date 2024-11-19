@@ -4,17 +4,18 @@
 
 import torch
 import ttnn
-from models.experimental.yolov4.reference.head import Head
+from models.demos.yolov4.reference.head import Head
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
 import time
-from models.experimental.yolov4.ttnn.head import TtHead
+from models.demos.yolov4.ttnn.head import TtHead
 from loguru import logger
 import os
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_head(device, reset_seeds, model_location_generator):
+    torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
     if model_path == "models":

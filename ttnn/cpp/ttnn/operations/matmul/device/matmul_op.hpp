@@ -21,7 +21,6 @@ namespace operations {
 namespace matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
-using tt::tt_metal::LegacyShape;
 
 /*
  * GENERAL MATMUL AND BMM
@@ -75,6 +74,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
@@ -114,6 +115,8 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::size_t in0_block_w;
     std::size_t out_subblock_h;
     std::size_t out_subblock_w;
+    std::size_t out_block_h;
+    std::size_t out_block_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
     bool transpose_mcast;
@@ -170,8 +173,6 @@ struct Matmul {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes_dram_sharded(
-        const std::vector<Tensor> &input_tensors, uint32_t N_unpadded) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,

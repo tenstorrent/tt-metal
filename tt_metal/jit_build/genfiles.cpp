@@ -11,11 +11,11 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
-#include "noc/noc_parameters.h"
+
+#include "tt_metal/hw/inc/circular_buffer.h"
 
 namespace fs = std::filesystem;
 
@@ -271,7 +271,7 @@ static void emit_unpack_data_formats(
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
-    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, const tt::ARCH arch) {
+    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool bfp8_pack_precise, const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.input_buf_dataformat_arr,
         desc.param_buf_dataformat_arr,
@@ -279,6 +279,7 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
         desc.output_buf_dataformat_arr,
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
+        bfp8_pack_precise,
         false,
         arch);
 
@@ -398,7 +399,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) =
-        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
+        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch);
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -550,8 +551,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& l1_bank_offset_map,
     uint32_t allocator_alignment) {
     stringstream ss;
-    bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
-    bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
 
     ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
     ss << "//" << endl;
@@ -568,21 +567,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#pragma once" << endl;
     ss << endl;
     ss << "#include <noc/noc_parameters.h>" << endl;
-    ss << endl;
-
-    ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
-    ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
-
-    if (is_dram_pow2) {
-        ss << "#define LOG_BASE_2_OF_NUM_DRAM_BANKS " << log2(dram_bank_map.size()) << endl;
-    } else {
-        ss << "#define IS_NOT_POW2_NUM_DRAM_BANKS 1" << endl;
-    }
-    if (is_l1_pow2) {
-        ss << "#define LOG_BASE_2_OF_NUM_L1_BANKS " << log2(l1_bank_map.size()) << endl;
-    } else {
-        ss << "#define IS_NOT_POW2_NUM_L1_BANKS 1" << endl;
-    }
     ss << endl;
 
     ss << "static_assert(NUM_NOCS == 2);" << endl;
@@ -604,10 +588,9 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         ss << "    {"
            << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-            uint16_t noc_x = NOC_0_X(noc, grid_size.x, dram_bank_map[bank_id].x);
-            uint16_t noc_y = NOC_0_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
-            ss << "        " << xy << ","
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, grid_size.x, dram_bank_map[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, grid_size.y, dram_bank_map[bank_id].y);
+            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
                << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -626,10 +609,9 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         ss << "    {"
            << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-            uint16_t noc_x = NOC_0_X(noc, grid_size.x, l1_bank_map[bank_id].x);
-            uint16_t noc_y = NOC_0_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
-            ss << "        " << xy << ","
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, grid_size.x, l1_bank_map[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, grid_size.y, l1_bank_map[bank_id].y);
+            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
                << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -683,21 +665,6 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     ofstream file_stream_siec(path + "/slave_idle_erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_siec << output_string;
     file_stream_siec.close();
-}
-
-static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {
-    stringstream ss;
-
-    string end_of_line = " \\\n    ( \\";
-    for (const auto& core : cores) {
-        ss << end_of_line << endl;
-        ss << "    ((x) == NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << core.x
-           << ") && (y) == NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << core.y << "))";
-        end_of_line = " || \\";
-    }
-    ss << ")" << endl;
-
-    return ss.str();
 }
 
 }  // namespace tt::tt_metal

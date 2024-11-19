@@ -259,7 +259,7 @@ class UNetDownblock:
 
         self.should_reshard = should_reshard
         if self.should_reshard:
-            parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
+            parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 batch_size=self.conv1.batch_size,
                 input_channels=self.conv1.in_channels,
@@ -270,7 +270,7 @@ class UNetDownblock:
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 is_out_tiled=True,
             )
-            self.sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
+            self.sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
                 tensor_shape=ttnn.Shape(
                     [
                         1,
@@ -313,7 +313,7 @@ class UNetUpblock:
 
         self.should_reshard = should_reshard
         if self.should_reshard:
-            parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
+            parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 batch_size=self.conv1.batch_size,
                 input_channels=self.conv1.in_channels,
@@ -324,7 +324,7 @@ class UNetUpblock:
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 is_out_tiled=True,
             )
-            self.sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
+            self.sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
                 tensor_shape=ttnn.Shape(
                     [
                         1,
@@ -441,7 +441,7 @@ class UNet:
         self.bnc2 = UNetConv2D(
             parameters.bnc_2, parameters.bnb_2, device, cache=self.conv_cache, mesh_mapper=mesh_mapper
         )
-        bnc_parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
+        bnc_parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             batch_size=self.bnc.batch_size,
             input_channels=self.bnc.in_channels,
@@ -452,7 +452,7 @@ class UNet:
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=True,
         )
-        self.bnc_sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
+        self.bnc_sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             tensor_shape=ttnn.Shape(
                 [
                     1,

@@ -41,7 +41,7 @@ void set_edm_runtime_args(
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core
 ) {
-    std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.emit_runtime_args();
+    std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.get_runtime_args();
     tt_metal::SetRuntimeArgs(program, edm_kernel_handle, eth_core, edm_clockwise_kernel_rt_args);
 
     std::stringstream ss;
@@ -395,10 +395,10 @@ bool RunWriteBWTest(
     }
 
     bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
-    for (auto buffer_id : local_output_buffers) {
+    for (const auto& buffer_id : local_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
-    for (auto buffer_id : remote_output_buffers) {
+    for (const auto& buffer_id : remote_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
 
