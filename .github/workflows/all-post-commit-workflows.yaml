@@ -2,6 +2,11 @@ name: "All post-commit tests"
 
 on:
   workflow_call:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: string
   workflow_dispatch:
     inputs:
       build-type:
