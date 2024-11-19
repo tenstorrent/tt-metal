@@ -16,7 +16,7 @@ struct PagedUpdateCacheOperation {
 };
 
 struct PagedFusedUpdateCacheOperation {
-    static ttnn::Tensor invoke(
+    static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
         const Tensor& cache_tensor1, const Tensor& input_tensor1, const Tensor& cache_tensor2, const Tensor& input_tensor2, const std::vector<uint32_t> update_idxs, const std::optional<const Tensor> update_idxs_tensor, const std::optional<bool> share_cache, const std::optional<const Tensor> page_table, const uint32_t batch_offset, std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 

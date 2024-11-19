@@ -48,7 +48,25 @@ void bind_experimental_paged_cache_operations(py::module& module) {
 
     auto paged_fused_update_cache_doc =
         R"doc(
-         Paged fused update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
+
+            Updates the cache tensors `cache_tensor1` and `cache_tensor2` in parallel with values derived from the corresponding input tensors. This function supports fine-grained updates using specified index lists or tensors.
+
+            Positional Arguments:
+                cache_tensor1 (ttnn.Tensor): The first cache tensor to update.
+                input_tensor1 (ttnn.Tensor): The input tensor corresponding to `cache_tensor1`.
+                cache_tensor2 (ttnn.Tensor): The second cache tensor to update.
+                input_tensor2 (ttnn.Tensor): The input tensor corresponding to `cache_tensor2`.
+
+            Keyword Args:
+                update_idxs (List[int]): A list of indices specifying the cache update positions. Defaults to an empty list.
+                update_idxs_tensor (ttnn.Tensor, optional): A tensor specifying update indices. Defaults to None.
+                share_cache (bool, optional): Whether the cache tensors share memory regions. Defaults to None.
+                page_table (ttnn.Tensor, optional): The page table for managing memory regions during updates. Defaults to None.
+                batch_offset (int): Offset for batching updates. Defaults to 0.
+                compute_kernel_config (DeviceComputeKernelConfig, Optional): Optional configuration for the device compute kernel. Defaults to None.
+
+            Returns:
+                ttnn.Tensor, ttnn.Tensor: Tensors representing the updated cache states.
         )doc";
 
     using PagedFusedUpdateCacheType = decltype(ttnn::experimental::paged_fused_update_cache);
