@@ -126,11 +126,7 @@ class downsample_2d:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=True,
-            packer_l1_accum_enabled=False,
             shard_layout=self.shard_layout,
             input_channels_alignment=32,
             transpose_shards=False,
@@ -140,6 +136,12 @@ class downsample_2d:
         if hidden_states.memory_config() != self.input_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.input_memory_config)
 
+        compute_config = ttnn.GetComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
@@ -157,6 +159,7 @@ class downsample_2d:
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             conv_config=conv_config,
+            compute_config=compute_config,
             conv_op_cache=conv_cache,
         )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(

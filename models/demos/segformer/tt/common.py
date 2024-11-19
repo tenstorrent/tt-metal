@@ -40,12 +40,8 @@ class Conv:
         conv_config = ttnn.Conv2dConfig(
             dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=False,
-            packer_l1_accum_enabled=False,
             input_channels_alignment=16 if input_tensor.shape[3] < 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
@@ -53,6 +49,12 @@ class Conv:
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_split_reader=False,
+        )
+        compute_config = ttnn.GetComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
@@ -71,6 +73,7 @@ class Conv:
             input_height=input_tensor.shape[1],
             input_width=input_tensor.shape[2],
             conv_config=conv_config,
+            compute_config=compute_config,
             groups=self.groups,
         )
 
