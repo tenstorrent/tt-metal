@@ -398,7 +398,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
         (!input_tensor_on_device || input_tensor_.is_sharded()) || conv_config.shard_layout.has_value(),
         "Tesor must be sharded or shard_layout must be set.");
 
-    TensorMemoryLayout shard_layout = conv_config.shard_layout.value_or(input_tensor_.memory_config().memory_layout);
+    TensorMemoryLayout shard_layout;
+    if(conv_config.shard_layout.has_value()) {
+        shard_layout = conv_config.shard_layout.value();
+    } else {
+        shard_layout = input_tensor_.memory_config().memory_layout;
+    }
 
     ParallelConfig input_tensor_parallel_config;
     if (!input_tensor_on_device) {
@@ -945,7 +950,6 @@ Result conv2d(
                 groups,
                 conv_config.output_layout == Layout::ROW_MAJOR,
                 conv_config.activation == "relu",
-                get_math_fidelity(compute_config),
                 opt_conv_op_parallel_config,
                 opt_conv_op_block_config,
                 conv_out_memory_config,
@@ -991,7 +995,6 @@ Result conv2d(
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation == "relu",
-            get_math_fidelity(compute_config),
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
