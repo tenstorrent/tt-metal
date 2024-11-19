@@ -3,22 +3,61 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <vector>
 
-#include "upsample_op.hpp"
-#include "ttnn/operations/math.hpp"
+#include "buffers/buffer_constants.hpp"
+#include "common/core_coord.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/math.hpp"
 
-#include "tt_metal/tt_stl/reflection.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::upsample {
 using namespace tt;
+
+Tensor create_config_tensor(
+    Device *device,
+    ShardSpec &input_shard_spec,
+    const uint32_t batch_size,
+    const uint32_t in_h,
+    const uint32_t in_w,
+    const uint32_t scale_factor_h,
+    const uint32_t scale_factor_w,
+    const uint32_t ncores) {
+    std::vector<uint16_t> config_vector;
+    uint32_t input_nsticks_per_core = input_shard_spec.shape[0];
+    uint32_t ncores_x = device->compute_with_storage_grid_size().x;
+    uint32_t in_core = 0;
+    uint32_t w = 0;
+    uint32_t curr_stick = 0;
+    auto core_coords = device->worker_core_from_logical_core(CoreCoord(in_core % ncores_x, in_core / ncores_x));
+    for (uint32_t b = 0; b < batch_size; b++) {
+        for (uint32_t h = 0; h < in_h; h++) {
+            for (uint32_t w = 0; w < in_w; w++) {
+                if (curr_stick == input_nsticks_per_core) {
+                    curr_stick = 0;
+                    in_core++;
+                    core_coords =
+                        device->worker_core_from_logical_core(CoreCoord(in_core % ncores_x, in_core / ncores_x));
+                }
+                config_vector.insert(config_vector.end(), {core_coords.x, core_coords.y, curr_stick, 0});
+                curr_stick++;
+            }
+            for (uint32_t j = 0; j < scale_factor_h - 1; j++)
+                config_vector.insert(config_vector.end(), config_vector.end() - (4 * in_w), config_vector.end());
+        }
+    }
+
+    uint32_t elems_per_core = 4 * scale_factor_h * input_nsticks_per_core;
+    Shape config_shape = Shape({config_vector.size() / elems_per_core, elems_per_core});
+    auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
+    Tensor config_tensor = Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+    return config_tensor;
+}
 
 operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
@@ -54,7 +93,6 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(in_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this restriction", in_nsticks_per_core, in_w);
     } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.x + 1;
         ncores_nhw = all_cores.ranges().begin()->end_coord.y + 1;
@@ -69,8 +107,6 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
 
     // TODO: Support non-multiple case
     TT_FATAL(in_nsticks_per_core == input_nsticks_per_core, "Input sticks per shard {} should be same as input sticks per core {}", in_nsticks_per_core, input_nsticks_per_core);
-    TT_FATAL(out_nsticks_per_core == output_nsticks_per_core, "Output sticks per shard {} should be same as output sticks per core {}", out_nsticks_per_core, output_nsticks_per_core);
-    TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
 
     // CBs
 
@@ -106,12 +142,37 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
     log_debug(LogOp, "input_nsticks_per_core: {}, output_nsticks_per_core: {}", input_nsticks_per_core, output_nsticks_per_core);
 
+    // create config tensor
+    Tensor config_tensor = create_config_tensor(
+        device,
+        shard_spec,
+        input.legacy_shape()[0],
+        input.legacy_shape()[1],
+        in_w,
+        scale_factor_h,
+        scale_factor_w,
+        ncores);
+    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_shape()[-1]});
+    ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, ShardOrientation::ROW_MAJOR, false);
+    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+    auto config_tensor_device = config_tensor.to(device, memory_config);
+    tt::tt_metal::detail::AddConfigBuffer(program, config_tensor_device.device_buffer());
+
+    tt::DataFormat config_df = tt::DataFormat::RawUInt16;
+    Buffer *config_buffer = config_tensor_device.buffer();
+    uint32_t config_cb_id = tt::CB::c_in2;
+    auto config_cb_config = CircularBufferConfig(config_buffer->size(), {{config_cb_id, config_df}})
+                                .set_page_size(config_cb_id, config_buffer->page_size())
+                                .set_globally_allocated_address(*config_buffer);
+    CBHandle config_cb = CreateCircularBuffer(program, all_cores, config_cb_config);
+
     // Kernels
 
     std::vector<uint32_t> writer_compile_time_args = {
         in_cb_id,
         out_cb_id,
         false,
+        config_cb_id,
     };
     auto writer_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto writer_kernel =
@@ -121,6 +182,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         in_cb_id,
         out_cb_id,
         true,
+        config_cb_id,
     };
     auto reader_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto reader_kernel =
@@ -133,11 +195,11 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t writer_nargs = 7;
     std::vector<uint32_t> writer_rt_args(writer_nargs);
     writer_rt_args[0] = input_stick_nbytes;
-    writer_rt_args[1] = input_nsticks_per_core / in_w;
+    writer_rt_args[1] = input_nsticks_per_core;
     writer_rt_args[2] = scale_factor_h;
     writer_rt_args[3] = scale_factor_w;
-    writer_rt_args[4] = in_w;
-    writer_rt_args[5] = out_w;
+    writer_rt_args[4] = input_nsticks_per_core;
+    writer_rt_args[5] = output_nsticks_per_core / 2; // half of the outputs are processed by each core
     writer_rt_args[6] = 0;  // set for each core below
 
     uint32_t start_input_stick_id = 0;
@@ -163,7 +225,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         TT_THROW("Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](
+    auto override_runtime_args_callback = [writer_kernel, cb_src0, config_cb, out_cb](
         const void* operation,
         Program &program,
         const std::vector<Tensor>& input_tensors,
