@@ -23,28 +23,28 @@ TEST_F(CoreCoordFixture, TestCoreRangeSetMergeCoreCoord) {
     EXPECT_EQ(empty_crs.merge(std::set{this->sc1}).ranges().size(), 1);
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{sc3, sc4}), ::CoreRangeSet(std::set{cr16}));
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{sc3}).merge(std::set{sc4}), ::CoreRangeSet(std::set{cr16}));
-    CoreRange rect({0, 0}, {4, 2});
-    std::set<CoreRange> rect_pts;
+    ::CoreRange rect({0, 0}, {4, 2});
+    std::set<::CoreRange> rect_pts;
     for (unsigned y = rect.start_coord.y; y <= rect.end_coord.y; y++) {
         for (unsigned x = rect.start_coord.x; x <= rect.end_coord.x; x++) {
-            rect_pts.insert(CoreRange({x, y}, {x, y}));
+            rect_pts.insert(::CoreRange({x, y}, {x, y}));
         }
     }
     EXPECT_EQ(empty_crs.merge(rect_pts), ::CoreRangeSet(std::set{rect}));
 
     // upside-down "T"
-    rect_pts.insert({CoreRange({2, 0}, {3, 5})});
-    EXPECT_EQ(empty_crs.merge(rect_pts), ::CoreRangeSet(std::set{rect, CoreRange({2, 3}, {3, 5})}));
+    rect_pts.insert({::CoreRange({2, 0}, {3, 5})});
+    EXPECT_EQ(empty_crs.merge(rect_pts), ::CoreRangeSet(std::set{rect, ::CoreRange({2, 3}, {3, 5})}));
 
     // "H", sub-optimal currently, should be reduced down to 3 CRs instead of 5
     EXPECT_EQ(
-        empty_crs.merge(std::vector{CoreRange{{0, 0}, {1, 5}}, CoreRange{{3, 0}, {4, 5}}, CoreRange{{0, 2}, {4, 3}}}),
+        empty_crs.merge(std::vector{::CoreRange{{0, 0}, {1, 5}}, ::CoreRange{{3, 0}, {4, 5}}, ::CoreRange{{0, 2}, {4, 3}}}),
         ::CoreRangeSet(std::set{
-            CoreRange{{0, 0}, {1, 1}},
-            CoreRange{{0, 2}, {4, 3}},
-            CoreRange{{0, 4}, {1, 5}},
-            CoreRange{{3, 0}, {4, 1}},
-            CoreRange{{3, 4}, {4, 5}}}));
+            ::CoreRange{{0, 0}, {1, 1}},
+            ::CoreRange{{0, 2}, {4, 3}},
+            ::CoreRange{{0, 4}, {1, 5}},
+            ::CoreRange{{3, 0}, {4, 1}},
+            ::CoreRange{{3, 4}, {4, 5}}}));
 }
 
 TEST_F(CoreCoordFixture, TestCoreRangeSetMergeCoreRange) {

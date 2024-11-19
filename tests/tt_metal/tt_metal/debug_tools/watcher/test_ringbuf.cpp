@@ -20,6 +20,7 @@ std::vector<std::string> expected = {
     "]"
 };
 
+namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
     // Set up program
     Program program = Program();
@@ -141,8 +142,10 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
         )
     );
 }
+}
 
 TEST_F(WatcherFixture, TensixTestWatcherRingBufferBrisc) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
@@ -151,6 +154,7 @@ TEST_F(WatcherFixture, TensixTestWatcherRingBufferBrisc) {
     }
 }
 TEST_F(WatcherFixture, TensixTestWatcherRingBufferNCrisc) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
@@ -159,6 +163,7 @@ TEST_F(WatcherFixture, TensixTestWatcherRingBufferNCrisc) {
     }
 }
 TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc0) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
@@ -167,6 +172,7 @@ TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc0) {
     }
 }
 TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc1) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
@@ -175,6 +181,7 @@ TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc1) {
     }
 }
 TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc2) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
@@ -183,6 +190,7 @@ TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc2) {
     }
 }
 TEST_F(WatcherFixture, ActiveEthTestWatcherRingBufferErisc) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
@@ -191,6 +199,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherRingBufferErisc) {
     }
 }
 TEST_F(WatcherFixture, IdleEthTestWatcherRingBufferIErisc) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
