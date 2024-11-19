@@ -268,8 +268,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             TT_ASSERT(num_cores_c % num_batches == 0 && "for CM shard, when each batch is split across cores, num_cores_c must be divisible by num_batches!");
         }
     } else { // height sharded
-        if (num_batches_per_core == 1)
+        if (num_batches_per_core == 1) {
             TT_ASSERT((num_cores_c*num_cores_r) % num_batches == 0 && "for height shard, number of cores must be divisible by num_batches!");
+        }
     }
 
     if (input_mask.has_value()) {

@@ -647,7 +647,7 @@ std::shared_ptr<CircularBuffer> detail::Program_::get_circular_buffer(CBHandle c
 
 std::vector<std::shared_ptr<CircularBuffer>> detail::Program_::circular_buffers_on_core(const CoreCoord &core) const {
     std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
-    for (auto circular_buffer : circular_buffers_) {
+    for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_core(core)) {
             cbs_on_core.push_back(circular_buffer);
         }
@@ -661,7 +661,7 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_core(c
 
 std::vector<std::shared_ptr<CircularBuffer>> detail::Program_::circular_buffers_on_corerange(const CoreRange &cr) const {
     std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
-    for (auto circular_buffer : circular_buffers_) {
+    for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_corerange(cr)) {
             cbs_on_core.push_back(circular_buffer);
         }
@@ -675,7 +675,7 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_corera
 
 std::vector<CoreRange> detail::Program_::circular_buffers_unique_coreranges() const {
     std::vector<CoreRange> core_ranges;
-    for (auto circular_buffer : circular_buffers_) {
+    for (const auto& circular_buffer : circular_buffers_) {
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
                 core_ranges.push_back(core_range);
@@ -708,7 +708,7 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
     }
 
     uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
-    for (std::shared_ptr<CircularBuffer> circular_buffer : this->circular_buffers_) {
+    for (const std::shared_ptr<CircularBuffer>& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
         }
@@ -839,7 +839,7 @@ void detail::Program_::set_cb_data_fmt(Device *device, const std::vector<CoreRan
     //ZoneScoped;
     for (auto logical_cr : crs) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
-        for (auto circular_buffer : cbs_on_core) {
+        for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
                 build_options.set_cb_dataformat_all_cores(
                     static_cast<CB>(buffer_index), circular_buffer->data_format(buffer_index));
