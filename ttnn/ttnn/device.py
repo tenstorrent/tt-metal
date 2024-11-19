@@ -161,8 +161,16 @@ def GetComputeKernelConfig(
     dst_full_sync_en=False,
 ):
     device = ttnn.GetDefaultDevice()
-    if is_wormhole_b0(device) or is_blackhole(device):
+    if is_wormhole_b0(device):
         return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
+            math_approx_mode=math_approx_mode,
+            dst_full_sync_en=dst_full_sync_en,
+        )
+    elif is_blackhole(device):
+        return ttnn.BlackholeComputeKernelConfig(
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
