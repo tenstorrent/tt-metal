@@ -20,6 +20,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn {
 
@@ -30,7 +31,7 @@ ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
-    std::string weights_format,
+    const std::string& weights_format,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -42,7 +43,7 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T *device,
-    std::optional<const Conv2dConfig> conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_);
 
 template <typename T>
 ttnn::Tensor prepare_conv_bias(
@@ -60,7 +61,22 @@ ttnn::Tensor prepare_conv_bias(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T *device,
-    std::optional<const Conv2dConfig> conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_);
+
+template <typename T>
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
+    const ttnn::Tensor& weight_tensor,
+    std::optional<const ttnn::Tensor>& bias_tensor,
+    uint32_t input_channels_alignment,
+    DataType weights_bias_dtype,
+    uint32_t weight_block_h_ntiles,
+    uint32_t weight_block_w_ntiles,
+    const sliding_window::ParallelConfig& parallel_config,
+    T * device,
+    uint32_t groups,
+    uint32_t act_block_h_ntiles,
+    uint32_t input_width,
+    const bool parameters_on_device=true);
 
 } // namespace conv2d
 } // namespace operations::conv
