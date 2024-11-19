@@ -514,6 +514,26 @@ RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kerne
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
  * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
+ * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
+ * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
+ */
+void EnqueueReadBuffer(
+    CommandQueue &cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void *dst,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+/**
+ * Reads a buffer from the device
+ *
+ * Return value: void
+ *
+ * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
+ * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
+ * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                        | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
@@ -526,7 +546,7 @@ void EnqueueReadBuffer(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
     dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
-    EnqueueReadBuffer(cq, buffer, dst.data(), blocking, sub_device_ids);
+    EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking, sub_device_ids);
 }
 template<typename DType>
 void EnqueueReadBuffer(
@@ -537,26 +557,6 @@ void EnqueueReadBuffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
     EnqueueReadBuffer(cq, *buffer, dst, blocking, sub_device_ids);
 }
-
-/**
- * Reads a buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
- */
-void EnqueueReadBuffer(
-    CommandQueue &cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    void *dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
  * Writes a buffer to the device
