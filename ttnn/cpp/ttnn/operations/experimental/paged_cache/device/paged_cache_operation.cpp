@@ -190,23 +190,22 @@ void PagedUpdateCacheDeviceOperation::validate(
     uint32_t num_input_tensors = input_tensors.size();
     validateInputTensorCount(this->op_type, num_input_tensors);
 
-    // Common validation for all tensor pairs
-    for (int i = 0; i < num_input_tensors; i += 2) {
-        const auto& cache_tensor = input_tensors.at(i);
-        const auto& input_tensor = input_tensors.at(i + 1);
+    if (this->op_type == PagedUpdateCacheOpType::UPDATE ||
+        this->op_type == PagedUpdateCacheOpType::FUSED_UPDATE) {
+        // Common validation for all tensor pairs
+        for (int i = 0; i < num_input_tensors; i += 2) {
+            const auto& cache_tensor = input_tensors.at(i);
+            const auto& input_tensor = input_tensors.at(i + 1);
 
-        validateTensorBasics(cache_tensor, input_tensor);
-        validateTensorShapes(cache_tensor, input_tensor);
-
-        if (this->op_type == PagedUpdateCacheOpType::UPDATE ||
-            this->op_type == PagedUpdateCacheOpType::FUSED_UPDATE) {
+            validateTensorBasics(cache_tensor, input_tensor);
+            validateTensorShapes(cache_tensor, input_tensor);
             validateUpdateOperation(cache_tensor, input_tensor, optional_input_tensors, this->share_cache, this->update_idxs, this->batch_offset);
-        } else if (this->op_type == PagedUpdateCacheOpType::FILL) {
-            validateFillOperation(cache_tensor, input_tensor, input_tensors.at(2), this->batch_idx);
         }
-    }
-    if (this->op_type == PagedUpdateCacheOpType::FUSED_UPDATE) {
-        validateFusedUpdateTensors(input_tensors.at(1), input_tensors.at(3));
+        if (this->op_type == PagedUpdateCacheOpType::FUSED_UPDATE) {
+            validateFusedUpdateTensors(input_tensors.at(1), input_tensors.at(3));
+        }
+    } else if (this->op_type == PagedUpdateCacheOpType::FILL) {
+        validateFillOperation(input_tensors.at(0), input_tensors.at(1), input_tensors.at(2), this->batch_idx);
     }
 }
 
