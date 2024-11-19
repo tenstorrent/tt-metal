@@ -403,7 +403,7 @@ def test_matmul_2d_host_perf(
                 )
 
 
-matmul_shapes_bfloat16_oob = [
+matmul_shapes_oob = [
     (512, 512, 512),
     (512, 1024, 1024),
     (512, 1024, 2048),
@@ -422,6 +422,10 @@ matmul_shapes_bfloat16_oob = [
 matmul_configs_oob = [
     (ttnn.bfloat16, False),
     (ttnn.bfloat16, True),
+    (ttnn.bfloat8_b, False),
+    (ttnn.bfloat8_b, True),
+    (ttnn.bfloat4_b, False),
+    (ttnn.bfloat4_b, True),
 ]
 
 
@@ -472,11 +476,14 @@ def test_matmul_2d_host_perf_out_of_box(
             ]
         )
 
-        math_fidelity = ttnn.MathFidelity.HiFi2
-
         for dtype, use_trace in matmul_configs_oob:
+            matmul_shapes = matmul_shapes_oob
             if dtype == ttnn.bfloat16:
-                matmul_shapes = matmul_shapes_bfloat16_oob
+                math_fidelity = ttnn.MathFidelity.HiFi2
+            elif dtype == ttnn.bfloat8_b:
+                math_fidelity = ttnn.MathFidelity.LoFi
+            elif dtype == ttnn.bfloat4_b:
+                math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
                 profiler.clear()
 

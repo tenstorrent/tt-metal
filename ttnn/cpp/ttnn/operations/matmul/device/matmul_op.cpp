@@ -154,7 +154,9 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in0_block_w,
     uint32_t in0_single_tile_size,
     uint32_t in1_single_tile_size,
-    uint32_t output_single_tile_size) {
+    uint32_t output_single_tile_size,
+    uint32_t interm_single_tile_size = 0
+    ) {
     // Circular Buffer sizes:
     // src0 CB: per_core_M * in0_block_w * 2 (for double buffer)
     // src1 CB: per_core_N * in0_block_w * 2 (for double buffer)
@@ -163,7 +165,8 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
     uint32_t in1_size = per_core_M * in0_block_w * 2 * in1_single_tile_size;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
-    return in0_size + in1_size + out_size;
+    uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
+    return in0_size + in1_size + out_size + interm_size;
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
@@ -213,7 +216,7 @@ inline uint32_t get_per_core_factor(const Tensor& input_tensor_a, const Tensor& 
     return 1;
 }
 
-inline std::vector<uint32_t> get_mutlti_dim_per_core_factor(const Tensor& input_tensor_a, const Tensor& input_tensor_b, uint32_t per_core_M, uint32_t per_core_N, uint32_t in0_block_w) {
+inline std::vector<uint32_t> get_mutlti_dim_per_core_factor(const Tensor& input_tensor_a, const Tensor& input_tensor_b, uint32_t per_core_M, uint32_t per_core_N, uint32_t in0_block_w, uint32_t interm_cb_size) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
@@ -228,7 +231,8 @@ inline std::vector<uint32_t> get_mutlti_dim_per_core_factor(const Tensor& input_
                     per_core_factor_k,
                     in0_single_tile_size,
                     in1_single_tile_size,
-                    in0_single_tile_size);
+                    in0_single_tile_size,
+                    interm_cb_size);
                 if (size < max_l1_space) {
                     return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
                 }
@@ -438,7 +442,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 per_core_M = !transpose_mcast ? Mt / num_cores_y : Mt / num_cores_x;
                 per_core_N = !transpose_mcast ? Nt / num_cores_x : Nt / num_cores_y;
 
-                auto mutlti_dim_per_core_factor = get_mutlti_dim_per_core_factor(input_tensor_a, input_tensor_b, per_core_M, per_core_N, in0_block_w);
+                auto mutlti_dim_per_core_factor = get_mutlti_dim_per_core_factor(input_tensor_a, input_tensor_b, per_core_M, per_core_N, in0_block_w, tt_metal::detail::TileSize(tt::DataFormat::Float16_b));
                 out_block_h = mutlti_dim_per_core_factor[0];
                 out_block_w = mutlti_dim_per_core_factor[1];
                 in0_block_w = mutlti_dim_per_core_factor[2];
@@ -968,7 +972,10 @@ Matmul create_matmul_struct(
     auto arch = input_tensor_a.device()->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
-    const auto increase_fidelity = !has_program_config && !has_user_grid;
+    bool are_inputs_low_precision_df =
+            ((input_tensor_a.get_dtype() == DataType::BFLOAT8_B || input_tensor_a.get_dtype() == DataType::BFLOAT4_B) &&
+            (input_tensor_b.get_dtype() == DataType::BFLOAT8_B || input_tensor_b.get_dtype() == DataType::BFLOAT4_B));
+    const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
     auto kernel_config_val = init_device_compute_kernel_config(arch, parameters.compute_kernel_config, math_fidelity, false /*default_approx_mode*/, false /*default_fp32_acc*/, true /*default_l1_acc*/);
     bool broadcast_batch =
