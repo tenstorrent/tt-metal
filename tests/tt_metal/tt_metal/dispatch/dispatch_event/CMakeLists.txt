@@ -1,8 +1,9 @@
 set(UNIT_TESTS_DISPATCH_EVENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueWaitForEvent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_events.cpp
-    PARENT_SCOPE
 )
+
+set(UNIT_TESTS_DISPATCH_EVENT_SRC "${UNIT_TESTS_DISPATCH_EVENT_SRC}" PARENT_SCOPE)
 
 add_executable(unit_tests_dispatch_event ${UNIT_TESTS_DISPATCH_EVENT_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_event)
