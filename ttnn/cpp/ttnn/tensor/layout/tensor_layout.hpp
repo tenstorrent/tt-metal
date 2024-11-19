@@ -60,6 +60,7 @@ private:
 
     Size compute_page_shape(const Size& physical_size) const;
     size_t compute_page_size_bytes(const Size& page_size) const;
+    Size compute_physical_shard_shape(const Size& logical_shard_shape) const;
 
     DataType dtype_ = DataType::BFLOAT16;
     PageConfig page_config_;

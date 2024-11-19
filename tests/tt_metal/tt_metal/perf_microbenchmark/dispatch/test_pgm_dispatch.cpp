@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -42,6 +39,8 @@ uint32_t n_kgs_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
 bool trisc_enabled_g;
+bool erisc_enabled_g;
+uint32_t erisc_count_g;
 bool lazy_g;
 bool time_just_finish_g;
 bool use_global_g;
@@ -60,19 +59,21 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -y: Y end of inclusive core range (default {})", 0);
         log_info(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
-        log_info(LogTest, "  -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
+        log_info(LogTest, " -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
         log_info(LogTest, " -kg: number of kernel groups (default 1)");
         log_info(LogTest, "  -g: use a 4 byte global variable (additional spans");
-        log_info(LogTest, "  -rs:run \"slow\" kernels for exactly <n> cycles (default 0)");
-        log_info(LogTest, "  -rf:run \"fast\" kernels for exactly <n> cycles (default 0)");
-        log_info(LogTest, "  -nf:run <n> fast kernels between slow kernels (default 0)");
+        log_info(LogTest, " -rs: run \"slow\" kernels for exactly <n> cycles (default 0)");
+        log_info(LogTest, " -rf: run \"fast\" kernels for exactly <n> cycles (default 0)");
+        log_info(LogTest, " -nf: run <n> fast kernels between slow kernels (default 0)");
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
         log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
+        log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
+        log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
-        log_info(LogTest, "  -tr: enable trace (default disabled)");
+        log_info(LogTest, " -tr: enable trace (default disabled)");
         exit(0);
     }
 
@@ -120,6 +121,8 @@ void init(int argc, char **argv) {
     brisc_enabled_g = !test_args::has_command_option(input_args, "-b");
     ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
     trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
+    erisc_enabled_g = test_args::has_command_option(input_args, "+e");
+    erisc_count_g = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
     workers_g = CoreRange({0, 0}, {core_x, core_y});
 
@@ -140,8 +143,7 @@ void set_runtime_args(tt_metal::Program& program, tt_metal::KernelHandle kernel_
     }
 }
 
-void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
-
+void initialize_program(tt_metal::Device* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<string, string> defines = {
@@ -204,8 +206,33 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
             tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
         }
 
-        kg.start_coord = { kg.end_coord.x + 1, kg.end_coord.y };
+        kg.start_coord = {kg.end_coord.x + 1, kg.end_coord.y};
         kg.end_coord = kg.start_coord;
+    }
+
+    if (erisc_enabled_g) {
+        auto erisc_cores = device->get_active_ethernet_cores(true);
+        if (erisc_count_g > erisc_cores.size()) {
+            log_fatal(
+                "Requested number of erisc cores {} exceeds actual erisc core count {}",
+                erisc_count_g,
+                erisc_cores.size());
+            exit(0);
+        }
+        auto erisc_core = erisc_cores.begin();
+        for (uint32_t i = 0; i < erisc_count_g; i++, erisc_core++) {
+            auto eth_kernel = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                *erisc_core,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = Eth::RECEIVER,
+                    .noc = NOC::NOC_0,
+                    .defines = defines,
+                });
+            tt_metal::SetRuntimeArgs(program, eth_kernel, *erisc_core, args);
+            tt_metal::SetCommonRuntimeArgs(program, eth_kernel, common_args);
+        }
     }
 }
 
@@ -216,24 +243,19 @@ int main(int argc, char **argv) {
 
     bool pass = true;
     try {
-        int device_id = 0;
+        const chip_id_t device_id = 0;
         tt_metal::Device* device;
-        if (use_trace_g) {
             device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000);
-        } else {
-            device = tt_metal::CreateDevice(device_id);
-        }
-
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
-        initialize_program(program[0], slow_kernel_cycles_g);
-        initialize_program(program[1], fast_kernel_cycles_g);
+        initialize_program(device, program[0], slow_kernel_cycles_g);
+        initialize_program(device, program[1], fast_kernel_cycles_g);
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
             EnqueueProgram(cq, program[0], false);
-            if (nfast_kernels_g > 0) {
+            for (int j = 0; j < nfast_kernels_g; j++) {
                 EnqueueProgram(cq, program[1], false);
             }
         }
@@ -241,7 +263,7 @@ int main(int argc, char **argv) {
         auto main_program_loop = [&]() {
             for (int i = 0; i < iterations_g; i++) {
                 EnqueueProgram(cq, program[0], false);
-                if (nfast_kernels_g > 0) {
+                for (int j = 0; j < nfast_kernels_g; j++) {
                     EnqueueProgram(cq, program[1], false);
                 }
             }

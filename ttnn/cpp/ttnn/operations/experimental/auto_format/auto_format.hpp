@@ -31,14 +31,35 @@ class AutoFormat {
         static Device * GetDefaultDevice() { return device; }
 
 
-        static tt::tt_metal::LegacyShape pad_to_tile_shape(const tt::tt_metal::LegacyShape& unpadded_shape, bool pad_c=false, bool pad_n=false, bool pad_h=true, bool pad_w=true) {
+        static tt::tt_metal::LegacyShape pad_to_tile_shape(const tt::tt_metal::LegacyShape& unpadded_shape,
+                                                           bool pad_c=false,
+                                                           bool pad_n=false,
+                                                           bool pad_h=true,
+                                                           bool pad_w=true) {
             using namespace tt::constants;
-            auto n = pad_n ? tt::round_up(unpadded_shape.rank() >= 4 ? unpadded_shape[-4] : 1, TILE_HEIGHT) : unpadded_shape.rank() >= 4 ? unpadded_shape[-4] : 1;
-            auto c = pad_c ? tt::round_up(unpadded_shape.rank() >= 3 ? unpadded_shape[-3] : 1, TILE_WIDTH) : unpadded_shape.rank() >= 3 ? unpadded_shape[-3] : 1;
-            auto h = pad_h ? tt::round_up(unpadded_shape[-2], TILE_HEIGHT) : unpadded_shape[-2];
-            auto w = pad_w ? tt::round_up(unpadded_shape[-1], TILE_WIDTH) : unpadded_shape[-1];
-            tt::tt_metal::LegacyShape padded_shape = {n, c, h, w};
-            return padded_shape;
+            auto rank = unpadded_shape.rank();
+            TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
+            std::vector<uint32_t> padded_shape_vec(rank);
+            for (auto i = 0; i < rank; ++i) {
+                padded_shape_vec[i] = unpadded_shape[i];
+            }
+            if (rank >= 1) {
+                auto w = pad_w ? tt::round_up(unpadded_shape[rank-1], TILE_WIDTH) : unpadded_shape[rank-1];
+                padded_shape_vec[rank-1] = w;
+            }
+            if (rank >= 2) {
+                auto h = pad_h ? tt::round_up(unpadded_shape[rank-2], TILE_HEIGHT) : unpadded_shape[rank-2];
+                padded_shape_vec[rank-2] = h;
+            }
+            if (rank >= 3) {
+                auto c = pad_c ? tt::round_up(unpadded_shape[rank-3], TILE_WIDTH) : unpadded_shape[rank-3];
+                padded_shape_vec[rank-3] = c;
+            }
+            if (rank >= 4) {
+                auto n = pad_n ? tt::round_up(unpadded_shape[rank-4], TILE_HEIGHT) : unpadded_shape[rank-4];
+                padded_shape_vec[rank-4] = n;
+            }
+            return tt::tt_metal::LegacyShape(padded_shape_vec);
         }
 
         static tt::tt_metal::LegacyShape pad_to_rm_shape(const tt::tt_metal::LegacyShape& unpadded_shape) {

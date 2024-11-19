@@ -341,7 +341,7 @@ size_t MeshDevice::num_cols() const { return this->mesh_device_shape.second; }
 MeshShape MeshDevice::shape() const { return this->mesh_device_shape; }
 
 void MeshDevice::close_devices() {
-    for (auto submesh : this->submeshes) {
+    for (const auto& submesh : this->submeshes) {
         submesh->close_devices();
     }
     if (not this->devices.empty()) {
