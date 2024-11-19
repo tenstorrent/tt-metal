@@ -1,8 +1,7 @@
 set(UNIT_TESTS_DISPATCH_BUFFER_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sub_device.cpp
-    CACHE INTERNAL
-    ""
+    PARENT_SCOPE
 )
 
 add_executable(unit_tests_dispatch_buffer ${UNIT_TESTS_DISPATCH_BUFFER_SRC})
