@@ -91,15 +91,17 @@ class upsample2d:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=True,
-            packer_l1_accum_enabled=False,
             input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
+        )
+        compute_config = ttnn.GetComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
@@ -117,6 +119,7 @@ class upsample2d:
             weight_tensor=self.conv_weight_tensor,
             bias_tensor=self.conv_bias_tensor,
             conv_config=conv_config,
+            compute_config=compute_config,
             conv_op_cache=conv_cache,
         )
         return tt_out
