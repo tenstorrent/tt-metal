@@ -144,8 +144,6 @@ inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_id
 
 class Hal {
   private:
-    std::mutex lock;
-    bool initialized_;
     tt::ARCH arch_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
@@ -158,8 +156,6 @@ class Hal {
 
   public:
     Hal();
-
-    void initialize(tt::ARCH arch);
 
     tt::ARCH get_arch() const {return arch_;}
 
@@ -300,7 +296,24 @@ inline T Hal::get_binary_local_init_addr(uint32_t programmable_core_type_index, 
     return this->core_info_[programmable_core_type_index].get_binary_local_init_addr(processor_class_idx, processor_type_idx);
 }
 
-extern Hal hal;
+class HalSingleton : public Hal {
+private:
+    HalSingleton() = default;
+    HalSingleton(const HalSingleton&) = delete;
+    HalSingleton(HalSingleton&&) = delete;
+    ~HalSingleton() = default;
+
+    HalSingleton& operator=(const HalSingleton&) = delete;
+    HalSingleton& operator=(HalSingleton&&) = delete;
+
+public:
+    static inline HalSingleton& getInstance() {
+        static HalSingleton instance;
+        return instance;
+    }
+};
+
+inline auto& hal = HalSingleton::getInstance(); // inline variable requires C++17
 
 }  // namespace tt_metal
 }  // namespace tt

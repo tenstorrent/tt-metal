@@ -2906,9 +2906,6 @@ int main(int argc, char **argv) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
-    // TODO(abhullar): Have to initialize the HAL explicitly here because it is accessed before Device initializes it
-    tt::ARCH arch = tt::Cluster::instance().arch();
-    hal.initialize(arch);
     init(argc, argv);
 
     bool pass = true;
