@@ -234,21 +234,19 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
     uint32_t num_interm_tiles = 2 * Wt; // double buffered
     uint32_t num_output_tiles = B * Wt;
 
-    const tt::CB src0_cb_index = CB::c_in0;
+    const tt::CB cache_cb_index = CB::c_in0;
     const tt::CB src1_cb_index = CB::c_in1;
     const tt::CB src2_cb_index = CB::c_in2;
-    const tt::CB src3_cb_index = CB::c_in3;
-    const tt::CB cb_index_id = CB::c_in4;
-    const tt::CB cb_pagetable_id = CB::c_in5;
+    const tt::CB cb_index_id = CB::c_in3;
+    const tt::CB cb_pagetable_id = CB::c_in4;
     const tt::CB intermed0_cb_index = CB::c_intermed0;
     const tt::CB intermed1_cb_index = CB::c_intermed1;
     const tt::CB intermed2_cb_index = CB::c_intermed2;
     const tt::CB output_cb_index = CB::c_out0;
 
-    create_cb(src0_cb_index, program, input1_cores, cache_single_tile_size, num_cache_tiles, cache_cb_data_format);
-    create_cb(src2_cb_index, program, input2_cores, cache_single_tile_size, num_cache_tiles, cache_cb_data_format);
+    create_cb(cache_cb_index, program, all_cores, cache_single_tile_size, num_cache_tiles, cache_cb_data_format);
     auto [_1, cb_src1] = create_cb(src1_cb_index, program, input1_cores, input_single_tile_size, num_input_tiles, input_cb_data_format, in1_buffer_address);
-    auto [_2, cb_src3] = create_cb(src3_cb_index, program, input2_cores, input_single_tile_size, num_input_tiles, input_cb_data_format, in2_buffer_address);
+    auto [_2, cb_src3] = create_cb(src2_cb_index, program, input2_cores, input_single_tile_size, num_input_tiles, input_cb_data_format, in2_buffer_address);
     create_cb({intermed0_cb_index, intermed1_cb_index}, program, all_cores, interm_single_tile_size, num_interm_tiles, interm_cb_data_format);
     create_cb(intermed2_cb_index, program, all_cores, interm_single_tile_size, num_interm_tiles, interm_cb_data_format);
     create_cb(output_cb_index, program, all_cores, cache_single_tile_size, num_output_tiles, cache_cb_data_format);
@@ -274,7 +272,7 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
 
     std::vector<uint32_t> reader1_compile_time_args = {
         (std::uint32_t) dst_is_dram,
-        (std::uint32_t) src0_cb_index,
+        (std::uint32_t) cache_cb_index,
         (std::uint32_t) src1_cb_index,
         // Index tensor args
         (std::uint32_t) use_index_tensor,
@@ -297,6 +295,8 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
         St,
         in0_sequential_mode_semaphore_id,
     };
+    std::vector<uint32_t> reader2_compile_time_args = reader1_compile_time_args;
+    reader2_compile_time_args[2] = src2_cb_index;
 
     std::vector<uint32_t> writer1_compile_time_args = {
         (std::uint32_t) dst_is_dram,
@@ -320,37 +320,10 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
         St,
         in0_sequential_mode_semaphore_id,
     };
-
-    std::vector<uint32_t> reader2_compile_time_args = {
-        (std::uint32_t) dst_is_dram,
-        (std::uint32_t) src2_cb_index,
-        (std::uint32_t) src3_cb_index,
-        // Index tensor args
-        (std::uint32_t) use_index_tensor,
-        (std::uint32_t) index_is_dram,
-        cb_index_id,
-        cache_batch_num_tiles,
-        Wt,
-        log2_page_size,
-        index_stick_size,
-        // page_table args
-        (std::uint32_t) is_paged_cache,
-        (std::uint32_t) num_heads,
-        (std::uint32_t) block_size,
-        (std::uint32_t) block_size_t,
-        (std::uint32_t) max_blocks_per_seq,
-        log2_page_table_stick_size,
-        page_table_stick_size,
-        (std::uint32_t) page_table_is_dram,
-        cb_pagetable_id,
-        St,
-        in0_sequential_mode_semaphore_id,
-    };
-
     std::vector<uint32_t> writer2_compile_time_args = writer1_compile_time_args;
 
     std::vector<uint32_t> compute1_kernel_args = {
-        src0_cb_index,
+        cache_cb_index,
         src1_cb_index,
         intermed0_cb_index,
         intermed1_cb_index,
@@ -359,16 +332,8 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
         Wt,
         num_heads,
     };
-    std::vector<uint32_t> compute2_kernel_args = {
-        src2_cb_index,
-        src3_cb_index,
-        intermed0_cb_index,
-        intermed1_cb_index,
-        intermed2_cb_index,
-        output_cb_index,
-        Wt,
-        num_heads,
-    };
+    std::vector<uint32_t> compute2_kernel_args = compute1_kernel_args;
+    compute2_kernel_args[1] = src2_cb_index;
 
     // Create array of input parameters
     UpdateCacheParams update_cache_inputs[2] = {
@@ -380,7 +345,7 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
             .cores = input1_cores,
             .num_cores = input1_num_cores,
             .dst_buffer = dst1_buffer,
-            .src_cb_indices = {src0_cb_index, src1_cb_index}
+            .src_cb_indices = {cache_cb_index, src1_cb_index}
         },
         // Input 2 parameters
         {
@@ -390,7 +355,7 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor
             .cores = input2_cores,
             .num_cores = input2_num_cores,
             .dst_buffer = dst2_buffer,
-            .src_cb_indices = {src2_cb_index, src3_cb_index}
+            .src_cb_indices = {cache_cb_index, src2_cb_index}
         }
     };
 
