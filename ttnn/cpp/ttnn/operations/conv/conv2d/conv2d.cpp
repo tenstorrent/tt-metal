@@ -398,8 +398,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
         (!input_tensor_on_device || input_tensor_.is_sharded()) || conv_config.shard_layout.has_value(),
         "Tesor must be sharded or shard_layout must be set.");
 
-    TT_FATAL(conv_config.shard_layout.has_value(),"Expects conv_config.shard_layout to be set.");
-    TensorMemoryLayout shard_layout = conv_config.shard_layout.value();
+    TensorMemoryLayout shard_layout = conv_config.shard_layout.value_or(input_tensor_.memory_config().memory_layout);
 
     ParallelConfig input_tensor_parallel_config;
     if (!input_tensor_on_device) {
