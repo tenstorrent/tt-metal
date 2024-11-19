@@ -41,8 +41,8 @@ struct Conv2dConfig {
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
-    uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
-                                  //Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
+    uint32_t act_block_w_div = 1; // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
+                                  // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     std::optional<TensorMemoryLayout> shard_layout;
@@ -105,9 +105,11 @@ struct Conv2dConfig {
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor);
 
+uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor);
+
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor);
 
-uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor);
+uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor);
 
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
@@ -125,6 +127,7 @@ sliding_window::ParallelConfig determine_parallel_config(
     uint32_t output_channels,
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
+    bool enable_channels_padding,
     bool is_out_tiled=true);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
@@ -133,7 +136,8 @@ uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::Paral
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
-OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
+OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
+    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
 
 std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_height, uint32_t block_width, bool fp32_accum);
 
@@ -141,7 +145,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    string activation,
+    const string& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
@@ -149,6 +153,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const sliding_window::ParallelConfig& parallel_config,
     const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
+    uint32_t padded_input_height_ntiles,
     uint32_t act_block_h_override,
     uint32_t act_block_w_div,
     uint32_t window_h,
@@ -165,7 +170,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     uint32_t height,
     uint32_t width,
     uint32_t in_channels,
-    uint32_t out_channels);
+    uint32_t out_channels,
+    bool is_mm_conv);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
@@ -199,7 +205,7 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::Paralle
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -207,13 +213,13 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 template <typename T>
 OptimizedConvBlockConfig get_opt_block_config(

@@ -11,6 +11,7 @@ from models.utility_functions import (
     skip_for_grayskull,
     is_grayskull,
     is_wormhole_b0,
+    skip_for_wormhole_b0,
     is_x2_harvested,
     is_blackhole,
     skip_for_blackhole,
@@ -22,6 +23,7 @@ import ttnn
 
 @skip_for_grayskull()
 @skip_for_blackhole()
+# @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
     (
@@ -95,6 +97,11 @@ def test_prepare_conv_weights(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
+
+    if batch_size == 20 and (
+        output_channels == 64 or (stride_h == 2 and (output_channels == 256 or output_channels == 128))
+    ):
+        pytest.skip("Skipping test because it won't fit in L1!")
 
     inp_shape = (batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels, filter_height, filter_width)
@@ -171,8 +178,8 @@ def test_prepare_conv_weights(
 
     tt_weight_tensor_formatted = ttnn.to_device(tt_weight_tensor_formatted, device)
     tt_bias_tensor_formatted = ttnn.to_device(tt_bias_tensor_formatted, device) if has_bias else None
-
-    tt_output_tensor_on_device = ttnn.conv2d(
+    (k := next(iter(conv_kwargs)), conv_kwargs.pop(k))  ##removing 1st element from dict
+    tt_output_tensor_on_device, _, _, _, _ = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor_formatted,
         bias_tensor=tt_bias_tensor_formatted,

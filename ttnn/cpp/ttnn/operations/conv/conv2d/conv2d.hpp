@@ -49,6 +49,7 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
+
 struct Conv2dOperation{
     static Result invoke(
         uint8_t queue_id,

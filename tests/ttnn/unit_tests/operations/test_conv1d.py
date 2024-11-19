@@ -120,8 +120,6 @@ def run_conv(
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
-        return_output_length=True,
-        return_prepared_device_weights=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

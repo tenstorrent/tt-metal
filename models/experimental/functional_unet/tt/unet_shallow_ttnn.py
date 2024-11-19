@@ -143,7 +143,7 @@ class UNetConv2D:
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     def __call__(self, x):
-        x, self.weight, self.bias = ttnn.conv2d(
+        x, _, _, self.weight, self.bias = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,

@@ -158,8 +158,6 @@ class downsample_2d:
             bias_tensor=self.conv_bias,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,
