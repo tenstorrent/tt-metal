@@ -12,6 +12,9 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+  push:
+    branches:
+      - rkim/15020-full-pipe
 
 permissions:
   actions: read
