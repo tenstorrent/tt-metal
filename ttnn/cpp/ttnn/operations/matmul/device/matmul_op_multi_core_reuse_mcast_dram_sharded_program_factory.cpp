@@ -1048,7 +1048,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     uint32_t num_cores_writtne_back = (N + per_core_N_storage - 1) / per_core_N_storage;
-    uint32_t expected_total_width = num_cores_writtne_back * per_core_N_storage;
+    uint32_t expected_max_total_width = num_cores_writtne_back * per_core_N_storage;
+    tt::log_info("per_core_N_storage: {}",per_core_N_storage);
+    tt::log_info("num_cores_writtne_back: {}",num_cores_writtne_back);
     uint32_t total_tensor_width_written_back = 0;
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
@@ -1205,7 +1207,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_FATAL(total_tensor_width_written_back == expected_total_width, "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}", expected_total_width, total_tensor_width_written_back);
+    TT_FATAL(total_tensor_width_written_back <= expected_max_total_width, "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}", expected_max_total_width, total_tensor_width_written_back);
 
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
