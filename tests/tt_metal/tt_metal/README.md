@@ -62,14 +62,15 @@ __Important note: only tests that use Google Test should be placed in the follow
 ### `device/`
  - Contains tests for device initialization and teardown
  - Contains tests that check device-specific properties
- - Contains tests that read from and/or write to the device, but don't launch anything
+ - Contains tests that read from and/or write to the device
 
 ### `dispatch/`
  - Contains tests that explicitly test for properties relating to dispatch
  - Contains both slow dispatch and fast dispatch tests
 
 ### `eth/`
- - Contains tests for ethernet communication between 2 or more devices
+ - Contains tests that check ethernet communication between multiple devices
+ - Contains tests that explicitly test ethernet properties on a single device
 
 ### `integration/`
  - Contains tests for real-world use cases, eg. matmul, etc

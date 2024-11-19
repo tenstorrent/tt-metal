@@ -48,7 +48,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnStorageCores) {
 }
 
 TEST_F(DispatchFixture, TensixIdleEthCreateKernelsOnDispatchCores) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
     for (unsigned int id = 0; id < this->devices_.size(); id++) {

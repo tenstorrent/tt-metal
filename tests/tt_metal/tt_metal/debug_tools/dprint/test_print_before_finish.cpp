@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "debug_tools_fixture.hpp"
-#include "test_utils.hpp"
+#include "debug_tools_test_utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.

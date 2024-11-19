@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug_tools_fixture.hpp"
-#include "test_utils.hpp"
+#include "debug_tools_test_utils.hpp"
 #include "common/bfloat8.hpp"
 #include "common/bfloat4.hpp"
 

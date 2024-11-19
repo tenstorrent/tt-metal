@@ -4,7 +4,7 @@
 
 #include "debug_tools_fixture.hpp"
 #include "common/bfloat16.hpp"
-#include "test_utils.hpp"
+#include "debug_tools_test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 

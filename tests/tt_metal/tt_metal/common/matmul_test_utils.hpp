@@ -4,14 +4,9 @@
 
 #pragma once
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"

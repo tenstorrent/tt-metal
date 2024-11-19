@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 #include <vector>
-#include "host_fixture.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
 
 template <bool tilize_first, typename T>
@@ -35,7 +34,7 @@ void tilize_untilize_helper(uint max_num_batches, uint max_num_row_tiles, uint m
 }
 
 // The following run the tilize/untilize APIs and their inverses
-TEST_F(HostFixture, TestTilizeAndThenUntilizeBfloat16) {
+TEST(Host, TestTilizeAndThenUntilizeBfloat16) {
     uint max_num_batches = 8;
     uint max_num_row_tiles = 8;
     uint max_num_col_tiles = 8;
@@ -45,12 +44,12 @@ TEST_F(HostFixture, TestTilizeAndThenUntilizeBfloat16) {
     tilize_untilize_helper<true, bfloat16>(max_num_batches, max_num_row_tiles, max_num_col_tiles, TILE_HEIGHT, TILE_WIDTH);
 }
 
-TEST_F(HostFixture, TestTilizeThrowErrorForNonBfloat16DataType) {
+TEST(Host, TestTilizeThrowErrorForNonBfloat16DataType) {
     std::vector<float> vec(1024, 0);
     EXPECT_ANY_THROW(tilize(vec, 32, 32));
 }
 
-TEST_F(HostFixture, TestTilizeThrowErrorForInvalidTileMandN) {
+TEST(Host, TestTilizeThrowErrorForInvalidTileMandN) {
     // m and n are not divisible by tile size
     std::vector<bfloat16> vec(16, 0);
     EXPECT_ANY_THROW(tilize(vec, 4, 4)); // m and n not divisible by 32
@@ -59,19 +58,19 @@ TEST_F(HostFixture, TestTilizeThrowErrorForInvalidTileMandN) {
     EXPECT_ANY_THROW(tilize(vec, 0, 0));
 }
 
-TEST_F(HostFixture, TestTilizeThrowErrorForInvalidVectorShape) {
+TEST(Host, TestTilizeThrowErrorForInvalidVectorShape) {
     std::vector<bfloat16> vec(16, 0); // Size not divisible by 1024
     EXPECT_ANY_THROW(tilize(vec, 32, 32)); // m and n not divisible by 32
     vec = {}; // Cannot have a zero vector either
     EXPECT_ANY_THROW(tilize(vec, 32, 32)); // m and n not divisible by 32
 }
 
-TEST_F(HostFixture, TestUntilizeThrowErrorForNonBfloat16DataType) {
+TEST(Host, TestUntilizeThrowErrorForNonBfloat16DataType) {
     std::vector<float> vec(1024, 0);
     EXPECT_ANY_THROW(untilize(vec, 32, 32));
 }
 
-TEST_F(HostFixture, TestUntilizeThrowErrorForInvalidTileMandN) {
+TEST(Host, TestUntilizeThrowErrorForInvalidTileMandN) {
     // m and n are not divisible by tile side lengths
     std::vector<bfloat16> vec(16, 0);
     EXPECT_ANY_THROW(untilize(vec, 4, 4));
@@ -80,14 +79,14 @@ TEST_F(HostFixture, TestUntilizeThrowErrorForInvalidTileMandN) {
     EXPECT_ANY_THROW(untilize(vec, 0, 0));
 }
 
-TEST_F(HostFixture, TestUntilizeThrowErrorForInvalidVectorShape) {
+TEST(Host, TestUntilizeThrowErrorForInvalidVectorShape) {
     std::vector<bfloat16> vec(16, 0); // Size not divisible by 1024
     EXPECT_ANY_THROW(untilize(vec, 32, 32)); // m and n not divisible by 32
     vec = {}; // Cannot have a zero vector either
     EXPECT_ANY_THROW(untilize(vec, 32, 32)); // m and n not divisible by 32
 }
 
-TEST_F(HostFixture, TestUntilizeAndThenTilizeBfloat16) {
+TEST(Host, TestUntilizeAndThenTilizeBfloat16) {
     uint max_num_batches = 8;
     uint max_num_row_tiles = 8;
     uint max_num_col_tiles = 8;

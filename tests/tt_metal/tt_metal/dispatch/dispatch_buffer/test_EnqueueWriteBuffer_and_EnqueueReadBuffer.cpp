@@ -14,6 +14,19 @@
 using std::vector;
 using namespace tt::tt_metal;
 
+struct BufferStressTestConfig {
+    // Used for normal write/read tests
+    uint32_t seed;
+    uint32_t num_pages_total;
+
+    uint32_t page_size;
+    uint32_t max_num_pages_per_buffer;
+
+    // Used for wrap test
+    uint32_t num_iterations;
+    uint32_t num_unique_vectors;
+};
+
 class BufferStressTestConfigSharded {
    public:
     uint32_t seed;
