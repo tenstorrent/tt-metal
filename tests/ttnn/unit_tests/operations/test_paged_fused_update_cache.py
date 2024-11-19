@@ -178,9 +178,9 @@ def run_test_paged_fused_update_cache_decode(
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8])
 @pytest.mark.parametrize("num_heads", [1, 8])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("pcc", [0.9995])
 def test_paged_fused_update_cache_decode(
     paged_update,
