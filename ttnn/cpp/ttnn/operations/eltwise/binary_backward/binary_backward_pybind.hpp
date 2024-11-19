@@ -771,7 +771,7 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            round_mode (str, optional): Round mode for the operation ( when input tensors are not ComplexTensor type ). Defaults to `None`.
+            round_mode (str, optional): Round mode for the operation (when input tensors are not ComplexTensor type). Defaults to `None`.
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor`. Defaults to `None`.
