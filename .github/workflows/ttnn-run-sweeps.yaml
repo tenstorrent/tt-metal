@@ -233,7 +233,7 @@ on:
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
-          - eltwise.binary_backward.ldexp_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw
           - eltwise.binary_backward.logaddexp_bw
           - eltwise.binary_backward.logaddexp2_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
