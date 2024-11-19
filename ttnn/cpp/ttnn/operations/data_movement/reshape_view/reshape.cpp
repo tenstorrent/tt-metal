@@ -31,9 +31,18 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     auto memory_config = tensor.memory_config();
     auto host_tensor = tensor.cpu();
     auto rm_tensor = ttnn::to_layout(host_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+
     if(tensor_shape.has_tile_padding()) {
+        if (tensor_shape.rank() >4)
+        {
+            uint32_t mult_factor = 1;
+            for (int i=0; i <tensor_shape.rank()-4; i++)
+            {
+                mult_factor = mult_factor * tensor_shape[i];
+            }
+            return ttnn::reshape(ttnn::reshape(tensor,ttnn::Shape{tensor_shape[-4]*mult_factor,tensor_shape[-3],tensor_shape[-2],tensor_shape[-1]}),shape);
+        }
         ttnn::Tensor slice_input;
-        TT_FATAL(tensor_shape.rank() <= 4, "Only up to 4D tensors");
         auto host_tensor_4d = unsqueeze_to_4D(rm_tensor);
         auto tensor_shape_4d = host_tensor_4d.shape();
         ttnn::SmallVector<uint32_t> begins({0, 0, 0, 0});
