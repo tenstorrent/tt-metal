@@ -1,6 +1,8 @@
 # Order is important; the last matching pattern takes the most
 # precedence.
 
+* @tenstorrent/metalium-admins
+
 .github/ @tt-rkim @ttmchiou @TT-billteng @blozano-tt @afuller-TT
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
@@ -12,10 +14,6 @@ CODEOWNERS @tt-rkim
 
 INSTALLING.md @tt-rkim @TT-billteng
 METALIUM_GUIDE.md @davorchap
-
-# Dependencies
-
-third_party/ @tt-rkim @TT-billteng
 
 # Build stuff
 
