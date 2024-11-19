@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -275,7 +275,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
 }
-BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperation::ElementWiseMultiCore::create(
+BinaryDeviceOperation::ElementWiseMultiCoreSfpu::cached_program_t BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -362,8 +362,9 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
+    tt::log_debug(tt::LogOp, "SFPU pgm factory ");
     std::map<string, string> eltwise_defines =
-        utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
+        utils::get_defines_fp32(op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
@@ -434,14 +435,17 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     bool fp32_dest_acc_en = dst_cb_data_format == tt::DataFormat::UInt32 ||
                             dst_cb_data_format == tt::DataFormat::Int32 ||
                             dst_cb_data_format == tt::DataFormat::Float32;
-    // std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    // unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+
+    tt::log_debug(tt::LogOp, "use binary SFPU kernel ");
+
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp",
         all_device_cores,
-        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .defines = eltwise_defines});
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode, .defines = eltwise_defines});
 
     set_eltwise_binary_runtime_args<true>(
         program,
@@ -473,7 +477,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
          dst_single_tile_size}};
 }
 
-void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
+void BinaryDeviceOperation::ElementWiseMultiCoreSfpu::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

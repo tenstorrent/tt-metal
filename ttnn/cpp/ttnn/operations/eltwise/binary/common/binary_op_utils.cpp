@@ -167,4 +167,45 @@ std::map<std::string, std::string> get_defines(
     return defines;
 }
 
+
+std::map<std::string, std::string> get_defines_fp32(
+    BinaryOpType op_type,
+    const std::optional<tt::tt_metal::DataType> input_dtype,
+    const std::optional<tt::tt_metal::DataType> output_dtype,
+    const std::optional<std::vector<UnaryWithParam>> fused_activations,
+    const std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+
+    std::map<std::string, std::string> new_defines;
+    std::string op_name = "sub_binary_tile";
+    std::string idst1 = "i*2";
+    std::string idst2 = "i*2+1";
+
+
+    switch (op_type) {
+        case BinaryOpType::ADD:
+            op_name = "add_binary_tile";
+            break;
+        case BinaryOpType::SUB:
+            op_name = "sub_binary_tile";
+            break;
+        case BinaryOpType::MUL:
+            op_name = "mul_binary_tile";
+            break;
+        case BinaryOpType::DIV_FAST:
+            op_name = "div_binary_tile";
+            break;
+        case BinaryOpType::RSUB:
+            op_name = "rsub_binary_tile";
+            break;
+        case BinaryOpType::POWER:
+            op_name = "power_binary_tile";
+            break;
+        default: TT_ASSERT(false && "Undefined op type");
+    }
+
+    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}( {}, {});", op_name, idst1, idst2)});
+
+    return new_defines;
 }
+
+} // namespace ttnn::operations::binary::utils

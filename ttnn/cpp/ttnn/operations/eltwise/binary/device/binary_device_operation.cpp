@@ -29,7 +29,11 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
-        return ElementWiseMultiCore{};
+        if(tensor_args.input_tensor_a.get_dtype() == DataType::FLOAT32 && tensor_args.input_tensor_b->get_dtype() == DataType::FLOAT32){
+            return ElementWiseMultiCoreSfpu{};
+        } else {
+            return ElementWiseMultiCore{};
+        }
     }
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
@@ -199,7 +203,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
     }
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    if (std::holds_alternative<ElementWiseMultiCore>(program_factory)) {
+    if (std::holds_alternative<ElementWiseMultiCore>(program_factory) or std::holds_alternative<ElementWiseMultiCoreSfpu>(program_factory)) {
         const auto& input_tensor_b = *tensor_args.input_tensor_b;
         if (operation_attributes.memory_config.is_sharded()) {
             ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
