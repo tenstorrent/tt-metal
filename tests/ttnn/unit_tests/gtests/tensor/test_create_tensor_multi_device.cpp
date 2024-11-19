@@ -22,8 +22,11 @@ using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::StorageType;
 using ::tt::tt_metal::TensorMemoryLayout;
 
-TEST_F(T3kMultiDeviceFixture, CreateEmpty) {
+class MultiDeviceTensorCreationTest : public T3kMultiDeviceFixture, public ::testing::WithParamInterface<bool> {};
+
+TEST_P(MultiDeviceTensorCreationTest, CreateEmpty) {
     MeshDevice* mesh_device = this->mesh_device_.get();
+    mesh_device->enable_async(GetParam());
 
     const auto mesh_replicated_tensor = ttnn::empty(
         ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
@@ -39,6 +42,8 @@ TEST_F(T3kMultiDeviceFixture, CreateEmpty) {
 
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
 }
+
+INSTANTIATE_TEST_SUITE_P(AllTests, MultiDeviceTensorCreationTest, ::testing::Bool());
 
 }  // namespace
 }  // namespace ttnn::distributed::test
