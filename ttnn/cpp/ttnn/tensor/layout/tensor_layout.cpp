@@ -97,9 +97,7 @@ TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const 
 }
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape) {
-    auto result = TensorLayout(dtype, page_config, memory_config);
-    result.alignment_ = CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape, page_config, memory_config);
-    return result;
+    return TensorLayout(dtype, page_config, memory_config, CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape, page_config, memory_config));
 }
 
 void TensorLayout::initialize_alignment() {
