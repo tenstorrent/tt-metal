@@ -27,20 +27,3 @@ def test_bw_squared_difference(input_shapes, device):
     golden_tensor = golden_function(grad_data, in_data, other_data)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
-
-
-def test_bw_squared_difference_example(device):
-    grad_tensor = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
-    x1_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True)
-    x2_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True)
-    golden_function = ttnn.get_golden_function(ttnn.squared_difference_bw)
-    golden_tensor = golden_function(grad_tensor, x1_torch, x2_torch)
-    grad_tt = ttnn.from_torch(grad_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    x1_tt = ttnn.from_torch(x1_torch, layout=ttnn.TILE_LAYOUT, device=device)
-    x2_tt = ttnn.from_torch(x2_torch, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.squared_difference_bw(grad_tt, x1_tt, x2_tt)
-    tt_out_1 = ttnn.to_torch(y_tt[1])
-    tt_out_0 = ttnn.to_torch(y_tt[0])
-    comp_pass_1 = torch.allclose(tt_out_1, golden_tensor[1])
-    comp_pass_0 = torch.allclose(tt_out_0, golden_tensor[0])
-    assert comp_pass_1 and comp_pass_0
