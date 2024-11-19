@@ -158,19 +158,6 @@ Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<
         Tensor az_bgtz = ttnn::logical_and(a_eqz, b_gtz, std::nullopt, output_mem_config);
         Tensor az_bz = ttnn::logical_and(a_eqz, b_eqz, std::nullopt, output_mem_config);
         float pi_2 = M_PI_2;
-        // // Tensor neg_result = ttnn::neg(result, output_mem_config);
-
-        // res = ttnn::where(
-        //     ttnn::gtz(input_a, output_mem_config),
-        //     ttnn::where(ib_gtz, result, neg_result),
-        //     ttnn::where(
-        //         ttnn::ltz(input_a, output_mem_config),
-        //         ttnn::where(
-        //             ib_gt,
-        //             ttnn::add(neg_result, M_PI, std::nullopt, output_mem_config),
-        //             ttnn::where(ib_lt, ttnn::subtract(result, M_PI, std::nullopt, output_mem_config), M_PI)),
-        //         ttnn::where(ib_gt, pi_2, ttnn::where(ib_lt, -pi_2, 0.0f))));
-
         res = ttnn::where(ia_gtz, result,
                           ttnn::where(altz_bgte, ttnn::add(result, M_PI, std::nullopt, output_mem_config),
                           ttnn::where(altz_bltz, ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),

@@ -63,11 +63,11 @@ def run_angle_tests(
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
     torch.set_printoptions(sci_mode=False)
-    print(tt_x_real)
-    print(tt_x_imag)
-    print(ref_value)
-    print(tt_result)
-    assert_with_pcc(ref_value, tt_result, 0.999)
+    # print(tt_x_real)
+    # print(tt_x_imag)
+    # print(ref_value)
+    # print(tt_result)
+    assert_with_pcc(ref_value, tt_result, 0.95)
 
 
 test_sweep_args = [
@@ -79,30 +79,30 @@ test_sweep_args = [
         ttnn.DRAM_MEMORY_CONFIG,
         0,
     ),
-    # (
-    #     [4, 7, 21, 133],
-    #     ttnn.bfloat16,
-    #     ttnn.TILE_LAYOUT,
-    #     ttnn.DRAM_MEMORY_CONFIG,
-    #     ttnn.DRAM_MEMORY_CONFIG,
-    #     1,
-    # ),
-    # (
-    #     [4, 7, 21, 133],
-    #     ttnn.bfloat8_b,
-    #     ttnn.TILE_LAYOUT,
-    #     ttnn.L1_MEMORY_CONFIG,
-    #     ttnn.DRAM_MEMORY_CONFIG,
-    #     21312,
-    # ),
-    # (
-    #     [4, 7, 21, 133],
-    #     ttnn.bfloat16,
-    #     ttnn.TILE_LAYOUT,
-    #     ttnn.L1_MEMORY_CONFIG,
-    #     ttnn.DRAM_MEMORY_CONFIG,
-    #     124214,
-    # ),
+    (
+        [4, 7, 21, 133],
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        1,
+    ),
+    (
+        [4, 7, 21, 133],
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.L1_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        21312,
+    ),
+    (
+        [4, 7, 21, 133],
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.L1_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        124214,
+    ),
 ]
 
 

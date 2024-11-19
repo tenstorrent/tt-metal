@@ -183,31 +183,24 @@ inline void calculate_sfpu_trig() {
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val)
 {
-    v_if(1 > sfpi::abs(val)){
-        dst_reg[0] = sfpi::abs(val)  ;
-    }
-    v_else{
-        dst_reg[0] =  sfpu_reciprocal(sfpi::abs(val));
-    }
-    v_endif;
+    vFloat tmp = val;
+    vFloat val_square = val * val;
 
-    vFloat t1 = dst_reg[0] * dst_reg[0];
+    vFloat output = tmp * 0.9998660f;
 
-    t1 = POLYVAL6(-0.013480470f, 0.057477314f, -0.121239071f, 0.195635925f, -0.332994597f, 0.999995630f, t1);
+    tmp = tmp * val_square;
+    output += (-0.3302995f) * tmp;
 
-    t1 = t1 * dst_reg[0];
+    tmp = tmp * val_square;
+    output +=  (0.1801410f) * tmp;
 
-    v_if (sfpi::abs(val) > 0){
-        t1 = 1.570796327f - t1;
-    }
-    v_endif;
+    tmp = tmp * val_square;
+    output += (-0.0851330f) * tmp;
 
-    v_if(val < 0 ){
-        t1 = -t1;
-    }
-    v_endif;
+    tmp = tmp * val_square;
+    output += (0.0208351f) * tmp;
 
-    return t1;
+    return output;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
@@ -217,8 +210,24 @@ inline void calculate_atan()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
-        val = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(val);
-        dst_reg[0] = val;
+        vFloat abs_r = sfpi::abs(val);
+        vFloat res;
+        v_if(abs_r > 1){
+            res = sfpu_reciprocal(abs_r);
+        }
+        v_endif;
+
+        res = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(res);
+
+        v_if(abs_r > 1){
+            res = 1.5707963267948966f - res;
+        }
+        v_endif;
+        v_if(val < 0 ){
+            res = -res;
+        }
+        v_endif;
+        dst_reg[0] = res;
         dst_reg++;
     }
 }
