@@ -436,7 +436,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 && input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED
                 && input_tensor_a.memory_config().buffer_type == BufferType::DRAM
                 && input_tensor_b.memory_config().buffer_type == BufferType::DRAM
-                && mem_config.buffer_type == BufferType::DRAM) {
+                && mem_config.buffer_type == BufferType::DRAM
+                && num_cores_x == 8 && num_cores_y == 8) {
 
                 in0_block_w = !transpose_mcast ? Kt / num_cores_x : Kt / num_cores_y;
                 per_core_M = !transpose_mcast ? Mt / num_cores_y : Mt / num_cores_x;
