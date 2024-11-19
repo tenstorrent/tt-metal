@@ -242,12 +242,14 @@ class transformer_2d_model:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             input_channels_alignment=32,
-            fp32_dest_acc_enabled=self.compute_kernel_config.fp32_dest_acc_en,
             transpose_shards=False,
+        )
+        compute_config = ttnn.GetComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
         )
         [hidden_states, _out_height, _out_width, self.proj_in_conv_weights, self.proj_in_conv_bias] = ttnn.conv2d(
             input_tensor=hidden_states,
@@ -263,6 +265,7 @@ class transformer_2d_model:
             weight_tensor=self.proj_in_conv_weights,
             bias_tensor=self.proj_in_conv_bias,
             conv_config=conv_config,
+            compute_config=compute_config,
             conv_op_cache=conv_cache,
         )
 
