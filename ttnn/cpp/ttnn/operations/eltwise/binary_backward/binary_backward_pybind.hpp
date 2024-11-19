@@ -22,7 +22,7 @@ namespace binary_backward {
 namespace detail {
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
+void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16", const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -53,6 +53,8 @@ void bind_binary_backward_ops(py::module& module, const binary_backward_operatio
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
+            {4}
+
         Example:
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
@@ -65,7 +67,8 @@ void bind_binary_backward_ops(py::module& module, const binary_backward_operatio
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        supported_dtype);
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -1115,7 +1118,7 @@ void py_module(py::module& module) {
         module,
         ttnn::ldexp_bw,
         R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16)doc", R"doc(Recommended input range : [-80, 80]. Performance of the PCC may degrade if the input falls outside this range.)doc");
 
 
     detail::bind_binary_backward_ops(
