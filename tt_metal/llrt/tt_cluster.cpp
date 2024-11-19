@@ -426,6 +426,12 @@ void Cluster::read_core(
     read_core(data.data(), size_in_bytes, core, addr, small_access);
 }
 
+void Cluster::read_core(
+    std::vector<uint8_t> &data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    data.resize(size_in_bytes);
+    read_core(data.data(), size_in_bytes, core, addr, small_access);
+}
+
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
     const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;

@@ -793,7 +793,7 @@ void detail::Program_::init_semaphores(const Device &device, const CoreCoord &lo
         llrt::write_hex_vec_to_core(
             device.id(),
             device.physical_core_from_logical_core(logical_core, core_type),
-            {semaphore.get().initial_value()},
+            std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
 }
