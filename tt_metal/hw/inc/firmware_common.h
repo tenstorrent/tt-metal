@@ -49,7 +49,7 @@ inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t tt_l1_ptr *l
     }
 }
 
-inline void firmware_kernel_common_init(void *init_local_l1_base) {
+inline void do_crt1(void *init_local_l1_base) {
 
     // Handle stuff typically done in crt0 in asm.  Easier to do in C
     wzerorange(__ldm_bss_start, __ldm_bss_end);
@@ -61,6 +61,7 @@ inline void firmware_kernel_common_init(void *init_local_l1_base) {
         (**fptr)();
     }
 }
+
 FORCE_INLINE
 uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
 

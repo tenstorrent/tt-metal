@@ -36,15 +36,17 @@ uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used
 
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
-    rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    // Not using firmware_kernel_common_init since it is copying to registers
+    // Not using do_crt1 since it is copying to registers???
     // TODO: need to find free space that routing FW is not using
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
+
+    rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
