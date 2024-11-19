@@ -172,6 +172,7 @@ def run_reshard_test(
         ),
     ],
 )
+@skip_for_blackhole("GH Issue #15234")
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_reshard(
     device,
