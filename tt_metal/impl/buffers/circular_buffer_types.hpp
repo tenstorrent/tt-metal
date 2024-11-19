@@ -89,7 +89,10 @@ class CircularBufferConfig {
     std::unordered_set<uint8_t> buffer_indices_;
     bool dynamic_cb_ = false;
     // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
-    std::optional<uint32_t> max_size_ = std::nullopt;
+    // `buffer_size_` is tracked to enforce the old size assertions.
+    // Will be removed once tests are updated to respect the correct `max_size_` constraint
+    uint32_t max_size_ = 0;
+    uint32_t buffer_size_ = 0;
 };
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);

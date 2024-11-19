@@ -461,6 +461,11 @@ DeviceAddr Buffer::aligned_size() const {
     return this->num_dev_pages() * this->aligned_page_size();
 }
 
+DeviceAddr Buffer::aligned_size_per_bank() const {
+    uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
+    return tt::tt_metal::detail::SizeBytesPerBank(this->size_, this->page_size_, num_banks, this->alignment());
+}
+
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
     auto shard_spec = this->shard_spec();
