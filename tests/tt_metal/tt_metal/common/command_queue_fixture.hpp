@@ -18,25 +18,34 @@
 
 class CommandQueueFixture : public DispatchFixture {
    protected:
-    tt::tt_metal::Device* device_;
+    tt::tt_metal::Device *device_;
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            GTEST_SKIP();
-        }
-        this->slow_dispatch_ = false;
+        this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        const chip_id_t device_id = 0;
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        this->device_ = tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        this->create_device();
     }
 
     void TearDown() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             tt::tt_metal::CloseDevice(this->device_);
         }
+    }
+
+    void validate_dispatch_mode() {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            tt::log_info(
+                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            GTEST_SKIP();
+        }
+        this->slow_dispatch_ = false;
+    }
+
+    void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        const chip_id_t device_id = 0;
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        this->device_ =
+            tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     }
 };
 
@@ -45,6 +54,18 @@ class CommandQueueEventFixture : public CommandQueueFixture {};
 class CommandQueueBufferFixture : public CommandQueueFixture {};
 
 class CommandQueueProgramFixture : public CommandQueueFixture {};
+
+class CommandQueueTraceFixture : public CommandQueueFixture {
+    protected:
+    void SetUp() override {
+        this->validate_dispatch_mode();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    }
+
+    void CreateDevice(const size_t trace_region_size) {
+        this->create_device(trace_region_size);
+    }
+};
 
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
    protected:
