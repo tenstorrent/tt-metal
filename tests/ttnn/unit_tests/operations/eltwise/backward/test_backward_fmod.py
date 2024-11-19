@@ -58,3 +58,17 @@ def test_bw_binary_fmod(input_shapes, device):
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
+
+
+def test_bw_fmod_example(device):
+    grad_tensor = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    x1_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True)
+    scalar = 2
+    golden_function = ttnn.get_golden_function(ttnn.fmod_bw)
+    golden_tensor = golden_function(grad_tensor, x1_torch, scalar)
+    grad_tt = ttnn.from_torch(grad_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    x1_tt = ttnn.from_torch(x1_torch, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.fmod_bw(grad_tt, x1_tt, scalar)
+    tt_out_0 = ttnn.to_torch(y_tt[0])
+    comp_pass_0 = torch.allclose(tt_out_0, golden_tensor[0])
+    assert comp_pass_0
