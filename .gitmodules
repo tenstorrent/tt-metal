@@ -1,9 +1,6 @@
 [submodule "third_party/pybind11"]
 	path = tt_metal/third_party/pybind11
 	url = https://github.com/pybind/pybind11.git
-[submodule "third_party/lfs"]
-	path = tt_metal/third_party/lfs
-	url = https://github.com/tenstorrent-metal/lfs.git
 [submodule "tt_metal/third_party/taskflow"]
 	path = tt_metal/third_party/taskflow
 	url = https://github.com/taskflow/taskflow

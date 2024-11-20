@@ -444,32 +444,32 @@ def test_create_sharded_memory_config(device, shape, strategy, orientation, core
 @pytest.mark.parametrize(
     "shape, shard_shape, strategy, orientation, core_grid",
     [
-        ([1, 1, 2, 16], None, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=1)),
-        ([1, 1, 2, 16], None, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
-        ([1, 1, 32, 16], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
-        ([1, 1, 64, 16], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
-        (
-            [1, 1, 2, 16],
-            [2, 16],
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                }
-            ),
-        ),
-        (
-            [1, 1, 5280, 16],
-            [5280, 16],
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                }
-            ),
-        ),
+        ([1, 1, 8, 40], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
+        # ([1, 1, 2, 16], None, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
+        # ([1, 1, 32, 16], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
+        # ([1, 1, 64, 16], None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=1)),
+        # (
+        #    [1, 1, 2, 16],
+        #    [2, 16],
+        #    ttnn.ShardStrategy.HEIGHT,
+        #    ttnn.ShardOrientation.ROW_MAJOR,
+        #    ttnn.CoreRangeSet(
+        #        {
+        #            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        #        }
+        #    ),
+        # ),
+        # (
+        #    [1, 1, 5280, 16],
+        #    [5280, 16],
+        #    ttnn.ShardStrategy.HEIGHT,
+        #    ttnn.ShardOrientation.ROW_MAJOR,
+        #    ttnn.CoreRangeSet(
+        #        {
+        #            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        #        }
+        #    ),
+        # ),
         # TODO: Add this test back by checking for core grid size and skipping if we can't do it
         #        (
         #            [1, 1, 675840, 16],

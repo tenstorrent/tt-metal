@@ -5,6 +5,23 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#define ENABLE_DEBUG 1
+
+#if ENABLE_DEBUG
+#include "debug/dprint.h"
+
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+#endif
+
 void kernel_main() {
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
@@ -59,5 +76,12 @@ void kernel_main() {
         }
     }
     noc_async_read_barrier();
+
+    DPRINT << "I2S READER OUTPUT" << ENDL();
+    DPRINT << "aligned_block_width_bytes: " << aligned_block_width_bytes << ENDL();
+    DPRINT << "block_height: " << block_height << ENDL();
+    DPRINT << "stick_size: " << stick_size << ENDL();
+    print_pages(get_read_ptr(cb_id_in0), block_width_bytes / sizeof(uint16_t), block_height);
+
     cb_push_back(cb_id_in0, block_height);
 }
