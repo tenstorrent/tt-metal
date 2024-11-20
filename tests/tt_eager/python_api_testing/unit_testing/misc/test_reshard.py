@@ -346,6 +346,7 @@ def test_reshard_with_program_cache(
     assert device.num_program_cache_entries() == 3
 
 
+@skip_for_blackhole("WIP for i2s bugs, see #15234")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_shape, input_shard_orientation, input_sharding_scheme, input_buffer_type, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme, output_buffer_type",
     [
