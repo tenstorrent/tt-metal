@@ -22,4 +22,8 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
-gtest_discover_tests(distributed_unit_tests)
+# Dont do this for now
+# When the test is probed something is constructed that tries to access a device
+# Build machine might not have a device
+# We don't use ctest in this project so we shouldn't need this yet
+#gtest_discover_tests(distributed_unit_tests)
