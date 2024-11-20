@@ -268,7 +268,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
     def validate_inputs(self, tokens, position_ids):
         batch, seq_len = tokens.shape[:2]
-        assert batch == 1, f"Only batch 1 is supported, got {batch}"
+        # assert batch == 1, f"Only batch 1 is supported, got {batch}"
         assert (
             seq_len <= self.configuration.max_seq_len
         ), f"Sequence length {seq_len} exceeds max sequence length {self.configuration.max_seq_len}"
@@ -339,15 +339,15 @@ class CrossAttentionTransformer(torch.nn.Module):
         rot_mats = get_prefill_rot_mat(
             self.configuration.head_dim, self.configuration.max_seq_len, self.mesh_device, seq_len=S
         )
-        transformation_mat_torch = get_rot_transformation_mat(self.configuration.head_dim)
-        transformation_mats = ttnn.as_tensor(
-            transformation_mat_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # transformation_mat_torch = get_rot_transformation_mat(self.configuration.head_dim)
+        # transformation_mats = ttnn.as_tensor(
+        #     transformation_mat_torch,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     device=self.mesh_device,
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
 
         full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, self.configuration.dim)
         tt_full_text_mask_expand_11SD = ttnn.from_torch(
@@ -366,7 +366,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_full_text_mask_expand_11SD,
             tt_position_id,
             rot_mats,
-            transformation_mats,
+            # transformation_mats,
         )
 
     def prepare_inputs_decode(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id):
@@ -374,10 +374,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            _tt_full_text_mask_expand_11SD,
             tt_position_id,
-            rot_mats,
-            _transformation_mats,
+            tt_rope_id,
         ) = self.prepare_decode_inputs_host(tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id)
 
         (
@@ -385,11 +383,11 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
-            rot_mats,
-        ) = self.copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, rot_mats))
+            tt_rope_id,
+        ) = self.copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id))
 
-        tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
-            tt_h,
+        tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
+            tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             B=tokens.shape[0],
@@ -399,18 +397,16 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            _tt_full_text_mask_expand_11SD,
             tt_position_id,
-            rot_mats,
-            _transformation_mats,
+            tt_rot_mats,
         )
 
-    def prepare_decode_inputs_host(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id):
+    def prepare_decode_inputs_host(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_ids):
         B = tokens.shape[0]
         assert (
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
-        position_ids = torch.tensor([position_id], dtype=torch.long)
+        # position_ids = torch.tensor([position_id], dtype=torch.long)
         h = self.prepare_inputs_common(position_ids, tokens)
         tt_h = self.configuration.prepare_inputs_ttnn_decode(
             h,
@@ -426,7 +422,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        xattn_mask = cross_attention_masks[:, :, position_ids]
+        tt_rope_id = self.text_model.rope_setup.get_rot_idxs(position_ids, on_host=True)
+        xattn_mask = torch.cat([cross_attention_masks[i][:, :, position_ids[i]] for i in range(B)], dim=1).unsqueeze(0)
         xattn_mask_expand = xattn_mask.expand(-1, self.configuration.n_heads // self.configuration.num_devices, -1, -1)
         xattn_mask_expand = xattn_mask_expand.transpose(1, 2).contiguous()
 
@@ -438,7 +435,9 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        full_text_mask = full_text_row_masked_out_mask[:, :, position_ids]
+        full_text_mask = torch.cat(
+            [full_text_row_masked_out_mask[i][:, :, position_ids[i]] for i in range(B)], dim=1
+        ).unsqueeze(0)
         full_text_mask_expand_1NSH = full_text_mask.expand(
             -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
         )
@@ -451,26 +450,25 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        rot_mats, _ = get_single_rot_mat(
-            self.configuration.head_dim,
-            self.mesh_device,
-            self.configuration.num_devices,
-            start_pos=position_ids.item() - 1,  # TODO: Change function to support decode batch > 1
-            # TODO: B must match max_batch_size, be careful
-            on_host=True,
-        )
+        # rot_mats, _ = get_single_rot_mat(
+        #     self.configuration.head_dim,
+        #     self.mesh_device,
+        #     self.configuration.num_devices,
+        #     start_pos=position_ids.item() - 1,  # TODO: Change function to support decode batch > 1
+        #     # TODO: B must match max_batch_size, be careful
+        #     on_host=True,
+        # )
 
-        transformation_mats = None
-        tt_full_text_mask_expand_11SD = None
+        # transformation_mats = None
 
         return (
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
             tt_position_id,
-            rot_mats,
-            transformation_mats,
+            tt_rope_id,
+            # rot_mats,
+            # transformation_mats,
         )
 
     def copy_host_to_device(self, host_tensors, device_tensors=None):
@@ -488,7 +486,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
             return device_tensors
 
-    def transform_decode_inputs_device(self, tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
+    def transform_decode_inputs_device(self, tt_rope_id, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
         """
         Does any transformations on device tensors which are necessary before ttnn_decode_forward
         """
@@ -497,7 +495,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         S = 1
 
-        tt_h = ttnn.to_memory_config(tt_h, self.configuration.model_config["DECODE_RESIDUAL_MEMCFG"])
+        tt_rot_mats = self.text_model.rope_setup.get_rot_mats(tt_rope_id)
 
         tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT)
         tt_xattn_mask = ttnn.reshape(
@@ -531,7 +529,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             ),
         )
 
-        return (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
+        return (tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
 
     def process_output_prefill(self, tt_out, B, S):
         padded_seq_len = _get_padded_prefill_seqlen(S)
@@ -609,7 +607,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         xattn_caches,
         position_id,
         rot_mats,
-        transformation_mats,
         user_id,
         vision_tokens,
     ):
@@ -623,8 +620,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
             current_pos=position_id,
-            rot_mat=rot_mats,
-            transformation_mats=transformation_mats,
+            rot_mats=rot_mats,
+            transformation_mats=None,  # Attention holds its own trans mats
             user_id=user_id,
             mode="prefill",
             vision_tokens=vision_tokens,
@@ -651,7 +648,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_11SD=None,
             xattn_caches=xattn_caches,
             current_pos=position_id,
-            rot_mat=rot_mats,
+            rot_mats=rot_mats,
             mode="decode",
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)

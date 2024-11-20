@@ -258,6 +258,46 @@ class TtLlamaCrossAttention(LightweightModule):
         output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
         output = ttnn.experimental.nlp_concat_heads(output)
 
+        # print(f'{output.shape=}')
+        # print(f'{full_text_row_masked_out_mask_1NSH.shape=}')
+
+        # output = ttnn.multiply(output, full_text_row_masked_out_mask_1NSH)
+        # self.sync_and_print('got here 9')
+        # print(f'{output.shape=}')
+        # core_grid_size = ttnn.num_cores_to_corerangeset(batch, self.mesh_device.compute_with_storage_grid_size(), True).bounding_box().grid_size()
+        # core_grid = ttnn.CoreGrid(y=core_grid_size.y, x=core_grid_size.x)
+        # height_sharded_mem_cfg = ttnn.create_sharded_memory_config(
+        #     (
+        #         32, # Padded num_heads
+        #         output.shape[-1],
+        #     ),
+        #     core_grid,
+        #     ttnn.ShardStrategy.HEIGHT,
+        #     ttnn.ShardOrientation.ROW_MAJOR,
+        #     use_height_and_width_as_shard_shape=True,
+        # )
+        # output = ttnn.to_memory_config(output, height_sharded_mem_cfg)
+        # self.sync_and_print('got here 10')
+        # # TODO: Does this need a reshape after to set the padding?
+        # print(f'{output.shape=}')
+        # output = ttnn.experimental.nlp_concat_heads_decode(
+        #     output,
+        #     num_heads=self.n_local_heads,
+        # )
+        # self.sync_and_print('got here 11')
+        # output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        # self.sync_and_print('got here 12')
+        # print(f'{output.shape=}')
+        # output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # print(f'{output.shape=}')
+        # output = ttnn.transpose(output, 1, 2)  # 1, B, NH, DH -> 1, NH, B, DH
+        # print(f'{output.shape=}')
+        # output = ttnn.slice(output, (0, 0, 0, 0), (1, self.n_local_heads, batch, self.head_dim))
+        # print(f'{output.shape=}')
+        # output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+        # print(f'{output.shape=}')
+        # output = ttnn.experimental.nlp_concat_heads(output)
+        # print(f'{output.shape=}')
         output = ttnn.matmul(
             output,
             self.wo,
