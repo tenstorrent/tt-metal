@@ -89,6 +89,8 @@ HalCoreInfoType create_active_eth_mem_map() {
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,  // this will be uplifted in subsequent commits
                                                                         // enabling active erisc
+            .fw_launch_addr = 0xFFB14008,
+            .fw_launch_addr_value = (uint32_t)eth_l1_mem::address_map::FIRMWARE_BASE,
         };
         processor_classes[processor_class_idx] = processor_types;
     }
