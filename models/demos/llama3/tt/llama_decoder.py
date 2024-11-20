@@ -89,14 +89,7 @@ class TtTransformerBlock(LightweightModule):
         page_table=None,
     ) -> ttnn.Tensor:
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        # FIXME: move to sharded residuals once support for this is added
-        # FIXME: Currently, for decode mode, we are using DRAM intereleaved as L1 interleaved results in h being corrupted in MLP
-        skip_mem_cfg = (
-            # ttnn.DRAM_MEMORY_CONFIG
-            self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG
-        )
+        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"

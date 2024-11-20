@@ -56,7 +56,7 @@ class TtModelArgs:
         "ATTN_OUTPUT",
         "ATTN_W_LAYOUT",
         # Decoder
-        "DEC_SKIP_OUTPUT",
+        "DECODE_RESIDUAL",
         "OUTPUT_MM",
     )
 
@@ -236,7 +236,7 @@ class TtModelArgs:
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
 
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-            self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
                     self.dim // residual_grid.num_cores // self.num_devices,

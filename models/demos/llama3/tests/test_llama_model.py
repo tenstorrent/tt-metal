@@ -176,7 +176,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
 
         decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            model_args.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
+            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
         current_pos_tensor = ttnn.from_torch(
             torch.tensor([current_pos] * batch),

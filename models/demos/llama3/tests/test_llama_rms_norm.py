@@ -73,7 +73,7 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, e
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        memory_config=model_args.get_model_config()["DEC_SKIP_OUTPUT_MEMCFG"]
+        memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
         if mode == "decode"
         else ttnn.DRAM_MEMORY_CONFIG,
     )

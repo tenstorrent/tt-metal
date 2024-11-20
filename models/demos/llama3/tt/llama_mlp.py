@@ -145,5 +145,5 @@ class TtLlamaMLP(LightweightModule):
 
         # reshard to residual, no-op if already correct
         if mode == "decode":
-            result = ttnn.to_memory_config(result, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
+            result = ttnn.to_memory_config(result, self.model_config["DECODE_RESIDUAL_MEMCFG"])
         return result

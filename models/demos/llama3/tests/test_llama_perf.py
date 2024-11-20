@@ -184,7 +184,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         profiler.start(f"model_run_for_inference_{i}")
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
+        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
         ttnn.deallocate(tt_out)

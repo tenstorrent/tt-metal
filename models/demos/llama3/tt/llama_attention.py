@@ -338,7 +338,7 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                memory_config_mm=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"],
+                memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
         else:
             # program config matched to output of nlp_concat_heads_decode
@@ -360,13 +360,13 @@ class TtLlamaAttention(LightweightModule):
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=self.model_config[
-                    "DEC_SKIP_OUTPUT_MEMCFG"
+                    "DECODE_RESIDUAL_MEMCFG"
                 ],  # Unlike matmuls, CCL ops can reshard to any valid output sharding for free
             )
             ttnn.deallocate(dense_out_sharded)
             return dense_out_reduced
         else:
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
+            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
     def forward_prefill(self, x_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):

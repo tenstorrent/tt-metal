@@ -394,6 +394,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             B=tokens.shape[0],
         )
 
+        tt_h = ttnn.to_memory_config(tt_h, self.configuration.model_config["DECODE_RESIDUAL_MEMCFG"])
+
         return (
             tt_h,
             tt_xattn_mask,
@@ -413,7 +415,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         h = self.prepare_inputs_common(position_ids, tokens)
         tt_h = self.configuration.prepare_inputs_ttnn_decode(
             h,
-            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,  # L1 memory_configs are not respected for on_host tensors
             on_host=True,
         )
 
