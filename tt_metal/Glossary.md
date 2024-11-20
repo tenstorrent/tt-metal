@@ -40,7 +40,7 @@
 - **GPU -** Graphic Processing Unit
 - **HBM -** High Bandwidth Memory
 - **HPC -** High Performance Computing
-- **I2S - S2I -** Image to Source, Source to Image - Toolkit and workflow for building reproducible container images from source code.
+- **I2S - S2I -** Interleaved to Sharded, Sharded to Interleaved.
 - **ISA -** Instruction-Set Architecture - An abstract computer model that determines how the CPU is controlled by the software.
 - **ISS -** Instruction Set Simulator
 - **JVM -** Java Virtual Machine
