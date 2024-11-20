@@ -64,7 +64,7 @@ void bind_reduction_argmax_operation(py::module& module) {
                 py::arg("input_tensor").noconvert(),
                 py::kw_only(),
                 py::arg("dim") = std::nullopt,
-                py::arg("use_multicore") = false,
+                py::arg("use_multicore") = true,
                 py::arg("memory_config") = std::nullopt,
                 py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0});

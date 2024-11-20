@@ -15,13 +15,13 @@ struct ExecuteTilize {
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = true);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = true);
 };
 
 }  // namespace operations::data_movement
