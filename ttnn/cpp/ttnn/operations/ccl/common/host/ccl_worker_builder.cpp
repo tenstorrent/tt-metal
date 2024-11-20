@@ -354,14 +354,14 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args() const
 {
+    auto const& input_tensor = this->op_config.get_input_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(this->op_config.get_input_tensor(0).memory_config().memory_layout), // tensor memory layout
-        static_cast<uint32_t>(this->op_config.get_input_tensor(0).buffer()->buffer_type()), // buffer type
-        static_cast<uint32_t>(this->op_config.get_input_tensor(0).layout()), // page layout
+        static_cast<uint32_t>(input_tensor.memory_config().memory_layout), // tensor memory layout
+        static_cast<uint32_t>(input_tensor.buffer()->buffer_type()), // buffer type
+        static_cast<uint32_t>(input_tensor.layout()), // page layout
         static_cast<uint32_t>(tt::CB::c_in0) // cb_id
     };
 
-    auto const& input_tensor = this->op_config.get_input_tensor(0);
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
 
@@ -370,14 +370,14 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
 
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args() const
 {
+    auto const& output_tensor = this->op_config.get_output_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(this->op_config.get_output_tensor(0).memory_config().memory_layout), // tensor memory layout
-        static_cast<uint32_t>(this->op_config.get_output_tensor(0).buffer()->buffer_type()), // buffer type
-        static_cast<uint32_t>(this->op_config.get_output_tensor(0).layout()), // page layout
+        static_cast<uint32_t>(output_tensor.memory_config().memory_layout), // tensor memory layout
+        static_cast<uint32_t>(output_tensor.buffer()->buffer_type()), // buffer type
+        static_cast<uint32_t>(output_tensor.layout()), // page layout
         static_cast<uint32_t>(tt::CB::c_in0) // cb_id
     };
 
-    auto const& output_tensor = this->op_config.get_output_tensor(0);
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(output_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
 

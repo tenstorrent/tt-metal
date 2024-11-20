@@ -231,7 +231,7 @@ void kernel_main() {
                 size_t contig_pages_advanced = 1;
                 for (size_t i = 0; i < n_pages; i += contig_pages_advanced) {
                     // DPRINT << "Contig loop\n";
-                    auto const [noc_addr, contig_pages] = get_noc_addr_and_contiguous_pages<tensor_layout, page_layout>(
+                    auto const [noc_addr, contig_pages] = get_noc_addr_and_contiguous_pages_for_fabric_write<tensor_layout, page_layout>(
                         curr_page_idx,
                         offset_into_worker_slice,
                         worker_slice_offset,
