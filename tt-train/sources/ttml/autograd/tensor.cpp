@@ -56,20 +56,26 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
     m_grad = ttnn::add(m_grad, grad);
 }
 
-void Tensor::backward() {
+void Tensor::backward(bool retain_graph) {
     if (!m_node_id.has_value()) {
         return;
     }
     std::vector<size_t> sorted_nodes;
     std::unordered_set<std::size_t> visited_nodes;
-    const auto& graph = m_node_id->get_graph();
+    auto& graph = m_node_id->get_graph();
     topological_sort(m_node_id->get_id(), graph.get_edges(), visited_nodes, sorted_nodes);
 
-    const auto& graph_nodes = graph.get_graph_nodes();
+    auto& graph_nodes = graph.get_graph_nodes();
     std::ranges::reverse(sorted_nodes);
     try_init_grad(/* init_ones */ true);
     for (const auto& node_id : sorted_nodes) {
         graph_nodes[node_id].grad_function();
+        if (!retain_graph) {
+            // setting grad function to nullptr releases context of the function
+            // it is often includes multiple tensors and if we don't need to retain them
+            // at this point of backward pass, we can release them
+            graph_nodes[node_id].grad_function = nullptr;
+        }
     }
 }
 

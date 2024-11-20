@@ -15,7 +15,7 @@ const std::vector<std::vector<size_t>>& Graph::get_edges() const {
     return m_links;
 }
 
-const std::vector<GraphNode>& Graph::get_graph_nodes() const {
+std::vector<GraphNode>& Graph::get_graph_nodes() {
     return m_graph_nodes;
 }
 
