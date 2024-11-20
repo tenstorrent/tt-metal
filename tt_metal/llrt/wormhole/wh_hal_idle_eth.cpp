@@ -24,9 +24,7 @@
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t) & (((mailboxes_t *)MEM_IERISC_MAILBOX_BASE)->x))
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal::wormhole {
 
 HalCoreInfoType create_idle_eth_mem_map() {
 
@@ -77,5 +75,4 @@ HalCoreInfoType create_idle_eth_mem_map() {
     return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::wormhole

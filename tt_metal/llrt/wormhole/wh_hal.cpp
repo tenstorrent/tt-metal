@@ -25,13 +25,13 @@ void Hal::initialize_wh() {
     static_assert(static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
-    HalCoreInfoType tensix_mem_map = create_tensix_mem_map();
+    HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
-    HalCoreInfoType active_eth_mem_map = create_active_eth_mem_map();
+    HalCoreInfoType active_eth_mem_map = wormhole::create_active_eth_mem_map();
     this->core_info_.push_back(active_eth_mem_map);
 
-    HalCoreInfoType idle_eth_mem_map = create_idle_eth_mem_map();
+    HalCoreInfoType idle_eth_mem_map = wormhole::create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
