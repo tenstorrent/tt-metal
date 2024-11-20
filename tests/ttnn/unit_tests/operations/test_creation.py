@@ -374,7 +374,6 @@ def test_empty(device, input_shapes):
         [2, 1280, 64, 64],
     ],
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_empty_multi_device(mesh_device, input_shapes):
     torch_output_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
 
