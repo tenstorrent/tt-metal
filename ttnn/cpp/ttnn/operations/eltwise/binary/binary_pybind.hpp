@@ -223,7 +223,6 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor1, tensor2)
-
         )doc",
 
         operation.base_name(),
@@ -251,35 +250,58 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite_with_alpha(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_binary_composite_with_alpha(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            .. math::
-                {3}
+        .. math::
+            {3}
 
-            Args:
-                input_tensor_a (ttnn.Tensor): the input tensor.
-                input_tensor_b (ttnn.Tensor): the input tensor.
-                alpha (float): the alpha value.
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor): the input tensor.
+            alpha (float): the value to be multiplied.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
+        Note:
+            Supported dtypes, layouts, and ranks:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-                >>> output = {1}(tensor1, tensor2, alpha)
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> alpha = 1.0
+            >>> output = {1}(tensor1, tensor2, alpha)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -312,21 +334,36 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
         Args:
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
-            rtol (float): relative tolerance.
-            atol (float): absolute tolerance.
-            equal_nan (bool): if NaN values should be treated as equal during comparison.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            rtol (float): relative tolerance. Defaults to `1e-05f`.
+            atol (float): absolute tolerance. Defaults to `1e-08f`.
+            equal_nan (bool): if NaN values should be treated as equal during comparison. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Example:
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(tensor1, tensor2, rtol, atol, equal_nan)
+        Note:
+            Supported dtypes, layouts, and ranks:
 
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> rtol = 1e-4
+            >>> atol = 1e-5
+            >>> equal_nan = False
+            >>> output = {1}(tensor1, tensor2, rtol=rtol, atol=atol, equal_nan=equal_nan)
         )doc",
 
         operation.base_name(),
@@ -358,33 +395,54 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite_overload(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_composite_overload(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            .. math::
-                \mathrm{{output\_tensor}} = \verb|{0}|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}).
+        .. math::
+            \mathrm{{output\_tensor}} = \verb|{0}|(\mathrm{{input\_tensor\_a,input\_tensor\_b}})
 
-            Args:
-                input_tensor_a (ttnn.Tensor): the input tensor.
-                input_tensor_b (ttnn.Tensor or Number): the input tensor.
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
+        Note:
+            Supported dtypes, layouts, and ranks:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-                >>> output = {1}(tensor1, tensor2/scalar)
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {3}
+                 - TILE
+                 - 2, 3, 4
+
+            {4}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1.5, 2.5], [3.5, 4.5]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -429,21 +487,32 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            accurate_mode (bool): `false` if input_tensor_b is non-zero, else `true` (Only if the input tensor is not ComplexTensor). Defaults to `false`.
-            round_mode (const std::string): `None`, `floor` and `trunc` (Only if the input tensor is not ComplexTensor). Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            accurate_mode (bool, optional): `false` if input_tensor_b is non-zero, else `true` (Only if the input tensor is not ComplexTensor). Defaults to `false`.
+            round_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Example:
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
+        Note:
+            Supported dtypes, layouts, and ranks:
 
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2/scalar, accurate_mode = false, round_mode = "None")
         )doc",
 
         operation.base_name(),
@@ -497,7 +566,13 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
 }
 
 template <typename binary_operation_t>
-void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype="BFLOAT16", const std::string& note=" ") {
+void bind_polyval(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype="BFLOAT16",
+    const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -510,7 +585,7 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
             Coeffs (Vector of floats): coefficients of the polynomial.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -531,8 +606,8 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
             {5}
 
         Example:
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> coeffs = (1, 2, 3, 4)
+            >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> coeffs = [1, 2, 3, 4]
             >>> output = {1}(tensor, coeffs)
 
         )doc",
@@ -562,28 +637,51 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
 }
 
 template <typename binary_operation_t>
-void bind_binary_overload_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_overload_operation(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& supported_dtype="BFLOAT16",
+    const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            Args:
-                input_tensor_a (ttnn.Tensor): the input tensor.
-                input_tensor_b (ttnn.Tensor or Number): the input tensor.
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-                >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor1, tensor2)
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {3}
+                 - TILE
+                 - 2, 3, 4
+
+            {4}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -951,7 +1049,8 @@ void py_module(py::module& module) {
     detail::bind_binary_composite_overload(
         module,
         ttnn::minimum,
-        R"doc(Compute minimum :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite(
         module,
@@ -1004,45 +1103,46 @@ void py_module(py::module& module) {
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::addalpha,
-        R"doc(Compute addalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}}).)doc"
-        );
+        R"doc(Computes addalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
+        R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::subalpha,
-        R"doc(Compute subalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}}).)doc"
-        );
+        R"doc(Computes subalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite_with_rtol_atol(
         module,
         ttnn::isclose,
-        R"doc(Compute isclose :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \begin{cases} 1, & \text{if } |\mathrm{input\_tensor\_a} - \mathrm{input\_tensor\_b}| \leq (\mathrm{atol} + \mathrm{rtol} \times |\mathrm{input\_tensor\_b}|) \\ 0, & \text{otherwise} \end{cases}
         )doc");
 
     detail::bind_div(
         module,
         ttnn::div,
-        R"doc(Compute div :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes div for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
         )doc");
 
     detail::bind_binary_composite_overload(
         module,
         ttnn::div_no_nan,
-        R"doc(Compute div_no_nan :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes div_no_nan for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite_overload(
         module,
         ttnn::floor_div,
-        R"doc(Compute floor division :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite_overload(
         module,
         ttnn::maximum,
-        R"doc(Compute maximum :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite(
         module,
@@ -1061,19 +1161,23 @@ void py_module(py::module& module) {
     detail::bind_polyval(
         module,
         ttnn::polyval,
-        R"doc(Compute polyval of all elements of :attr:`input_tensor_a` with coefficient :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes polyval of all elements of :attr:`input_tensor_a` with coefficients :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \sum_{i=0}^{n} (\mathrm{coeffs}_i) (\mathrm{input\_tensor}^i)
-        )doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
+        )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_overload_operation(
         module,
         ttnn::fmod,
-        R"doc(Perform an eltwise-fmod operation. Formula : a - a.div(b, rounding_mode=trunc) * b . Support provided only for WH_B0.)doc");
+        R"doc(Performs an eltwise-fmod operation. Formula : a - a.div(b, rounding_mode=trunc) * b.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(Support provided only for WH_B0.)doc");
 
     detail::bind_binary_overload_operation(
         module,
         ttnn::remainder,
-        R"doc(Perform an eltwise-modulus operation a - a.div(b, rounding_mode=floor) * b.", "Support provided only for WH_B0.)doc");
+        R"doc(Performs an eltwise-modulus operation. Formula : a - a.div(b, rounding_mode=floor) * b.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(Support provided only for WH_B0.)doc");
 
     detail::bind_inplace_operation(
         module,
