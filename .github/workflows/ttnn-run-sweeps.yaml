@@ -349,7 +349,7 @@ jobs:
     timeout-minutes: 30
     runs-on: [build, in-service]
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/checkout-with-submodule-lfs
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -409,7 +409,7 @@ jobs:
     timeout-minutes: 720
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/checkout-with-submodule-lfs
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
