@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
-    [16],
+    [128],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_lenet_inference(mesh_device, batch_size, model_location_generator, reset_seeds):
@@ -29,26 +29,16 @@ def test_lenet_inference(mesh_device, batch_size, model_location_generator, rese
     model = torch_LeNet.eval()
     torch_output = model(test_input)
 
-    inputs_mesh_mapper = None
-    weights_mesh_mapper = None
-    output_mesh_composer = None
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size if mesh_device_flag else batch_size / 2
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    if is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-
-        with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
-            parameters = preprocess_model_parameters(
-                initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
-            )
-
-    else:
-        if is_wormhole_b0():
-            mesh_device = ttnn.open_device(device_id=0)
-            parameters = preprocess_model_parameters(
-                initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
-            )
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
+        )
 
     parameters = lenet_utils.custom_preprocessor_device(parameters, device=mesh_device)
 

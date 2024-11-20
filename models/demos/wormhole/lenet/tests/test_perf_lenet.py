@@ -24,20 +24,16 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 
 def get_expected_times(tt_lenet):
-    if is_grayskull():
+    if is_wormhole_b0():
         return {
-            tt_lenet: (3.4, 0.58),
-        }[tt_lenet]
-    elif is_wormhole_b0():
-        return {
-            tt_lenet: (9.52, 0.91),
+            tt_lenet: (17.64, 0.1026),
         }[tt_lenet]
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
-    [8],
+    [128],
 )
 @pytest.mark.parametrize(
     "tt_lenet",
@@ -46,6 +42,7 @@ def get_expected_times(tt_lenet):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator, reset_seeds):
+    disable_persistent_kernel_cache()
     num_classes = 10
     test_input, images, outputs = lenet_utils.get_test_data(batch_size)
 
@@ -54,27 +51,20 @@ def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator,
     model = torch_LeNet.float()
     model = torch_LeNet.eval()
     torch_output = model(test_input)
-
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size if mesh_device_flag else batch_size / 2
     inputs_mesh_mapper = None
     weights_mesh_mapper = None
     output_mesh_composer = None
 
-    if is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-        with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
-            parameters = preprocess_model_parameters(
-                initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
-            )
-
-    else:
-        if is_wormhole_b0():
-            mesh_device = ttnn.open_device(device_id=0)
-            parameters = preprocess_model_parameters(
-                initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
-            )
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
+        )
 
     parameters = lenet_utils.custom_preprocessor_device(parameters, device=mesh_device)
 
@@ -98,44 +88,48 @@ def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator,
         )
         end = time.time()
         durations.append(end - start)
+        enable_persistent_kernel_cache()
 
     inference_and_compile_time, *inference_times = durations
-    average_inference_time = sum(inference_times) / len(inference_times)
+    inference_time = sum(inference_times) / len(inference_times)
     expected_compile_time, expected_inference_time = get_expected_times(tt_lenet)
 
     prep_perf_report(
         model_name="tt_lenet",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
-        inference_time=average_inference_time,
+        inference_time=inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="",
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - average_inference_time}")
-    logger.info(f"Inference time: {average_inference_time}")
+    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    logger.info(f"Inference time: {inference_time}")
     logger.info(f"Inference times: {inference_times}")
-    logger.info(f"Sample(s) per second: {1 / average_inference_time * batch_size}")
+    logger.info(f"Sample(s) per second: {1 / inference_time * batch_size}")
+    assert (
+        inference_time < expected_inference_time
+    ), f"Expected inference time: {expected_inference_time} Actual inference time: {inference_time}"
+    logger.info("Exit Lenet perf test")
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
-    [16],
+    [128],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal(batch_size, reset_seeds):
     subdir = "tt_lenet"
     num_iterations = 1
     margin = 0.03
-    if is_grayskull():
-        expected_perf = 419.5
-    elif is_wormhole_b0():
-        expected_perf = 988.29
 
-    command = f"pytest tests/ttnn/integration_tests/lenet/test_lenet.py"
+    if is_wormhole_b0():
+        expected_perf = 235836.45
+
+    command = f"pytest tests/ttnn/integration_tests/lenet/test_lenet_wh.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
