@@ -132,7 +132,6 @@ Pointwise Unary
    ttnn.hardswish
    ttnn.hardtanh
    ttnn.heaviside
-   ttnn.hypot
    ttnn.i0
    ttnn.identity
    ttnn.isfinite
@@ -308,6 +307,7 @@ Pointwise Binary
    ttnn.logical_xor
    ttnn.logaddexp
    ttnn.logaddexp2
+   ttnn.hypot
    ttnn.xlogy
    ttnn.squared_difference
    ttnn.gtz
