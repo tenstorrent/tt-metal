@@ -41,15 +41,14 @@ async def shutdown():
 
 
 def process_request(output):
-    # Convert all tensors to lists for JSON serialization
-    output_serializable = {"output": [tensor.tolist() for tensor in output]}
+    # Cast tensors to float32 before converting to NumPy
+    output_serializable = [tensor.to(torch.float32).numpy().tolist() for tensor in output]
     return output_serializable
 
 
 @app.post("/objdetection_v2")
 async def objdetection_v2(file: UploadFile = File(...)):
     contents = await file.read()
-
     # Load and convert the image to RGB
     image = Image.open(BytesIO(contents)).convert("RGB")
     image = np.array(image)
@@ -60,11 +59,13 @@ async def objdetection_v2(file: UploadFile = File(...)):
     else:
         print("unknow image type")
         exit(-1)
+
     t1 = time.time()
     response = model.run_traced_inference(image)
     t2 = time.time()
     print("the inference on the sever side took: ", t2 - t1)
-
     # Convert response tensors to JSON-serializable format
     output = process_request(response)
+    t3 = time.time()
+    print("the processing of the response to convert to lists takes: (this is a requirement per streamlit) ", t3 - t2)
     return output

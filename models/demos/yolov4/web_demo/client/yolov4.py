@@ -26,13 +26,12 @@ class VideoProcessor(VideoProcessorBase):
 
     def post_processing(self, img, conf_thresh, nms_thresh, output):
         box_array = output[0]
-        confs = output[1].float()
+        confs = output[1]
 
         t1 = time.time()
 
-        if type(box_array).__name__ != "ndarray":
-            box_array = box_array.cpu().detach().numpy()
-            confs = confs.cpu().detach().numpy()
+        box_array = np.array(box_array)
+        confs = np.array(confs)
 
         num_classes = confs.shape[2]
 
@@ -202,7 +201,11 @@ class VideoProcessor(VideoProcessorBase):
         pil_image = pil_image.resize(new_size)
         t1 = time.time()
         buf = io.BytesIO()
-        pil_image.save(buf, format="JPEG")
+        # t10 = time.time()
+        # pil_image.save(buf, format="JPEG")
+        # pil_image.save(buf, format="JPEG", quality=85, optimize=True)
+        pil_image.save(buf, format="JPEG", quality=85, progressive=True, optimize=True, subsampling=0)
+
         byte_im = buf.getvalue()
         file = {"file": byte_im}
         # Argument Parser to grab namespace_id of server pod from user
@@ -211,22 +214,46 @@ class VideoProcessor(VideoProcessorBase):
         args = parser.parse_args()
         apiurl = args.api_url
         url = f"{apiurl}/objdetection_v2"
-        r = requests.post(url, files=file)
+        t10 = time.time()
+        r = requests.post(url, files=file, stream=True)
+        t11 = time.time()
+        print("\n\n\nrequest.post took: ", t11 - t10)
+
+        t100 = time.time()
+        import torch
+        import orjson
+
+        #        if r.status_code == 200:
+        #            try:
+        #                # Parse JSON response directly
+        #                response_dict = orjson.loads(r.content)  # Faster than r.json()
+        #
+        #                # Preallocate tensors efficiently
+        #                output = response_dict['output']
+        #
+        #            except (ValueError, KeyError, TypeError) as e:
+        #                st.error(f"Failed to parse JSON or process data: {str(e)}")
+        #        else:
+        #            st.error(f"Request failed with status code {r.status_code}")
 
         if r.status_code == 200:
-            try:
-                # Get the JSON response as a dictionary
-                response_dict = r.json()
-                output = [torch.tensor(tensor_data) for tensor_data in response_dict["output"]]
-            except ValueError:
-                st.error("Failed to parse JSON. The response is not in JSON format.")
+            # Use .get() for efficient access without exception handling
+            response_dict = orjson.loads(r.content)  # Fast JSON parsing
+
+            # Extract 'output' and handle missing key scenario
+            # output = response_dict.get('output', None)  # Avoid KeyError
+            output = response_dict
         else:
             st.error(f"Request failed with status code {r.status_code}")
 
         t3 = time.time()
+        print("\nExtracting output from the response took: ", t3 - t100)
         bgr_image = frame.to_ndarray(format="bgr24")
         conf_thresh = 0.6
         nms_thresh = 0.5
+        print()
+        print("we do reach here!")
+        print()
         boxes = self.post_processing(bgr_image, conf_thresh, nms_thresh, output)
         namesfile = "coco.names"
         class_names = self.load_class_names(namesfile)
@@ -234,9 +261,9 @@ class VideoProcessor(VideoProcessorBase):
         # random_number = random.randint(1, 100)
         # save_name = "ttnn_prediction_demo" + str(random_number) + ".jpg"
         save_name = None
-
         image_final = self.plot_boxes_cv2(bgr_image, boxes[0], save_name, class_names)
         t4 = time.time()
+
         print()
         print(f" IMG-IN | WH | Post | Total time: ")
         print(f" {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} ")
