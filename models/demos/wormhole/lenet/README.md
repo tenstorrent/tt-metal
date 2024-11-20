@@ -7,9 +7,9 @@
 
 The LeNet model is a foundational convolutional neural network (CNN) architecture that was specifically developed for handwritten digit recognition on the MNIST dataset. This pioneering model consists of several convolutional layers interspersed with pooling layers, followed by fully connected layers that output the final classification. By utilizing convolutional layers, LeNet effectively captures spatial hierarchies and local patterns in images, leading to significantly enhanced performance compared to traditional, simpler architectures. Its design laid the groundwork for many modern deep learning models used in image classification tasks today.
 
-### Batch size: 8
+### Batch size: 128
 
-Batch Size determines the number of input sequences processed simultaneously during training or inference, impacting computational efficiency and memory usage. It's recommended to set the batch_size to 8
+Batch Size determines the number of input sequences processed simultaneously during training or inference, impacting computational efficiency and memory usage. It's recommended to set the batch_size to 128
 
 ## How to Run
 

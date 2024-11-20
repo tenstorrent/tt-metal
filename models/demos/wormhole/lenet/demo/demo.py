@@ -15,9 +15,14 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.lenet.tt import tt_lenet
 from models.demos.wormhole.lenet import lenet_utils
 from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.utility_functions import (
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+)
 
 
 def run_demo_dataset(mesh_device, batch_size, iterations, model_location_generator, reset_seeds):
+    disable_persistent_kernel_cache()
     num_classes = 10
     test_input, images, outputs = lenet_utils.get_test_data(batch_size)
 
@@ -31,22 +36,16 @@ def run_demo_dataset(mesh_device, batch_size, iterations, model_location_generat
     weights_mesh_mapper = None
     output_mesh_composer = None
 
-    if is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size if mesh_device_flag else batch_size / 2
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-        with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
-            parameters = preprocess_model_parameters(
-                initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
-            )
-
-    else:
-        if is_wormhole_b0():
-            mesh_device = ttnn.open_device(device_id=0)
-            parameters = preprocess_model_parameters(
-                initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
-            )
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model, custom_preprocessor=lenet_utils.custom_preprocessor
+        )
 
     parameters = lenet_utils.custom_preprocessor_device(parameters, device=mesh_device)
     correct = 0
@@ -82,7 +81,7 @@ def run_demo_dataset(mesh_device, batch_size, iterations, model_location_generat
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [128])
 @pytest.mark.parametrize("iterations", [1])
 def test_demo_dataset(
     mesh_device,
