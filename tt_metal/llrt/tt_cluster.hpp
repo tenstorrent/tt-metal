@@ -91,8 +91,6 @@ class Cluster {
         void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
     void read_core(
         std::vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        std::vector<uint8_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
         tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());

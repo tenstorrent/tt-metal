@@ -82,7 +82,6 @@ void write_hex_vec_to_core(
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
-std::vector<std::uint8_t> read_hex_byte_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical_core);
 

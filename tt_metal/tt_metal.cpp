@@ -500,16 +500,18 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, uint8_t* host_buf
     size_t host_idx = 0;
 
     uint32_t bank_index = 0;
+    std::vector<uint8_t> page;
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint8_t> page;
+        page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE:
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                page = llrt::read_hex_byte_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+                page.resize(page_size);
+                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }

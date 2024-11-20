@@ -101,12 +101,6 @@ std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &co
     return read_hex_vec;
 }
 
-std::vector<uint8_t> read_hex_byte_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
-    std::vector<uint8_t> read_hex_vec;
-    tt::Cluster::instance().read_core(read_hex_vec, sz_bytes, tt_cxy_pair(chip, core), addr);
-    return read_hex_vec;
-}
-
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
