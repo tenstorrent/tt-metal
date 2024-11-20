@@ -39,7 +39,7 @@ jobs:
       - pipeline-functional
       - ${{ inputs.extra-tag }}
     steps:
-      - uses: ./.github/actions/checkout-with-submodule-lfs
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@blozano-consolidate
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

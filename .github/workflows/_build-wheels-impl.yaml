@@ -20,7 +20,7 @@ jobs:
     env:
       ARCH_NAME: ${{ inputs.arch }}
     steps:
-      - uses: ./.github/actions/checkout-with-submodule-lfs
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@blozano-consolidate
         with:
           fetch-depth: 0
       - uses: ./.github/actions/install-metal-deps

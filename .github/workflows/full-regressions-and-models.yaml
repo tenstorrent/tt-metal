@@ -27,7 +27,7 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ["model-runner-${{ matrix.arch }}", "in-service"]
     steps:
-      - uses: ./.github/actions/checkout-with-submodule-lfs
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@blozano-consolidate
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount

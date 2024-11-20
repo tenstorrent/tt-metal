@@ -22,7 +22,7 @@ jobs:
     steps:
       # Metalium
       - name: Clone Metalium
-        uses: ./.github/actions/checkout-with-submodule-lfs
+        uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@blozano-consolidate
       - name: Generate docker tag
         id: generate-docker-tag
         uses: ./.github/actions/generate-docker-tag

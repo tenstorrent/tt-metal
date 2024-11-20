@@ -68,7 +68,7 @@ jobs:
       - ${{ inputs.runner-label }}
       - "in-service"
     steps:
-      - uses: ./.github/actions/checkout-with-submodule-lfs
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@blozano-consolidate
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
