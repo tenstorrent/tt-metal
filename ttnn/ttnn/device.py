@@ -173,10 +173,12 @@ def GetComputeKernelConfig(
             math_approx_mode=math_approx_mode,
             dst_full_sync_en=dst_full_sync_en,
         )
-    else:
+    elif is_grayskull(device):
         return ttnn.GrayskullComputeKernelConfig(
             math_fidelity=math_fidelity, math_approx_mode=math_approx_mode, dst_full_sync_en=dst_full_sync_en
         )
+    else:
+        raise ValueError("Unsupported device")
 
 
 __all__ = []

@@ -190,7 +190,6 @@ Result conv_transpose2d(
         }
         if (conv_config.reallocate_halo_output) {
             auto move_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
-            ttnn::operations::core::deallocate(halo_output);
             halo_output = move_output;
             log_debug(tt::LogOp, "Reallocate Halo Output");
         }
