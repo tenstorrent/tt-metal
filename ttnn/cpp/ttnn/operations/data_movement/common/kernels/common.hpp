@@ -54,11 +54,14 @@ namespace tt::data_movement::common {
     }
 
     // Utility functions
-    FORCE_INLINE constexpr uint32_t div_up(uint32_t a, uint32_t b) {
+    template<uint32_t a, uint32_t b>
+    FORCE_INLINE constexpr uint32_t div_up() {
+        static_assert(b > 0, "divisor must be greater than 0");
         return static_cast<uint32_t>((a + b - 1) / b);
     }
 
-    FORCE_INLINE constexpr uint32_t round_up(uint32_t a, uint32_t b) {
-        return b * div_up(a, b);
+    template<uint32_t a, uint32_t b>
+    FORCE_INLINE constexpr uint32_t round_up() {
+        return b * div_up<a, b>();
     }
 }

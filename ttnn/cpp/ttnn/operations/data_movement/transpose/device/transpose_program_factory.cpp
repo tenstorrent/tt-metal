@@ -470,20 +470,17 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
-
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
     auto [padded_num_cores, padded_all_cores, padded_core_group_1, padded_core_group_2, padded_num_tiles_per_core_group_1, padded_num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
 
+
+
+    all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
-    auto output_shape = output_tensor.get_padded_shape();
-
-    for(uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for(const auto &core : cores) {
         uint32_t num_tiles_per_core;
         uint32_t padded_tiles_per_core;
 

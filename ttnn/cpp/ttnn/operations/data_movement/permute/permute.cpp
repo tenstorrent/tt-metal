@@ -48,7 +48,7 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
 
     if (a.get_shape().rank() > 4) {
         auto input = a.get_layout() == Layout::TILE ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr) : a;
-        TT_FATAL(!(pad_value.has_value() && pad_value.value() != 0.0f), "pad_value is not supported for rank > 4 ");
+        TT_FATAL(!(pad_value.has_value() && pad_value.value() != 0.0f), "Non-zero padding is not supported for permute on tensors with rank > 4.");
         input = ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
         return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
     }

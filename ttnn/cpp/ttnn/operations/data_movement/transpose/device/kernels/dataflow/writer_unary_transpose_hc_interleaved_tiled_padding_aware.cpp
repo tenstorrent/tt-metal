@@ -32,9 +32,9 @@ void kernel_main() {
     constexpr uint8_t NUM_FACES_H = TILE_HEIGHT / FACE_HEIGHT;
     constexpr uint8_t NUM_FACES_W = TILE_WIDTH / FACE_WIDTH;
 
-    constexpr uint32_t C_p = tt::data_movement::common::round_up(C, TILE_HEIGHT);
-    constexpr uint32_t H_p = tt::data_movement::common::round_up(H, TILE_HEIGHT);
-    constexpr uint32_t W_p = tt::data_movement::common::round_up(W, TILE_WIDTH);
+    constexpr uint32_t C_p = tt::data_movement::common::round_up<C, TILE_HEIGHT>();
+    constexpr uint32_t H_p = tt::data_movement::common::round_up<H, TILE_HEIGHT>();
+    constexpr uint32_t W_p = tt::data_movement::common::round_up<W, TILE_WIDTH>();
 
     constexpr uint32_t W_t = W_p / TILE_WIDTH;
     constexpr uint32_t H_t = H_p / TILE_HEIGHT;
@@ -56,11 +56,7 @@ void kernel_main() {
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
 
     // Calculate real_faces_h
-    uint8_t remainder_faces_h = (H_last_tile + FACE_HEIGHT - 1) / FACE_HEIGHT;
-    if (remainder_faces_h > NUM_FACES_H) {
-        // Ensure it does not exceed maximum number of faces per tile
-        remainder_faces_h = NUM_FACES_H;
-    }
+    uint8_t remainder_faces_h = tt::data_movement::common::div_up<H_last_tile, FACE_HEIGHT>();
 
     uint32_t remainder = H_last_tile % FACE_HEIGHT;
     uint8_t sub_tile_lines_real = (remainder == 0) ? FACE_HEIGHT : static_cast<uint8_t>(remainder);
