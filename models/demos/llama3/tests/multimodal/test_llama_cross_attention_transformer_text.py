@@ -58,7 +58,7 @@ def test_llama_cross_attention_transformer_text_inference(
     prefill_pcc_required = 0.98
     decode_pcc_required = 0.73
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
