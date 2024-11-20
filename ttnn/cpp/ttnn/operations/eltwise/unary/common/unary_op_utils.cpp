@@ -57,6 +57,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::ISFINITE: defines["SFPU_OP_ISINF_ISNAN_INCLUDE"] = "1"; break;
         case UnaryOpType::LOGICAL_NOT_UNARY: defines["SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE"] = "1"; break;
         case UnaryOpType::I0: defines["SFPU_OP_I0_INCLUDE"] = "1"; break;
+        case UnaryOpType::I1: defines["SFPU_OP_I1_INCLUDE"] = "1"; break;
         case UnaryOpType::COS:
         case UnaryOpType::SIN:
         case UnaryOpType::TAN: defines["SFPU_OP_TRIG_FAMILY_INCLUDE"] = "1"; break;
@@ -299,6 +300,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
             op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             break;
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
+        case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
         case UnaryOpType::ERFINV:
             op_init_and_name = {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
             break;
