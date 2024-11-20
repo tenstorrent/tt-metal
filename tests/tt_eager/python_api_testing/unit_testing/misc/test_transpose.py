@@ -187,6 +187,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=3, input_dtype=dtype)
 
 
+@skip_for_blackhole("GH #15234")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat8_b, ttnn.float32),
