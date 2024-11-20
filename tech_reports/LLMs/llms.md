@@ -70,6 +70,7 @@ Other useful resources:
 <figcaption>Llama3.1 Decoder</figcaption>
 </div> <br>
 If the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward. According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass. Only thing to worry about is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM. <br><br> Decode forward pass implementation below follows diagram above and has nothing that is not already explained in previous sections. Also, it's crucial to deallocate tensors after their usage to optimize memory. However, in this explanation, tensor deallocation has been omitted for clarity and to keep the code as straightforward as possible.
+
 <br><br><br>
 
 ```py
@@ -110,9 +111,101 @@ def forward(
 ```
 
 ### 2.7 LM Head
+The LMHead is specific because LLMs typically have large ```vocab_size```, which is independent of the model size (e.g., 1B, 2B, 8B, 405B parameters). As a result, the LMHead always has a large last_dim in its weight matrix. Given the substantial size of LMHead weights and the memory limitations of hardware, these weights must be distributed across multiple devices and processed in iterations, while activations are replicated across devices.
 
+The number of iterations required depends on the size of the weights and the number of devices available, which can range from 1 to several iterations. For example, in Llama 3.1’s decode mode, the LMHead matrix multiplication involves shapes ```(32, 8K) x (8K, 128K)```.
 
+Below is an illustration of how the LMHead weights are partitioned across two devices, followed by its implementation. For educational purposes it's used 128K for vocab_size even though it's 128256 for Llama3.1
 
+<div align="center">
+<img src="lm_head.png" alt="Decoder Diagram" title="Decoder Title" width="650" height="350">
+<figcaption>LMHead matmul</figcaption>
+</div> <br>
+
+```py
+size_per_device = self.vocab_size // self.num_devices
+num_splits = math.ceil(size_per_device / max_columns_per_device)
+
+split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
+split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+
+# Split the output weights
+torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
+self.output_weights = []
+
+for i, split_size in enumerate(split_sizes):
+    cache_file_name = (
+        None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_{i}"
+    )
+
+    # Create a list to store the split tensors for each device
+    device_splits = []
+    for device in range(self.num_devices):
+        start = device * size_per_device + sum(split_sizes[:i])
+        end = start + split_size
+        device_splits.append(torch_output_weights[:, start:end])
+
+    # Concatenate the splits from all devices
+    combined_split = torch.cat(device_splits, dim=-1)
+
+    memory_config = args.create_dram_sharded_mem_config(
+        k=args.dim, n=combined_split.shape[-1] // self.num_devices
+    )
+    self.output_weights.append(
+        ttnn.as_tensor(
+            combined_split,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=memory_config,
+            cache_file_name=cache_file_name,
+        )
+    )
+```
+We use dram-sharded matmul for LMHead with ```program_config``` and ```memory_config``` generated in code below. If you want to learn why we decided to use them check out section 4.4. The primary reason for having multiple program_configs is that the weight shapes may result in unequal split sizes. This variability means the same configuration cannot be used for every matrix multiplication.
+```py
+# Generate dram-sharded memory_config
+memory_config = args.create_dram_sharded_mem_config(
+    k=args.dim, n=combined_split.shape[-1] // self.num_devices
+)
+# Generate dram-sharded program_config
+self.program_configs = [
+    args.dram_matmul_config(
+        args.tile_padded_batch_rows,
+        args.dim,
+        split_size,
+        args.lm_head_core_grid.num_cores,
+    )
+    for split_size in split_sizes
+]
+```
+Once weights are pushed to devices and decoders are executed LMHead forward pass needs to be executed in iterations. Code below shows that after each iteration outputs are converted from sharded to interleaved tensors. Once all iterations are completed final output is produced by concatenation over last dim and returned as output.
+
+When executing the model, it is essential to ensure that the output of the last decoder is already replicated across tensors. Since this replication is enforced earlier, no additional code is required in the LMHead forward pass to handle it.
+
+The LMHead forward pass is executed iteratively. The code below illustrates how, after each iteration, the outputs are converted from sharded tensors to interleaved tensors. After all iterations are completed, the tensors are concatenated along the last dimension to produce the final output, which is then returned.
+
+```py
+def forward(self, x: ttnn.Tensor):
+    outputs = []
+    for weight, pc in zip(self.output_weights, self.program_configs):
+        output = ttnn.linear(
+            x,
+            weight,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=pc,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
+        outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
+    # Concatenate the outputs
+    output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    return output
+```
 
 ## 3. Features
 ### 3.1 Generative Decoding
