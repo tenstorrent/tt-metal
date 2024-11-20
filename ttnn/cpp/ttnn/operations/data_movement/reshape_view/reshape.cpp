@@ -165,6 +165,15 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     if (tensor_shape == shape) {
         return tensor;
     }
+
+    // Just edit shape if shape has a 0 dimension
+    for (auto index = 0; index < shape.rank(); ++index) {
+        if (shape[index] == 0) {
+            std::cout << "!!! 0 dimension !!!" << std::endl;
+            return tensor.reshape(shape);
+        }
+    }
+
     // This is a constraint Torch places on reshape I was assuming, but it causes half of the codebase to fail if added
     // Validate_transform(tensor_shape, shape)
     // For view the following cases work:
