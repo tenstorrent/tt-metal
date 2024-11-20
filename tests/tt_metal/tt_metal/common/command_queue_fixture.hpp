@@ -80,7 +80,7 @@ class CommandQueueSingleCardFixture : virtual public DispatchFixture {
     void validate_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
         this->slow_dispatch_ = false;
@@ -123,7 +123,7 @@ class CommandQueueMultiDeviceFixture : public DispatchFixture {
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
         this->slow_dispatch_ = false;

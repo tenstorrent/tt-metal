@@ -64,6 +64,7 @@ __Important note: only tests that use Google Test should be placed in the follow
 
 ### `api/`
  - Contains tests that explicitly test `tt-metal`'s API
+ - Contains tests that read from and/or write to the device
 
 ### `debug_tools/`
  - Contains tests for DPrint and Watcher
@@ -71,7 +72,6 @@ __Important note: only tests that use Google Test should be placed in the follow
 ### `device/`
  - Contains tests for device initialization and teardown
  - Contains tests that check device-specific properties
- - Contains tests that read from and/or write to the device
 
 ### `dispatch/`
  - Contains tests that explicitly test for properties relating to dispatch
@@ -85,7 +85,8 @@ __Important note: only tests that use Google Test should be placed in the follow
  - Contains tests for real-world use cases, eg. matmul, etc
 
 ### `llk/`
- -
+ - Contains tests for compute Low-Level Kernel (LLK) API
+ - Tests don't cover individual compute LLK calls, but cover testing LLK API calls as these are used in compute kernels
 
 ### `stl/`
  - Contains tests which test custom data structures and algorithms used in `tt-metal`

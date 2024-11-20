@@ -20,7 +20,7 @@ class N300DeviceFixture : public MultiDeviceFixture {
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (not slow_dispatch) {
-            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            tt::log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
         const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

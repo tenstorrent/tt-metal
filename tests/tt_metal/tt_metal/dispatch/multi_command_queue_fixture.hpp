@@ -35,7 +35,7 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
     void validate_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
         this->slow_dispatch_ = false;
@@ -44,7 +44,7 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
     void validate_num_cqs() {
         const uint8_t num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
         if (num_cqs != 2) {
-            TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
         this->num_cqs_ = num_cqs;
@@ -103,13 +103,13 @@ class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
         this->slow_dispatch_ = false;
         auto num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
         if (num_cqs != 2) {
-            TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
         const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
