@@ -86,7 +86,7 @@ jobs:
             echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@blozano-consolidate
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
