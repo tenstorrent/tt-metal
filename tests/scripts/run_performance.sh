@@ -96,6 +96,8 @@ run_device_perf_models() {
 
     env pytest models/demos/convnet_mnist/tests/ -m $test_marker
 
+    env pytest models/demos/whisper/tests/ -m $test_marker
+
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
