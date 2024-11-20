@@ -9,7 +9,7 @@ jobs:
   remove-stale-branches:
     runs-on: ubuntu-latest
     steps:
-      - uses: fpicalausa/remove-stale-branches@v2.0.1
+      - uses: blozano-tt/remove-stale-branches@5286c692f7f58cc0b4fc5b096c834e013616587b
         with:
           dry-run: false
           days-before-branch-stale: 180 # Branches stale for ~6 months
