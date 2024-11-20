@@ -33,4 +33,3 @@ OP Infra is the foundation for the OP Libary that provides common primitives req
 
 ## TT-NN Runtime
 ![TT-NN Runtime](https://github.com/user-attachments/assets/0794b7c2-82b6-49aa-9117-9aee8b1c1ecd)
-
