@@ -1,0 +1,145 @@
+# Glossary of Terms
+## **Tenstorrent Devices:** ##
+- **Blackhole -** Tenstorrent's next generation AI compute solution. 140 Tensix Cores.
+- **Galaxy -** Tenstorrent's high density rack-mounted AI compute solution, intended for corporations.
+- **Grayskull -** Tenstorrent's entry level DevKit. 120 Tensix Cores.
+- **LoudBox -** Tenstorrent's desktop workstation equipped with Tenstorrent hardware and software.
+- **Wormhole -** Tenstorrent’s GPU device. 80 Tensix Cores.
+## **Tenstorrent Software:** ##
+- **Metal Trace -** Performance optimization feature.
+- **Runtime -** Bottom of the Metalium software stack. Controls kernel execution and collects results from kernel executions.
+- **Tracy -** Tenstorrent's profiling tool.
+- **TT-Buda -** A compute framework used to develop, run, and analyze ML workloads on Tenstorrent hardware.
+- **TT-Fabric -**
+- **TT-Forge -** Tenstorrent’s graph compiler.
+- **TT-Metalium -** Tenstorrent’s low-level programming model.
+- **TT-MLIR -** Tenstorrent’s MLIR-based compiler.
+- **TT-NN -** Tenstorrent’s library of optimized operators.
+- **Watcher -** Tenstorrent monitoring tool.
+## **Acronyms:** ##
+- **ANN -** Artificial Neural Network
+- **BFS Algorithm -** Breadth-first search algorithms searches for a node that satisfies specific requirements.
+- **BMM -** Batch Matrix Multiplication
+- **CCL -** Collective Communication Library - The CCL provides a collection of pre-written multi-chip operations.
+- **CI -** Continuous Integration
+- **CQ -** Command Queue
+- **CNN -** Convolution Neural Network - A deep learning model suited for data processing.
+- **DMA -** Direct Memory Access
+- **DNN -** DotNetNuke - Web content management system.
+- **DP -** Data Parallel
+- **DRAM -** Dynamic Random Access Memory - Off-chip Memory. Provides larger, off-chip storage for the system.
+- **EDM -** ERISC Data Mover - Reusable data movement component used to send data over ethernet links. It provides ethernet link utilization and handles design concerns by implementing multi-chip collective operations.
+- **ELF -** Executable and Linkable Format - Standard file format for executable files.
+- **FDE -** Fetch-decode-execute cycle.
+- **FET -** Field Effect Transistor
+- **FPF -** Floating Point Format
+- **FVC -** Fabric Virtual Channel
+- **GBD -** GNU Debugger tool.
+- **GDDR -** Graphics Double Data Rate - Memory type used for GPUs.
+- **GH -** GitHub
+- **GPU -** Graphic Processing Unit
+- **HBM -** High Bandwidth Memory
+- **HPC -** High Performance Computing
+- **I2S - S2I -** Image to Source, Source to Image - Toolkit and workflow for building reproducible container images from source code.
+- **ISA -** Instruction-Set Architecture - An abstract computer model that determines how the CPU is controlled by the software.
+- **ISS -** Instruction Set Simulator
+- **JVM -** Java Virtual Machine
+- **KWARG -** Keyword Argument - used client side to allow all arguments, not used in server side functions.
+- **LLK -** Low Level Kernels - Bottom layer of software stack, responsible for basic system operations.
+- **LLM -** Large Language Model
+- **LPDDR4 -** DRAM - Off-chip Memory. Provides larger, off-chip storage for the system.
+- **LUT -** Look Up Table - Mapping table of input and output values used for addressing.
+- **MLP -** Multilayer Perceptron - A modern feedforward artificial neural network.
+- **MLIR -** Multi-Level Intermediate Representation
+- **MM - MatMul - Matrix Multiplication -** Multiplication of two square or rectangular matrices.
+- **MIMD -** Multiple Instruction Multiple Data - Allows multiple processors to function simultaneously and asynchronously.
+- **NM -** Nanometers
+- **NMC -** Near Memory Computing - Computing paradigm that moves data processing closer to where the data is stored.
+- **NLP -** Natural Language Processing
+- **NoC -** Network on Chip
+- **NPU -** Neural Processing Unit
+- **NUMA -** Non-uniform Memory Access
+- **PCC -** Pearson Correlation Coefficient - A method of measuring a linear correlation between two variables.
+- **Q, K, V values -** Q, K, and V stand for different values. Q = query, K = key, V = value. In transformer architecture these values are used to help the model focus on relevant parts of the input sequence.
+- **RB -** Routing Buffer
+- **RDMA -** Remote Direct Memory Access
+- **SDK -** Software Development Kit
+- **seqL -** Sequence Length
+- **SFPU -** Sundance Flash Programming Utility
+- **SIMD -** Single Instruction Multiple Data - Allows processors to execute the same instruction on multiple data points simultaneously
+- **SoC -** System on Chip
+- **SRAM -** Static Random Access Memory. On-chip Memory. 1 MB SRAM memory (L1), a scratch pad accessible by all RISC-V processors and engines within the core.
+- **TM -** Tensor Movement
+- **TP -** Tensor Parallel
+- **ViT -** Vision Transformer - A transformer model used for vision processing tasks.
+- **VM -** Virtual Machine
+## **Terminology** ##
+- **ARC Core -** Manages board-level control and administration.
+- **Argument -** A value or set of values as an input that allows customization of code functions.
+- **Atomic Operation -** Sequences of operations completed without interruption. Atomic operations include counter updates and other data integrity tasks.
+- **Baby RISC-V -** Miniature RISC-V chips used in Tensix Cores.
+- **Bool -** Boolean data type.
+- **Convolution -** A mathematical operation on two functions that produces a third function.
+- **Circular Buffer -** Data stored in a continuous loop. Enables safe interaction, collaboration, data transfer between off-chip and on-chip memory.
+- **Cmake -** Cross-platform free and open-source software for build automation, testing, packaging and installation of software by using a compiler-independent method.
+- **Deterministic Programming -** Programming style where the same input will always produce the same output.
+- **dim -** Dimension.
+- **DPRINT -** Configurable code formatting platform.
+- **dtype -** Data Type.
+- **Elt-wise -** Element Wise - A programming technique that performs an operation on each element of a data container independently.
+- **Ethernet Core -** Facilitates chip-to-chip communication across the mesh.
+- **FeedForward -** Characteristic of a network. Feedforward networks provide context for data before sending the data. When expected data is received, confirmation feedback is provided.
+- **HelloWorld -** Basic computer program often used as a starting point.
+- **Huge Page -** Memory management technique used to request larger memory blocks.
+- **Kernel Types -** Kernels send and receive data from tensors.
+  - **Bare Metal C/C++ Kernels -** Kernels written in C or C++ for execution. Generally used to accelerate computation and processing performance.
+  - **Reader Kernel -** Kernel receiving data from a DRAM or SRAM buffer.
+  - **Writer Kernel -** Kernel sending data to a DRAM or SRAM buffer.
+  - **User Kernel Types -** Kernels are in user mode when operating in applications.
+    - **Compute Kernels -** Kernels used for processing tasks or operations. Compute kernels will automatically generate the following types of kernels:
+      - **Unpack Kernels -** Unpack kernels prepare data for operations to be performed by the math kernel.
+      - **Math Kernels -** Kernels used for matrix multiplication and other mathematical tasks or operations.
+      - **Pack Kernels -** Pack kernels wait for the end of the math kernel and prepare data to be moved to the next part of the system.
+    - **Data Movement Kernels _** The first and fifth RISC-Vs on a Tensix Core responsible for moving data between NoCs, memory buffers, and the compute kernel.
+    - **Ethernet Data Movement Kernels -** Kernels responsible for moving data between cores.
+  - **Dispatch Kernels -** Kernels that determine where data is dispatched depending on the data’s priority and dispatch key.
+  - **Low-Level Kernels -** Kernels at the bottom of the software stack, these are for the system’s basic functions.
+- **Mantissa -** Floating point number that represents significant digits of the number.
+- **Memory Types -** Memory can be Interleaved or Sharded and can be further categorized into height, width, and block sharding.
+  - **Interleaved Memory -** L1 interleaved distributes across all L1 memory banks sequentially.
+  - **Sharded Memory -** L1 sharded lays out tensors based user provided shard specifications.
+      - **Height Sharding -** L1 Memory split across dimension 0.
+      - **Width Sharding -** L1 Memory split across dimension 1.
+      - **Block Sharding -** L1 Memory split across dimension 0 and dimension 1.
+- **Memory Barrier -** Parallelization technique where operations are required to complete before moving on to other operations.
+- **Mesh -** 2D chip architecture.
+- **Mixed Precision -** Optimization technique using floating-point types in a model to enhance performance and reduce memory usage. The following are different precision types:
+  - **Mixed Precision -** Combined use of numerical precisions in a computational method.
+  - **Half Precision -** FP16 data transfers.
+  - **Single Precision -** FP32 data transfers.
+  - **Double Precision -** FP64 data transfers.
+- **Multicast -** Allows multiple processors to function simultaneously and asynchronously.
+- **PCIe -** Link between the chip and the host machine.
+- **Printf -** Library function that formats text.
+- **Profiler -** A tool used to assess the performance of software or an operation. Provides data to optimize system performance.
+- **PyBuda -** A Python interface for TT-Buda.
+- **PyTorch -** Optimized tensor library.
+- **RISC-V -** Processors (Baby RISCVs) that run C/C++ kernels and dispatch instructions to compute and data movement engines.
+- **Semaphore -** A variable or abstract data type used for access control. All semaphores use atomic operations.
+- **Singlecast -** Allows processors to execute the same instruction on multiple data points simultaneously.
+- **Tensix Core -** Processor cores that make up Tensix processors. Tensix cores contain the following components:
+  - **Matrix Engine -** Performs matrix multiplication, elementwise, and dot product operations on small matrices (tiles) of shape 32x32 or similar.
+  - **Tile Math Engine -** Handles standard algebraic operations.
+  - **Vector Math Engine -** Handles vectorized kernels such as Top-k, Sort, and special functions like GELU, Exp, and Sqrt.
+- **Tensor -** Data structure that can hold data in multiple dimensions. Tensors can be organized in a Row-Major or Tiled Layout:
+  - **Row-Major Tensor Layout -** Each row of the tensor corresponds to a page in the buffer.
+  - **Tiled Tensor Layout -** Pages represented as 2D tiles rather than being confined in a row.
+- **Tensor Shape -** Shape refers to the configuration of a tensor. The following are tensor shape types:
+  - **Logical Shape -**
+  - **Padded Shape -** A tensor is padded when its sequences must be masked for a certain shape. Sequences in a tensor are padded or truncated depending on requirements.
+  - **Simple Shape -**
+- **TFLOPS -** Teraflops
+- **Topology -** Physical organization of a device.
+  - **Linear Topology -** All devices or components are connected to a common source.
+  - **Mesh Topology -** Network configuration where all devices or components are connected to each other.
+  - **Torus Topology -** Interconnect switchless network configuration connecting processors used often for parallel systems.
