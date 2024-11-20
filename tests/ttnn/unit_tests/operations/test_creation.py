@@ -374,7 +374,7 @@ def test_empty(device, input_shapes):
         [2, 1280, 64, 64],
     ],
 )
-def test_empty(mesh_device, input_shapes):
+def test_empty_multi_device(mesh_device, input_shapes):
     torch_output_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
 
     output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
