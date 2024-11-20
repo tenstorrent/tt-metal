@@ -171,8 +171,8 @@ Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<
 }
 
 
-Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input, float value, bool accurate_mode, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+    TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     output_tensor = output_tensor.value_or(ttnn::zeros_like(input));
     ttnn::multiply(queue_id, input, (1.0f/value), std::nullopt, output_mem_config, output_tensor);
     if(round_mode == "trunc"){
@@ -184,12 +184,12 @@ Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input, float value, bo
     return output_tensor.value();
 }
 
-Tensor ExecuteDiv::invoke(const Tensor& input, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+Tensor ExecuteDiv::invoke(const Tensor& input, float value, bool accurate_mode, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
    return ExecuteDiv::invoke(DefaultQueueId, input, value, accurate_mode, round_mode, output_mem_config, output_tensor);
 }
 
-Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+    TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     output_tensor = output_tensor.value_or(ttnn::empty_like(input_a));
     auto arch = input_a.device()->arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -255,7 +255,7 @@ Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input_a, const Tensor&
     }
 }
 
-Tensor ExecuteDiv::invoke(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+Tensor ExecuteDiv::invoke(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
    return ExecuteDiv::invoke(DefaultQueueId, input_a, input_b, accurate_mode, round_mode, output_mem_config, output_tensor);
 }
 
@@ -267,7 +267,7 @@ Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optio
 }
 
 Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor div_result = ttnn::div(input_a, input_b, false, "None", output_mem_config);
+    Tensor div_result = ttnn::div(input_a, input_b, false, std::nullopt, output_mem_config);
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0, div_result);
 }
 
@@ -342,7 +342,7 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor temp = ttnn::div(input_a, input_b, true, "None", output_mem_config);
+    Tensor temp = ttnn::div(input_a, input_b, true, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, true, "floor", output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
     return ttnn::where(
@@ -449,7 +449,7 @@ Tensor ExecuteGCD::invoke(const Tensor& input_a, const Tensor& input_b, const st
 Tensor ExecuteLCM::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor val = ttnn::multiply(input_a, input_b, std::nullopt, output_mem_config);
     Tensor tmp_result = ttnn::gcd(input_a, input_b);
-    Tensor result = ttnn::div(val, tmp_result, false, "None", output_mem_config);
+    Tensor result = ttnn::div(val, tmp_result, false, std::nullopt, output_mem_config);
     return ttnn::abs(result);
 }
 

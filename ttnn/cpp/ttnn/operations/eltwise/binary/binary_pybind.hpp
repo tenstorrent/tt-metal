@@ -534,9 +534,13 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                  - 2, 3, 4
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar, accurate_mode = false, round_mode = "None")
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2, accurate_mode = false, round_mode = None)
+
+            >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> scalar = 3
+            >>> output = {1}(tensor, scalar, round_mode = "floor")
         )doc",
 
         operation.base_name(),
@@ -553,7 +557,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                bool accurate_mode,
-               const std::string& round_mode,
+               const std::optional<std::string>& round_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
@@ -563,7 +567,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("accurate_mode") = false,
-            py::arg("round_mode") = "None",
+            py::arg("round_mode") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId},
@@ -573,7 +577,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_a,
                float value,
                bool accurate_mode,
-               const std::string& round_mode,
+               const std::optional<std::string>& round_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
@@ -583,7 +587,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
             py::arg("value"),
             py::kw_only(),
             py::arg("accurate_mode") = false,
-            py::arg("round_mode") = "None",
+            py::arg("round_mode") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId});
