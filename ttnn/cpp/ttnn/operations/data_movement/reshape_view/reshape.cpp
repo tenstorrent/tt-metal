@@ -370,6 +370,12 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
+
+    // Just edit shape if shape has a 0 dimension
+    if tensor.volume() == 0 {
+        return tensor.reshape(shape);
+    }
+
     bool this_is_view =
         (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
