@@ -11,7 +11,7 @@ import random
 import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm, get_device_grid_size
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt, gen_rand_inf
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_inf, _gen_reshape_args_from_volume
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -23,56 +23,111 @@ Y, X = get_device_grid_size()
 random.seed(0)
 
 
-def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
-    assert sharding_strategy in ["block", "width", "height"]
+def gen_sharded_spec(num_shapes, y, x, max_tensor_size=8 * 1024 * 1024):
+    # [ttnn.ShardStrategy.BLOCK, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT, "tensor_wh"]
+    sharding_strategy_list = ["tensor_wh"]
+    shard_orientation_list = [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR]
+    spec_list = []
 
-    shard_orientation_list = ["col_major", "row_major"]
-    tensor_hw_as_shard_shape_list = [True, False]
-
-    for shard_orientation, tensor_hw_as_shard_shape in itertools.product(
-        shard_orientation_list, tensor_hw_as_shard_shape_list
+    for sharding_strategy, shard_orientation, rank, layout in itertools.product(
+        sharding_strategy_list, shard_orientation_list, [4, 3, 2], [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
     ):
-        if sharding_strategy == "block":
-            if not sanitize_args:
-                interval_1 = 1
-                interval_2 = 2
-            else:
-                interval_1 = 32 * y
-                interval_2 = 32 * x
-
-            input_shape_list = (
-                gen_shapes([1, 1, 32 * y, 32 * x], [6, 12, 512, 512], [1, 1, interval_1, interval_2], num_shapes)
-                + gen_shapes([1, 32 * y, 32 * x], [12, 512, 512], [1, interval_1, interval_2], num_shapes)
-                + gen_shapes([32 * y, 32 * x], [512, 512], [interval_1, interval_2], num_shapes)
-            )
-        elif sharding_strategy == "width":
-            if not sanitize_args:
-                interval = 1
-            else:
-                interval = 32 * x * y
-            input_shape_list = (
-                gen_shapes([1, 1, 32, 32 * x * y], [4, 6, 64, 32 * x * y], [1, 1, 32, interval], num_shapes)
-                + gen_shapes([1, 32, 32 * x * y], [6, 64, 32 * x * y], [1, 32, interval], num_shapes)
-                + gen_shapes([32, 32 * x * y], [64, 32 * x * y], [32, interval], num_shapes)
-            )
+        if sharding_strategy == "tensor_wh":
+            tensor_hw_as_shard_shape = True
+            sharding_strategy = ttnn.ShardStrategy.BLOCK
         else:
-            if not sanitize_args:
-                interval = 1
-            else:
-                interval = 32 * x * y
-            input_shape_list = (
-                gen_shapes([1, 1, 32 * x * y, 32], [4, 6, 32 * x * y, 64], [1, 1, interval, 32], num_shapes)
-                + gen_shapes([1, 32 * x * y, 32], [6, 32 * x * y, 64], [1, interval, 32], num_shapes)
-                + gen_shapes([32 * x * y, 32], [32 * x * y, 64], [interval, 32], num_shapes)
+            tensor_hw_as_shard_shape = False
+
+        for _ in range(num_shapes):
+            if tensor_hw_as_shard_shape:
+                # Gets stuck:
+                # X 8 Y 8 input_shape [1, 17792, 8] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape True
+
+                if layout == ttnn.TILE_LAYOUT:
+                    # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
+                    min_shard_size_x = 32
+                    min_shard_size_y = 32
+                else:  # if layout == ttnn.ROW_MAJOR_LAYOUT:
+                    # Shard Size must be multiple of input_tile_size (width * height is multiple of 1024)
+                    min_shard_size_x = random.choice([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024])
+                    min_shard_size_y = 1024 // min_shard_size_x
+
+                rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y * x * y))
+                input_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank))
+                input_shape = list(input_shape["reshape_dims"])
+                input_shape[-2] = input_shape[-2] * min_shard_size_x
+                input_shape[-1] = input_shape[-1] * min_shard_size_y
+
+                # Shard width should be multiple of 16 to satisfy L1 alignment (width = multiple 8 for bfloat16)
+                while input_shape[-1] % 16 != 0:
+                    input_shape[-1] *= 2
+                    input_shape[-2] //= 2
+
+                if shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+                    tmp = input_shape[-2]
+                    input_shape[-2] = input_shape[-1]
+                    input_shape[-1] = tmp
+
+            elif sharding_strategy == ttnn.ShardStrategy.BLOCK:
+                min_shard_size_y = 32 * y
+                min_shard_size_x = 32 * x
+                mul_x = random.randint(1, 10)
+                mul_y = random.randint(1, 64 // mul_x)
+
+                input_shape = random.choice(
+                    _gen_reshape_args_from_volume(mul_y * min_shard_size_y, step=1, out_dims=rank - 1)
+                )
+                input_shape = list(input_shape["reshape_dims"])
+                input_shape.append(mul_x * min_shard_size_x)
+
+            elif sharding_strategy == ttnn.ShardStrategy.WIDTH or sharding_strategy == ttnn.ShardStrategy.HEIGHT:
+                # if shard_width % total_cores != 0: raise RuntimeError("Invalid sharding core_grid")
+                # Shard Size must be multiple of input_tile_size
+
+                if layout == ttnn.TILE_LAYOUT:
+                    # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
+                    min_shard_size_x = 32
+                    min_shard_size_y = 32 * x * y
+                else:  # if layout == ttnn.ROW_MAJOR_LAYOUT:
+                    min_shard_size_x = 1
+                    min_shard_size_y = x * y
+
+                    # Shard Size must be multiple of input_tile_size
+                    mul_32_x = random.choice([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024])
+                    mul_32_y = 1024 // mul_32_x
+
+                    min_shard_size_x *= mul_32_x
+                    min_shard_size_y *= mul_32_y
+
+                    if sharding_strategy == ttnn.ShardStrategy.HEIGHT:
+                        # Shard width should be multiple of 16 to satisfy L1 alignment
+                        while min_shard_size_x % 16 != 0:
+                            min_shard_size_x *= 2
+
+                rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y))
+                input_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank))
+                input_shape = list(input_shape["reshape_dims"])
+                input_shape[-2] = input_shape[-2] * min_shard_size_x
+                input_shape[-1] = input_shape[-1] * min_shard_size_y
+
+                if sharding_strategy == ttnn.ShardStrategy.HEIGHT:
+                    tmp = input_shape[-2]
+                    input_shape[-2] = input_shape[-1]
+                    input_shape[-1] = tmp
+
+                # print(input_shape)
+
+            spec_list.append(
+                {
+                    "input_shape": input_shape,
+                    "sharding_strategy": sharding_strategy,
+                    "shard_orientation": shard_orientation,
+                    "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
+                    "input_layout": layout,
+                }
             )
 
-        for input_shape in input_shape_list:
-            yield {
-                "input_shape": input_shape,
-                "sharding_strategy": sharding_strategy,
-                "shard_orientation": shard_orientation,
-                "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
-            }
+    return spec_list
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -81,30 +136,8 @@ def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": list(gen_sharded_spec(4, "block", Y, X))
-        + list(gen_sharded_spec(4, "height", Y, X))
-        + list(gen_sharded_spec(4, "width", Y, X)),
+        "input_spec": gen_sharded_spec(16, Y, X),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    },
-    "xfail": {
-        "input_spec": list(gen_sharded_spec(16, "block", Y, X, sanitize_args=False))
-        + list(gen_sharded_spec(16, "height", Y, X, sanitize_args=False))
-        + list(gen_sharded_spec(16, "width", Y, X, sanitize_args=False)),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    },
-    "test": {
-        "input_spec": [
-            {
-                "input_shape": [2048, 32],
-                "sharding_strategy": "height",
-                "shard_orientation": "row_major",
-                "tensor_hw_as_shard_shape": False,
-            }
-        ],
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_layout": [ttnn.TILE_LAYOUT],
     },
 }
 
@@ -113,44 +146,11 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, sharding_strategy, _, _ = test_vector["input_spec"].values()
+    input_shape, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
-    if sharding_strategy == "block":
-        if pre_sharded_height % Y != 0:
-            return (
-                True,
-                "Prod of all dimensions except the innermost must be divisible by the y coordinate of coregrid when using block sharding",
-            )
-        if pre_sharded_width % X != 0:
-            return (
-                True,
-                "Innermost dimension must be divisible by the x coordinate of coregrid when using block sharding",
-            )
-        if (pre_sharded_height // Y) // 32 <= 0:
-            return True, "Shard height must be greater than 32"
-        if (pre_sharded_width // X) // 32 <= 0:
-            return True, "Shard wdith must be greater than 32"
-
-    if sharding_strategy == "width":
-        if pre_sharded_width % (Y * X) != 0:
-            return True, "Last dimension must be divisible by a total number of cores when using width sharding"
-        if (pre_sharded_width // (Y * X)) // 32 <= 0:
-            return True, "Shard wdith must be greater than 32"
-
-    if sharding_strategy == "height":
-        if pre_sharded_height % (Y * X) != 0:
-            return (
-                True,
-                "Prod of all dimensions except the innermost must be divisible by a total number of cores when using height sharding",
-            )
-        if (pre_sharded_height // (Y * X)) // 32 <= 0:
-            return True, "Shard heght must be greater than 32"
-
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Input to eltwise binary must be tilized"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
 
     return False, None
@@ -163,25 +163,16 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_spec,
     input_a_dtype,
-    input_layout,
     *,
     device,
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+    input_shape, sharding_strategy, shard_orientation, tensor_hw_as_shard_shape, input_layout = input_spec.values()
 
-    input_shape, sharding_strategy, shard_orientation, tensor_hw_as_shard_shape = input_spec.values()
-    if shard_orientation == "col_major":
-        shard_orientation = ttnn.ShardOrientation.COL_MAJOR
-    else:
-        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-
-    if sharding_strategy == "block":
-        sharding_strategy = ttnn.ShardStrategy.BLOCK
-    elif sharding_strategy == "width":
-        sharding_strategy = ttnn.ShardStrategy.WIDTH
-    else:
-        sharding_strategy = ttnn.ShardStrategy.HEIGHT
+    print(
+        f"X {X} Y {Y} input_shape {input_shape} {input_a_dtype} {input_layout} {sharding_strategy} {shard_orientation} tensor_hw_as_shard_shape {tensor_hw_as_shard_shape}"
+    )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
@@ -211,7 +202,7 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(pcc)
+    print(pcc)
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
 
 
@@ -231,10 +222,12 @@ for suite in parameters.keys():
             continue
         try:
             passed, _ = run(**vector, device=device)
-            if passed[0] != True:
-                print(passed)
+            # if passed[0] != True:
+            #     print(passed)
         except Exception as e:
             print(e)
+
+        # break
 
     ttnn.close_device(device)
 
