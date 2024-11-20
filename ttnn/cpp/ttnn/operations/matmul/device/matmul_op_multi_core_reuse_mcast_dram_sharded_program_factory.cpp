@@ -1047,10 +1047,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         }
     }
 
-    uint32_t num_cores_writtne_back = (N + per_core_N_storage - 1) / per_core_N_storage;
-    uint32_t expected_max_total_width = num_cores_writtne_back * per_core_N_storage;
-    tt::log_info("per_core_N_storage: {}",per_core_N_storage);
-    tt::log_info("num_cores_writtne_back: {}",num_cores_writtne_back);
+    uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
+    uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
+    tt::log_debug("per_core_N_storage: {}",per_core_N_storage);
+    tt::log_debug("num_cores_written_back: {}",num_cores_written_back);
     uint32_t total_tensor_width_written_back = 0;
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
@@ -1082,13 +1082,13 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         bank_id = (bank_id + 1) % num_dram_banks;
 
         if (per_core_N_in1_sender < per_core_N_storage) {
-            if (curr_storage_core_idx < num_cores_writtne_back) {
+            if (curr_storage_core_idx < num_cores_written_back) {
                 uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
                 uint32_t per_core_N_reshard_1 =
                     (remaining_per_core_N_storage > per_core_N_in1_sender) ? per_core_N_in1_sender : remaining_per_core_N_storage;
                 uint32_t per_core_N_reshard_2 = per_core_N_in1_sender - per_core_N_reshard_1;
 
-                if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_writtne_back) {
+                if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
                     mm_in1_sender_writer_args.push_back(2);
                 } else {
                     mm_in1_sender_writer_args.push_back(1);
@@ -1112,7 +1112,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
                 total_tensor_width_written_back += per_core_N_reshard_1;
 
-                if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_writtne_back) {
+                if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
                     log_debug(
                         "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
                         i,
@@ -1137,7 +1137,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         } else {
             uint32_t num_cores_write_back = 0;
 
-            if (curr_storage_core < num_cores_writtne_back) {
+            if (curr_storage_core < num_cores_written_back) {
                 num_cores_write_back++;
 
                 worker_core_stride = per_core_N_storage - storage_core_stride;
@@ -1167,7 +1167,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
                 total_tensor_width_written_back += worker_core_stride;
 
-                while (curr_worker_core <= i and curr_storage_core < num_cores_writtne_back) {
+                while (curr_worker_core <= i and curr_storage_core < num_cores_written_back) {
                     num_cores_write_back++;
 
                     bool increment_worker_core = (worker_core_stride + per_core_N_storage) >= per_core_N_in1_sender;
@@ -1207,7 +1207,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_FATAL(total_tensor_width_written_back <= expected_max_total_width, "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}", expected_max_total_width, total_tensor_width_written_back);
+    TT_ASSERT(total_tensor_width_written_back <= expected_max_total_width, "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}", expected_max_total_width, total_tensor_width_written_back);
 
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
