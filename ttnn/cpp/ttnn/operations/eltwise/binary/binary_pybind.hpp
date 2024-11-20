@@ -81,7 +81,14 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 
 
 template <typename binary_operation_t>
-void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ", const std::string& supported_dtype="BFLOAT16", const std::string& note=" ") {
+void bind_binary_operation(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& info=". ",
+    const std::string& supported_dtype="BFLOAT16",
+    const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -94,9 +101,9 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            dtype (ttnn.DataType, optional): Data type for the output tensor. Defaults to `Null`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
@@ -121,10 +128,9 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             {6}
 
         Example:
-
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(tensor1, tensor2)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -186,7 +192,16 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype = "BFLAOT16", const std::string& note="") {
+void bind_binary_composite(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_rank = "2, 3, 4",
+    const std::string& example_tensor1 = "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
+    const std::string& example_tensor2 = "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
+    const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -199,7 +214,7 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
             input_tensor_b (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -215,13 +230,13 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
                  - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
+                 - {5}
 
-            {5}
+            {8}
 
         Example:
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
+            >>> tensor1 = {6}
+            >>> tensor2 = {7}
             >>> output = {1}(tensor1, tensor2)
         )doc",
 
@@ -230,6 +245,9 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
         description,
         math,
         supported_dtype,
+        supported_rank,
+        example_tensor1,
+        example_tensor2,
         note);
 
     bind_registered_operation(
@@ -291,8 +309,8 @@ void bind_binary_composite_with_alpha(
             {5}
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> alpha = 1.0
             >>> output = {1}(tensor1, tensor2, alpha)
         )doc",
@@ -358,8 +376,8 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
                  - 2, 3, 4
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> rtol = 1e-4
             >>> atol = 1e-5
             >>> equal_nan = False
@@ -434,8 +452,8 @@ void bind_binary_composite_overload(
             {4}
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1.5, 2.5], [3.5, 4.5]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1.5, 2.5], [3.5, 4.5]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
@@ -510,8 +528,8 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                  - 2, 3, 4
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor1, tensor2/scalar, accurate_mode = false, round_mode = "None")
         )doc",
 
@@ -606,12 +624,11 @@ void bind_polyval(
             {5}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> coeffs = [1, 2, 3, 4]
             >>> output = {1}(tensor, coeffs)
 
         )doc",
-
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
@@ -673,8 +690,8 @@ void bind_binary_overload_operation(
             {4}
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
@@ -897,7 +914,7 @@ void py_module(py::module& module) {
         module,
         ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_inplace_operation(
@@ -910,7 +927,7 @@ void py_module(py::module& module) {
         module,
         ttnn::subtract,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
@@ -924,7 +941,7 @@ void py_module(py::module& module) {
         module,
         ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_inplace_operation(
@@ -937,79 +954,79 @@ void py_module(py::module& module) {
         module,
         ttnn::eq,
         R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ne,
         R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::lt,
         R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::le,
-        R"doc(MCompares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(Compares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::gt,
         R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ge,
         R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logical_and,
-        R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logical_or,
-        R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ldexp,
-        R"doc(Compute ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = ldexp(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = \verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logaddexp,
-        R"doc(Compute logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = logaddexp(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logaddexp2,
-        R"doc(Compute logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = logaddexp2(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::squared_difference,
-        R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::bias_gelu,
-        R"doc(Compute bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc");
+        R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc", ". ", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
@@ -1028,23 +1045,23 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::hypot,
-        R"doc(compute Hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \sqrt{(\mathrm{input\_tensor\_a}_i^2 + \mathrm{input\_tensor\_b}_i^2)}
-        )doc");
+        )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::xlogy,
-        R"doc(Compute xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
         )doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::nextafter,
-        R"doc(Compute nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
-        )doc");
+        )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite_overload(
         module,
@@ -1055,9 +1072,9 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::atan2,
-        R"doc(Compute atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
-        )doc");
+        )doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_operation(
         module,
@@ -1087,18 +1104,22 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::gcd,
-        R"doc(Compute Greatest common divisor of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
+        R"doc(Computes Greatest common divisor of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
         [supported range -1024 to 1024].)doc",
-        R"doc(\mathrm{output\_tensor}_i = \text{gcd}\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
-        )doc");
+        R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
+        )doc", R"doc(INT32)doc", R"doc(2, 3, 4)doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::lcm,
-        R"doc(Compute Least common multiple of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
+        R"doc(Computes Least common multiple of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
         [supported range -1024 to 1024].)doc",
-        R"doc(\mathrm{output\_tensor}_i = \text{lcm}\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
-        )doc");
+        R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
+        )doc", R"doc(INT32)doc", R"doc(2, 3, 4)doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc");
 
     detail::bind_binary_composite_with_alpha(
         module,
@@ -1147,16 +1168,22 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::scatter,
-        R"doc(Compute scatter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{output}_{i,j,k,l} = \begin{cases} \mathrm{input}[\mathrm{index}_{i,j,k}][j][k][l], & \text{if } \mathrm{dim} = 0 \\ \mathrm{input}[i][\mathrm{index}_{i,j,k}][k][l], & \text{if } \mathrm{dim} = 1 \\ \mathrm{input}[i][j][\mathrm{index}_{i,j,k}][l], & \text{if } \mathrm{dim} = 2 \\ \mathrm{input}[i][j][k][\mathrm{index}_{i,j,k}], & \text{if } \mathrm{dim} = 3 \end{cases}
-        )doc");
+        R"doc(Computes scatter for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{output}_i = \verb|scatter|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right))doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(4)doc",
+        R"doc(ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::outer,
-        R"doc(Compute outer :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\begin{align} \mathrm{output\_tensor} &= \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b} \\ \text{where} \quad \mathrm{\mathrm{input\_tensor\_a}_{1,1,i,j}} &= \mathrm{\mathrm{output\_tensor}_{1,1,i,1}} \cdot \mathrm{\mathrm{input\_tensor\_b}_{1,1,1,j}} \end{align}
-        )doc");
+        R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(4)doc",
+        R"doc(ttnn.from_torch(torch.rand([1, 1, 32, 1], dtype=torch.bfloat16), device=device))doc",
+        R"doc(ttnn.from_torch(torch.rand([1, 1, 1, 32], dtype=torch.bfloat16), device=device))doc");
 
     detail::bind_polyval(
         module,
