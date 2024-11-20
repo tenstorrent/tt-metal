@@ -8,7 +8,7 @@
 #include <limits>
 #include <random>
 
-#include "device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 #include "gtest/gtest.h"
 // #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"

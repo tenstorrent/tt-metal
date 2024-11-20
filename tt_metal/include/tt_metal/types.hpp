@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "device/tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"

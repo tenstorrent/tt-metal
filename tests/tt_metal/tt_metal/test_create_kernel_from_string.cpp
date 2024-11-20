@@ -11,7 +11,7 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/program/program.hpp"
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 

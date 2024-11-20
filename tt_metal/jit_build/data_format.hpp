@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include "common/tt_backend_api_types.hpp"  // for DataFormat
-#include "device/tt_arch_types.h"           // for ARCH
+#include "umd/device/tt_arch_types.h"           // for ARCH
 enum class UnpackToDestMode : std::uint8_t;
 
 namespace tt {

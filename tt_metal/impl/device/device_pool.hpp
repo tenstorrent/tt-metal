@@ -10,7 +10,7 @@
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_cluster_descriptor.h"
 namespace tt {
 namespace tt_metal::detail {
 

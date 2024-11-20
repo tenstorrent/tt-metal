@@ -4,9 +4,9 @@
 
 #include "tlb_config.hpp"
 
-#include "third_party/umd/device/blackhole/blackhole_implementation.h"
-#include "third_party/umd/device/grayskull/grayskull_implementation.h"
-#include "third_party/umd/device/wormhole/wormhole_implementation.h"
+#include "umd/device/blackhole_implementation.h"
+#include "umd/device/grayskull_implementation.h"
+#include "umd/device/wormhole_implementation.h"
 #include "tt_metal/common/assert.hpp"
 
 namespace ll_api {

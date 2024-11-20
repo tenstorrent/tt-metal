@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "eth_l1_address_map.h"
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 

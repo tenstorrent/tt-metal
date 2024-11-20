@@ -14,7 +14,7 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/program/program.hpp"
 #include "llrt/rtoptions.hpp"
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 
 using namespace tt;
 using namespace tt::tt_metal;

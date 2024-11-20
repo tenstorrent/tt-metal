@@ -18,7 +18,7 @@
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/dispatch/command_queue.hpp"
 #include "llrt/hal.hpp"
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -26,7 +26,7 @@
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
-#include "tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 
 class CommandQueueFixture : public ::testing::Test {
    protected:

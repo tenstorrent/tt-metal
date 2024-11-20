@@ -16,7 +16,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
-#include "tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 
 using std::vector;
 using namespace tt::tt_metal;
