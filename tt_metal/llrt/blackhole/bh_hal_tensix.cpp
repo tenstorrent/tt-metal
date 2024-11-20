@@ -22,9 +22,7 @@
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal::blackhole {
 
 HalCoreInfoType create_tensix_mem_map() {
 
@@ -114,5 +112,4 @@ HalCoreInfoType create_tensix_mem_map() {
     return {HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true};
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::blackhole

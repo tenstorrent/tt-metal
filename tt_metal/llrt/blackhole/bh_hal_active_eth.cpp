@@ -21,9 +21,7 @@
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((std::uint64_t) & (((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal::blackhole {
 
 HalCoreInfoType create_active_eth_mem_map() {
 
@@ -73,5 +71,4 @@ HalCoreInfoType create_active_eth_mem_map() {
     return {HalProgrammableCoreType::ACTIVE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::blackhole
