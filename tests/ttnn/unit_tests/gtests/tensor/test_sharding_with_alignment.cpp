@@ -824,7 +824,8 @@ INSTANTIATE_TEST_SUITE_P(
         // EXAMPLE 2: ROW_MAJOR tensor with different representation for width sharded / interleaved
         // - In this example, (shard) width alignment is 1 because it's row major
         /////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Example 2a: Logical shard shape + alignment after
+        // Example 2a: Logical shard shape that is already aligned
+        // NOTE: ShardMode::PHYSICAL is equivalent in this case
         // - Along width: 5 / 1 is 5 shards; 5 * 1 = 5
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{

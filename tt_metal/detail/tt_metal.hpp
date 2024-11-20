@@ -100,7 +100,7 @@ inline namespace v0 {
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
         * | buffer      | Buffer to read data from                        | Buffer &                |                                                  | Yes      |
-        * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data into                | std::vector<DType> &    |                                                  | Yes      |
         * | core_id     | ID of core                                      | const uint32_t &        |                                                  | Yes      |
         */
         template<typename DType>
