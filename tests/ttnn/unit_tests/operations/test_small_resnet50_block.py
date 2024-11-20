@@ -118,6 +118,8 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
+            ),
+            compute_config=ttnn.GetComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -139,8 +141,10 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
+            ),
+            compute_config=ttnn.GetComputeKernelConfig(
+                math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -162,6 +166,8 @@ class resnet50Bottleneck:
                 conv_config=ttnn.Conv2dConfig(
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
+                ),
+                compute_config=ttnn.GetComputeKernelConfig(
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                 ),
                 conv_op_cache=conv_op_cache,
@@ -187,8 +193,10 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
+            ),
+            compute_config=ttnn.GetComputeKernelConfig(
+                math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -211,6 +219,8 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
+            ),
+            compute_config=ttnn.GetComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
