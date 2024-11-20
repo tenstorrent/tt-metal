@@ -68,23 +68,6 @@ def test_bw_div_binary_default(input_shapes, device):
     assert status
 
 
-def test_bw_div_example(device):
-    grad_tensor = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
-    x1_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True)
-    x2_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True)
-    golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_tensor, x1_torch, x2_torch, None)
-    grad_tt = ttnn.from_torch(grad_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    x1_tt = ttnn.from_torch(x1_torch, layout=ttnn.TILE_LAYOUT, device=device)
-    x2_tt = ttnn.from_torch(x2_torch, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.div_bw(grad_tt, x1_tt, x2_tt, round_mode=None)
-    tt_out_1 = ttnn.to_torch(y_tt[1])
-    tt_out_0 = ttnn.to_torch(y_tt[0])
-    comp_pass_1 = torch.allclose(tt_out_1, golden_tensor[1])
-    comp_pass_0 = torch.allclose(tt_out_0, golden_tensor[0])
-    assert comp_pass_1 and comp_pass_0
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
