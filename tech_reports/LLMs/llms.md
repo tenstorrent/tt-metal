@@ -67,7 +67,6 @@ Other useful resources:
 ### 2.6 Decoder
 <div align="center">
 <img src="decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
-<figcaption>Llama3.1 Decoder</figcaption>
 </div> <br>
 If the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward. According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass. Only thing to worry about is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM. <br><br> Decode forward pass implementation below follows diagram above and has nothing that is not already explained in previous sections. Also, it's crucial to deallocate tensors after their usage to optimize memory. However, in this explanation, tensor deallocation has been omitted for clarity and to keep the code as straightforward as possible.
 
@@ -119,7 +118,6 @@ Below is an illustration of how the LMHead weights are partitioned across two de
 
 <div align="center">
 <img src="lm_head.png" alt="Decoder Diagram" title="Decoder Title" width="650" height="350">
-<figcaption>LMHead matmul</figcaption>
 </div> <br>
 
 ```py
@@ -210,7 +208,6 @@ def forward(self, x: ttnn.Tensor):
 
 <div align="center">
 <img src="llama_model.png" alt="Llama model" title="Llama model" width="350" height="350">
-<figcaption>Llama3.1-70b model</figcaption>
 </div> <br>
 
 Once the model components are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in an earlier section, so they are not included within the model class itself.
