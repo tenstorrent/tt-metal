@@ -71,10 +71,12 @@ void Tensor::backward(bool retain_graph) {
     for (const auto& node_id : sorted_nodes) {
         graph_nodes[node_id].grad_function();
         if (!retain_graph) {
-            // setting grad function to nullptr releases context of the function
-            // it is often includes multiple tensors and if we don't need to retain them
-            // at this point of backward pass, we can release them
-            graph_nodes[node_id].grad_function = nullptr;
+            graph_nodes[node_id].grad_function = [] {
+                throw std::runtime_error(
+                    "[Tensor::backward] This backward function should not be called! Memory from the node is released! "
+                    "Please consider tweaking the retain_graph parameter if you need to call backward twice on the "
+                    "same graph nodes.");
+            };
         }
     }
 }
