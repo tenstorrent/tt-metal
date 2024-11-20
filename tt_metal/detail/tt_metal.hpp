@@ -37,8 +37,17 @@ inline namespace v0 {
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
 
-        void WriteToDevice(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer);
-
+        /**
+        * Copies data from a host buffer into the specified buffer
+        *
+        * Return value: void
+        *
+        * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
+        * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+        * | buffer      | Buffer to send data to                          | Buffer &                |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match buffer               | Yes      |
+        */
+        void WriteToBuffer(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer);
         /**
         * Copies data from a host buffer into the specified buffer
         *
@@ -51,7 +60,7 @@ inline namespace v0 {
         */
         template<typename DType>
         void WriteToBuffer(Buffer &buffer, const std::vector<DType>& host_buffer) {
-            WriteToDevice(buffer, tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
+            WriteToBuffer(buffer, tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
         }
         template<typename DType>
         void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& host_buffer) {

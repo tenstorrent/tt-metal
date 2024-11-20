@@ -676,7 +676,7 @@ void write_data_to_device_buffer(
 template <typename T, template <typename> typename BufferType>
 void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& device_buffer) {
     ZoneScoped;
-    ::detail::WriteToDevice(device_buffer, tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(T)));
+    ::detail::WriteToBuffer(device_buffer, tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(T)));
 }
 
 template <typename T, template <typename> typename BufferType>

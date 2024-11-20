@@ -477,6 +477,20 @@ void WriteToDevice(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer) {
     }
 }
 
+void WriteToBuffer(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:  // fallthrough
+        case BufferType::L1:    // fallthrough
+        case BufferType::L1_SMALL: {
+            WriteToDevice(buffer, host_buffer);
+        } break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_THROW("Writing to host memory is unsupported!");
+        } break;
+        default: TT_THROW("Unsupported buffer type!");
+    }
+}
+
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, uint8_t* host_buffer) {
     uint32_t page_size = buffer.page_size();
     uint32_t num_pages = buffer.num_pages();
@@ -501,9 +515,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, uint8_t* host_buf
         }
 
         // Copy page into host buffer
-        for (uint32_t entry : page) {
-            host_buffer[host_idx++] = entry;
-        }
+        std::memcpy(host_buffer + host_idx, page.data(), page.size());
+        host_idx += page.size();
 
         bank_index = (bank_index + 1) % num_banks;
     }

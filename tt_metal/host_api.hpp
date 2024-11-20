@@ -536,7 +536,7 @@ void EnqueueReadBuffer(
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                        | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
+ * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
  */
 template<typename DType>
 void EnqueueReadBuffer(
