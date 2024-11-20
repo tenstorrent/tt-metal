@@ -419,7 +419,10 @@ void WatcherDeviceReader::DumpL1Status(CoreDescriptor& core, const launch_msg_t*
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
     data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
-    if (data[0] != llrt::generate_risc_startup_addr(false)) {
+    TT_ASSERT(core.type == CoreType::WORKER);
+    uint32_t core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    auto fw_launch_value = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
+    if (data[0] != fw_launch_value) {
         LogRunningKernels(core, launch_msg);
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.coord.str(), data[0]);
     }

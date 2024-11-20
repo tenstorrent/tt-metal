@@ -83,6 +83,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+            .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
+            .fw_launch_addr_value = 0x1,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

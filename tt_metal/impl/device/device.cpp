@@ -451,10 +451,10 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     this->initialize_device_bank_to_noc_tables(core_type, virtual_core);
     uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
+    auto jit_build_config = hal.get_jit_build_config(core_type_idx, 0, 0); // Only the first risc needs to be programmed
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            llrt::program_risc_startup_addr(this->id(), virtual_core);
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
@@ -510,11 +510,6 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                 }
             }
-            if (is_idle_eth) {
-                llrt::program_risc_startup_addr(this->id(), virtual_core);
-            } else {
-                llrt::launch_erisc_app_fw_on_core(this->id(), virtual_core);
-            }
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
             launch_msg->kernel_config.mode = (this->using_slow_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST :  DISPATCH_MODE_DEV;
@@ -523,6 +518,9 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         default:
             TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
     }
+
+    tt::Cluster::instance().write_core(
+        &jit_build_config.fw_launch_addr_value, sizeof(uint32_t), tt_cxy_pair(this->id_, virtual_core), jit_build_config.fw_launch_addr);
 
     // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
     // launch_message during program execution need to at least have the correct dispatch mode.

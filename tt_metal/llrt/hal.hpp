@@ -64,9 +64,14 @@ enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
 
 using DeviceAddr = std::uint64_t;
 
+// Note: nsidwell will be removing need for fw_base_addr and local_init_addr
+// fw_launch_addr is programmed with fw_launch_addr_value on the master risc
+//  of a given progammable core to start FW
 struct HalJitBuildConfig {
     DeviceAddr fw_base_addr;
     DeviceAddr local_init_addr;
+    DeviceAddr fw_launch_addr;
+    uint32_t fw_launch_addr_value;
 };
 
 class Hal;
@@ -98,10 +103,7 @@ public:
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
-    template <typename T = DeviceAddr>
-    T get_base_firmware_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
-    template <typename T = DeviceAddr>
-    T get_binary_local_init_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const HalJitBuildConfig &get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
 template <typename T>
@@ -124,18 +126,10 @@ inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_cl
     return this->processor_classes_[processor_class_idx].size();
 }
 
-template <typename T>
-inline T HalCoreInfoType::get_base_firmware_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const {
+inline const HalJitBuildConfig &HalCoreInfoType::get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
     TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
-    return this->processor_classes_[processor_class_idx][processor_type_idx].fw_base_addr;
-}
-
-template <typename T>
-inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_idx, uint32_t processor_type_idx) const {
-    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
-    TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
-    return this->processor_classes_[processor_class_idx][processor_type_idx].local_init_addr;
+    return this->processor_classes_[processor_class_idx][processor_type_idx];
 }
 
 class Hal {
@@ -248,11 +242,7 @@ public:
 
     uint32_t get_num_risc_processors() const;
 
-    template <typename T = DeviceAddr>
-    T get_base_firmware_addr(
-        uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
-    template <typename T = DeviceAddr>
-    T get_binary_local_init_addr(
+    const HalJitBuildConfig &get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
@@ -348,20 +338,10 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
 }
 
-template <typename T>
-inline T Hal::get_base_firmware_addr(
+inline const HalJitBuildConfig &Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
-    return this->core_info_[programmable_core_type_index].get_base_firmware_addr(
-        processor_class_idx, processor_type_idx);
-}
-
-template <typename T>
-inline T Hal::get_binary_local_init_addr(
-    uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
-    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
-    return this->core_info_[programmable_core_type_index].get_binary_local_init_addr(
-        processor_class_idx, processor_type_idx);
+    return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
 }
 
 class HalSingleton : public Hal {
@@ -382,6 +362,8 @@ public:
 };
 
 inline auto& hal = HalSingleton::getInstance();  // inline variable requires C++17
+
+uint32_t generate_risc_startup_addr(uint32_t firmware_base); // used by Tensix initializers to build HalJitBuildConfig
 
 }  // namespace tt_metal
 }  // namespace tt
