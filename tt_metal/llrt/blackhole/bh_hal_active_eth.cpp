@@ -18,7 +18,7 @@
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
 
-#include <magic_enum.hpp>
+//#include <magic_enum.hpp>
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t) & (((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
