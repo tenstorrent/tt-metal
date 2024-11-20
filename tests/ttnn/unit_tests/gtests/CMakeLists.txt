@@ -41,7 +41,6 @@ function(setup_ttnn_test_target target_name)
     target_include_directories(
         ${target_name}
         PRIVATE
-            ${UMD_HOME}
             ${PROJECT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/tt_metal
             ${PROJECT_SOURCE_DIR}/tests
