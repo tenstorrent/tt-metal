@@ -146,8 +146,7 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 
 tt::tt_metal::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
-    // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device->get_device(0), memory_config);
+    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device, memory_config);
 }
 
 tt::tt_metal::Tensor full(

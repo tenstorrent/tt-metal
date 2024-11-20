@@ -337,7 +337,7 @@ void bind_empty_operation(py::module& module, const std::string& info_doc = "") 
             shape (List[int]): The shape of the tensor to be created.
             dtype (ttnn.DataType, optional): The tensor data type. Defaults to `ttnn.bfloat16`.
             layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR`.
-            device (ttnn.Device): The device where the tensor will be allocated.
+            device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
 
         Returns:
@@ -365,6 +365,20 @@ void bind_empty_operation(py::module& module, const std::string& info_doc = "") 
                const DataType& dtype,
                const Layout& layout,
                Device* device,
+               const MemoryConfig& memory_config) -> ttnn::Tensor {
+                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
+            },
+            py::arg("shape"),
+            py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("layout") = Layout::ROW_MAJOR,
+            py::arg("device"),
+            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG},
+        ttnn::pybind_overload_t{
+            [](const EmptyType& self,
+               const std::vector<uint32_t>& shape,
+               const DataType& dtype,
+               const Layout& layout,
+               MeshDevice* device,
                const MemoryConfig& memory_config) -> ttnn::Tensor {
                 return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
             },
