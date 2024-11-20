@@ -41,9 +41,6 @@ def test_bw_div_binary(input_shapes, round_mode, device):
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data, round_mode)
 
-    if round_mode == None:
-        round_mode = "None"
-
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor, round_mode=round_mode)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
@@ -80,7 +77,7 @@ def test_bw_div_example(device):
     grad_tt = ttnn.from_torch(grad_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     x1_tt = ttnn.from_torch(x1_torch, layout=ttnn.TILE_LAYOUT, device=device)
     x2_tt = ttnn.from_torch(x2_torch, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.div_bw(grad_tt, x1_tt, x2_tt, round_mode="None")
+    y_tt = ttnn.div_bw(grad_tt, x1_tt, x2_tt, round_mode=None)
     tt_out_1 = ttnn.to_torch(y_tt[1])
     tt_out_0 = ttnn.to_torch(y_tt[0])
     comp_pass_1 = torch.allclose(tt_out_1, golden_tensor[1])
@@ -99,7 +96,7 @@ def test_bw_div_example(device):
 @pytest.mark.parametrize(
     "round_mode",
     (
-        "None",
+        None,
         "trunc",
         "floor",
     ),
@@ -111,9 +108,6 @@ def test_bw_unary_div_0(input_shapes, scalar, round_mode, device):
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, False, val=0)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
-
-    if round_mode == "None":
-        round_mode = None
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
 
@@ -132,7 +126,7 @@ def test_bw_unary_div_0(input_shapes, scalar, round_mode, device):
 @pytest.mark.parametrize(
     "round_mode",
     (
-        "None",
+        None,
         "trunc",
         "floor",
     ),
@@ -143,11 +137,6 @@ def test_bw_unary_div(input_shapes, scalar, round_mode, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
-
-    in_data.retain_grad()
-
-    if round_mode == "None":
-        round_mode = None
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
 
@@ -233,7 +222,7 @@ def test_bw_unary_div_bf8b(input_shapes, scalar, device):
 @pytest.mark.parametrize(
     "round_mode",
     (
-        "None",
+        None,
         "trunc",
         "floor",
     ),
@@ -250,9 +239,6 @@ def test_bw_div_scalar_opt_output(input_shapes, scalar, round_mode, device):
     ttnn.div_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode, input_grad=input_grad, queue_id=cq_id)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
     tt_output_tensor_on_device = [input_grad]
-
-    if round_mode == "None":
-        round_mode = None
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
 
@@ -271,7 +257,7 @@ def test_bw_div_scalar_opt_output(input_shapes, scalar, round_mode, device):
 @pytest.mark.parametrize(
     "round_mode",
     (
-        "None",
+        None,
         "trunc",
         "floor",
     ),
@@ -306,9 +292,6 @@ def test_bw_div_opt(input_shapes, round_mode, are_required_outputs, device):
     )
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
     tt_output_tensor_on_device = [input_grad, other_grad]
-
-    if round_mode == "None":
-        round_mode = None
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data, round_mode)
