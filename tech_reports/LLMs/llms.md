@@ -206,6 +206,55 @@ def forward(self, x: ttnn.Tensor):
 
     return output
 ```
+### 2.8 Model
+
+<div align="center">
+<img src="llama_model.png" alt="Llama model" title="Llama model" width="350" height="350">
+<figcaption>Llama3.1-70b model</figcaption>
+</div> <br>
+
+Once the model components are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in an earlier section, so they are not included within the model class itself.
+
+The model’s constructor initializes 80 decoders, an RMSNorm object, and the LMHead, ensuring that weights for all components are loaded onto the appropriate devices.
+
+During the forward pass, the decoders are executed sequentially, followed by normalization and the LMHead computation at the end. A specific optimization is applied for the prefill mode: since only the last token is relevant, the LMHead is executed only on the final tile in this mode.
+
+In prefill mode, the RMSNorm output is interleaved, but the LMHead requires a sharded tensor. To accommodate this, the ```interleaved_to_sharded``` function is used to prepare the output accordingly.
+
+```py
+def forward(
+    self,
+    x: ttnn.Tensor,
+    current_pos,
+    rot_mat=None,
+    transformation_mats=None,
+    user_id=0,
+    mode="decode",
+    page_table=None,
+    get_last_token=-1,
+):
+    for layer in self.layers:
+        x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode, page_table)
+
+    if mode == "prefill" and get_last_token == -1:
+        return x
+
+    # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+    if get_last_token != -1:
+        x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+
+    # Output norm
+    x = self.norm(x, mode=mode)
+
+    if mode == "prefill":
+        x = ttnn.interleaved_to_sharded(
+            x,
+            self.model_config["LM_HEAD_INPUT_MEMCFG"],
+        )
+
+    return self.lm_head(x)
+```
+
 
 ## 3. Features
 ### 3.1 Generative Decoding
