@@ -80,8 +80,7 @@ static Tensor full(
                     tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.data(), false);
                 }
             } else {
-                auto uint32_data = tt::tt_metal::tensor_impl::pack_vec_into_uint32_vec<T>(owned_buffer);
-                tt::tt_metal::detail::WriteToBuffer(*device_buffer, uint32_data);
+                tt::tt_metal::detail::WriteToBuffer(*device_buffer, owned_buffer.get());
             }
 
             return optional_output_tensor.value();

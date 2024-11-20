@@ -23,7 +23,6 @@ using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCP
 template <bool debug_sync = false>
 static inline void memcpy_to_device(void *__restrict dst, const void *__restrict src, size_t n) {
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
-    TT_ASSERT(n % sizeof(uint32_t) == 0);
 
     static constexpr uint32_t inner_loop = 8;
     static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);
@@ -67,6 +66,12 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
                 _mm_stream_si32((int32_t *)dst8, *(int32_t *)src8);
                 src8 += sizeof(int32_t);
                 dst8 += sizeof(int32_t);
+            }
+            n -= n / sizeof(int32_t) * sizeof(int32_t);
+            for (size_t i = 0; i < n; ++i) {
+                *src8 = *dst8;
+                src8++;
+                dst8++;
             }
         }
     }

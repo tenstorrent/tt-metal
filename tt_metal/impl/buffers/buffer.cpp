@@ -56,9 +56,6 @@ void validate_buffer_size_and_page_size(
         "should be divisible by buffer size",
         page_size,
         size);
-    TT_FATAL(
-        page_size % sizeof(uint32_t) == 0,
-        "Page size {} must be divisible by sizeof(uint32_t) because buffers hold uint32_t values", page_size);
 
     if (is_sharded(buffer_layout)) {
         TT_FATAL(

@@ -822,10 +822,10 @@ INSTANTIATE_TEST_SUITE_P(
         },
         /////////////////////////////////////////////////////////////////////////////////////////////////////
         // EXAMPLE 2: ROW_MAJOR tensor with different representation for width sharded / interleaved
-        // - In this example, (shard) width alignment is 4 because UINT8 = 1 bytes and we pack with uint32_t
+        // - In this example, (shard) width alignment is 1 because it's row major
         /////////////////////////////////////////////////////////////////////////////////////////////////////
         // Example 2a: Logical shard shape + alignment after
-        // - Along width: 5 / 1 is 5 shards; 5 * 4 = 20
+        // - Along width: 5 / 1 is 5 shards; 5 * 1 = 5
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 10, 5},
@@ -844,15 +844,15 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_size = Size{20, 20}
+                .physical_size = Size{20, 5}
             }
         },
         // Example 2b: Logical shard shape that is already aligned
         // NOTE: ShardMode::PHYSICAL is equivalent in this case
-        // - Along width: 5 / 4 is 2 shards; 2 * 4 = 8
+        // - Along width: 8 / 4 is 2 shards; 2 * 4 = 8
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 10, 5},
+                .shape = SimpleShape{1, 2, 10, 8},
                 .data_type = DataType::UINT8,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
@@ -872,7 +872,7 @@ INSTANTIATE_TEST_SUITE_P(
             }
         },
         // Example 2c: For interleaved, we treat entire height/width as "logical shard shape" for calculations
-        // 20 "shards" with 5 aligned to 4 for uint32_t alignment
+        // 20 "shards" with 5 aligned to 1
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 10, 5},
@@ -886,7 +886,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_size = Size{20, 8}
+                .physical_size = Size{20, 5}
             }
         },
         ////////////////////////////////////////////////////////////////////
