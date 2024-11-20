@@ -9,10 +9,10 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
+      timeout-seconds:
         required: false
         type: number
-        default: 80
+        default: 4800
   workflow_dispatch:
     inputs:
       arch:
@@ -30,10 +30,10 @@ on:
           - N150
           - N300
           - BH
-      timeout:
+      timeout-seconds:
         required: false
         type: number
-        default: 80
+        default: 4800
 
 jobs:
   models:
@@ -68,7 +68,7 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         uses: ./.github/actions/retry-command
         with:
-          timeout-seconds: ${{ inputs.timeout * 60 }}
+          timeout-seconds: ${{ inputs.timeout-seconds }}
           max-retries: 3
           backoff-seconds: 30
           tt-smi-reset-on-fail: true
