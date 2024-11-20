@@ -78,7 +78,7 @@ struct ExecuteDiv
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string> round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -86,7 +86,7 @@ struct ExecuteDiv
         const Tensor& input_tensor,
         float value,
         bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string> round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -95,7 +95,7 @@ struct ExecuteDiv
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string> round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -104,7 +104,7 @@ struct ExecuteDiv
         const Tensor& input_tensor,
         float value,
         bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string> round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };

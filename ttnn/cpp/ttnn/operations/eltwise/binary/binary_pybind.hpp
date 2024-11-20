@@ -557,7 +557,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                bool accurate_mode,
-               const std::optional<std::string>& round_mode,
+               const std::optional<std::string> round_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
@@ -577,7 +577,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_a,
                float value,
                bool accurate_mode,
-               const std::optional<std::string>& round_mode,
+               const std::optional<std::string> round_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
