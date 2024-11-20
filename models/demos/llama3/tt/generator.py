@@ -200,7 +200,6 @@ class LlamaGenerator:
             tt_full_text_mask_expand_11SD,
             tt_position_id,
             rot_mats,
-            transformation_mats,
         ) = self.model.prepare_inputs_prefill(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len=prefill_len
         )
@@ -213,7 +212,6 @@ class LlamaGenerator:
             xattn_caches,
             tt_position_id,
             rot_mats,
-            transformation_mats,
             user_id,
             vision_tokens,
         )
@@ -221,6 +219,38 @@ class LlamaGenerator:
         logits = self.model.process_output_prefill(tt_logits, B, prefill_len)
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
+
+    def prefill_forward(self, vision_images, vision_masks, tokens: torch.Tensor, xattn_caches, total_lens, prompt_lens):
+        """
+        Batched version of prefill_forward_single_user for vision model.
+        """
+        batch, batch_seq_len = tokens.shape
+        output_logits = torch.zeros(batch, max(prompt_lens), self.model_args.vocab_size)
+        output_xattn_masks = []
+        output_full_text_row_masked_out_masks = []
+
+        for user_id in range(batch):
+            print(f"Prefilling User {user_id}")
+            seq_len = prompt_lens[user_id]
+            (
+                xattn_caches,
+                cross_attention_masks,
+                full_text_row_masked_out_mask,
+                logits,
+            ) = self.prefill_forward_single_user(
+                vision_images=vision_images[user_id],
+                vision_mask=vision_masks[user_id],
+                tokens=tokens[user_id : user_id + 1, :seq_len],  # Keep batch dimension
+                xattn_caches=xattn_caches,
+                user_id=user_id,
+                total_len=total_lens[user_id],
+                prefill_len=seq_len,
+            )
+            output_logits[user_id, :seq_len] = logits
+            output_xattn_masks.append(cross_attention_masks)
+            output_full_text_row_masked_out_masks.append(full_text_row_masked_out_mask)
+
+        return output_logits, output_xattn_masks, output_full_text_row_masked_out_masks
 
     def decode_forward(
         self,
@@ -237,17 +267,14 @@ class LlamaGenerator:
 
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
-        # B = 1 # TODO: Only supports batch=1 right now! Might make tokens input a tensor.
         B, S = tokens.shape
 
         (
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            _,
             tt_position_id,
-            rot_mats,
-            _,
+            tt_rot_mats,
         ) = self.model.prepare_inputs_decode(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
@@ -258,7 +285,7 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             xattn_caches,
             tt_position_id,
-            rot_mats,
+            tt_rot_mats,
         )
 
         logits = self.model.process_output_decode(tt_logits, B, S)
@@ -279,10 +306,8 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            _,
             tt_position_id,
-            rot_mats,
-            _,
+            tt_rot_mats,
         ) = self.model.prepare_inputs_decode(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
@@ -294,7 +319,7 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             xattn_caches,
             tt_position_id,
-            rot_mats,
+            tt_rot_mats,
         )
 
         # Get inputs ready for trace run
@@ -302,10 +327,8 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            _,
             tt_position_id,
-            rot_mats,
-            _,
+            tt_rope_id,
         ) = self.model.prepare_decode_inputs_host(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id
         )
@@ -315,9 +338,9 @@ class LlamaGenerator:
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
-            rot_mats,
+            tt_rope_id,
         ) = self.model.copy_host_to_device(
-            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, rot_mats)
+            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id)
         )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -325,11 +348,11 @@ class LlamaGenerator:
         B = tokens.shape[0]
         # Do on-device transformations of inputs before forward
         (
-            tt_h,
+            tt_rot_mats,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
         ) = self.model.transform_decode_inputs_device(
-            tt_h,
+            tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             B=B,
@@ -341,20 +364,12 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH_transform,
             xattn_caches,
             tt_position_id,
-            rot_mats,
+            tt_rot_mats,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
 
-        return (
-            trace_id,
-            tt_logits_rm,
-            tt_h_trace_input,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_position_id,
-            rot_mats,
-        )
+        return trace_id, tt_logits_rm, tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id
 
     def decode_forward_trace(
         self,
@@ -369,28 +384,26 @@ class LlamaGenerator:
         trace_xattn_mask,
         trace_full_text_mask_expand_1NSH,
         trace_position_id,
-        trace_rot_mats,
+        trace_rope_id,
     ):
         (
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
-            _,
             tt_position_id,
-            rot_mats,
-            _,
+            tt_rope_id,
         ) = self.model.prepare_decode_inputs_host(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
 
         self.model.copy_host_to_device(
-            host_tensors=(tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, rot_mats),
+            host_tensors=(tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id),
             device_tensors=(
                 trace_h,
                 trace_xattn_mask,
                 trace_full_text_mask_expand_1NSH,
                 trace_position_id,
-                trace_rot_mats,
+                trace_rope_id,
             ),
         )
 
@@ -420,7 +433,7 @@ class LlamaGenerator:
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
                 tt_position_id,
-                rot_mats,
+                tt_rope_id,
             ) = self.capture_trace(
                 position_id,
                 tokens,
@@ -434,7 +447,7 @@ class LlamaGenerator:
                 "tt_xattn_mask": tt_xattn_mask,
                 "tt_full_text_mask_expand_1NSH": tt_full_text_mask_expand_1NSH,
                 "tt_position_id": tt_position_id,
-                "rot_mats": rot_mats,
+                "tt_rope_id": tt_rope_id,
             }
             self.trace_outputs = {
                 "tt_logits_rm": tt_logits_rm,
@@ -452,7 +465,7 @@ class LlamaGenerator:
             self.trace_inputs["tt_xattn_mask"],
             self.trace_inputs["tt_full_text_mask_expand_1NSH"],
             self.trace_inputs["tt_position_id"],
-            self.trace_inputs["rot_mats"],
+            self.trace_inputs["tt_rope_id"],
         )
 
     def generate(
