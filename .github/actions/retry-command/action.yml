@@ -13,6 +13,9 @@ inputs:
   max-retries:
     description: "Max number of retries to retry command"
     default: 3
+  tt-smi-reset-on-fail:
+    description: "tt-smi-metal reset on failure"
+    default: false
 runs:
   using: "composite"
   steps:
@@ -38,6 +41,11 @@ runs:
 
           # Optional: Add a delay between retries
           sleep ${{ inputs.backoff-seconds }}
+
+          # smi reset for workflows that request it
+          if [[ "${{ inputs.tt-smi-reset-on-fail }}" == "true" ]]; then
+            tt-smi-metal -r 0
+          fi
         done
 
         echo "Command failed after $max_retries attempts."

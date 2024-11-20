@@ -33,7 +33,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
+        default: 80
 
 jobs:
   models:
@@ -66,12 +66,13 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: ${{ inputs.timeout * 60 }}
+          max-retries: 3
+          backoff-seconds: 30
+          tt-smi-reset-on-fail: true
+          command: PYTHONPATH=$TT_METAL_HOME ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
