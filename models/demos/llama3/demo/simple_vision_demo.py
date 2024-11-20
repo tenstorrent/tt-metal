@@ -42,6 +42,21 @@ def get_sampler(temperature, top_p, tokenizer):
     return sample
 
 
+def get_batch_sampler(temperature, top_p, tokenizer):
+    def sample(logits):
+        if temperature > 0:
+            probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
+            next_token = llama_reference_generation.sample_top_p(probs, top_p)
+        else:
+            next_token = torch.argmax(logits[:, -1], dim=-1)
+
+        next_tokens = next_token.reshape(-1)
+        texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(len(next_tokens))]
+        return next_tokens, texts
+
+    return sample
+
+
 def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16):
     from models.demos.llama3.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.demos.llama3.tt.model_config import TtModelArgs
@@ -77,29 +92,29 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     ids=["cold", "warm"],
 )
 @pytest.mark.parametrize(
-    "test_case",
-    [
-        "normal",
-    ],
-)
-@pytest.mark.parametrize(
     "enable_trace",
     (False, True),
     ids=["no_trace", "yes_trace"],
+)
+@pytest.mark.parametrize(
+    "max_batch_size",
+    (1, 2, 4, 8, 16, 32),
+    ids=["batch1", "batch2", "batch4", "batch8", "batch16", "batch32"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 def test_llama_multimodal_demo_text(
     mesh_device,
     warmup_iters,
-    test_case,
     enable_trace,
+    max_batch_size,
     temperature: float = 0,
     top_p: float = 0.9,
     max_seq_len: int = 512,
-    max_batch_size: int = 1,
     max_gen_len: Optional[int] = 200,
     model_parallel_size: Optional[int] = None,
 ):
+    if max_batch_size == 1 and enable_trace:
+        pytest.skip("Trace is not supported for batch size 1")
     """
     Simple multimodal demo with limited dependence on reference code.
     """
@@ -133,97 +148,110 @@ def test_llama_multimodal_demo_text(
         [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
         [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
         [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
-    ]
+    ] * 8
 
-    sampler = get_sampler(temperature, top_p, tokenizer)
+    assert len(dialogs) % max_batch_size == 0
+    num_batches = len(dialogs) // max_batch_size
+
+    sampler = get_batch_sampler(temperature, top_p, tokenizer)
 
     for iter_num in range(warmup_iters + 1):
-        for dialog in dialogs:
-            for msg in dialog:
-                print(f"{msg.role.capitalize()}: {msg.content}\n")
+        logger.info(f"Iteration {iter_num}")
+        for batch_idx in range(num_batches):
+            batch_dialogs = dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
+            for dialog in batch_dialogs:
+                for msg in dialog:
+                    print(f"{msg.role.capitalize()}: {msg.content}\n")
 
-            if iter_num <= warmup_iters:
-                logger.info(f"Warmup iteration {iter_num}")
-
-            model_input = formatter.encode_dialog_prompt(dialog, tool_prompt_format=False)
+            batch_model_input = [
+                formatter.encode_dialog_prompt(dialog, tool_prompt_format=False) for dialog in batch_dialogs
+            ]
 
             # Do initial prefill
-            vision_images = model_input.vision.images
-            vision_mask = model_input.vision.mask
-            prompt_tokens = model_input.tokens
-            prefill_len = len(prompt_tokens)
-            total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
-            # Create tokens tensor
+            vision_images = [model_input.vision.images for model_input in batch_model_input]
+            vision_mask = [model_input.vision.mask for model_input in batch_model_input]
+            prompt_tokens = [model_input.tokens for model_input in batch_model_input]
+            # Get max length of prompts in batch
+            prefill_lens = torch.tensor([len(tokens) for tokens in prompt_tokens], dtype=torch.long)
+            total_lens = prefill_lens + max_gen_len
+
+            # Create padded tokens tensor for batch
             pad_id = tokenizer.pad_id
-            bsz = 1
-            tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long)
-            tokens[0, : len(prompt_tokens)] = torch.tensor(prompt_tokens, dtype=torch.long)
+            bsz = len(prompt_tokens)
+            tokens = torch.full((bsz, max(total_lens)), pad_id, dtype=torch.long)
+
+            # Fill in actual tokens for each sequence in batch
+            for i, seq in enumerate(prompt_tokens):
+                tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
+
             prefill_start = time.perf_counter()
-            prompt_tokens_tensor = torch.tensor(prompt_tokens, dtype=torch.long).reshape(1, -1)  # B, S
-            (
-                xattn_caches,
-                cross_attention_masks,
-                full_text_row_masked_out_mask,
-                logits,
-            ) = generator.prefill_forward_single_user(
+            batch_logits, batch_xattn_masks, batch_text_masks = generator.prefill_forward(
                 vision_images,
                 vision_mask,
-                prompt_tokens_tensor,
+                tokens,
                 xattn_caches,
-                user_id=0,
-                total_len=total_len,
-                prefill_len=prefill_len,
+                total_lens,
+                prefill_lens,
             )
+
             prefill_end = time.perf_counter()
-
-            next_token, text = sampler(logits)
-            tokens[0, prefill_len] = next_token
-
+            # Get logits for last prefill token
+            batch_logits = batch_logits[torch.arange(max_batch_size), prefill_lens - 1].view(max_batch_size, 1, -1)
+            next_tokens, next_texts = sampler(batch_logits)
+            for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
+                tokens[i, prefill_lens[i]] = next_token
+            print(f"Next tokens: {next_tokens}")
+            print(f"Next texts: {next_texts}")
             decode_times = []
 
             for gen_idx in range(max_gen_len - 1):
                 decode_start = time.perf_counter()
-                position_id = prefill_len + gen_idx
-                next_token_tensor = torch.tensor([next_token], dtype=torch.long).reshape(1, 1)  # B, S
+                position_id = prefill_lens + gen_idx
+                next_token_tensor = next_tokens.reshape(max_batch_size, 1)  # 1, B
 
                 if enable_trace:
                     logits = generator.easy_trace(
                         position_id,
                         next_token_tensor,
-                        cross_attention_masks,
-                        full_text_row_masked_out_mask,
+                        batch_xattn_masks,
+                        batch_text_masks,
                         xattn_caches,
                     )
                 else:
                     logits = generator.decode_forward(
                         position_id,
                         next_token_tensor,
-                        cross_attention_masks,
-                        full_text_row_masked_out_mask,
+                        batch_xattn_masks,
+                        batch_text_masks,
                         xattn_caches,
                     )
 
-                next_token, text = sampler(logits)
+                next_tokens, next_texts = sampler(logits)
+                # print(f"Next tokens: {next_tokens}")
+                # print(f"Next texts: {next_texts}")
                 # Update next token
-                tokens[0, position_id + 1] = next_token
+                tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                 decode_end = time.perf_counter()
                 decode_times.append(decode_end - decode_start)
 
-                if text in ["<|eot_id|>", "<|eom_id|>"]:
-                    break
-
-            # Log full text output
+                # Disable checking for eot until I have more robust code
+                # if text in ["<|eot_id|>", "<|eom_id|>"]:
+                #     break
+            # Log full text output for each user in batch
             vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
-            # Remove <|image|> tokens since they break the tokenizer
-            tokens_out = [
-                t if t not in vision_tokens else tokenizer.pad_id for t in tokens[0].tolist()[: position_id + 2]
-            ]
-            text = tokenizer.decode(tokens_out)
-            logger.info(f"Full text: {text}")
+
+            for user_id in range(max_batch_size):
+                # Remove <|image|> tokens since they break the tokenizer
+                tokens_out = [
+                    t if t not in vision_tokens else tokenizer.pad_id
+                    for t in tokens[user_id].tolist()[: position_id[user_id] + 2]
+                ]
+                text = tokenizer.decode(tokens_out)
+                logger.info(f"User {user_id} full text: {text}")
 
             prefill_time_ms = (prefill_end - prefill_start) * 1000
             logger.info(f"Prefill time: {prefill_time_ms:.2f} ms")
             decode_time_ms = sum(decode_times) / (gen_idx + 1) * 1000
-            logger.info(f"Decode time: {decode_time_ms:.2f} ms")
+            logger.info(f"Average decode time per token: {decode_time_ms:.2f} ms")
 
             # ttnn.release_trace(generator.mesh_device, trace_id)
