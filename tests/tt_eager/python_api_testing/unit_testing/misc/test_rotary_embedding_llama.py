@@ -11,19 +11,14 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, nearest_32
-from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
-from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, nearest_32, skip_for_wormhole_b0
+from models.demos.llama3.tt.llama_common import (
+    precompute_freqs,
+    get_rot_transformation_mat,
+)
+from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
-
-
-def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
-    cos, sin = precompute_freqs(dhead, end)
-    rot_mat = freqs_to_rotation_matrix(cos, sin)
-    position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
-    rot_emb = gather_rotary_emb(rot_mat, position_ids)
-    return rot_emb
 
 
 class TtLlamaRotary(torch.nn.Module):
@@ -110,15 +105,8 @@ class PytorchLlamaRotaryModel(torch.nn.Module):
         return xq, xk
 
 
-def get_rot_transformation_mat(dhead):
-    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
-    return rot_emb_matrix
-
-
 def compute_gather_cos_sin(dhead, end, position_ids):
-    cos, sin = precompute_freqs(dhead, end)
+    cos, sin = precompute_freqs(dhead, end, theta=10000.0, use_scaled=False)  # Using reference defaults
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
     sin = sin.gather(0, position_id_expanded)
@@ -185,7 +173,8 @@ def run_test_rotary_embedding_llama(
     tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk)
 
     if mode == "decode":
-        rope_setup_decode = TtLlamaRotarySetup(device, head_dim, max_seq_len)
+        rope_setup_decode = TtLlamaRotarySetup(device, batch, head_dim, max_seq_len)
+        cos, sin = rope_setup_decode.get_rot_mats(position_ids)
         tt_model.transformation_mat = rope_setup_decode.transformation_mat
 
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
@@ -313,7 +302,7 @@ def run_test_rotary_embedding_llama(
         (1, 128 * 1024),
         (64, 1),
         (32, 1),
-        (16, 1),
+        (15, 1),
         (8, 1),
         (1, 1),
     ),
@@ -330,7 +319,7 @@ def run_test_rotary_embedding_llama(
         "prefill_128k",
         "decode_64",
         "decode_32",
-        "decode_16",
+        "decode_15",
         "decode_8",
         "decode_1",
     ),
@@ -461,10 +450,8 @@ def test_rotary_embedding_llama_with_program_cache(
     if mode == "decode":
         num_ops += 4  # embedding + transpose + pad + interleaved_to_sharded
 
-        # When batch size is 1, transpose is a no-op
-        if batch == 1:
-            num_ops -= 1
-        elif batch % 32 == 0:
-            num_ops -= 1  # When batch size is a multiple of 32, no padding
+        # Extra ops to pad batch to tile size
+        if batch % ttnn.TILE_SIZE != 0:
+            num_ops += 2  # pad + slice
 
     assert device.num_program_cache_entries() == num_ops

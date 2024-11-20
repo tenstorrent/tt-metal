@@ -28,6 +28,7 @@ class TtLlamaRotarySetup(LightweightModule):
     ):
         super().__init__()
 
+        self.batch_size = batch_size
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
@@ -59,9 +60,7 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-        batch_grid = (
-            ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True).bounding_box().grid_size()
-        )
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
@@ -71,12 +70,11 @@ class TtLlamaRotarySetup(LightweightModule):
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, 1, ttnn.TILE_SIZE * batch_size, ttnn.TILE_SIZE),
-            # shape=(1, 1, ttnn.TILE_SIZE * num_cores, ttnn.TILE_SIZE),
-            # core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
-            core_grid=ttnn.CoreGrid(y=batch_grid.y, x=batch_grid.x),
+            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+            core_grid=batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
         self.transformation_mat = ttnn.from_torch(
             trans_mat,
@@ -93,10 +91,11 @@ class TtLlamaRotarySetup(LightweightModule):
 
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
+        assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
         batch = position_idxs.shape[0]
-        position_idxs = position_idxs.unsqueeze(0)
-        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
+        position_idxs = position_idxs.reshape(1, 1, 1, batch)  # [1, 1, 1, batch]
+        assert position_idxs.shape == (1, 1, 1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
         if on_host:
@@ -131,11 +130,16 @@ class TtLlamaRotarySetup(LightweightModule):
         # Send the idxs to device
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        batch = rot_idxs.shape[1]
 
-        use_rm = batch % ttnn.TILE_SIZE != 0  # Use row major is batch size is not a multiple of TILE_SIZE
-        embedding_layout = ttnn.ROW_MAJOR_LAYOUT if use_rm else ttnn.TILE_LAYOUT
+        batch = rot_idxs.shape[3]
 
+        # Pad the batch dimension to be a multiple of TILE_SIZE
+        if batch % ttnn.TILE_SIZE != 0:
+            pad_size = ttnn.TILE_SIZE - (batch % ttnn.TILE_SIZE)
+            rot_idxs = ttnn.pad(rot_idxs, [1, 1, 1, batch + pad_size], [0, 0, 0, batch], 0.0)
+            batch = rot_idxs.shape[3]
+
+        embedding_layout = ttnn.TILE_LAYOUT
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
         sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, head_dim]
 
@@ -145,16 +149,16 @@ class TtLlamaRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 
-        if use_rm:
-            cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
-            sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
+        cos = cos[:, : self.batch_size, :, :]
+        sin = sin[:, : self.batch_size, :, :]
 
-        grid = ttnn.num_cores_to_corerangeset(batch, self.core_grid, row_wise=True).bounding_box().grid_size()
+        grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, batch, ttnn.TILE_SIZE, self.head_dim),
-            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
 
         cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
