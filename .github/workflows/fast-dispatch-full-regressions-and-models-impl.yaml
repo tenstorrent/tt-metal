@@ -137,7 +137,7 @@ jobs:
           arch: wormhole_b0
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
-        timeout-minutes: 50
+        timeout-minutes: ${{ matrix.model == 'mamba' && 100 || 30 }}
         # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
         # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
         run: |
