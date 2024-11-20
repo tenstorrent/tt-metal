@@ -224,7 +224,7 @@ struct Empty {
         const Layout& layout,
         Device* device,
         const MemoryConfig& memory_config) {
-        return create_device_tensor(shape, dtype, layout, device, memory_config);
+        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
     }
 
     static ttnn::Tensor invoke(
@@ -233,10 +233,7 @@ struct Empty {
         const Layout& layout,
         distributed::MeshDevice* device,
         const MemoryConfig& memory_config) {
-        Tensor device_tensor = allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
-        device_tensor.wait_for_tensor_metadata_populated();
-        device_tensor.wait_for_tensor_data_populated();
-        return device_tensor;
+        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
     }
 };
 

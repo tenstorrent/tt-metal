@@ -409,6 +409,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     this->set_dtype(other.get_dtype());
     this->set_layout(other.get_layout());
     this->set_tile(other.get_tile());
+
     // Populate storage container with buffers + shapes
     std::visit(
         [this](auto&& storage) {
@@ -847,12 +848,10 @@ Tensor allocate_tensor_on_device(
 
                 uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
                 if (not num_workers_completed) {
-                    device_tensor.set_shape(ttnn::Shape(shape));
-                    device_tensor.set_dtype(data_type);
-                    device_tensor.set_layout(layout);
-                    if (tile.has_value()) {
-                        device_tensor.set_tile(tile.value());
-                    }
+                    device_tensor.set_shape(local_tensor.get_shape());
+                    device_tensor.set_dtype(local_tensor.get_dtype());
+                    device_tensor.set_layout(local_tensor.get_layout());
+                    device_tensor.set_tile(local_tensor.get_tile());
                     device_tensor.tensor_attributes->metadata_populated = true;
                 }
             });
