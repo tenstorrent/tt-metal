@@ -9,6 +9,8 @@ fi
 
 source $TT_METAL_HOME/python_env/bin/activate
 
+export PYTHONPATH=$TT_METAL_HOME
+
 run_tests() {
     kernel_path="/tmp/kernels"
     mkdir -p $kernel_path
