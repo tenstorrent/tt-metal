@@ -72,7 +72,7 @@ jobs:
           max-retries: 3
           backoff-seconds: 30
           tt-smi-reset-on-fail: true
-          command: PYTHONPATH=$TT_METAL_HOME ${{ matrix.test-group.cmd }}
+          command: PYTHONPATH=$TT_METAL_HOME ${{ github.workspace }}${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
