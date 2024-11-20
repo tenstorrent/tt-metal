@@ -63,8 +63,7 @@ void MAIN {
 
         cb_push_back(out_cb, Wt);
         cb_pop_front(untilized_cache2_cb, Wt);
-        tilize_uninit_with_dt(untilized_cache2_cb, out_cb);
-        reconfig_data_format_srca(untilized_cache2_cb, untilized_cache_cb);
+        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
 
     }
