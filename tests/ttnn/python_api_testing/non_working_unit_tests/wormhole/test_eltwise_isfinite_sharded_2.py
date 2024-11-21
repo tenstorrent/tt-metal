@@ -36,7 +36,7 @@ def run_tests(
     else:
         torch_input_tensor_a = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
 
-    torch_output_tensor = torch.isfinite(torch_input_tensor_a)
+    torch_output_tensor = torch_op(torch_input_tensor_a)
 
     sharded_config = ttnn.create_sharded_memory_config(
         shape=input_shape,
@@ -54,7 +54,7 @@ def run_tests(
         memory_config=sharded_config,
     )
 
-    output_tensor = ttnn.isfinite(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn_op(input_tensor_a, memory_config=sharded_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     [passed, message] = check_with_pcc(torch_output_tensor, output_tensor, 0.999)

@@ -63,7 +63,15 @@ def run_tests(
 
 test_sweep_args = [
     (
-        (1, 1, 25088, 2),
+        (1, 8704, 4),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardStrategy.BLOCK,
+        ttnn.ShardOrientation.COL_MAJOR,
+        True,
+    ),
+    (
+        (3, 1536, 2),
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ShardStrategy.BLOCK,
@@ -77,7 +85,7 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
     (test_sweep_args),
 )
-def test_eltwise_isfinite(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+def test_eltwise_isposinf(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
     run_tests(
         input_shape,
         dtype,
@@ -85,8 +93,8 @@ def test_eltwise_isfinite(input_shape, dtype, dlayout, sharding_strategy, shard_
         sharding_strategy,
         shard_orientation,
         hw_as_shard_shape,
-        torch.isfinite,
-        ttnn.isfinite,
+        torch.isposinf,
+        ttnn.isposinf,
         True,
         device,
     )
