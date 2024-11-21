@@ -18,7 +18,7 @@ enum class PagedUpdateCacheOpParallelizationStrategy {
 };
 
 enum class PagedUpdateCacheOpType {
-    UPDATE, FILL
+    UPDATE, FUSED_UPDATE, FILL
 };
 
 struct PagedUpdateCacheDeviceOperation {
