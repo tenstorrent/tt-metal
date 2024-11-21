@@ -968,6 +968,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                     settings.producer_semaphore_id,  // upstream sem
                                     mux_sem++); // local sem
+                        connections_remaining--;
                     }
                     uint32_t src_id_start = 0xA1 + mux_id * MAX_SWITCH_FAN_IN;
                     uint32_t dst_id_start = 0xB1 + mux_id * MAX_SWITCH_FAN_IN;
