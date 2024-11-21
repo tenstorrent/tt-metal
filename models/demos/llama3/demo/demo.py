@@ -444,7 +444,9 @@ def run_llama3_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=False, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(
+            tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
+        )
         ttnn.deallocate(tt_out_rm)
         ttnn.plus_one(current_pos_tensor)
         profiler.end(f"compile_trace_{batch_idx}")
@@ -474,7 +476,7 @@ def run_llama3_demo(
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(
-            tt_out_rm, dim=3, use_multicore=False, output_tensor=tt_out_tok
+            tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
         )  # TODO Multicore is not compatible with batch > 1
         ttnn.deallocate(tt_out_rm)
         ttnn.plus_one(current_pos_tensor)
