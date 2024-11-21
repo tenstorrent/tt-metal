@@ -59,7 +59,6 @@ class TtTransformer(LightweightModule):
         )
 
         self.compute_kernel = self.args.get_compute_kernel_config()
-        self.compute_kernel_reduce = self.args.get_compute_kernel_config_reduce()
 
         if self.rotary_on_host:
             self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos_ids)
