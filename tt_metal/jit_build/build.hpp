@@ -183,6 +183,7 @@ inline const string jit_build_get_kernel_compile_outpath(int build_key) {
     // TODO(pgk), get rid of this
     // The test infra needs the output dir.  Could put this in the device, but we plan
     // to remove the device dependence in the future, so putting this here for now
+    // TODO : Add git hash path here
     return llrt::OptionsG.get_root_dir() + "/built/" + std::to_string(build_key) + "/kernels/";
 }
 

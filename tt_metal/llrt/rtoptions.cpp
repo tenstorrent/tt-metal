@@ -125,6 +125,10 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {
         this->skip_loading_fw = true;
     }
+
+    if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
+        this->skip_deleting_built_cache = true;
+    }
 }
 
 const std::string &RunTimeOptions::get_root_dir() {
