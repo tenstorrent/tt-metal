@@ -125,6 +125,7 @@ def run(
     output_tensor = ttnn.concat_bw(
         grad_tensor, input_tensor_a, input_tensor_b, dim=dim, memory_config=output_memory_config
     )[0]
+
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
