@@ -1183,6 +1183,7 @@ void Matmul::validate(
 
                 // No padding
                 TT_FATAL(M == per_core_M, "Error");
+                TT_FATAL(M == 1, "currently only support in0 tensor height of tile height");
                 TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
                 TT_FATAL(K % program_config.in0_block_w == 0, "Error");
                 TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
@@ -1407,7 +1408,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1];
+                    uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
                     auto input_tensor_b_shape = input_tensor_b.get_legacy_shape();
 
@@ -1416,7 +1417,14 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
 
                     TT_FATAL(per_core_N % tile_width_ratio == 0, "per_core_N must be divisible by override output tile width");
 
-                    CoreRangeSet all_cores = input_tensor_a.shard_spec().value().grid;
+                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
+                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+                    uint32_t num_cores = num_blocks_x * num_blocks_y;
+                    auto end_core = input_tensor_a.shard_spec()->grid.bounding_box().end_coord;
+                    auto grid_size = CoreCoord{end_core.x + 1, end_core.y + 1};
+                    CoreRangeSet all_cores =
+                        num_cores_to_corerangeset(num_cores, grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;

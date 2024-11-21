@@ -141,27 +141,14 @@ void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape
              dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
             "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on device!");
     };
-    auto supported_layout = [&shape, &dtype, &layout]() {
+    auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
             case DataType::UINT32:
             case DataType::INT32:
-            case DataType::FLOAT32: break;
+            case DataType::FLOAT32:
             case DataType::UINT8:
-                if (layout == Layout::ROW_MAJOR) {
-                    TT_ASSERT(
-                        shape[-1] % 4 == 0,
-                        "For ROW_MAJOR layout tensors with dtype UINT8, tensor width must be divisible by "
-                        "4 since data is packed as uint32_t when creating buffers on device!");
-                }
-                break;
             case DataType::UINT16:
             case DataType::BFLOAT16:
-                if (layout == Layout::ROW_MAJOR) {
-                    TT_ASSERT(
-                        shape[-1] % 2 == 0,
-                        "For ROW_MAJOR layout tensors with dtype BFLOAT16 or UINT16, tensor width must be divisible by "
-                        "2 since data is packed as uint32_t when creating buffers on device!");
-                }
                 break;
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
@@ -625,14 +612,12 @@ Tensor to_host_sharded(const Tensor& tensor) {
     auto device_buffer = tensor.buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = device_buffer->size();
-    std::vector<uint32_t> device_data;
+    std::vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         TT_THROW("FAST_DISPATCH is not supported for to_host_sharded!");
     }
-    ::detail::ReadFromBuffer(*device_buffer, device_data, true);
-    auto data_vec = unpack_uint32_vec<T>(device_data);
+    ::detail::ReadFromBuffer(*device_buffer, data_vec, true);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
     return Tensor(OwnedStorage{output_buffer}, tensor.get_tensor_spec());
 }
@@ -687,11 +672,7 @@ void write_data_to_device_buffer(
 template <typename T, template <typename> typename BufferType>
 void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& device_buffer) {
     ZoneScoped;
-    // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
-    // And effectively get rid of any additional allocation
-
-    auto uint32_data = pack_vec_into_uint32_vec<T>(host_buffer);
-    ::detail::WriteToBuffer(device_buffer, uint32_data);
+    ::detail::WriteToBuffer(device_buffer, tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(T)));
 }
 
 template <typename T, template <typename> typename BufferType>
@@ -1218,11 +1199,10 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer_shard_shape = buffer->shard_spec().shape();
     std::array<uint32_t, 4> shard_shape_array = {1, 1, buffer_shard_shape[0], buffer_shard_shape[1]};
     tt::tt_metal::LegacyShape shard_shape(shard_shape_array);
-    std::vector<uint32_t> device_data;
+    std::vector<T> device_data;
     ::detail::ReadShard(*buffer, device_data, core_id);
 
-    auto unpacked_data = tensor_impl::unpack_uint32_vec<T>(device_data);
-    auto output_buffer = owned_buffer::create<T>(std::move(unpacked_data));
+    auto output_buffer = owned_buffer::create<T>(std::move(device_data));
     return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tensor_spec().tile());
 }
 

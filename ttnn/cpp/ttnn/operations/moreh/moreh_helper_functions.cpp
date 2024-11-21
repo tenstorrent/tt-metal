@@ -205,7 +205,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     std::vector<CircularBufferArg> args) {
     std::vector<CBHandle> cb_ids{};
     CBHandle cb_id{};
-    for (auto arg : args) {
+    for (const auto& arg : args) {
         cb_id = CreateCircularBuffer(program, core_range, data_format, arg);
         cb_ids.push_back(cb_id);
     }

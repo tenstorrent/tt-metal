@@ -42,7 +42,7 @@ public:
     bool get_requires_grad() const;
     const std::optional<NodeId> &get_node() const;
 
-    void backward();
+    void backward(bool retain_graph = false);
 
     bool is_grad_initialized() const;
 

@@ -51,6 +51,8 @@
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tt_metal/common/core_coord.hpp"
 
+#include "get_platform_architecture.hpp"
+
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 
@@ -67,8 +69,6 @@ Cluster::Cluster() {
 
     this->detect_arch_and_target();
 
-    tt_metal::hal.initialize(arch_);
-
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
@@ -83,26 +83,11 @@ Cluster::Cluster() {
 }
 
 void Cluster::detect_arch_and_target() {
-    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
-        this->target_type_ = TargetDevice::Simulator;
-        auto arch_env = getenv("ARCH_NAME");
-        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
-        this->arch_ = tt::get_arch_from_string(arch_env);
-    }else {
-        this->target_type_ = TargetDevice::Silicon;
-        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-        for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
-            chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
-            tt::ARCH detected_arch = detect_arch(device_id);
-            TT_FATAL(
-                this->arch_ == detected_arch,
-                "Expected all devices to be {} but device {} is {}",
-                get_arch_str(this->arch_),
-                device_id,
-                get_arch_str(detected_arch));
-        }
-    }
+
+    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR_EN")) ? TargetDevice::Simulator : TargetDevice::Silicon;
+
+    this->arch_ = tt_metal::get_platform_architecture();
+
 #ifdef ARCH_GRAYSKULL
     TT_FATAL(
         this->arch_ == tt::ARCH::GRAYSKULL,
@@ -233,7 +218,7 @@ void Cluster::assign_mem_channels_to_devices(
 void Cluster::get_metal_desc_from_tt_desc(
     const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
     const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
-    for (const auto it : input) {
+    for (const auto& it : input) {
         chip_id_t id = it.first;
         this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
     }

@@ -106,14 +106,14 @@ bool is_arch_whb0(const tt::ARCH& arch);
 bool is_cpu_tensor(const Tensor& tensor);
 bool is_device_tensor(const Tensor& tensor);
 
-// Given a multi-device tensor, and a function that transforms a tensor, apply the function to all per-device
+// Given a multi-device tensor, and a function that transforms a tensor, applies the function to all per-device
 // tensors.
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
 
-// Given a multi-device tensor, and a callable, apply the function to all per-device tensors.
+// Given a multi-device tensor, and a callable, applies the function to all per-device tensors.
 void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable);
 
-// Given a multi-device tensor, return all the devices it is mapped to.
+// Given a multi-device tensor, returns all the devices it is mapped to.
 std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
 
 uint32_t num_buffers_in_tensor(const Tensor& tensor);

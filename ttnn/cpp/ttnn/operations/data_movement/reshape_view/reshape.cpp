@@ -31,9 +31,10 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     auto memory_config = tensor.memory_config();
     auto host_tensor = tensor.cpu();
     auto rm_tensor = ttnn::to_layout(host_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+
     if(tensor_shape.has_tile_padding()) {
+
         ttnn::Tensor slice_input;
-        TT_FATAL(tensor_shape.rank() <= 4, "Only up to 4D tensors");
         auto host_tensor_4d = unsqueeze_to_4D(rm_tensor);
         auto tensor_shape_4d = host_tensor_4d.shape();
         ttnn::SmallVector<uint32_t> begins({0, 0, 0, 0});
@@ -55,9 +56,15 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn
     auto tensor_shape_with_padding = tensor_shape.padded_shape();
 
     //Constraint in device kernel
-    uint32_t ROW_MAJOR_WIDTH = 8;
+
+    uint32_t ROW_MAJOR_WIDTH = 32/tensor.element_size();
     ttnn::Tensor reshaped_rm_tensor;
-    if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0)) {
+    if(tensor.element_size()<2 && layout == ttnn::TILE_LAYOUT)
+    {
+        //Can't call to_layout on 4b and 8b datatypes
+        reshaped_rm_tensor = host_reshape(tensor, shape);
+    }
+    else if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0)) {
         auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
         if (rm_tensor.is_contiguous()) {
             // Page size depends on the width, so only modify the shape if the width is the same
@@ -100,6 +107,57 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn
 
 }
 
+ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape) {
+    //Apply the correct padding metadata to the target shape
+    auto padded = shape.with_tile_padding();
+    auto rank = shape.rank();
+    const int8_t correction_1 =(ttnn::types::TILE_SIZE - (int)padded[-1] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
+    if(rank == 1)
+    {
+        return ttnn::Shape({shape[0]},{padded[0]+correction_1});
+    }
+    const int8_t correction_2 =(ttnn::types::TILE_SIZE - (int)padded[-2] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
+    switch(rank)
+    {
+        case 2:
+            return ttnn::Shape({shape[0],shape[1]},{padded[0]+correction_2,padded[1]+correction_1});
+            break;
+        case 3:
+            return ttnn::Shape({shape[0],shape[1],shape[2]},{padded[0],padded[1]+correction_2,padded[2]+correction_1});
+            break;
+        case 4:
+            return ttnn::Shape({shape[0],shape[1],shape[2],shape[3]},{padded[0],padded[1],padded[2]+correction_2,padded[3]+correction_1});
+            break;
+
+    }
+    return shape;
+}
+
+ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+    if (tensor.get_layout() == ttnn::TILE_LAYOUT &&(shape[-1]%ttnn::types::TILE_SIZE!=0 || shape[-2]%ttnn::types::TILE_SIZE!=0 ))
+    {
+        //Correct the output shape to add padding metadata before reshape (view)
+        return tensor.reshape(tiling_reshape_corrector(shape));
+    }
+    //Perform a reshape (view)
+    return tensor.reshape(shape);
+}
+
+void Validate_transform (const ttnn::Shape& input_shape, const ttnn::Shape& output_shape)
+{
+    //Reshape should not be adding or removing data
+    uint32_t input_volume = 1;;
+    uint32_t output_volume = 1;
+    for (int i=0; i <input_shape.rank(); i++)
+    {
+        input_volume = input_volume * input_shape[i];
+    }
+    for (int i=0; i <output_shape.rank(); i++)
+    {
+        output_volume = output_volume * output_shape[i];
+    }
+    TT_FATAL(input_volume == output_volume, "Invalid Reshape, input and output volume must match");
+}
 
 ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     auto layout = tensor.get_layout();
@@ -109,19 +167,40 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     if (tensor_shape == shape) {
         return tensor;
     }
-
+    //This is a constraint Torch places on reshape I was assuming, but it causes half of the codebase to fail if added
+    //Validate_transform(tensor_shape, shape)
+    //For view the following cases work:
+    //RM: The last dimension is the same
+    //Tiled: The last two dimensions are the same or there is no padding on the second last dimension
+    bool this_is_view = (tensor_shape[-1] == shape[-1]) &&
+        ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
+        (tensor_shape[-2]==shape[-2]) || //Second last dimension is the same
+        (shape[-2]%ttnn::types::TILE_SIZE==0 && tensor_shape[-2]%ttnn::types::TILE_SIZE==0)); //There is no padding on the second last dimension
     bool tile_tensor_view_reshape_possible = (layout == ttnn::Layout::TILE and
         ((shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0) and (shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0)) and
         (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1])
         );
 
-    // For Tensors already on host we can do the tensor.reshape (changing of view)
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or tile_tensor_view_reshape_possible) {
+        //This case has been allowed in the past though it means introducing padding values to the data
         return tensor.reshape(shape);
     }
-
+    if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or this_is_view) {
+        return PerformView(tensor,shape);
+    }
+    if (tensor_shape.rank() >3)
+    {
+        uint32_t mult_factor = 1;
+        for (int i=0; i <tensor_shape.rank()-3; i++)
+        {
+            mult_factor = mult_factor * tensor_shape[i];
+        }
+        const ttnn::Tensor temp_tensor = PerformView(tensor,ttnn::Shape{tensor_shape[-3]*mult_factor,tensor_shape[-2],tensor_shape[-1]});
+        return detail::convert_tensor_to_rm_reshape_convert_back_to_orig_layout(temp_tensor, shape);
+    }
     // Catch-all
     // Do the reshape in row-major
+
     return detail::convert_tensor_to_rm_reshape_convert_back_to_orig_layout(tensor, shape);
 }
 

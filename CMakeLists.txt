@@ -108,9 +108,6 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
-# Set default values for variables/options
-set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
-
 ############################################################################################################################
 # Project Options
 #   The following options and their defaults impact what artifacts get built
