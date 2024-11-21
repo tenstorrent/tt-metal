@@ -737,39 +737,46 @@ void bind_binary_overload_operation(
 }
 
 template <typename binary_operation_t>
-void bind_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& supported_dtype="BFLOAT16", const std::string& note="") {
+void bind_inplace_operation(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype="BFLOAT16",
+    const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            .. math::
-                {3}
+        .. math::
+            {3}
 
-            Args:
-                input_tensor_a (ttnn.Tensor): the input tensor.
-                input_tensor_b (ttnn.Tensor or Number): the input tensor.
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
-            Returns:
-               ttnn.Tensor: the output tensor.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Note:
-                Supported dtypes, layouts, and ranks:
+        Note:
+            Supported dtypes, layouts, and ranks:
 
-                .. list-table::
-                   :header-rows: 1
+            .. list-table::
+                :header-rows: 1
 
-                   * - Dtypes
-                     - Layouts
-                     - Ranks
-                   * - {4}
-                     - TILE
-                     - 2, 3, 4
+                * - Dtypes
+                  - Layouts
+                  - Ranks
+                * - {4}
+                  - TILE
+                  - 2, 3, 4
 
-                {5}
+            {5}
 
-            Example:
-                >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor1, tensor2)
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[2, 2], [2, 2]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 1], [1, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -834,9 +841,9 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
             {5}
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor1, tensor2)
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[2, 2], [2, 2]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 1], [1, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1092,20 +1099,20 @@ void py_module(py::module& module) {
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
-        R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_xor_,
-        R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
-        R"doc(Compute inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite(
         module,
@@ -1224,38 +1231,44 @@ void py_module(py::module& module) {
     detail::bind_inplace_operation(
         module,
         ttnn::gt_,
-        R"doc(Perform Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}}))doc");
+        R"doc(Performs Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::ge_,
-        R"doc(Perform Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}}))doc");
+        R"doc(Performs Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::lt_,
-        R"doc(Perform Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}}))doc");
+        R"doc(Performs Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::le_,
-        R"doc(Perform Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}}))doc");
+        R"doc(Performs Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::eq_,
-        R"doc(Perform Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}}))doc");
+        R"doc(Performs Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::ne_,
-        R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} != \mathrm{{input\_tensor\_b}}))doc");
+        R"doc(Performs Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
 }
 
