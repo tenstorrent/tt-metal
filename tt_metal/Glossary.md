@@ -25,7 +25,7 @@
 - **CQ -** Command Queue
 - **CNN -** Convolution Neural Network - A deep learning model suited for data processing.
 - **DMA -** Direct Memory Access
-- **DNN -** DotNetNuke - Web content management system.
+- **DNN -** Deep Neural Network
 - **DP -** Data Parallel
 - **DRAM -** Dynamic Random Access Memory - Off-chip Memory. Provides larger, off-chip storage for the system.
 - **EDM -** ERISC Data Mover - Reusable data movement component used to send data over ethernet links. It provides ethernet link utilization and handles design concerns by implementing multi-chip collective operations.
