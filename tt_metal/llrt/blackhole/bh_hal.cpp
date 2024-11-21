@@ -51,7 +51,7 @@ void Hal::initialize_bh() {
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
 
-        // Note: Blackhole doe not have IRAM
+        // Note: Blackhole does not have IRAM
 
         // No relocation needed
         return addr;
