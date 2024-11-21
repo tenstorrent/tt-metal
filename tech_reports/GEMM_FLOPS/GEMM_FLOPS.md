@@ -18,14 +18,30 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 The matrix multiply TFLOPS results can be tested on N150 card using:
 
 ```bash
-pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
 ```
+
+for manually selected matmul configurations, or using:
+
+```bash
+TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+```
+
+for out-of-box matmul configurations.
 
 Alternatively, to test on an N300 card, use the following command:
 
 ```bash
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
 ```
+
+for manually selected matmul configurations, or using:
+
+```bash
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+```
+
+for out-of-box matmul configurations.
 
 
 ## Design of Experiments
