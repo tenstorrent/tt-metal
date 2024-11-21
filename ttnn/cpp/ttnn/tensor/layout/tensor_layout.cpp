@@ -134,7 +134,6 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
 
     switch (shard_spec.mode) {
         case ShardMode::PHYSICAL:
-            TT_FATAL(shard_spec.shape[0] % alignment_[-2] == 0 and shard_spec.shape[1] % alignment_[-1] == 0, "In shard mode {}, physical shard shape {} is not compatible with alignment {}!", shard_spec.mode, shard_spec.shape, alignment_);
             break;
         case ShardMode::LOGICAL: {
             const auto& physical_shard_shape = compute_physical_shard_shape(shard_spec.shape);
