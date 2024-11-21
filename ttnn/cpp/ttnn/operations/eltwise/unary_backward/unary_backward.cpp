@@ -134,12 +134,12 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftplus::invoke(
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<string> round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
-    if (round_mode == "None") {
+    if (round_mode == std::nullopt) {
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(ttnn::neg(grad, output_mem_config),
