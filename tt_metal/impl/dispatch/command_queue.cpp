@@ -3067,37 +3067,6 @@ void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer
 
 inline namespace v0 {
 
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::vector<uint32_t>& dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    // TODO(agrebenisan): Move to deprecated
-    ZoneScoped;
-    tt_metal::detail::DispatchStateCheck(true);
-    Buffer& b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer)
-                    ? *(std::get<std::shared_ptr<Buffer>>(buffer))
-                    : std::get<std::reference_wrapper<Buffer>>(buffer).get();
-    // Only resizing here to keep with the original implementation. Notice how in the void*
-    // version of this API, I assume the user mallocs themselves
-    std::visit(
-        [&dst](auto&& b) {
-            using T = std::decay_t<decltype(b)>;
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
-                dst.resize(b.get().page_size() * b.get().num_pages() / sizeof(uint32_t));
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                dst.resize(b->page_size() * b->num_pages() / sizeof(uint32_t));
-            } else {
-                TT_THROW("Invalid buffer type");
-            }
-        },
-        buffer);
-
-    // TODO(agrebenisan): Move to deprecated
-    EnqueueReadBuffer(cq, buffer, dst.data(), blocking, sub_device_ids);
-}
-
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
@@ -3127,7 +3096,7 @@ void EnqueueWriteBuffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = src, .sub_device_ids = sub_device_ids});
+        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = std::move(src), .sub_device_ids = sub_device_ids});
 }
 
 void EnqueueProgram(

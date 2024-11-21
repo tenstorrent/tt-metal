@@ -121,9 +121,9 @@ INSTANTIATE_TEST_SUITE_P(
     EmptyTensorTest,
     ::testing::Combine(
         ::testing::Values(
-            //ttnn::Shape({}),
-            //ttnn::Shape({0}),
-            //ttnn::Shape({1}),
+            ttnn::Shape({}),
+            ttnn::Shape({0}),
+            ttnn::Shape({1}),
             ttnn::Shape({1, 2}),
             ttnn::Shape({1, 2, 3}),
             ttnn::Shape({1, 2, 3, 4}),
