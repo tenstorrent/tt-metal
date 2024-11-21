@@ -61,14 +61,13 @@ static Tensor full(
         auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
         std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-        if(!optional_output_tensor.has_value()){
+        if (!optional_output_tensor.has_value()){
             auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
             if (device != nullptr) {
                 output = output.to(device, output_mem_config);
             }
             return output;
-        }
-        else {
+        } else {
             auto device_buffer = std::get<DeviceStorage>(optional_output_tensor.value().tensor_attributes->storage).get_buffer();
             bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
@@ -80,8 +79,7 @@ static Tensor full(
                     tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.data(), false);
                 }
             } else {
-                auto uint32_data = tt::tt_metal::tensor_impl::pack_vec_into_uint32_vec<T>(owned_buffer);
-                tt::tt_metal::detail::WriteToBuffer(*device_buffer, uint32_data);
+                tt::tt_metal::detail::WriteToBuffer(*device_buffer, owned_buffer.get());
             }
 
             return optional_output_tensor.value();

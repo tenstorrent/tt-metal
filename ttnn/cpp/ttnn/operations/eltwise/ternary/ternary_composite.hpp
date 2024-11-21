@@ -31,12 +31,12 @@ template <TernaryCompositeOpType ternary_comp_op_type>
 struct ExecuteTernaryCompositeLerp
 {
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const Tensor& input_tensor_c,
+        const Tensor& input_tensor,
+        const Tensor& end,
+        const Tensor& weight,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            return OpHandler<ternary_comp_op_type>::handle(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
+            return OpHandler<ternary_comp_op_type>::handle(input_tensor, end, weight, memory_config);
         }
 
     static Tensor invoke(

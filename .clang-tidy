@@ -149,7 +149,6 @@ Checks: >
   -modernize-use-using,
   -performance-avoid-endl,
   -performance-faster-string-find,
-  -performance-for-range-copy,
   -performance-inefficient-string-concatenation,
   -performance-inefficient-vector-operation,
   -performance-move-const-arg,

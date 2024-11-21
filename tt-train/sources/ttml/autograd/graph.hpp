@@ -37,7 +37,7 @@ private:
 
 public:
     [[nodiscard]] const std::vector<std::vector<size_t>>& get_edges() const;
-    [[nodiscard]] const std::vector<GraphNode>& get_graph_nodes() const;
+    [[nodiscard]] std::vector<GraphNode>& get_graph_nodes();
     NodeId add_node(GradFunction&& grad_function, std::span<NodeId> links);
 
     void reset();

@@ -341,7 +341,7 @@ size_t MeshDevice::num_cols() const { return this->mesh_device_shape.second; }
 MeshShape MeshDevice::shape() const { return this->mesh_device_shape; }
 
 void MeshDevice::close_devices() {
-    for (auto submesh : this->submeshes) {
+    for (const auto& submesh : this->submeshes) {
         submesh->close_devices();
     }
     if (not this->devices.empty()) {
@@ -368,13 +368,15 @@ std::shared_ptr<MeshDevice> SystemMesh::get_mesh_device(const std::vector<chip_i
     log_trace(LogMetal, "Getting mesh device for {} physical devices: {}", physical_device_ids.size(), physical_device_ids);
     std::unordered_set<chip_id_t> input_set(physical_device_ids.begin(), physical_device_ids.end());
 
-    for (const auto& [mesh_id, mesh_device] : this->assigned_mesh_device_devices) {
-        const auto& assigned_devices = this->assigned_devices.at(mesh_id);
-        std::unordered_set<chip_id_t> assigned_set(assigned_devices.begin(), assigned_devices.end());
-        log_trace(LogMetal, "Assigned devices: {}", assigned_devices);
+    for (const auto& [mesh_id, weak_mesh_device] : this->assigned_mesh_device_devices) {
+        if (auto mesh_device = weak_mesh_device.lock()) {
+            const auto& assigned_devices = this->assigned_devices.at(mesh_id);
+            std::unordered_set<chip_id_t> assigned_set(assigned_devices.begin(), assigned_devices.end());
+            log_trace(LogMetal, "Assigned devices: {}", assigned_devices);
 
-        if (input_set == assigned_set) {
-            return mesh_device;
+            if (input_set == assigned_set) {
+                return mesh_device;
+            }
         }
     }
     TT_THROW("No mesh device found for the provided devices");

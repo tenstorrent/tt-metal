@@ -418,7 +418,8 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
-                    ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
+                    ll_api::memory binary_mem = llrt::get_risc_binary(
+                        firmware_build_states_[riscv_id]->get_target_out_path(""), core_type_idx, processor_class, (riscv_id - build_idx));
                     uint32_t fw_size = binary_mem.get_text_size();
                     if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
@@ -426,7 +427,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
                     if (not llrt::OptionsG.get_skip_loading_fw()) {
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
+                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (riscv_id - build_idx));
                     }
                 }
             }
@@ -460,10 +461,11 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
-                        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
+                        ll_api::memory binary_mem = llrt::get_risc_binary(
+                            firmware_build_states_[eriscv_id]->get_target_out_path(""), core_type_idx, processor_class, (eriscv_id - build_idx));
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (eriscv_id - build_idx));
                     }
                 }
             }
@@ -966,6 +968,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                     settings.producer_semaphore_id,  // upstream sem
                                     mux_sem++); // local sem
+                        connections_remaining--;
                     }
                     uint32_t src_id_start = 0xA1 + mux_id * MAX_SWITCH_FAN_IN;
                     uint32_t dst_id_start = 0xB1 + mux_id * MAX_SWITCH_FAN_IN;
@@ -1567,7 +1570,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
                     uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + pcie_alignment - 1) & (~(pcie_alignment - 1));
                     uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
-                    const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
+                    const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? HAL_MEM_L1_SIZE : HAL_MEM_ETH_SIZE;
                     uint32_t dispatch_s_buffer_base;
                     uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                     if (dispatch_core_type == CoreType::WORKER) {
@@ -1799,7 +1802,7 @@ void Device::setup_tunnel_for_remote_devices() {
 
     tunnels_from_mmio_ = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
     uint32_t index = 0;
-    for (auto tunnel : tunnels_from_mmio_) {
+    for (const auto& tunnel : tunnels_from_mmio_) {
         for (auto remote_dev : tunnel) {
             log_info(tt::LogMetal, "MMIO Device {} : Tunnel {} : Device {}", mmio_device_id, index, remote_dev);
         }

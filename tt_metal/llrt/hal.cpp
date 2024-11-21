@@ -3,44 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hal.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_arch_types.h"
 
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/common/assert.hpp"
+
+#include "get_platform_architecture.hpp"
 namespace tt {
 
 namespace tt_metal {
 
-Hal hal;
+// Hal Constructor determines the platform architecture by using UMD
+// Once it knows the architecture it can self initialize architecture specific memory maps
+Hal::Hal() : arch_(get_platform_architecture()) {
 
-// This back poitner is a little clunky but necessary at least for now
-Hal::Hal() : initialized_(false) {
-}
+    switch (this->arch_) {
+        case tt::ARCH::GRAYSKULL: initialize_gs();
+        break;
 
-void Hal::initialize(tt::ARCH arch) {
+        case tt::ARCH::WORMHOLE_B0: initialize_wh();
+        break;
 
-    const std::lock_guard<std::mutex> lock(this->lock);
+        case tt::ARCH::BLACKHOLE: initialize_bh();
+        break;
 
-    if (!this->initialized_) {
-        switch (arch) {
-        case tt::ARCH::GRAYSKULL:
-            initialize_gs();
-            break;
-
-        case tt::ARCH::WORMHOLE_B0:
-            initialize_wh();
-            break;
-
-        case tt::ARCH::BLACKHOLE:
-            initialize_bh();
-            break;
-
-        default:
-            TT_THROW("Unsupported arch for HAL");
-        }
-
-        this->arch_ = arch;
-
-        this->initialized_ = true;
+        case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/;
+        break;
     }
 }
 
@@ -69,7 +56,7 @@ uint32_t Hal::get_num_risc_processors() const {
 
 HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
                                  CoreType core_type,
-                                 const std::vector<std::vector<uint8_t>> &processor_classes,
+                                 const std::vector<std::vector<HalJitBuildConfig>> &processor_classes,
                                  const std::vector<DeviceAddr>& mem_map_bases,
                                  const std::vector<uint32_t>& mem_map_sizes,
                                  bool supports_cbs) :

@@ -31,16 +31,18 @@ void py_module_types(py::module& module) {
 
     py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
         .def(
-            py::init<MathFidelity, bool, bool, bool>(),
+            py::init<MathFidelity, bool, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
             py::arg("math_approx_mode") = true,
             py::arg("fp32_dest_acc_en") = false,
-            py::arg("packer_l1_acc") = false)
+            py::arg("packer_l1_acc") = false,
+            py::arg("dst_full_sync_en") = false)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
-        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
+        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc)
+        .def_readwrite("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en);
 }
 
 void py_module(py::module& module) {

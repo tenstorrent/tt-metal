@@ -73,19 +73,28 @@ def run_conv(
     shard_layout=None,
     auto_shard=False,
     memory_config=None,
+    input_mesh_mapper=None,
+    weight_mesh_mapper=None,
+    output_mesh_composer=None,
 ):
+    if isinstance(device, ttnn.MeshDevice):
+        assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
+        assert weight_mesh_mapper is not None, "Expected mesh mapper for weight tensors when using device mesh"
+        assert output_mesh_composer is not None, "Expected mesh composer for output tensor when using device mesh"
+        num_devices = len(device.get_device_ids())
+        total_batch_size = num_devices * batch_size  # Batch size across all devices
+        logger.info(f"Using {num_devices} devices for this test")
+    else:
+        total_batch_size = batch_size
+
     torch.manual_seed(0)
-    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_input_shape = [total_batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.tensor(range(input_height * input_width)).reshape([1,1,input_height,input_width]).float()
-    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
 
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
@@ -107,15 +116,19 @@ def run_conv(
     reader_patterns_cache = {}
 
     tt_weight_tensor = ttnn.from_torch(
-        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        torch_weight_tensor,
+        weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
+        mesh_mapper=weight_mesh_mapper,
     )
     tt_bias_tensor = None
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(
-            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+            torch_bias_tensor,
+            weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
+            mesh_mapper=weight_mesh_mapper,
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=input_mesh_mapper)
 
     if shard_layout is None and not auto_shard:
         shard_layout = (
@@ -171,11 +184,13 @@ def run_conv(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
-    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor.reshape(
+        total_batch_size, out_height, out_width, torch_output_tensor.shape[-1]
+    )
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
@@ -414,6 +429,86 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+    )
+
+
+@skip_for_grayskull()
+@skip_for_blackhole()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
+@pytest.mark.parametrize("groups", [1, 2])
+@pytest.mark.parametrize("stride", [2])
+@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout, config",
+    (
+        (256, 256, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
+        (128, 128, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None),
+        (16, 16, 256, 256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, {"act_block_h": 32}),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "filter, pad",
+    [
+        [3, 1],
+    ],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_conv_features_multi_device(
+    mesh_device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    config,
+    filter,
+    stride,
+    pad,
+    output_layout,
+    groups,
+):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+
+    run_conv(
+        mesh_device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter,
+        filter,
+        stride,
+        stride,
+        pad,
+        pad,
+        True,
+        config,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        has_bias=True,
+        input_mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        weight_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        output_mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        groups=groups,
     )
 
 

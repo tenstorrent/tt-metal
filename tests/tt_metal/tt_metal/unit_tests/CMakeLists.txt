@@ -71,7 +71,6 @@ target_link_libraries(
 target_include_directories(
     unit_tests
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
@@ -82,7 +81,6 @@ target_include_directories(
 target_include_directories(
     unit_tests_galaxy
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests

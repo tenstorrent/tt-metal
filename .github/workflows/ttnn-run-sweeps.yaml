@@ -233,7 +233,7 @@ on:
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
-          - eltwise.binary_backward.ldexp_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw
           - eltwise.binary_backward.logaddexp_bw
           - eltwise.binary_backward.logaddexp2_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
@@ -350,7 +350,7 @@ jobs:
     timeout-minutes: 30
     runs-on: [build, in-service]
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -410,7 +410,7 @@ jobs:
     timeout-minutes: 720
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

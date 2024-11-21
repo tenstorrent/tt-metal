@@ -51,7 +51,8 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0,
+ll_api::memory get_risc_binary(string const &path,
+    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
     ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
     ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
 
@@ -61,12 +62,24 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0,
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
+template<typename DType>
 void write_hex_vec_to_core(
     chip_id_t chip,
     const CoreCoord &core,
-    const std::vector<uint32_t> &hex_vec,
+    const std::vector<DType>& hex_vec,
     uint64_t addr,
-    bool small_access = false);
+    bool small_access = false) {
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+}
+template<typename DType>
+void write_hex_vec_to_core(
+    chip_id_t chip,
+    const CoreCoord &core,
+    tt::stl::Span<const DType> hex_vec,
+    uint64_t addr,
+    bool small_access = false) {
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+}
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
@@ -93,8 +106,8 @@ inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
 uint32_t generate_risc_startup_addr(bool is_eth_core);
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
+bool test_load_write_read_risc_binary(
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx);
 void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address);
 
 // subchannel hard-coded to 0 for now

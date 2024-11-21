@@ -218,13 +218,22 @@ inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
 
 struct Empty {
-   static ttnn::Tensor invoke(
-    const ttnn::Shape& shape,
-    const DataType& dtype,
-    const Layout& layout,
-    Device* device,
-    const MemoryConfig& memory_config) {
-        return create_device_tensor(shape, dtype, layout, device, memory_config);
+    static ttnn::Tensor invoke(
+        const ttnn::Shape& shape,
+        const DataType& dtype,
+        const Layout& layout,
+        Device* device,
+        const MemoryConfig& memory_config) {
+        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
+    }
+
+    static ttnn::Tensor invoke(
+        const ttnn::Shape& shape,
+        const DataType& dtype,
+        const Layout& layout,
+        distributed::MeshDevice* device,
+        const MemoryConfig& memory_config) {
+        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
     }
 };
 
