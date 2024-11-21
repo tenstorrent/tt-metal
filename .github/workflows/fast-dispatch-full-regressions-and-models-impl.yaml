@@ -164,7 +164,7 @@ jobs:
           - model: "mamba 6"
             cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
         card: [N150, N300]
-    name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
+    name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
     env:
       ARCH_NAME: wormhole_b0
       LOGURU_LEVEL: INFO
