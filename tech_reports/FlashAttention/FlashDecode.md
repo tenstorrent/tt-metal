@@ -1,4 +1,4 @@
-# FlashDecode on Tenstorrent’s Wormhole Architecture
+# FlashDecode on Tenstorrent's Wormhole Architecture
 
 Author: Jack (Xun) Cai
 
@@ -24,11 +24,10 @@ This technical report considers group query attention, which is a general form o
 
 ## 2 Background
 
-### 2.1 What is KV Cache and How it can Speed Up Decode
-KV cache is a technique used to store previously computed key and value tensors during autoregressive generation, avoiding redundant computation of these tensors for tokens that have already been processed. During text generation, new tokens are generated one at a time, and at each step, the model needs to compute attention scores between the new token's query and all previous tokens' keys, followed by a weighted sum of their values. Without KV cache, the model would need to recompute the key and value tensors for all previous tokens at each generation step, which is computationally expensive. By caching these tensors, we only need to compute new key and value tensors for the latest generated token and append them to the cache. This optimization significantly reduces the computational cost of generation, as it changes the time complexity from O(n²) to O(n), where n is the sequence length. The tradeoff is increased memory usage to store the cache, but this is generally worthwhile given the substantial speedup in generation time.
+### 2.1 What is KV Cache and How it Can Speed Up Decoding
+KV cache is a technique used to store previously computed key and value tensors during autoregressive generation, avoiding redundant computation for tokens that have already been processed. During text generation, new tokens are generated one at a time. At each step, the model needs to compute attention scores between the new token's query and all previous tokens' keys, followed by a weighted sum of their values. Without KV cache, the model would need to recompute the key and value tensors for all previous tokens at each generation step, which is computationally expensive. By caching these tensors, we only need to compute new key and value tensors for the latest generated token and append them to the cache. This optimization significantly reduces the computational cost of generation, changing the time complexity from O(n²) to O(n), where n is the sequence length. The tradeoff is increased memory usage to store the cache, but this is generally worthwhile given the substantial speedup in generation time.
 
-
-### 2.2 How To Smartly Utilize Tenstorrent's Tile-based Architecture to do Attention Decode
+### 2.2 How to Smartly Utilize Tenstorrent's Tile-based Architecture for Attention Decoding
 During decode phase, the sequence length of the query is 1, and the attention is parallelized over the batch and head dimensions. This results in attention on a small query with a large KV cache. In vanilla PyTorch, attention is implemented as follows:
 ```python
 # query: [bsz, num_q_heads, seqlen=1, head_dim]
@@ -65,12 +64,11 @@ attn_output = attn_output.view(1, bsz, num_q_heads, head_dim)
 ```
 
 ### 2.3 FlashDecode
-Just like FlashAttention, we can fuse the above PyTorch code and do attention by chunks to use Tenstorrent's high bandwidth L1 memory. Contrary to FlashAttention, however, our input shape is different with query heads in the `y` dimension. In addition, we often come across with the case where there are more available cores than work. One example is in Llama 3.1 70B on 8 devices, where each device performs MQA with 1 kv_head. Using a batch size of 16, there are `16*1` works in total, but 64 cores available. In this case, FlashDecode can be particularly useful by allowing multiple cores to work on a single kv_head. This is done by splitting the kv_cache into groups, where each group is assigned to a core. A reduction step is applied at the very end to combine the results from each core. Tri Dao et al., who purposed the FlashDecode [1] technique, has a great visualization which we borrow and include below:
+Just like FlashAttention, we can fuse the above PyTorch code and perform attention by chunks to use Tenstorrent's high bandwidth L1 memory. However, unlike FlashAttention, our input shape is different with query heads in the `y` dimension. Additionally, we often encounter cases where there are more available cores than works. One example is in Llama 3.1 70B on 8 devices, where each device performs MQA with 1 kv_head. Using a batch size of 16, there are `16*1` works in total, but 64 cores available. In this case, FlashDecode can be particularly useful by allowing multiple cores to work on a single kv_head. This is achieved by splitting the kv_cache into groups, where each group is assigned to a core. A reduction step is applied at the end to combine the results from each core. Tri Dao et al., who proposed the FlashDecode [1] technique, provides a great visualization which we include below:
 
 ![FlashDecodeTriDao](images/FlashDecode/parallelization_kv.gif)
 
 *Figure 1: FlashDecode parallelization scheme. Multiple cores can work on a single kv_head by splitting the kv_cache into groups. Figure taken from [1].*
-
 
 ## 3 Implementation Details
 Our full implementation of FlashDecode can be found [here](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/transformer/sdpa_decode).
@@ -123,15 +121,13 @@ if (core_type == WORKER) {
 Overall, the kernel pseudocode is similar to FlashAttention, but with only a single Q chunk and an reduction step at the end. The complete reader, writer, and compute kernels are be found [here](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels).
 
 ### 3.4 Causal vs. Non-causal
-In the last part of the implementation details, we will discuss the role of `cur_pos`, `cur_pos_tensor`, and `attn_mask` in the kernel.
+In the final part of the implementation details, we will discuss the role of `cur_pos`, `cur_pos_tensor`, and `attn_mask` in the kernel.
 
 **Causal mode**
-
-In causal mode, each batch's query attends to all the previous tokens up to the current decoding position. Since each batch is independent, each core will only need to read the previous tokens from the KV cache rather than reading the entire KV cache. This is done by passing in the `cur_pos` list, which contains the current decoding position for each batch, into the kernel. Alternatively, the `cur_pos_tensor` can be passed in as a row major TT-NN tensor. This optimization removes the need for an explicit mask and do redundant computation. An example of causal mode flash decode use case is in the [Llama 3 attention module](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/llama_attention.py).
+In causal mode, each batch's query attends to all previous tokens up to the current decoding position. Since each batch is independent, each core only needs to read the previous tokens from the KV cache rather than reading the entire cache. This is accomplished by passing the `cur_pos` list, which contains the current decoding position for each batch, into the kernel. Alternatively, the `cur_pos_tensor` can be passed in as a row-major TT-NN tensor. This optimization eliminates the need for an explicit mask and avoids redundant computation. An example of causal mode flash decode can be found in the [Llama 3 attention module](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/llama_attention.py).
 
 **Non-causal mode**
-
-In non-causal mode, the query does not necessarily attend to all previous tokens. We support user to pass in an arbitrary attention mask up to `kv_len`. Attention on the entire length of KV cache is computed, and the mask is applied to the attention scores. An use case of non-causal attention is in the vision language model, where cross attention is applied in decode phase on the entire input image with arbitrary masking. An example of non-causal mode flash decode use case is in the [Llama 3 cross attention module](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/multimodal/llama_cross_attention.py).
+In non-causal mode, the query does not necessarily attend to all previous tokens. Users can pass in an arbitrary attention mask up to `kv_len`. Attention is computed on the entire length of KV cache, and the mask is applied to the attention scores. A use case for non-causal attention is in vision-language models, where cross attention is applied in the decode phase on the entire input image with arbitrary masking. An example of non-causal mode flash decode can be found in the [Llama 3 cross attention module](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/multimodal/llama_cross_attention.py).
 
 ## 4 Performance Analysis
 
