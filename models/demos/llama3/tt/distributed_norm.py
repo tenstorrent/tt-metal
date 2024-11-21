@@ -11,10 +11,9 @@ class DistributedNorm(LightweightModule):
         self.norm = norm
         self.args = args
 
-    def forward(self, orig_x, mode):
+    def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        x = orig_x
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
