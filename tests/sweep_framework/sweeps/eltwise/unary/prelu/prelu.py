@@ -6,18 +6,12 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -45,12 +39,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def torch_prelu(x, *args, **kwargs):
-    weight = kwargs.pop("scalar")
-    result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
-    return result
-
-
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
@@ -65,14 +53,14 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_output_tensor = torch_prelu(torch_input_tensor_a, scalar=weight)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, weight)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

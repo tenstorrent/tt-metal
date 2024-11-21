@@ -418,6 +418,9 @@ void bind_binary_composite_overload(
     const binary_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_rank = "2, 3, 4",
+    const std::string& example_tensor1 = "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
+    const std::string& example_tensor2 = "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
@@ -447,19 +450,22 @@ void bind_binary_composite_overload(
                  - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
+                 - {4}
 
-            {4}
+            {7}
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1.5, 2.5], [3.5, 4.5]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor1 = {5}
+            >>> tensor2 = {6}
             >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
+        supported_rank,
+        example_tensor1,
+        example_tensor2,
         note);
 
     bind_registered_operation(
@@ -1164,6 +1170,15 @@ void py_module(py::module& module) {
         ttnn::maximum,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    detail::bind_binary_composite_overload(
+        module,
+        ttnn::prelu,
+        R"doc(Perform an eltwise-prelu operation. PReLU supports the case where the size of input_tensor_b matches the number of channels in input_tensor_a.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(2, 3, 4, 5)doc",
+        R"doc(ttnn.from_torch(torch.rand([1, 2, 32, 32], dtype=torch.bfloat16), device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([1, 2], dtype=torch.bfloat16), device=device))doc");
 
     detail::bind_binary_composite(
         module,

@@ -281,6 +281,33 @@ Tensor Softplus::invoke(
         optional_output_tensor);
 }
 
+Tensor Prelu::invoke(
+    uint8_t queue_id,
+    const Tensor& input,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input,
+        {UnaryWithParam{UnaryOpType::PRELU_SFPU, value}},
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor Prelu::invoke(
+    const Tensor& input,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        DefaultQueueId,
+        input,
+        {UnaryWithParam{UnaryOpType::PRELU_SFPU, value}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Identity::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,

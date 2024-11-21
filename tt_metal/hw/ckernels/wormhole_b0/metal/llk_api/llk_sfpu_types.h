@@ -14,6 +14,7 @@ enum SfpuType {
     reciprocal,
     sqrt,
     lrelu,
+    prelu,
     power,
     square,
     tanh_derivative,
