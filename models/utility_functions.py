@@ -508,9 +508,9 @@ def untilize(x):
     ) == 0, "The last two dimensions of the tensor must be divisible by 32"
 
     if isinstance(x, torch.Tensor):
-        ret = torch.zeros(x.shape)
+        ret = torch.zeros(x.shape, dtype=x.dtype)
     else:
-        ret = np.zeros(x.shape)
+        ret = np.zeros(x.shape, dtype=x.dtype)
 
     for B in range(x.shape[0]):
         for C in range(x.shape[1]):
