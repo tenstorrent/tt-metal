@@ -7,7 +7,6 @@ import ttnn
 from models.utility_functions import nearest_32
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
-from loguru import logger
 
 
 class TtMixtralAttention(LightweightModule):
