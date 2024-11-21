@@ -109,8 +109,8 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, const MemoryC
                         TT_FATAL(input_tensor.get_layout() == ttnn::TILE_LAYOUT, "ttnn.concat: expected all input tensors to be in tile layout");
                         auto untilized_tensor = ttnn::untilize(input_tensor);
                         // untilized, so now we have a padded rm tensor
-                        untilized_tensor.set_shape(ttnn::Shape {input_tensor.get_logical_shape().view(),
-                                                                untilized_tensor.get_padded_shape().view()});
+                        untilized_tensor = ttnn::reshape(untilized_tensor,
+                            ttnn::Shape {input_tensor.get_logical_shape().view(), untilized_tensor.get_padded_shape().view()});
                         return untilized_tensor;
                     }
                 );
