@@ -44,8 +44,8 @@ void bind_unary_composite_optional_floats_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float or ttnn.Tensor): {3}. Defaults to `{4}`.
-            {5} (float or ttnn.Tensor): {6}. Defaults to `{7}`.
+            {2} (float or ttnn.Tensor): {3}. Defaults to `None`.
+            {5} (float or ttnn.Tensor): {6}. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -67,8 +67,13 @@ void bind_unary_composite_optional_floats_with_default(
             {10}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, 5.0, 7.0)
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> min_tensor = ttnn.from_torch(torch.tensor([[0, 2], [0,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> max_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(input_tensor, min_tensor, max_tensor)
+
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(input_tensor, min = 2, max = 9)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -351,7 +356,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            fast_and_approximate_mode (bool): Use the fast and approximate mode.
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -375,8 +380,8 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             {3}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, fast_and_approximate_mode=true)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, fast_and_approximate_mode=True)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),

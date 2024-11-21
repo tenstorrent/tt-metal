@@ -203,6 +203,34 @@ def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device):
         assert comp_pass
 
 
+def test_clamp_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    min = torch.tensor([[0, 2], [0, 4]], dtype=torch.bfloat16)
+    max = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.clamp)
+    golden_tensor = golden_function(input, min, max)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x2_tt = ttnn.from_torch(min, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x3_tt = ttnn.from_torch(max, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.clamp(x1_tt, x2_tt, x3_tt)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_rsqrt_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rsqrt)
+    golden_tensor = golden_function(input)
+    print(golden_tensor)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.rsqrt(x1_tt, fast_and_approximate_mode=True)
+    tt_out = ttnn.to_torch(y_tt)
+    print(tt_out)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
