@@ -175,7 +175,7 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
                     auto shard_spec = input_tensor.shard_spec().value();
                     shard_spec.shape[1] = output_shape[3];
 
-                    CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
+                    CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(0, 0));
                     CoreRangeSet core_range_set({first_core_range});
                     shard_spec.grid = core_range_set;
                     auto mem_config = this->output_mem_config;
