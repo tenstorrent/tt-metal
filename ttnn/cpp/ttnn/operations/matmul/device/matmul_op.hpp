@@ -218,7 +218,7 @@ Tensor matmul(
     const std::optional<const Tensor> bias = std::nullopt,
     const struct Matmul &parameters = Matmul{},
     const uint8_t queue_id = 0,
-    std::vector<std::optional<const Tensor>> optional_output_tensors = {});
+    std::vector<std::optional<Tensor>> optional_output_tensors = {});
 
 }  // namespace matmul
 
