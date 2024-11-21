@@ -58,7 +58,8 @@ static Tensor full(
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
         constexpr DataType data_type = detail::get_data_type<T>();
-        auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
+        TensorSpec tensor_spec(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout), MemoryConfig{}, shape));
+        auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.compute_packed_buffer_size_bytes());
         std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
         if (!optional_output_tensor.has_value()){
@@ -217,7 +218,9 @@ static Tensor arange(
     if (size % 2 != 0) {
         size++;
     }
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
+    ttnn::SimpleShape shape{1, 1, 1, static_cast<uint32_t>(size)};
+    TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.compute_packed_buffer_size_bytes());
 
     auto index = 0;
     for (auto value = start; value < stop; value += step) {
@@ -444,7 +447,7 @@ static Tensor fill_first_val_into_tensor(
         owned_buffer[i] = input_buffer[0];
     }
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
-    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
     }
@@ -493,7 +496,7 @@ static Tensor prod_result_computation_GS(
     }
     owned_buffer[0] = result;  // store the result at the first position of the tensor,and the rest of the values as
                                // 0.0f
-    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
     }
@@ -546,7 +549,7 @@ static Tensor prod_result_computation_WH_B0(
     }
     owned_buffer[0] = result;  // store the result at the first position of the tensor,and the rest of the values as
                                // 0.0f
-    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
     }
@@ -710,7 +713,7 @@ static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, con
         }
     }
 
-    return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+    return Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
 }
 
 static Tensor random(
