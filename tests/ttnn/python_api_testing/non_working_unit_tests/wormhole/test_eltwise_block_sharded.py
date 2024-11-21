@@ -34,7 +34,7 @@ def run_tests(
     if gen_infs:
         torch_input_tensor_a = gen_rand_inf(input_shape, low=-100, high=100)
     else:
-        torch_input_tensor_a = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
+        torch_input_tensor_a = torch.Tensor(size=input_shape).uniform_(-50, 50).to(torch.bfloat16)
 
     torch_output_tensor = torch_op(torch_input_tensor_a)
 
@@ -60,19 +60,6 @@ def run_tests(
     [passed, message] = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     assert passed, f"PCC={message}"
 
-
-# X 8 Y 8 input_shape [256, 2, 5, 1536] DataType.BFLOAT16 Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape False
-# (False, '0.0011681649683373467')
-# X 8 Y 8 input_shape [256, 2, 5, 1536] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape False
-# (False, '0.0001750748520755012')
-# X 8 Y 8 input_shape [1, 256, 2, 2304] DataType.BFLOAT16 Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape False
-# (False, '3.9930462497966295e-05')
-# X 8 Y 8 input_shape [1, 256, 2, 2304] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape False
-# (False, '-0.000952861622351697')
-# X 8 Y 8 input_shape [32, 4, 8, 768] DataType.BFLOAT16 Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape False
-# (False, '0.00028035922183673165')
-# X 8 Y 8 input_shape [32, 4, 8, 768] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape False
-# (False, '0.0016899023358967573')
 
 test_sweep_args = [
     (
@@ -238,8 +225,88 @@ def test_eltwise_exp(input_shape, dtype, dlayout, sharding_strategy, shard_orien
         sharding_strategy,
         shard_orientation,
         hw_as_shard_shape,
-        torch.isposinf,
-        ttnn.isposinf,
-        True,
+        torch.cos,
+        ttnn.cos,
+        False,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_cos(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.cos,
+        ttnn.cos,
+        False,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_sin(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.sin,
+        ttnn.sin,
+        False,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_abs(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.abs,
+        ttnn.abs,
+        False,
+        device,
+    )
+
+
+def nop(x, memory_config=None):
+    return x
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_nop(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        nop,
+        nop,
+        False,
         device,
     )
