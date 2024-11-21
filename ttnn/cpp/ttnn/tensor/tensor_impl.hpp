@@ -141,7 +141,7 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout);
+DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_spec);
 
 template <typename T>
 inline void read_data_from_device_buffer(
