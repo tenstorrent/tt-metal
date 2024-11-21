@@ -1930,18 +1930,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
 
     for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
         this->expected_num_workers_completed[i] = 0;
-        for (uint32_t index = 0; index < tt::tt_metal::hal.get_programmable_core_type_count(); index++) {
-            this->config_buffer_mgr[i].init_add_buffer(
-                tt::tt_metal::hal.get_dev_addr(
-                    tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-                tt::tt_metal::hal.get_dev_size(
-                    tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
-        }
-        // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the previous
-        // launch message.
-        // TODO(jbauman): Give correct number once async bug is fixed.
-        this->config_buffer_mgr[i].init_add_buffer(0, 1);
     }
+    reset_config_buffer_mgr(dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
 }
 
 void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
@@ -2993,9 +2983,10 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
                 tt::tt_metal::hal.get_dev_size(
                     tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
         }
-        // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the previous
-        // launch message.
-        this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
+        // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
+        // previous launch message.
+        // TODO(jbauman): Give correct number once async bug is fixed.
+        this->config_buffer_mgr[i].init_add_buffer(0, 1);
     }
 }
 
