@@ -4,13 +4,10 @@
 
 #include "tt_memory.h"
 
-#include <cassert>
-#include <cstdio>
-#include <fstream>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
-#include <stdexcept>
 
-#include "tensix.h"
 #include "tt_elffile.hpp"
 #include "tt_metal/common/assert.hpp"
 
