@@ -75,7 +75,7 @@ def run(
         input_shape = sanitize_shape_rm(input_shape)
 
     torch_input_tensor_a = gen_rand_inf(input_shape, low=-100, high=100)
-    torch_output_tensor = torch.isfinite(torch_input_tensor_a)
+    torch_output_tensor = torch.isneginf(torch_input_tensor_a)
 
     sharded_config = ttnn.create_sharded_memory_config(
         shape=input_shape,
@@ -94,7 +94,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.isfinite(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn.isneginf(input_tensor_a, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
