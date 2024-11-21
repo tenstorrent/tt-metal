@@ -180,14 +180,18 @@ class resnet50Bottleneck:
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     math_fidelity=self.model_config["MATH_FIDELITY"],
-                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                    if height_sharding
-                    else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    shard_layout=(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                        if height_sharding
+                        else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                    ),
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
                 ),
                 conv_op_cache=conv_op_cache,
+                return_output_size=True,
+                return_prepared_device_weights=True,
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -228,12 +232,14 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_size=True,
+            return_prepared_device_weights=True,
         )
 
         act_block_h_override = 0
@@ -293,17 +299,19 @@ class resnet50Bottleneck:
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
                 act_block_h_override=act_block_h_override,
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_size=True,
+            return_prepared_device_weights=True,
         )
 
         # conv3 is 1x1 conv
         # print("Running conv3")
-        out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
+        out, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             in_channels=self.conv3_input_channels,
@@ -320,12 +328,13 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
+            return_prepared_device_weights=True,
         )
 
         if not self.run_downsample_before_conv2:
@@ -541,6 +550,8 @@ class resnet50:
                 act_block_h_override=act_block_h_override,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_size=True,
+            return_prepared_device_weights=True,
         )
         # Relu is fused with conv1
 
@@ -872,6 +883,8 @@ class resnet50:
                 act_block_h_override=act_block_h_override,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_size=True,
+            return_prepared_device_weights=True,
         )
         # Relu is fused with conv1
 
