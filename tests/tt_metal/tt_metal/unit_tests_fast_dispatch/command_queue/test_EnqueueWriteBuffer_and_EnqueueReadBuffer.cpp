@@ -314,7 +314,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     bool pass = true;
     vector<uint32_t> dst;
     uint32_t idx = start;
-    for (auto buffer : bufs) {
+    for (const auto& buffer : bufs) {
         EnqueueReadBuffer(cq, buffer, dst, true);
         pass &= dst == unique_vectors[idx % unique_vectors.size()];
         idx++;

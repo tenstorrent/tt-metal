@@ -62,12 +62,24 @@ ll_api::memory get_risc_binary(string const &path,
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
+template<typename DType>
 void write_hex_vec_to_core(
     chip_id_t chip,
     const CoreCoord &core,
-    const std::vector<uint32_t> &hex_vec,
+    const std::vector<DType>& hex_vec,
     uint64_t addr,
-    bool small_access = false);
+    bool small_access = false) {
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+}
+template<typename DType>
+void write_hex_vec_to_core(
+    chip_id_t chip,
+    const CoreCoord &core,
+    tt::stl::Span<const DType> hex_vec,
+    uint64_t addr,
+    bool small_access = false) {
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+}
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 

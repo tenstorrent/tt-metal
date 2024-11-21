@@ -89,10 +89,10 @@ ll_api::memory get_risc_binary(string const &path,
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vector<uint32_t>& hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, small_access);
 }
 
 std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
@@ -121,8 +121,9 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
+static const uint32_t ERISC_APP_FW_ON_CORE_FLAG = 0x1;
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
-    llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+    llrt::write_hex_vec_to_core(chip, core, tt::stl::Span(&ERISC_APP_FW_ON_CORE_FLAG, 1), eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -173,7 +174,7 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     std::vector<uint32_t> jump_to_fw;
     jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
-    write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
+    write_hex_vec_to_core(chip_id, core, tt::stl::Span<const uint32_t>(jump_to_fw.data(), jump_to_fw.size()), 0);
 }
 
 bool test_load_write_read_risc_binary(

@@ -119,9 +119,7 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
 {
     TT_FATAL(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
 
-    const auto element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
-    auto width_alignment = sizeof(uint32_t) / element_size;
-
+    uint32_t width_alignment = 1;
     if (memory_config.shard_spec.has_value()) {
         const auto& shard_spec = memory_config.shard_spec.value();
         if (shard_spec.physical_shard_shape.has_value()) {
@@ -130,12 +128,6 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
         if (shard_spec.mode == ShardMode::PHYSICAL && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto& physical_shard_shape = shard_spec.shape;
             const auto physical_shard_width = physical_shard_shape[1];
-            TT_FATAL(
-                (physical_shard_width % width_alignment) == 0,
-                "For Row Major layout and shard mode {}, the width of shard shape {} is treated as physical shard width and must be aligned to {} since we pack buffer data as uint32_t.",
-                    shard_spec.mode, physical_shard_shape, width_alignment
-                );
-
             width_alignment = physical_shard_width;
         }
     }
@@ -145,12 +137,6 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
 void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
-    const uint32_t element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
-    const uint32_t page_alignment = sizeof(uint32_t) / element_size;
-
-    TT_FATAL((width_alignment % page_alignment) == 0,
-        "Incorrect alignment configuration for Row Major layout: innermost dimension alignment must be aligned to {} bytes since we pack buffer data as uint32_t. With element size of {} byte(s), alignment {} must be a multiple of alignment {}.",
-        sizeof(uint32_t), element_size, alignment, page_alignment);
 
     // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as width_alignment
     if (memory_config.shard_spec.has_value() && memory_config.shard_spec.value().mode == ShardMode::PHYSICAL && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {

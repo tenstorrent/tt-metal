@@ -343,7 +343,7 @@ void watcher_init(Device *device) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, watcher_init_val, GET_WATCHER_TENSIX_DEV_ADDR());
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()), GET_WATCHER_TENSIX_DEV_ADDR());
         }
     }
 

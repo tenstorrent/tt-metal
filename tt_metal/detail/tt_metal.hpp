@@ -11,6 +11,7 @@
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -44,10 +45,29 @@ inline namespace v0 {
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
         * | buffer      | Buffer to send data to                          | Buffer &                |                                                  | Yes      |
-        * | host_buffer | Buffer on host to copy data from                | std::vector<uint32_t> & | Host buffer size must match buffer               | Yes      |
+        * | host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match buffer               | Yes      |
         */
-        void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer);
-        void WriteToBuffer( std::shared_ptr<Buffer> buffer, const std::vector<uint32_t> &host_buffer);
+        void WriteToBuffer(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer);
+        /**
+        * Copies data from a host buffer into the specified buffer
+        *
+        * Return value: void
+        *
+        * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
+        * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+        * | buffer      | Buffer to send data to                          | Buffer &                |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data from                | std::vector<DType> &    | Host buffer size must match buffer               | Yes      |
+        */
+        template<typename DType>
+        void WriteToBuffer(Buffer &buffer, const std::vector<DType>& host_buffer) {
+            WriteToBuffer(buffer, tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
+        }
+        template<typename DType>
+        void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& host_buffer) {
+            WriteToBuffer(*buffer, host_buffer);
+        }
+
+        void ReadFromBuffer(Buffer &buffer, uint8_t* host_buffer, bool shard_order = false);
         /**
         * Copies data from a buffer into a host buffer
         *
@@ -56,12 +76,22 @@ inline namespace v0 {
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
         * | buffer      | Buffer to read data from                        | Buffer &                |                                                  | Yes      |
-        * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data into                | std::vector<DType> &    |                                                  | Yes      |
         * | shard_order | For a sharded buffer we can read in shard order | bool                    |                                                  | No       |
         */
-        void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
-        void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
+        template<typename DType>
+        void ReadFromBuffer(Buffer &buffer, std::vector<DType> &host_buffer, bool shard_order = false) {
+            auto buffer_size = buffer.size();
+            TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
+            host_buffer.resize(buffer.size() / sizeof(DType));
+            ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), shard_order);
+        }
+        template<typename DType>
+        void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType> &host_buffer, bool shard_order = false) {
+            ReadFromBuffer(*buffer, host_buffer, shard_order);
+        }
 
+        void ReadShard(Buffer &buffer, uint8_t* host_buffer, const uint32_t & core_id);
         /**
         * Copies data from a buffer into a host buffer
         *
@@ -70,12 +100,14 @@ inline namespace v0 {
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
         * | buffer      | Buffer to read data from                        | Buffer &                |                                                  | Yes      |
-        * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data into                | std::vector<DType> &    |                                                  | Yes      |
         * | core_id     | ID of core                                      | const uint32_t &        |                                                  | Yes      |
         */
-        void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id);
-
-
+        template<typename DType>
+        void ReadShard(Buffer &buffer, std::vector<DType> &host_buffer, const uint32_t & core_id) {
+            host_buffer.resize(buffer.page_size() * buffer.shard_spec().size());
+            ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
+        }
 
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
