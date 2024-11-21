@@ -6,7 +6,6 @@ function(setup_ttnn_test_target target_name)
             test_common_libs
             ttnn
             Metalium::Metal
-            GTest::gtest
             GTest::gtest_main
     )
     target_include_directories(
