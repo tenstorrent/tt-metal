@@ -3,14 +3,12 @@ set(UNIT_TESTS_DISPATCH_EVENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_events.cpp
 )
 
-set(UNIT_TESTS_DISPATCH_EVENT_SRC "${UNIT_TESTS_DISPATCH_EVENT_SRC}" PARENT_SCOPE)
+add_library(unit_tests_dispatch_event_o STATIC ${UNIT_TESTS_DISPATCH_EVENT_SRC})
 
-add_executable(unit_tests_dispatch_event ${UNIT_TESTS_DISPATCH_EVENT_SRC})
-TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_event)
+target_link_libraries(unit_tests_dispatch_event_o PRIVATE test_metal_common_libs)
 
-target_link_libraries(unit_tests_dispatch_event PUBLIC test_metal_common_libs)
 target_include_directories(
-    unit_tests_dispatch_event
+    unit_tests_dispatch_event_o
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
@@ -21,9 +19,16 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
+
+add_executable(unit_tests_dispatch_event $<TARGET_OBJECTS:unit_tests_dispatch_event_o>)
+
+target_link_libraries(unit_tests_dispatch_event PRIVATE test_metal_common_libs)
+
 set_target_properties(
     unit_tests_dispatch_event
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_event)

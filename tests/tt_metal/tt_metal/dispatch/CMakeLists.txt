@@ -5,10 +5,10 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_trace)
 
 add_executable(
     unit_tests_dispatch
-    ${UNIT_TESTS_DISPATCH_BUFFER_SRC}
-    ${UNIT_TESTS_DISPATCH_EVENT_SRC}
-    ${UNIT_TESTS_DISPATCH_PROGRAM_SRC}
-    ${UNIT_TESTS_DISPATCH_TRACE_SRC}
+    $<TARGET_OBJECTS:unit_tests_dispatch_buffer_o>
+    $<TARGET_OBJECTS:unit_tests_dispatch_event_o>
+    $<TARGET_OBJECTS:unit_tests_dispatch_program_o>
+    $<TARGET_OBJECTS:unit_tests_dispatch_trace_o>
 )
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch)
 

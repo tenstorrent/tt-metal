@@ -5,14 +5,12 @@ set(UNIT_TESTS_DISPATCH_PROGRAM_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sub_device.cpp
 )
 
-set(UNIT_TESTS_DISPATCH_PROGRAM_SRC "${UNIT_TESTS_DISPATCH_PROGRAM_SRC}" PARENT_SCOPE)
+add_library(unit_tests_dispatch_program_o STATIC ${UNIT_TESTS_DISPATCH_PROGRAM_SRC})
 
-add_executable(unit_tests_dispatch_program ${UNIT_TESTS_DISPATCH_PROGRAM_SRC})
-TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_program)
+target_link_libraries(unit_tests_dispatch_program_o PRIVATE test_metal_common_libs)
 
-target_link_libraries(unit_tests_dispatch_program PUBLIC test_metal_common_libs)
 target_include_directories(
-    unit_tests_dispatch_program
+    unit_tests_dispatch_program_o
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
@@ -23,9 +21,16 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
+
+add_executable(unit_tests_dispatch_program $<TARGET_OBJECTS:unit_tests_dispatch_program_o>)
+
+target_link_libraries(unit_tests_dispatch_program PRIVATE test_metal_common_libs)
+
 set_target_properties(
     unit_tests_dispatch_program
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_program)
