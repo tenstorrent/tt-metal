@@ -59,7 +59,7 @@ static Tensor full(
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
         constexpr DataType data_type = detail::get_data_type<T>();
         TensorSpec tensor_spec(shape.logical_shape(), TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout), MemoryConfig{}, shape));
-        auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.compute_packed_buffer_size_bytes());
+        auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.padded_shape().volume());
         std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
         if (!optional_output_tensor.has_value()){
