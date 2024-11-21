@@ -10,7 +10,7 @@ namespace ttnn::operations::ccl {
 
 ttnn::Tensor ExecuteReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
-    const uint32_t scatter_dim,
+    const int16_t scatter_dim,
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -23,7 +23,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
 }
 ttnn::Tensor ExecuteReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
-    const uint32_t scatter_dim,
+    const int16_t scatter_dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType math_op,

@@ -26,7 +26,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t scatter_dim,
+               const int16_t scatter_dim,
                ttnn::operations::reduction::ReduceType math_op,
                const uint32_t num_links,
                const ttnn::MemoryConfig& memory_config,
@@ -48,7 +48,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t scatter_dim,
+               const int16_t scatter_dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                ttnn::operations::reduction::ReduceType math_op,
@@ -86,7 +86,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
-            dim (int): Dimension to perform operation
+            scatter_dim (int): Dimension to perform operation
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
@@ -107,8 +107,8 @@ void py_bind_reduce_scatter(pybind11::module& module) {
 
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
             >>> num_devices = 8
-            >>> dim = 3
-            >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
+            >>> scatter_dim = 3
+            >>> input_tensors = torch.chunk(full_tensor, num_devices, scatter_dim)
             >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
             >>> tt_input_tensors = []
@@ -116,7 +116,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
                     tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
             >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
-            >>> output = ttnn.reduce_scatter(input_tensor_mesh, dim=0, topology=ttnn.Topology.Linear)
+            >>> output = ttnn.reduce_scatter(input_tensor_mesh, scatter_dim=0, topology=ttnn.Topology.Linear)
 
         )doc");
 }

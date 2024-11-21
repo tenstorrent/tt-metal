@@ -29,16 +29,16 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t dim,
+               const int16_t gather_dim,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+                return self(input_tensor, gather_dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
             },
             py::arg("input_tensor"),
-            py::arg("dim"),
+            py::arg("gather_dim"),
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
@@ -49,7 +49,7 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t dim,
+               const int16_t gather_dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const uint32_t num_links,
@@ -57,10 +57,10 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+                return self(input_tensor, gather_dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
             },
             py::arg("input_tensor"),
-            py::arg("dim"),
+            py::arg("gather_dim"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::kw_only(),
@@ -84,7 +84,7 @@ void py_bind_all_gather(pybind11::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
-            dim (int): Dimension to perform operation.
+            gather_dim (int): Dimension to perform operation.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
@@ -113,7 +113,7 @@ void py_bind_all_gather(pybind11::module& module) {
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.all_gather(ttnn_tensor, gather_dim=0, topology=ttnn.Topology.Ring)
 
         )doc");
 }

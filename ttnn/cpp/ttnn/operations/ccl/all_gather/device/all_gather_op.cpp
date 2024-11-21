@@ -175,7 +175,7 @@ namespace operations {
 namespace ccl {
 
 Tensor all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const ttnn::ccl::Topology topology) {
+    const Tensor& input_tensor, const int16_t gather_dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const ttnn::ccl::Topology topology) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
@@ -186,6 +186,13 @@ Tensor all_gather(
     if (num_devices == 2){
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
+
+    int16_t rank = input_tensor.get_logical_shape().rank();
+
+    int16_t dim = (gather_dim < 0) ? rank + gather_dim : gather_dim;
+
+    TT_FATAL(dim >= -rank && dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
+
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology](
@@ -206,7 +213,7 @@ Tensor all_gather(
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const uint32_t dim,
+    const int16_t gather_dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
@@ -218,6 +225,12 @@ Tensor all_gather(
     TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+
+    int16_t rank = input_tensor.get_logical_shape().rank();
+
+    int16_t dim = (gather_dim < 0) ? rank + gather_dim : gather_dim;
+
+    TT_FATAL(dim >= -rank && dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
