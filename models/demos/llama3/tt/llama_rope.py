@@ -125,7 +125,7 @@ class TtLlamaRotarySetup(LightweightModule):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
-            assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+            assert rot_idxs.shape == [1, 1, 1, self.batch_size], "rot_idxs must be a [1, 1, 1, batch] tensor"
 
         # Send the idxs to device
         if rot_idxs.device != device:
