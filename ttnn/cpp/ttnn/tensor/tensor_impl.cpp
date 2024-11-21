@@ -141,13 +141,12 @@ void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape
              dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
             "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on device!");
     };
-    auto supported_layout = [&shape, &dtype, &layout]() {
+    auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
             case DataType::UINT32:
             case DataType::INT32:
-            case DataType::FLOAT32: break;
+            case DataType::FLOAT32:
             case DataType::UINT8:
-                break;
             case DataType::UINT16:
             case DataType::BFLOAT16:
                 break;

@@ -68,10 +68,12 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
                 dst8 += sizeof(int32_t);
             }
             n -= n / sizeof(int32_t) * sizeof(int32_t);
-            for (size_t i = 0; i < n; ++i) {
-                *src8 = *dst8;
-                src8++;
-                dst8++;
+            // Copying the last few bytes (n < 4).
+            // Overrunning dst buffer is safe, because the actual allocated space for dst is guaranteed to be at least 4 byte aligned.
+            if (n > 0) {
+                int32_t val = 0;
+                std::memcpy(&val, src8, n);
+                _mm_stream_si32((int32_t *)dst8, val);
             }
         }
     }
