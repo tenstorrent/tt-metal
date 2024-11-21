@@ -25,9 +25,6 @@ permissions:
   packages: write
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-wheels:
     needs: build-artifact
     strategy:
