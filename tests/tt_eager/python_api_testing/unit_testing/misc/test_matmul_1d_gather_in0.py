@@ -85,8 +85,8 @@ PREFETCHER_GRID = [
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
-        # 32, 2304, 3840 (PREFETCHER), only works on TG
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_GRID),
+        # # 32, 2304, 3840 (PREFETCHER), only works on TG
+        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_GRID),
         # 32, 2304, 3840
         (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
         # 32, 2304, 3840
@@ -116,11 +116,16 @@ PREFETCHER_GRID = [
     [
         None,
         ttnn.UnaryOpType.SILU,
+        ttnn.UnaryOpType.RELU,
     ],
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
     [False, True],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [1, 3],
 )
 def test_multi_core_matmul_1d_wh(
     device,
@@ -137,6 +142,8 @@ def test_multi_core_matmul_1d_wh(
     activation,
     grid,
     use_arbitrary_cores,
+    num_iters,
+    use_program_cache,
     function_level_defaults,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
@@ -276,19 +283,24 @@ def test_multi_core_matmul_1d_wh(
         dst_full_sync_en=True,
     )
 
-    output_t = ttnn.matmul(
-        in0_t,
-        in1_t,
-        program_config=program_config,
-        memory_config=output_sharded_mem_config,
-        compute_kernel_config=compute_kernel_config,
-    )
+    for _ in range(num_iters):
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=output_sharded_mem_config,
+            compute_kernel_config=compute_kernel_config,
+        )
     tt_out = ttnn.to_torch(output_t)
 
     pt_out = in0 @ in1
     if activation:
-        pt_out = torch.nn.SiLU()(pt_out)
+        act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
+        pt_out = act_fnc(pt_out)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing
+
+    # Check program cache
+    assert device.num_program_cache_entries() == 1  # Only 1 op
