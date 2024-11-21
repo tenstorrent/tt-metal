@@ -10,6 +10,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from models.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("height", [32, 30])
@@ -125,3 +126,36 @@ def test_untilize_with_unpadding_W_16(device, in_dtype, use_multicore, use_pack_
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
     logger.info(pcc_msg)
     assert passing
+
+
+@pytest.mark.parametrize("h", [1, 18, 65])
+@pytest.mark.parametrize("w", [1, 15, 17, 29, 33, 49, 63, 65])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_to_layout_device(device, h, w, input_layout, output_layout):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch_random((h, w), -0.1, 0.1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16, layout=input_layout)
+    new_layout_tensor = ttnn.to_layout(input_tensor, layout=output_layout)
+    torch_brought_back = ttnn.to_torch(new_layout_tensor)
+
+    assert_with_pcc(torch_input_tensor, torch_brought_back)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_to_layout_unet_shallow(device, use_program_cache):
+    torch_input = torch.rand([1, 1, 337920, 1])
+    input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
+
+    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
+    input = ttnn.to_device(input, device)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [1, 1, 337920, 32], ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.HEIGHT
+    )
+    input = ttnn.to_memory_config(input, sharded_memory_config)
+    input = ttnn.to_memory_config(input, ttnn.L1_MEMORY_CONFIG)
+
+    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)  # This fails
+    torch_output = ttnn.to_torch(input)
+    assert_with_pcc(torch_input, torch_output)
