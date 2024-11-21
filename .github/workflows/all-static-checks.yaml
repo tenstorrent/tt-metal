@@ -227,5 +227,6 @@ jobs:
             echo "all-post-commit passed for the latest commit."
           else
             echo "all-post-commit has not passed for the latest commit."
+            echo "API Response: $api_response"
             exit 1
           fi
