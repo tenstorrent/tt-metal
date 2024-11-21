@@ -6,20 +6,27 @@
 
 #include <gtest/gtest.h>
 #include "host_api.hpp"
+#include "logger.hpp"
 
 using namespace tt;
 
 class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
    protected:
     void SetUp() override {
-        this->validate_preconditions();
+        if (!this->are_preconditions_satisfied()) {
+            GTEST_SKIP();
+        }
 
         const chip_id_t device_id = 0;
         this->device_ = CreateDevice(device_id);
         this->program_ = CreateProgram();
     }
 
-    void TearDown() override { CloseDevice(this->device_); }
+    void TearDown() override {
+        if (!IsSkipped()) {
+            CloseDevice(this->device_);
+        }
+    }
 
     void create_kernel(const string &kernel_file) {
         CoreCoord core(0, 0);
@@ -52,26 +59,32 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
     Program program_;
 
    private:
-    void validate_preconditions() {
-        this->validate_env_vars_are_set();
-        this->validate_kernel_dir_is_valid();
+    bool are_preconditions_satisfied() {
+        return this->are_env_vars_set() && this->is_kernel_dir_valid();
     }
 
-    void validate_env_vars_are_set() {
+    bool are_env_vars_set() {
+        bool are_set = true;
         if (!llrt::OptionsG.is_root_dir_specified()) {
-            GTEST_SKIP() << "Skipping test: TT_METAL_HOME must be set";
+            log_info(LogTest, "Skipping test: TT_METAL_HOME must be set");
+            are_set = false;
         }
         if (!llrt::OptionsG.is_kernel_dir_specified()) {
-            GTEST_SKIP() << "Skipping test: TT_METAL_KERNEL_PATH must be set";
+            log_info(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
+            are_set = false;
         }
+        return are_set;
     }
 
-    void validate_kernel_dir_is_valid() {
+    bool is_kernel_dir_valid() {
+        bool is_valid = true;
         const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
         if (!this->does_path_exist(kernel_dir) || !this->is_path_a_directory(kernel_dir) ||
             !this->is_dir_empty(kernel_dir)) {
-            GTEST_SKIP() << "Skipping test: TT_METAL_KERNEL_PATH must be an existing, empty directory";
+            log_info(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be an existing, empty directory");
+            is_valid = false;
         }
+        return is_valid;
     }
 
     bool does_path_exist(const string &path) {

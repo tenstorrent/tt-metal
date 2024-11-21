@@ -26,19 +26,20 @@ class CommandQueueFixture : public DispatchFixture {
     }
 
     void TearDown() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        if (!this->IsSlowDispatch()) {
             tt::tt_metal::CloseDevice(this->device_);
         }
     }
 
     void validate_dispatch_mode() {
+        this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             tt::log_info(
                 tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
-        this->slow_dispatch_ = false;
     }
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -78,12 +79,14 @@ class CommandQueueSingleCardFixture : virtual public DispatchFixture {
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
     void validate_dispatch_mode() {
+        this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(
+                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
-        this->slow_dispatch_ = false;
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -121,18 +124,21 @@ class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCa
 class CommandQueueMultiDeviceFixture : public DispatchFixture {
    protected:
     void SetUp() override {
+        this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
-        this->slow_dispatch_ = false;
+
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices_ < 2 ) {
             GTEST_SKIP();
         }
+
         std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
             chip_ids.push_back(id);
