@@ -24,7 +24,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow
     env python tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
-    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue.*Fixture.*
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
     # Enable this on BH after #14613
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         TT_METAL_GTEST_ETH_DISPATCH=1 ./build/test/tt_metal/unit_tests_dispatch
