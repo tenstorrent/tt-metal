@@ -218,9 +218,7 @@ static Tensor arange(
     if (size % 2 != 0) {
         size++;
     }
-    ttnn::SimpleShape shape{1, 1, 1, static_cast<uint32_t>(size)};
-    TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.compute_packed_buffer_size_bytes());
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
     for (auto value = start; value < stop; value += step) {
@@ -230,7 +228,8 @@ static Tensor arange(
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    auto output = Tensor(OwnedStorage{owned_buffer}, ttnn::SimpleShape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, ttnn::SimpleShape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
+        .to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
     }
