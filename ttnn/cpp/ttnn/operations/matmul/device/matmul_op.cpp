@@ -1041,7 +1041,8 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t queue_id) {
+    const uint8_t queue_id,
+    std::vector<std::optional<const Tensor>> optional_output_tensors) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     if (bias.has_value()) {
@@ -1051,6 +1052,10 @@ Tensor matmul(
     } else {
         optional_input_tensors.push_back(std::nullopt);
         output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+    }
+
+    for (auto val: output_tensors) {
+        optional_output_tensors.push_back(val);
     }
 
     operation::launch_op(
