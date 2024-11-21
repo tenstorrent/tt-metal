@@ -18,6 +18,7 @@ template <typename T>
 using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
 // Ideally would work by cachelines, but the min size is less than that
+// Benchmarked to be approximately 1.4x - 1.8x faster than std::memcpy
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
 // TODO: ditto alignment isues
 template <bool debug_sync = false>
