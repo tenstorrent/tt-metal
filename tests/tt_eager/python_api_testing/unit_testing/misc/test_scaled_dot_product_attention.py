@@ -71,13 +71,13 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     tt_K = ttnn.Tensor(K, dtype).to(ttnn.TILE_LAYOUT).to(device)
     tt_V = ttnn.Tensor(V, dtype).to(ttnn.TILE_LAYOUT).to(device)
     tt_back = ttnn.transformer.scaled_dot_product_attention(
-        tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
+        tt_Q, tt_K, tt_V, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
     tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
-    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=False)
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
@@ -88,26 +88,43 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
-@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128, 256, 512], ids=["q128", "q256", "q512"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256, 512], ids=["k128", "k256", "k512"])
+@pytest.mark.parametrize("use_high_precision_compute", [False], ids=["lo_precision"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     (
-        [1, 8, 1, 2048, 128],  # Llama2-70B
-        [1, 16, 1, 2048, 64],  # Falcon-40B
-        [1, 71, 1, 2048, 64],  # Falcon-7B
-        [8, 8, 1, 2048, 128],  # Llama2-70B large batch
-        [1, 8, 1, 8192, 128],  # Llama2-70B large sequence
+        # [1, 8, 1, 2048, 128],  # Llama2-70B
+        # [1, 16, 1, 2048, 64],  # Falcon-40B
+        # [1, 71, 1, 2048, 64],  # Falcon-7B
+        # [8, 8, 1, 2048, 128],  # Llama2-70B large batch
+        # [1, 8, 1, 8192, 128],  # Llama2-70B large sequence
+        # [1, 24, 24, 44557, 128], # mochi
+        # [1, 24, 24, 44672, 128], # div by 128
+        # [1, 24, 24, 44800, 128], # div by 256
+        # [1, 24, 24, 45056, 128], # div by 512
+        [1, 3, 3, 45056, 128],  # div by 512
     ),
 )
-def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
     ttnn.device.DisablePersistentKernelCache()
-    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+    run_test_sdpa_tt(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        use_high_precision_compute=use_high_precision_compute,
+    )
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")

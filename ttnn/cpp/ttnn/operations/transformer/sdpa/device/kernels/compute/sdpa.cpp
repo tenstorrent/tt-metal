@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 namespace NAMESPACE {
 template <uint32_t in0, uint32_t in1, uint32_t num_tiles>
@@ -58,7 +59,7 @@ void reduce_c() {
 
     reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
-    const uint32_t num_tiles = rows * cols;
+    constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
@@ -105,7 +106,6 @@ void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
     cb_wait_front(in0_cb, rows * cols);
@@ -290,9 +290,7 @@ void matmul_blocks(
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-
-    mm_block_init_short(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+    mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
@@ -430,23 +428,16 @@ void MAIN {
 
                     /* QK = Q_CHUNK @ K_CHUNK */
                     pack_reconfig_data_format(cb_qk_im);
-                    matmul_blocks(
-                        cb_q_in,
-                        cb_k_in,
-                        cb_qk_im,
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        DHt,
-                        qk_num_blocks,
-                        qk_in0_num_subblocks,
-                        qk_in1_num_subblocks,
-                        qk_in0_block_w,
-                        qk_subblock_h,
-                        qk_subblock_w,
-                        true /*transpose*/);
+                    {
+                        DeviceZoneScopedN("matmul_blocks_0");
+                        matmul_blocks(cb_q_in, cb_k_in, cb_qk_im, Sq_chunk_t, Sk_chunk_t, DHt, qk_num_blocks, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_in0_block_w, qk_subblock_h, qk_subblock_w, true /*transpose*/);
+                    }
 
                     /* QK *= SCALE */
-                    mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
+                    {
+                        DeviceZoneScopedN("mul_block_bcast_scalar_inplace");
+                        mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
+                    }
 
                     // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                     // Q-range = [q_low, q_high)
@@ -467,71 +458,73 @@ void MAIN {
                         }
                     }
 
-                    reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                    reduce_c<
-                        PoolType::MAX,
-                        ReduceDim::REDUCE_ROW,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        cb_cur_max,
-                        Sq_chunk_t,
-                        Sk_chunk_t>();
+                    {
+                        DeviceZoneScopedN("reduce_max");
+                        reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                        reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+                    }
 
                     if (k_chunk > 0) {
+                        DeviceZoneScopedN("max_block_inplace");
                         max_block_inplace<cb_cur_max, cb_prev_max, Sq_chunk_t>();
                     }
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+                    {
+                        DeviceZoneScopedN("sub_exp_block_bcast_cols_inplace");
+                        sub_exp_block_bcast_cols_inplace<cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+                    }
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
-                    reduce_c<
-                        PoolType::SUM,
-                        ReduceDim::REDUCE_ROW,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        cb_cur_sum,
-                        Sq_chunk_t,
-                        Sk_chunk_t>();
+                    {
+                        DeviceZoneScopedN("reduce_sum");
+                        reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
+                    }
 
                     /* OUT_IM = QK @ V_CHUNK */
-                    matmul_blocks(
-                        cb_qk_im,
-                        cb_v_in,
-                        cb_out_im,
-                        Sq_chunk_t,
-                        DHt,
-                        Sk_chunk_t,
-                        out_num_blocks,
-                        out_in0_num_subblocks,
-                        out_in1_num_subblocks,
-                        out_in0_block_w,
-                        out_subblock_h,
-                        out_subblock_w,
-                        false /*transpose*/);
+                    {
+                        DeviceZoneScopedN("matmul_blocks_1");
+                        matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
+                    }
                     reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk == 0) {
+                        DeviceZoneScopedN("copy_block");
                         copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
                     } else {
+                        DeviceZoneScopedN("stats");
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
-                        sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        {
+                            DeviceZoneScopedN("sub_exp_block");
+                            sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        }
                         cb_pop_front(cb_prev_max, Sq_chunk_t);
 
                         /* cb_prev_sum *= cb_exp_max_diff */
-                        mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        {
+                            DeviceZoneScopedN("mul_block_inplace");
+                            mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        }
 
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
-                        mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+                        {
+                            DeviceZoneScopedN("mul_block_bcast_cols_inplace");
+                            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+                        }
 
                         /* cb_cur_sum += cb_prev_sum */
-                        add_block_inplace(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                        {
+                            DeviceZoneScopedN("add_block_inplace");
+                            add_block_inplace(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                        }
 
-                        /* cb_out_accumulate_im += cb_out_im */
-                        add_block_inplace(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+                        {
+                            DeviceZoneScopedN("add_block_inplace");
+                            add_block_inplace(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+                        }
                     }
 
                     // Set cb_prev_sum and cb_prev_max
