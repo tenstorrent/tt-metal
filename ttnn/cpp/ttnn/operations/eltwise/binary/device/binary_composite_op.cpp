@@ -264,6 +264,24 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0, div_result);
 }
 
+Tensor ExecutePrelu::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::prelu_sfpu(input, scalar);
+}
+
+Tensor ExecutePrelu::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    const auto s_a = input_a.get_shape();
+    const auto volume = input_b.get_logical_volume();
+
+    TT_FATAL(s_a[1] == volume, "Mismatch of parameter numbers and input channel size. Found parameter numbers = {} and channel size = {}.", volume, s_a[1]);
+    Tensor b = input_b;
+    if(s_a.rank()>2){
+        SmallVector<uint32_t> reshape(s_a.rank(), 1);
+        reshape[1] = s_a[1];
+        b = ttnn::reshape(input_b, ttnn::Shape(reshape));
+    }
+    Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
+    return result;
+}
 // Binary remainder will be overloaded by unary remainder in another PR
 Tensor ExecuteBinaryRemainder::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();

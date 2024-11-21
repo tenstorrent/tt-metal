@@ -507,9 +507,9 @@ void bind_unary_backward_two_float_with_default(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2} = {4}, {5} = {7})
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(grad_tensor, input, {2} = {4}, {5} = {7}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -587,8 +587,8 @@ void bind_unary_backward_float_with_default(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(grad_tensor, input, {2} = {4})
         )doc",
         operation.base_name(),
@@ -619,6 +619,7 @@ void bind_unary_backward_float_with_default(
             py::arg("memory_config") = std::nullopt});
 }
 
+
 template <typename unary_backward_operation_t>
 void bind_unary_backward_optional_float_params_with_default(
     py::module& module,
@@ -641,8 +642,8 @@ void bind_unary_backward_optional_float_params_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float, optional): {3}. Defaults to `{4}`.
-            {5} (float, optional): {6}. Defaults to `{7}`.
+            {2} (float, optional): {3}. Defaults to `None`.
+            {5} (float, optional): {6}. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -666,9 +667,11 @@ void bind_unary_backward_optional_float_params_with_default(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2} = {4}, {5} = {7})
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 0.5
+            >>> {5} = 2.0
+            >>> output = {1}(grad_tensor, input, {2}, {5})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -764,8 +767,9 @@ void bind_unary_backward_float_string_default(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 0.5
             >>> output = {1}(grad_tensor, input, {2}, {4} = {6})
         )doc",
         operation.base_name(),
@@ -800,79 +804,6 @@ void bind_unary_backward_float_string_default(
             py::arg("memory_config") = std::nullopt});
 }
 
-template <typename unary_backward_operation_t>
-void bind_unary_backward_string_default(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    string parameter_a_value,
-    const std::string_view description,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        {5}
-
-        Args:
-            grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword args:
-            {2} (string, optional): {3}. Defaults to `{4}`.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - {6}
-                 - TILE
-                 - 2, 3, 4
-
-            {7}
-
-        Example:
-
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2} = {4})
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
-        description,
-        supported_dtype,
-        note);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               string parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg("memory_config") = std::nullopt});
-}
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_unary_optional_float(
@@ -917,8 +848,8 @@ void bind_unary_backward_unary_optional_float(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(grad_tensor, tensor, {2})
         )doc",
         operation.base_name(),
@@ -994,8 +925,8 @@ void bind_unary_backward_shape(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> grad_tensor = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.rand([2, 1, 32, 32], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(grad_tensor, input, {2})
         )doc",
         operation.base_name(),
@@ -1066,8 +997,8 @@ void bind_unary_backward_optional(
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(grad_tensor, tensor)
         )doc",
         operation.base_name(),
@@ -1202,8 +1133,10 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> grad_tensor = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> input = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> all_dimensions = True
+            >>> dim =0
             >>> output = {1}(grad_tensor, input, all_dimensions, dim)
         )doc",
         operation.base_name(),
@@ -1418,7 +1351,8 @@ void py_module(py::module& module) {
         "max",
         "Maximum value",
         1.0,
-        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
 
     detail::bind_unary_backward_float_with_default(
@@ -1436,7 +1370,8 @@ void py_module(py::module& module) {
         "lambd",
         "Lambda value for the softshrink formula ",
         0.5,
-        R"doc(Performs backward operations for softshrink on :attr:`input_tensor`, :attr:`lambd`, with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for softshrink on :attr:`input_tensor`, :attr:`lambd`, with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_float_with_default(
         module,
@@ -1453,8 +1388,7 @@ void py_module(py::module& module) {
         "alpha",
         "alpha value for the elu formula ",
         1.0,
-        R"doc(Performs backward operations for elu on :attr:`input_tensor`, :attr:`alpha`, with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Performs backward operations for elu on :attr:`input_tensor`, :attr:`alpha`, with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward_float_with_default(
         module,
@@ -1627,7 +1561,7 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::tan_bw,
-        R"doc(Performs backward operations for tan on :attr:`input_tensor` with given :attr:`grad_tensor`. "Supported input range is (-1.45, 1.45)")doc",
+        R"doc(Performs backward operations for tan on :attr:`input_tensor` with given :attr:`grad_tensor`. Supported input range is (-1.45, 1.45))doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_op(

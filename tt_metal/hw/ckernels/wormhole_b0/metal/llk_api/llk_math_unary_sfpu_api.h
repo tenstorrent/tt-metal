@@ -36,3 +36,4 @@
 #include "llk_math_eltwise_unary_sfpu_right_shift.h"
 #include "llk_math_eltwise_unary_sfpu_left_shift.h"
 #include "llk_math_eltwise_unary_sfpu_fill.h"
+#include "llk_math_eltwise_unary_sfpu_prelu.h"

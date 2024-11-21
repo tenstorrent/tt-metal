@@ -244,10 +244,6 @@ mul = ttnn.multiply
 mul_ = ttnn.multiply_
 
 
-def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
-    return ttnn.leaky_relu(*args, **kwargs)
-
-
 # TODO: pybind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
