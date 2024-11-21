@@ -204,3 +204,28 @@ jobs:
       continue-on-error: true
     - name: Final step to signal success
       run: echo "The job passes even if 3rd party action fails."
+
+  all-post-commit-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all-post-commit workflow status
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr_commit_sha=$(jq -r .pull_request.head.sha < "$GITHUB_EVENT_PATH")
+          repo_full_name=${{ github.repository }}
+
+          # Query the workflow runs for the latest commit
+          api_response=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$repo_full_name/actions/runs?event=workflow_dispatch&branch=${{ github.head_ref }}")
+
+          # Parse the JSON response for the 'all-post-commit' workflow
+          apc_status=$(echo "$api_response" | jq -r --arg commit "$pr_commit_sha" '
+            .workflow_runs[] | select(.head_sha == $commit and .name == "all-post-commit") | .conclusion')
+
+          if [ "$apc_status" == "success" ]; then
+            echo "all-post-commit passed for the latest commit."
+          else
+            echo "all-post-commit has not passed for the latest commit."
+            exit 1
+          fi
