@@ -300,8 +300,6 @@ ttnn.attach_golden_function(ttnn.isclose, golden_function=_golden_function_isclo
 def _golden_function_div(input_tensor_a, input_tensor_b, round_mode, *args, **kwargs):
     import torch
 
-    if round_mode == "None":
-        return torch.div(input_tensor_a, input_tensor_b, rounding_mode=None)
     return torch.div(input_tensor_a, input_tensor_b, rounding_mode=round_mode)
 
 
