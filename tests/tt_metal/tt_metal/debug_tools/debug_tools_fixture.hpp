@@ -13,6 +13,7 @@ class DebugToolsFixture : public DispatchFixture {
     bool watcher_previous_enabled;
 
     void TearDown() override {
+        DispatchFixture::TearDown();
         tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
     }
 
