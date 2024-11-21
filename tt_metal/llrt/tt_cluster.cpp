@@ -129,7 +129,7 @@ void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Passing simulator reported physical devices as logical devices.
-        this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids());
+        this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
