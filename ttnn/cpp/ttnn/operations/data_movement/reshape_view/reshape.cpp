@@ -167,11 +167,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     }
 
     // Just edit shape if shape has a 0 dimension
-    for (auto index = 0; index < shape.rank(); ++index) {
-        if (shape[index] == 0) {
-            std::cout << "!!! 0 dimension !!!" << std::endl;
-            return tensor.reshape(shape);
-        }
+    if tensor.volume() == 0 {
+        return tensor.reshape(shape);
     }
 
     // This is a constraint Torch places on reshape I was assuming, but it causes half of the codebase to fail if added

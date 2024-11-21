@@ -487,11 +487,11 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
         }
     }
     if (has_zero && index_of_negative_1 != -1) {
-        std::string error_msg = "cannot reshape tensor of 0 elements into shape [";
+        std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
         for(auto & s: shape) {
             error_msg += std::to_string(s) + ",";
         }
-        error_msg += "] because the unspecified dimension size -1 can be any value and is ambiguous";
+        error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";
         TT_THROW("{}", error_msg);
     }
 
