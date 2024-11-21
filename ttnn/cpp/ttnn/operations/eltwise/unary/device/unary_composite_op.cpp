@@ -699,7 +699,8 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 }
 
 //rdiv
-Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::string& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+    TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
     Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
