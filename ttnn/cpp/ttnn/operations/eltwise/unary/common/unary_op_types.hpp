@@ -84,7 +84,8 @@ enum class UnaryOpType {
     REMAINDER,
     FMOD,
     DROPOUT,
-    FILL
+    FILL,
+    PRELU_SFPU,
 };
 
 struct UnaryWithParam {
