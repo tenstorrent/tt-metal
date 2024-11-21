@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole
+from models.utility_functions import is_blackhole, is_wormhole_b0
 
 
 @pytest.mark.parametrize("h", [32])
@@ -160,6 +160,8 @@ def test_permute_5d(shape, perm, device):
 def test_permute_pad_value(device, pad_value):
     if pad_value is not None and is_blackhole():
         pytest.skip("Blackhole reduce is needed for the full test to work")
+    if is_wormhole_b0():
+        pytest.skip("Skipping for WHB0")
     torch.manual_seed(2005)
     input_a = torch.randn((2, 11, 33, 17), dtype=torch.bfloat16)
     torch_output = torch.permute(input_a, (3, 2, 1, 0))
