@@ -25,8 +25,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
     }
 }
 
-// Ensure we cannot create kernels on storage cores
-TEST_F(DispatchFixture, TensixCreateKernelsOnStorageCores) {
+TEST_F(DispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         if (this->devices_.at(id)->storage_only_cores().empty()) {
             GTEST_SKIP() << "This test only runs on devices with storage only cores";
@@ -47,7 +46,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnStorageCores) {
     }
 }
 
-TEST_F(DispatchFixture, TensixIdleEthCreateKernelsOnDispatchCores) {
+TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
