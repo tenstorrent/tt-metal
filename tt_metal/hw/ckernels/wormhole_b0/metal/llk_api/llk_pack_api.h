@@ -19,6 +19,8 @@
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 
+#include "debug/dprint.h"
+
 /*************************************************************************
  * LLK PACK
  *************************************************************************/
@@ -172,6 +174,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
+    DPRINT << "llk_pack, " << static_cast<uint32_t>(DST_SYNC_MODE) << ", " << static_cast<uint32_t>(untilize) << ", " << static_cast<uint32_t>(is_fp32_dest_acc_en) << ", " << tile_index << ", " << pack_tile_addr << ENDL();
     _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
 }
 

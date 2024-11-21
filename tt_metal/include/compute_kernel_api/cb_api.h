@@ -11,6 +11,7 @@
 #ifdef TRISC_UNPACK
 #include "llk_io_unpack.h"
 #endif
+#include "debug/dprint.h"
 
 namespace ckernel {
 
@@ -37,7 +38,10 @@ namespace ckernel {
  * tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that
  * fit into the CB) | True     |
  * */
-ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles(cbid, ntiles))); }
+ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    DPRINT_UNPACK(DPRINT << "cb_wait_front, " << cbid << ", " << ntiles << ENDL());
+    UNPACK((llk_wait_tiles(cbid, ntiles)));
+}
 
 /**
  * Pops a specified number of tiles from the front of the specified CB. This
@@ -68,7 +72,10 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles
  * tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that
  * fit into the CB) | True     |
  */
-ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(cbid, ntiles))); }
+ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
+    DPRINT_UNPACK(DPRINT << "cb_pop_front, " << cbid << ", " << ntiles << ENDL());
+    UNPACK((llk_pop_tiles(cbid, ntiles)));
+}
 
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
@@ -84,8 +91,10 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(c
  * tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit
  * into the CB) | True     |
  */
-ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
-    PACK((llk_wait_for_free_tiles<false, false, false>(cbid, ntiles)));
+ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
+{
+    DPRINT_PACK(DPRINT << "cb_reserve_back, " << cbid << ", " << ntiles << ENDL());
+    PACK((llk_wait_for_free_tiles<false,false,false>(cbid,ntiles)));
 }
 
 /**
@@ -117,7 +126,11 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
  * tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that
  * fit into the CB) | True     |
  */
-ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) { PACK((llk_push_tiles<false, false>(cbid, ntiles))); }
+ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles)
+{
+    DPRINT_PACK(DPRINT << "cb_push_back, " << cbid << ", " << ntiles << ENDL());
+    PACK((llk_push_tiles<false,false>(cbid, ntiles)));
+}
 
 /**
  * Sends the pointer to the given tile index of the specified CB from the UNPACK

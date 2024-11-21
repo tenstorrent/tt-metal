@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
+#include "debug/dprint.h"
 
 /*************************************************************************
  * LLK MATMUL
@@ -49,5 +50,6 @@ inline void llk_math_matmul(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
+    DPRINT << "llk_math_matmul, " << NUM_FIDELITY_PHASES << ", " << dst_index << ", " << static_cast<uint32_t>(transpose) << ", " << ct_dim << ", " << rt_dim << ", " << kt_dim << ENDL();
     _llk_math_matmul_<NUM_FIDELITY_PHASES, DstTileFaceLayout::RowMajor>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
 }
