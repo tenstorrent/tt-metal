@@ -1,4 +1,35 @@
 # TT-Metalium for Beginners #
+
+Author: Brian Beggs
+
+## Contents ##
+- [TT-Metalium for Beginners](#tt-metalium-for-beginners)
+- [1. User Program Organization](#1-user-program-organization)
+- [2. Tenstorrent Architecture](#2-tenstorrent-architecture)
+  - [2.1 Mesh Architecture](#21-mesh-architecture)
+  - [2.2 Ethernet Core Architecture](#22-ethernet-core-architecture)
+  - [2.3 DRAM Core Architecture](#23-dram-core-architecture)
+  - [2.4 NoC Architecture](#24-noc-architecture)
+- [3. Program Model](#3-program-model)
+  - [3.1 Tensix Core Architecture](#31-tensix-core-architecture)
+  - [3.2 Tensix Kernels](#32-tensix-kernels)
+  - [3.3 Tensix Compute](#33-tensix-compute)
+  - [3.4 Tensix Compute Schemes](#34-tensix-compute-schemes)
+  - [3.5 Data Movement in the Tensix Core](#35-data-movement-in-the-tensix-core)
+  - [3.6 Memory Model](#36-memory-model)
+    - [3.6.1 Device Memory Buffer Types](#361-device-memory-buffer-types)
+      - [3.6.1.1 L1 Interleaved Memory](#3611-l1-interleaved-memory)
+      - [3.6.1.2 L1 Sharded Memory](#3612-l1-sharded-memory)
+    - [3.7 Synchronization Mechanisms](#37-synchronization-mechanisms)
+    - [3.8 Tensix Tensors](#38-tensix-tensors)
+    - [3.9 Data Movement Patterns](#39-data-movement-patterns)
+- [4. Scale Out](#4-scale-out)
+  - [4.1 Tensix Operations](#41-tensix-operations)
+  - [4.2 Tensix Dataflow](#42-tensix-dataflow)
+  - [4.3 Compile-time Stack](#43-compile-time-stack)
+  - [4.4 Runtime Support](#44-runtime-support)
+- [5. Glossary of Terms](#5-glossary-of-terms)
+
 ## 1. User Program Organization ##
 TT-Metalium is a low-level programming model enabling kernel development on Tenstorrent or non-Tenstorrent hardware. It is for developers who customize models, write new models, or just run non-machine learning code. TT-Metalium is an open source, low-level AI hardware SDK with no black boxes, encrypted APIs, or hidden functions.
 
