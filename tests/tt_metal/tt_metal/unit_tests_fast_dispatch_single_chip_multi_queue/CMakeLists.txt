@@ -12,7 +12,6 @@ target_link_libraries(unit_tests_fast_dispatch_single_chip_multi_queue PUBLIC te
 target_include_directories(
     unit_tests_fast_dispatch_single_chip_multi_queue
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests

@@ -12,7 +12,6 @@ target_link_libraries(
 target_include_directories(
     unit_tests_frequent
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests

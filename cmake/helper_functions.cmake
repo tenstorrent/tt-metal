@@ -23,7 +23,6 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
         target_include_directories(
             ${TEST_TARGET}
             PRIVATE
-                ${UMD_HOME}
                 ${PROJECT_SOURCE_DIR}
                 ${PROJECT_SOURCE_DIR}/tt_metal
                 ${PROJECT_SOURCE_DIR}/ttnn/cpp
@@ -57,7 +56,6 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
         target_include_directories(
             ${TEST_TARGET}
             PRIVATE
-                ${UMD_HOME}
                 ${PROJECT_SOURCE_DIR}
                 ${PROJECT_SOURCE_DIR}/tt_metal
                 ${PROJECT_SOURCE_DIR}/tt_metal/common
