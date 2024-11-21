@@ -700,6 +700,22 @@ void bind_unary_backward_optional_float_params_with_default(
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
             py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               std::optional<Tensor> parameter_a,
+               std::optional<Tensor> parameter_b,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
 
