@@ -110,7 +110,7 @@ CclOpTensorConfig::CclOpTensorConfig(Tensor const& tensor) :
     buffer_start_address(tensor.buffer()->address()),
     df(tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype())) {
     if (tensor.get_layout() == Layout::TILE) {
-        this->tile = tensor.get_tile();
+        this->tile = tensor.get_tensor_spec().tile();
         this->page_size =this->tile.get_tile_size(this->df);
         this->tile_size = this->tile.get_tile_hw();
     } else {
@@ -327,8 +327,9 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
                 output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
             num_rows;
     } else {
-        const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / input_tensor.get_tile().get_width();
-        uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / input_tensor.get_tile().get_height());
+        auto input_tile = input_tensor.get_tensor_spec().tile();
+        const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / input_tile.get_width();
+        uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / input_tile.get_height());
         for (std::size_t i = 0; input_tensor.get_legacy_shape().rank() > 2 && i < input_tensor.get_legacy_shape().rank() - 2; i++) {
             num_tiles_y *= input_tensor.get_legacy_shape()[i];
         }
@@ -369,11 +370,12 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
             input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
                 input_tensor.get_legacy_shape()[2]};
     } else {
+        auto input_tile = input_tensor.get_tensor_spec().tile();
         this->flattened_tensor_shape = tt_xy_pair{
-            input_tensor.get_legacy_shape()[3] /input_tensor.get_tile().get_width(),
+            input_tensor.get_legacy_shape()[3] / input_tile.get_width(),
             (input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
                 input_tensor.get_legacy_shape()[2]) /
-               input_tensor.get_tile().get_height()};
+               input_tile.get_height()};
     }
 
     this->worker_slice_offsets = DERIVED_SLICER_T::compute_worker_slice_offsets(this->worker_slice_shapes, this->tensor_slice_shape);

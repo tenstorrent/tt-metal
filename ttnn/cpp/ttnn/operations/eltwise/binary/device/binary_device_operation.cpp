@@ -152,9 +152,9 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
 
 BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
+    const auto input_shape_a = tensor_args.input_tensor_a.shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->tensor_attributes->shape : ttnn::Shape{1, 1};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->shape() : ttnn::Shape{1, 1};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();

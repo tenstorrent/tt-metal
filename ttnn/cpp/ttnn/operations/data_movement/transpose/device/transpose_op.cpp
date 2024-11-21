@@ -100,7 +100,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
                 break;
             } else {
                 uint32_t C = output_shape[1];
-                uint32_t C_p = tt::round_up(C, input_tensor.get_tile().get_height());
+                uint32_t C_p = tt::round_up(C, input_tensor.get_tensor_spec().tile().get_height());
                 uint32_t H = output_shape[2];
                 output_shape[1] = H;
                 output_shape[2] = C;

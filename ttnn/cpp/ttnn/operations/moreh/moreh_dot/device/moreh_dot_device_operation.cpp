@@ -67,8 +67,8 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     const auto& input_tensor = tensor_args.input_a;
     return create_device_tensor(
         output_shape,
-        input_tensor.tensor_attributes->dtype,
-        input_tensor.tensor_attributes->layout,
+        input_tensor.dtype(),
+        input_tensor.layout(),
         input_tensor.device(),
         operation_attributes.memory_config);
 }

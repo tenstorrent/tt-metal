@@ -45,7 +45,8 @@ std::vector<ttnn::SimpleShape> ReshapeDeviceOperation::compute_output_shapes(con
 
 std::vector<Tensor> ReshapeDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return {create_device_tensor(output_shape, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), input_tensor_a.device(), this->output_mem_config, input_tensor_a.tile())};
+    return {create_device_tensor(output_shape, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), input_tensor_a.device(),
+        this->output_mem_config, input_tensor_a.get_tensor_spec().tile())};
 }
 
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

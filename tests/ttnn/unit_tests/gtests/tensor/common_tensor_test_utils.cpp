@@ -27,7 +27,7 @@ void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const TensorLay
         host_data[i] = i % random_prime_number;
     }
 
-    auto tensor = tt::tt_metal::create_device_tensor(input_shape, layout, device);
+    auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(input_shape, layout), device);
     ttnn::queue_synchronize(device->command_queue(io_cq));
 
     ttnn::write_buffer(io_cq, tensor, {host_data});

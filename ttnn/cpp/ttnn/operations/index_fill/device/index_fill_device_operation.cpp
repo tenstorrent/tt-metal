@@ -50,8 +50,8 @@ IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tens
     const auto& input = tensor_args.input;
     return create_device_tensor(
         output_shape,
-        input.tensor_attributes->dtype,
-        input.tensor_attributes->layout,
+        input.dtype(),
+        input.layout(),
         input.device(),
         operation_attributes.memory_config);
 }

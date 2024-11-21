@@ -16,7 +16,7 @@ class ShapeBase {
 public:
     using Container = SmallVector<uint32_t>;
 
-    ShapeBase() = default;
+    ShapeBase() { init(); };
     explicit ShapeBase(const Container& shape) : value_(shape) { init(); }
     explicit ShapeBase(Container&& shape) : value_(std::move(shape)) { init(); }
     explicit ShapeBase(std::initializer_list<uint32_t> ilist) : value_(ilist) { init(); }

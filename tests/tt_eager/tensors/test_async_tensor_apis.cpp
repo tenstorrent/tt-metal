@@ -42,7 +42,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
     Tensor host_tensor = ttnn::numpy::arange<float>(0, 32 * 32 * 4, 1);
-    Tensor readback_tensor({}, 1);
+    Tensor readback_tensor(1);
 
     auto func = [device, host_tensor, readback_tensor]() mutable {
         // Ensure that both the lambda and global scope have ownership to this tensor
@@ -67,9 +67,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
-        readback_tensor.set_shape(thread_local_tensor.get_shape());
-        readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-        readback_tensor.set_layout(thread_local_tensor.get_layout());
+        readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
         readback_tensor.tensor_attributes->metadata_populated = true;
         readback_tensor.tensor_attributes->num_workers_completed++;
         // Ensure that the readback buffer is owned inside and outside the lambda
@@ -240,8 +238,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
-    Tensor readback_tensor({}, 1);
-    ;
+    Tensor readback_tensor(1);
     std::thread worker;
 
     {
@@ -278,9 +275,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
-            readback_tensor.set_shape(thread_local_tensor.get_shape());
-            readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-            readback_tensor.set_layout(thread_local_tensor.get_layout());
+            readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
             readback_tensor.tensor_attributes->metadata_populated = true;
             readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors

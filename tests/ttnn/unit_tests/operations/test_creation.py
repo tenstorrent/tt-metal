@@ -259,16 +259,21 @@ def test_zeros(device, input_shape):
     [
         [32, 32],
         [5, 96, 64],
+        [1, 50257],
     ],
 )
 @pytest.mark.parametrize(
     "fill_value",
     [-5.25, 0, 1.0],
 )
-def test_full(device, input_shape, fill_value):
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE],
+)
+def test_full(device, input_shape, fill_value, layout):
     torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
 
-    tensor = ttnn.full(input_shape, device=device, fill_value=fill_value)
+    tensor = ttnn.full(input_shape, device=device, fill_value=fill_value, layout=layout)
     assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 

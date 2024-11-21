@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-#include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+
 #include "device/repeat_op.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_metal/common/math.hpp"
+#include "ttnn/common/constants.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -99,8 +100,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
             auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.view(),
                                                      tiled_output.get_padded_shape().view());
-            tiled_output.set_shape(padded_to_tiled_shape);
-            return tiled_output;
+            return ttnn::reshape(tiled_output, padded_to_tiled_shape);
         } else {
             return ttnn::slice(output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
         }

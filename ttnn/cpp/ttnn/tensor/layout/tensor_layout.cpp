@@ -33,7 +33,7 @@ Alignment legacyShapeToAlignment(const ttnn::Shape& shape, const PageConfig& pag
     // SHARDED
     if (memory_config.shard_spec.has_value()) {
         TT_FATAL(alignment_can_be_2D, "Tensor with shape {} cannot be sharded because alignment will have rank greater than 2!", shape);
-        if (page_config.is_row_major()) {
+        if (page_config.get_layout() == Layout::ROW_MAJOR) {
             const auto& shard_spec = memory_config.shard_spec.value();
             if (shard_spec.physical_shard_shape.has_value()) {
                 return Alignment{shard_spec.physical_shard_shape.value()[1]};
@@ -65,6 +65,12 @@ Alignment legacyShapeToAlignment(const ttnn::Shape& shape, const PageConfig& pag
 
     for (int i = rank - 3; i >= 0; i--) {
         values[i] = legacy_padded_shape[i] * values[i + 1];
+    }
+
+    for (auto& value : values) {
+        if (value == 0) {
+            value = 1;
+        }
     }
 
     Alignment result(std::move(values));
@@ -128,7 +134,6 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
 
     switch (shard_spec.mode) {
         case ShardMode::PHYSICAL:
-            TT_FATAL(shard_spec.shape[0] % alignment_[-2] == 0 and shard_spec.shape[1] % alignment_[-1] == 0, "In shard mode {}, physical shard shape {} is not compatible with alignment {}!", shard_spec.mode, shard_spec.shape, alignment_);
             break;
         case ShardMode::LOGICAL: {
             const auto& physical_shard_shape = compute_physical_shard_shape(shard_spec.shape);

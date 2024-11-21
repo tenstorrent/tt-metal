@@ -8,7 +8,7 @@ namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-size_t element_size_bytes(DataType dtype) {
+size_t rm_element_size_bytes(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16: return sizeof(bfloat16);
         case DataType::FLOAT32: return sizeof(float);
@@ -18,7 +18,8 @@ size_t element_size_bytes(DataType dtype) {
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
-            TT_THROW("element_size_bytes() should not be used for BFLOAT8_B and BFLOAT4_B types becaues of how they are packed");
+            // To store block floats in RowMajor layout, we use a fallback and store full floats instead
+            return sizeof(float);
 
         default:
             TT_THROW("Unsupported data type!");
@@ -37,10 +38,13 @@ PageConfig::PageConfig(Layout layout)
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if(layout == Layout::ROW_MAJOR) {
-        config_ = RowMajorPageConfig();
+        if (tile.has_value()) {
+            tt::log_warning("Specifying tile shape for a row major layout is deprecated, and will be removed soon");
+        }
+        config_ = RowMajorPageConfig(tile.value_or(Tile()));
     }
     else {
-        config_ =  TilePageConfig(tile.value_or(Tile()));
+        config_ = TilePageConfig(tile.value_or(Tile()));
     }
 }
 
@@ -60,17 +64,16 @@ size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) c
     return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
 }
 
-bool PageConfig::is_row_major() const {
-    return std::holds_alternative<RowMajorPageConfig>(config_);
+Layout PageConfig::get_layout() const {
+    if (std::holds_alternative<RowMajorPageConfig>(config_)) {
+        return Layout::ROW_MAJOR;
+    }
+    return Layout::TILE;
 }
 
-std::optional<Tile> PageConfig::get_tile() const
-{
-    if(std::holds_alternative<TilePageConfig>(config_)) {
-        return std::get<TilePageConfig>(config_).get_tile();
-    }
 
-    return std::nullopt;
+Tile PageConfig::get_tile() const {
+    return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
 }
 
 
@@ -115,10 +118,10 @@ const Tile& TilePageConfig::get_tile() const {
     return tile_;
 }
 
+RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
+
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
 {
-    TT_FATAL(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
-
     uint32_t width_alignment = 1;
     if (memory_config.shard_spec.has_value()) {
         const auto& shard_spec = memory_config.shard_spec.value();
@@ -151,7 +154,7 @@ void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType
 
 Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
-        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype));
+        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
     }
 
     if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
@@ -168,8 +171,12 @@ Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtyp
 }
 
 size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
-    const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
+    const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     return size;
+}
+
+const Tile& RowMajorPageConfig::get_tile() const {
+    return tile_;
 }
 
 } // namespace tt::tt_metal
