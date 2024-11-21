@@ -64,6 +64,7 @@ static Tensor full(
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.padded_shape().volume());
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
+    // TODO: #14974 - Extend to support multi-device storage.
     if (!optional_output_tensor.has_value()) {
         auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
         if (device != nullptr) {
@@ -83,11 +84,15 @@ static Tensor full(
                 tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.data(), false);
             }
         } else {
-            tt::tt_metal::detail::WriteToBuffer(*device_buffer, owned_buffer.get());
+            tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.data(), false);
         }
-
-        return optional_output_tensor.value();
     }
+    else {
+        tt::tt_metal::detail::WriteToBuffer(*device_buffer, owned_buffer.get());
+    }
+
+    return optional_output_tensor.value();
+}
 }
 
 }  // namespace detail

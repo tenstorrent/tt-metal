@@ -365,18 +365,11 @@ void memcpy(
 void memcpy(Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
-Tensor allocate_tensor_on_device(
+Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    Device* device,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
-Tensor allocate_tensor_on_device(
-    const ttnn::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    distributed::MeshDevice* mesh_device,
+    const std::vector<Device*>& devices,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);

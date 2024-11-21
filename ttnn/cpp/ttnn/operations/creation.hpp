@@ -4,16 +4,20 @@
 
 #pragma once
 
+#include <functional>
+#include <variant>
+
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "ttnn/common/constants.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/common/constants.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -212,6 +216,19 @@ struct OnesLike : FullLikeWith<1.0f> {};
 inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
 
+// TODO: #14974 - Long term solution involves a single API for MeshDevice / Device. For now, implement convenience
+// wrapper for existing Python bindings.
+using TargetDevice = std::variant<std::reference_wrapper<Device>, std::reference_wrapper<distributed::MeshDevice>>;
+
+// Extracts and returns all devices specified in `target_device`.
+inline std::vector<Device*> extract_devices_from_target_device(const TargetDevice& target_device) {
+    if (auto* device = std::get_if<std::reference_wrapper<Device>>(&target_device); device != nullptr) {
+        return {&device->get()};
+    } else {
+        return std::get<std::reference_wrapper<distributed::MeshDevice>>(target_device).get().get_devices();
+    }
+}
+
 struct Empty {
     static ttnn::Tensor invoke(
         const ttnn::Shape& shape,
@@ -219,7 +236,7 @@ struct Empty {
         const Layout& layout,
         Device* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
+        return allocate_tensor_on_devices(shape, dtype, layout, {device}, memory_config);
     }
 
     static ttnn::Tensor invoke(
@@ -228,7 +245,7 @@ struct Empty {
         const Layout& layout,
         distributed::MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
+        return allocate_tensor_on_devices(shape, dtype, layout, device->get_devices(), memory_config);
     }
 };
 
@@ -237,13 +254,14 @@ struct EmptyLike {
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
+        const std::optional<TargetDevice>& device_arg = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        Device* device = device_arg.has_value() ? &(device_arg.value().get()) : tensor.device();
+        const std::vector<Device*> devices =
+            device_arg.has_value() ? extract_devices_from_target_device(*device_arg) : tensor.get_workers();
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        return create_device_tensor(tensor.get_shape(), dtype_value, layout_value, device, mem_cfg);
+        return allocate_tensor_on_devices(tensor.get_shape(), dtype_value, layout_value, devices, mem_cfg);
     }
 };
 

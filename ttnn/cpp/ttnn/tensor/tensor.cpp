@@ -840,37 +840,15 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> tra
     }
 }
 
-Tensor allocate_tensor_on_device(
+Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    Device* device,
+    const std::vector<Device*>& devices,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
-    // Top level wrapper to asynchronously create a device tensor (single device)
-    Tensor device_tensor = Tensor({device});
-
-    // Save the ref count to later re-set it:
-    // 1. device_tensor is copied in the lambda by the main thread, which increments the ref count.
-    // 2. The destruction happens in a worker thread, which doesn't decrement the ref count.
-    const uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    device->push_work([shape, data_type, layout, device, memory_config, tile, device_tensor]() mutable {
-        auto local_tensor = create_device_tensor(shape, data_type, layout, device, memory_config, tile);
-        device_tensor.populate_buffers_and_metadata(local_tensor);
-    });
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device, device_tensor_ref_count);
-    return device_tensor;
-}
-
-Tensor allocate_tensor_on_device(
-    const ttnn::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    distributed::MeshDevice* mesh_device,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    // Top level wrapper to asynchronously create a device tensor (multi-device)
-    Tensor device_tensor = Tensor(mesh_device->get_devices());
+    // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
+    Tensor device_tensor = Tensor(devices);
     TensorSpec tensor_spec(
         shape.logical_shape(),
         TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape));
