@@ -132,6 +132,9 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
 
         cache_tensors.append(test_tensor)
 
-    num_ops = 5  # embedding + fused_qk_rope + transpose + pad + interleaved_to_sharded
+    if batch == 32 or batch == 16:
+        num_ops = 4
+    else:
+        num_ops = 5  # embedding + fused_qk_rope + transpose + pad + interleaved_to_sharded
 
     assert device.num_program_cache_entries() == num_ops

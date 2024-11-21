@@ -161,7 +161,7 @@ MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, const MemoryConf
                     tensors.end(),
                     std::back_inserter(itensors),
                     [dim1, dim2](const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
-                        return ttnn::transpose(input_tensor, dim1, dim2, std::nullopt);
+                        return ttnn::transpose(input_tensor, dim1, dim2);
                     }
                 );
                 auto norm_dim1 = tensors.front().get_shape().get_normalized_index(dim1);
