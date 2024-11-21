@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -11,6 +12,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t num_writes = get_compile_time_arg_val(1);
+    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(2);
+    constexpr uint32_t needs_padding = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -38,5 +42,14 @@ void kernel_main() {
         noc_async_read_tile(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
+    }
+    if constexpr (needs_padding) {
+        // Add padding
+        cb_reserve_back(tt::CB::c_in1, 1);
+        uint32_t l1_write_addr = get_write_ptr(tt::CB::c_in1);
+        // Fill with padding value
+        // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
+        tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
+        cb_push_back(tt::CB::c_in1, 1);
     }
 }

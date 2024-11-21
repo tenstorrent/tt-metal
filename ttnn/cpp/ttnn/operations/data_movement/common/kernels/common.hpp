@@ -9,7 +9,7 @@
 namespace tt::data_movement::common {
 
     // this function is useful for converting bfloat16 values to float32
-    float bfloat16_to_float32(uint16_t bfloat16_data) {
+    FORCE_INLINE float bfloat16_to_float32(uint16_t bfloat16_data) {
         uint32_t bits = static_cast<uint32_t>(bfloat16_data) << 16;
 
         // Extract the sign bit
@@ -43,5 +43,25 @@ namespace tt::data_movement::common {
 
         ieee_float.u = sign | exponent | mantissa;
         return ieee_float.f;
+    }
+
+
+    FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
+        auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+        for (uint32_t i = 0; i < n; ++i) {
+            ptr[i] = val;
+        }
+    }
+
+    // Utility functions
+    template<uint32_t a, uint32_t b>
+    FORCE_INLINE constexpr uint32_t div_up() {
+        static_assert(b > 0, "divisor must be greater than 0");
+        return static_cast<uint32_t>((a + b - 1) / b);
+    }
+
+    template<uint32_t a, uint32_t b>
+    FORCE_INLINE constexpr uint32_t round_up() {
+        return b * div_up<a, b>();
     }
 }
