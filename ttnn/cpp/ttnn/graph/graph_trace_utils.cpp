@@ -228,6 +228,7 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(const nlohmann::json&
     // we are lookin for buffer_allocate that is connected to a buffer,
     // that is connected to a same tensor as the function_end connected to capture_end
     // buffer_allocate -> buffer -> tensor <- function_end -> capture_end
+    // if there are multiple buffer_allocate nodes connected to the same buffer node, we take the last one
 
     // Find the 'capture_end' node
     const auto& capture_end_node =
@@ -238,8 +239,20 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(const nlohmann::json&
     }
 
     // helper function to find a node of a specific type that points to a given node
-    auto find_a_first_node_of_a_type_pointing_to_me([&](const auto& trace, const char* node_type, const auto& my_node) {
+    auto find_the_first_node_of_a_type_pointing_to_me([&](const auto& trace, const char* node_type, const auto& my_node) {
         return std::find_if(trace.begin(), trace.end(), [&](const auto& v) {
+            // check if v.at(kNodeType) starts with node_type because buffers and tensors have suffixes \"(counter)\"
+            std::string v_node_type = v.at(kNodeType).dump();
+            v_node_type.erase(std::remove(v_node_type.begin(), v_node_type.end(), '"'), v_node_type.end());
+
+            return (v_node_type.starts_with(node_type)) &&
+                   (std::find(v.at(kConnections).begin(), v.at(kConnections).end(), my_node.at(kCounter)) !=
+                    v.at(kConnections).end());
+        });
+    });
+
+    auto find_the_last_node_of_a_type_pointing_to_me([&](const auto& trace, const char* node_type, const auto& my_node) {
+        return std::find_if(trace.rbegin(), trace.rend(), [&](const auto& v) {
             // check if v.at(kNodeType) starts with node_type because buffers and tensors have suffixes \"(counter)\"
             std::string v_node_type = v.at(kNodeType).dump();
             v_node_type.erase(std::remove(v_node_type.begin(), v_node_type.end(), '"'), v_node_type.end());
@@ -256,7 +269,7 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(const nlohmann::json&
     });
 
     const auto& last_function_end_node =
-        find_a_first_node_of_a_type_pointing_to_me(trace, kNodeFunctionEnd, *capture_end_node);
+        find_the_first_node_of_a_type_pointing_to_me(trace, kNodeFunctionEnd, *capture_end_node);
 
     if (last_function_end_node == trace.end()) {
         throw std::runtime_error("No function_end node connected to capture_end found in the trace");
@@ -268,17 +281,16 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(const nlohmann::json&
     }
 
     const auto& output_buffer_node =
-        find_a_first_node_of_a_type_pointing_to_me(trace, kNodeBuffer, *output_tensor_node);
+        find_the_first_node_of_a_type_pointing_to_me(trace, kNodeBuffer, *output_tensor_node);
     if (output_buffer_node == trace.end()) {
         throw std::runtime_error("No buffer node connected to tensor found in the trace");
     }
 
     const auto& output_buffer_allocate_node =
-        find_a_first_node_of_a_type_pointing_to_me(trace, kNodeBufferAllocate, *output_buffer_node);
-    if (output_buffer_allocate_node == trace.end()) {
+        find_the_last_node_of_a_type_pointing_to_me(trace, kNodeBufferAllocate, *output_buffer_node);
+    if (output_buffer_allocate_node == trace.rend()) {
         throw std::runtime_error("No buffer_allocate node connected to buffer found in the trace");
     }
-
 
     uint32_t output_buffer_allocate_total_size = std::stoi(output_buffer_allocate_node->at(kParams).at(kSize).get<std::string>());
 
