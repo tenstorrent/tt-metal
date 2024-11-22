@@ -37,7 +37,6 @@ enum class UnaryCompositeOpType {
     HARDSIGMOID,
     HARDTANH,
     SELU,
-    THRESHOLD,
     GLU,
     REGLU,
     GEGLU,
@@ -82,7 +81,6 @@ Tensor _hardswish(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f, c
 Tensor _hardsigmoid(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _hardtanh(const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _selu(const Tensor&, float scale = 1.0507, float alpha = 1.67326, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _threshold(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
@@ -264,13 +262,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::SELU> {
     static Tensor handle(const Tensor& t1, float scale, float alpha, const std::optional<MemoryConfig>& mem_cfg ) {
         return _selu(t1, scale, alpha, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::THRESHOLD> {
-    static Tensor handle(const Tensor& t1, float threshold, float value, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _threshold(t1, threshold, value, mem_cfg);
     }
 };
 
