@@ -3678,7 +3678,7 @@ v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions optio
         options.num_hw_cqs,
         options.l1_small_size,
         options.trace_region_size,
-        options.dispatch_core_type,
+        options.dispatch_core_config,
         options.l1_bank_remap);
 
     return tt::DevicePool::instance().get_active_device(device_id);

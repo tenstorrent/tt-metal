@@ -103,6 +103,18 @@ def get_dispatch_core_type():
     return dispatch_core_type
 
 
+def get_dispatch_core_config(device_params):
+    import ttnn
+
+    dispatch_core_type = get_dispatch_core_type()
+    dispatch_core_axis = device_params.pop(
+        "dispatch_core_axis",
+        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
+    )
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    return dispatch_core_config
+
+
 @pytest.fixture(scope="function")
 def device_params(request):
     return getattr(request, "param", {})
@@ -117,12 +129,7 @@ def device(request, device_params):
 
     num_devices = ttnn.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     device = ttnn.CreateDevice(device_id=device_id, dispatch_core_config=dispatch_core_config, **device_params)
     ttnn.SetDefaultDevice(device)
 
@@ -143,12 +150,7 @@ def pcie_devices(request, device_params):
     request.node.pci_ids = device_ids
 
     # Get only physical devices
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     devices = ttnn.CreateDevices(device_ids, dispatch_core_config=dispatch_core_config, **device_params)
 
     yield [devices[i] for i in range(num_devices)]
@@ -168,12 +170,7 @@ def all_devices(request, device_params):
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
 
     # Get only physical devices
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     devices = ttnn.CreateDevices(device_ids, dispatch_core_config=dispatch_core_config, **device_params)
 
     yield [devices[i] for i in range(num_devices)]
@@ -225,12 +222,7 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config, **device_params
     )
@@ -260,12 +252,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
         dispatch_core_config=dispatch_core_config,
@@ -291,12 +278,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     if ttnn.get_num_devices() < 2:
         pytest.skip()
 
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
         dispatch_core_config=dispatch_core_config,
@@ -321,12 +303,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = get_dispatch_core_config(device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 4),
         dispatch_core_config=dispatch_core_config,
