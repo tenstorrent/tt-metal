@@ -52,21 +52,19 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     uint32_t num_input_tensors = input_tensors.size();
 
     std::vector<CBHandle> cb_input(num_input_tensors);
-    std::vector<uint32_t> input_num_units_per_shard_height(num_input_tensors);
-    std::vector<uint32_t> input_num_units_per_shard_width(num_input_tensors);
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     auto all_cores = input_tensors[0].shard_spec().value().grid;
 
     std::vector<uint32_t> cb_ids(num_input_tensors);
-    uint32_t input_unit_size = input_tensors[0].shard_spec().value().shape[1] * input_tensors[0].element_size();
 
     // input CBs
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         auto shard_spec = input_tensors[input_id].shard_spec().value();
-        input_num_units_per_shard_height[input_id] = shard_spec.shape[0];
-        input_num_units_per_shard_width[input_id] = 1;
-        auto num_input_units = input_num_units_per_shard_height[input_id] * input_num_units_per_shard_width[input_id];
+        uint32_t num_input_num_units_per_shard_height = shard_spec.shape[0];
+        uint32_t num_input_num_units_per_shard_width = 1;
+        auto num_input_units = num_input_num_units_per_shard_height * num_input_num_units_per_shard_width;
+        uint32_t input_unit_size = shard_spec.shape[1] * input_tensors[input_id].element_size();
         auto input_page_size = round_up_to_mul32(input_unit_size);
         tt_metal::CircularBufferConfig input_cb_config =
             tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_id, cb_data_format}})
@@ -78,10 +76,9 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 
     // output CB
     uint32_t cb_dst_id = 16;
-    auto num_output_units =
-        input_num_units_per_shard_height[0] * input_num_units_per_shard_width[0] * num_input_tensors;
-    uint32_t intermed_cb_id = 8;
-    auto output_page_size = round_up_to_mul32(input_unit_size);
+    uint32_t num_output_units = output.shard_spec().value().shape[0];
+    uint32_t output_unit_size = output.shard_spec().value().shape[1] * output.element_size();
+    auto output_page_size = round_up_to_mul32(output_unit_size);
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(num_output_units * output_page_size, {{cb_dst_id, cb_data_format}})
             .set_page_size(cb_dst_id, output_page_size)
