@@ -85,9 +85,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     }
 
     uint32_t src_address;
-    CoreCoord src_noc_xy;
     uint32_t dst_address;
-    CoreCoord dst_noc_xy;
 
     tt_metal::BufferType buff_type =
         test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
@@ -98,9 +96,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     auto dst_buffer = CreateBuffer(buff_config);
 
     src_address = src_buffer->address();
-    src_noc_xy = src_buffer->noc_coordinates();
     dst_address = dst_buffer->address();
-    dst_noc_xy = dst_buffer->noc_coordinates();
 
     // create kernels
     vector<tt_metal::KernelHandle> receiver_kernels;
@@ -173,11 +169,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 program,
                 receiver_kernels.at(core_id),
                 core,
-                {src_address,
-                 (uint32_t)src_noc_xy.x,
-                 (uint32_t)src_noc_xy.y,
-                 (uint32_t)num_tiles,
-                 (uint32_t)num_repetitions});
+                {src_address, 0, (uint32_t)num_tiles, (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
@@ -196,11 +188,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 program,
                 sender_kernels.at(core_id),
                 core,
-                {dst_address,
-                 (uint32_t)dst_noc_xy.x,
-                 (uint32_t)dst_noc_xy.y,
-                 (uint32_t)num_tiles,
-                 (uint32_t)num_repetitions});
+                {dst_address, 0, (uint32_t)num_tiles, (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,

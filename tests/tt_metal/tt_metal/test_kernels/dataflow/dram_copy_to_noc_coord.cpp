@@ -10,15 +10,17 @@
  * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
-    std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
+    std::uint32_t local_l1_buffer_addr = get_arg_val<uint32_t>(0);
 
-    std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
-    std::uint32_t dram_src_bank_id        = get_arg_val<uint32_t>(2);
+    std::uint32_t l1_buffer_src_addr = get_arg_val<uint32_t>(1);
+    std::uint32_t l1_src_noc_x = get_arg_val<uint32_t>(2);
+    std::uint32_t l1_src_noc_y = get_arg_val<uint32_t>(3);
 
-    std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
-    std::uint32_t dram_dst_bank_id        = get_arg_val<uint32_t>(4);
+    std::uint32_t l1_buffer_dst_addr = get_arg_val<uint32_t>(4);
+    std::uint32_t l1_dst_noc_x = get_arg_val<uint32_t>(5);
+    std::uint32_t l1_dst_noc_y = get_arg_val<uint32_t>(6);
 
-    std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(5);
+    std::uint32_t l1_buffer_size = get_arg_val<uint32_t>(7);
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
@@ -38,12 +40,12 @@ void kernel_main() {
 #endif
 
     // DRAM NOC src address
-    std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_src_bank_id, dram_buffer_src_addr);
-    noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
+    std::uint64_t l1_buffer_src_noc_addr = get_noc_addr(l1_src_noc_x, l1_src_noc_y, l1_buffer_src_addr);
+    noc_async_read(l1_buffer_src_noc_addr, local_l1_buffer_addr, l1_buffer_size);
     noc_async_read_barrier();
 
     // DRAM NOC dst address
-    std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
-    noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
+    std::uint64_t l1_buffer_dst_noc_addr = get_noc_addr(l1_dst_noc_x, l1_dst_noc_y, l1_buffer_dst_addr);
+    noc_async_write(local_l1_buffer_addr, l1_buffer_dst_noc_addr, l1_buffer_size);
     noc_async_write_barrier();
 }
