@@ -15,6 +15,8 @@
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
 
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+
 #include <cstdint>
 
 
@@ -122,14 +124,13 @@ void kernel_main() {
     // -> however, wanted to call it out here to make it clear that we need to pull this
     //    out when we start enabling other modes
     const uint32_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t page_size = get_arg_val<uint32_t>(arg_idx++);
-    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, tensor_address, page_size, tt::CB::c_in0);
+    const uint32_t payload_page_size = get_arg_val<uint32_t>(arg_idx++);
+    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, tensor_address, payload_page_size, tt::CB::c_in0);
 
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
 
     // Don't use CBs because there appears to be a bug if we have the same producer/consumer core to a given CB
     // Instead, open up the CB and use it as a raw scratch space6
-    const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id);
 
     // #ifdef DEBUG_PRINT_ENABLED
     // DPRINT << "ccl_send_reader has " << (uint32_t)num_commands << " commands" << ENDL();
@@ -171,6 +172,7 @@ void kernel_main() {
             bool last_page_of_worker = false;
             for (uint32_t p = 0; p < command_tensor.worker_pages_per_slice; p += packet_size_in_pages) {
                 cb_reserve_back(cb_id, packet_size_in_pages);
+                const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id) + sizeof(tt::fabric::PacketHeader);
 
                 uint32_t n_pages = std::min(packet_size_in_pages, command_tensor.worker_pages_per_slice - p);
                 ASSERT(command_tensor.worker_start_offset_in_slice.w == 0);
@@ -183,6 +185,7 @@ void kernel_main() {
                 ASSERT(command_tensor.tensor_slice_shape.z == 1);
 
                 // DPRINT << "iter "<< p << " curr_tile_id: " << curr_tile_id << ENDL();
+                DPRINT << "local_l1_scratch_buffer_address: " << local_l1_scratch_buffer_address << ENDL();
 
                 read_wrapped_chunk_from_output_tensor_to_address(
                     curr_tile_id,
@@ -195,7 +198,7 @@ void kernel_main() {
                     local_l1_scratch_buffer_address,
                     tensor_addrgen,
                     n_pages,
-                    page_size,
+                    payload_page_size,
                     last_page_of_worker
                 );
 

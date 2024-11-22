@@ -133,7 +133,8 @@ void kernel_main() {
     // -> however, wanted to call it out here to make it clear that we need to pull this
     //    out when we start enabling other modes
     const size_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
-    const size_t page_size = get_arg_val<uint32_t>(arg_idx++);
+    const size_t payload_page_size = get_arg_val<uint32_t>(arg_idx++);
+    const size_t l1_scratch_page_size = payload_page_size + sizeof(tt::fabric::PacketHeader);
     const size_t forward_direction_num_hops = get_arg_val<uint32_t>(arg_idx++);
     const size_t backward_direction_num_hops = get_arg_val<uint32_t>(arg_idx++);
     const bool has_forward_fabric_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
@@ -147,7 +148,7 @@ void kernel_main() {
     auto sync_details_arg_idx = arg_idx;
     arg_idx += num_sync_signals * num_args_per_sync_signal_sender;
 
-    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, dest_address, page_size, tt::CB::c_in0);
+    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, dest_address, payload_page_size, tt::CB::c_in0);
 
     if (has_forward_fabric_connection) {
         DPRINT << "Opening forward fabric connection\n";
@@ -205,6 +206,7 @@ void kernel_main() {
             bool last_page_of_worker = false;
             DPRINT << "Outside loop\n";
             DPRINT << "worker_pages_per_slice: " << command_tensor.worker_pages_per_slice << ENDL();
+            DPRINT << "payload_page_size: " << (uint32_t) payload_page_size << ENDL();
             // DPRINT << "packet_size_in_pages: " << packet_size_in_pages << ENDL();
             for (uint32_t p = 0; p < command_tensor.worker_pages_per_slice; p += packet_size_in_pages) {
                 DPRINT << "Packet loop\n";
@@ -247,12 +249,25 @@ void kernel_main() {
                     {  /// ALL JUST FABRIC MCAST LOGIC - PULL INTO SEPARATE FUNCTIon
                         // Initiate the local write
                         const size_t payload_l1_address = l1_read_addr + sizeof(tt::fabric::PacketHeader);
-                        size_t payload_size_bytes = contig_pages_advanced * page_size;
+                        size_t payload_size_bytes = contig_pages_advanced * payload_page_size;
+                        const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc_addr);
                         // local chip write
-                        noc_async_write(payload_l1_address, noc_addr, payload_size_bytes);
+                        noc_async_write(
+                            payload_l1_address,
+                            get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, 1), // use noc_id = 1 for local writes on writer
+                            payload_size_bytes
+                        );
+                        DPRINT << "l1_read_addr: " << (uint32_t)l1_read_addr << ENDL();
+                        DPRINT << "payload_l1_address: " << (uint32_t)payload_l1_address << ENDL();
+                        DPRINT << "noc_addr: " << (uint64_t)noc_addr << ENDL();
+                        DPRINT << "noc_addr_local: " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, 1) << ENDL();
+                        DPRINT << "size packetheader: " << (uint32_t)sizeof(tt::fabric::PacketHeader) << ENDL();
+                        DPRINT << "payload_size_bytes: " << (uint32_t)payload_size_bytes << ENDL();
                         // DPRINT << "CHKPT2\n";
                         // Write the mcast packet (forward)
-                        const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc_addr);
+                        DPRINT << "dest_noc_xy.x: " << (uint32_t)dest_noc_xy.x << ENDL();
+                        DPRINT << "dest_noc_xy.y: " << (uint32_t)dest_noc_xy.y << ENDL();
+                        DPRINT << "dest_addr: " << (uint32_t)dest_addr << ENDL();
                         // DPRINT << "CHKPT3\n";
                         size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
                         if (has_forward_fabric_connection) {
@@ -307,10 +322,10 @@ void kernel_main() {
                     // DPRINT << "noc_async_write_barrier\n";
                     noc_async_write_barrier(); // since our last call to
                     DPRINT << "cb_pop_front\n";
-                    cb_pop_front(cb_id, packet_size_in_pages);
+                    cb_pop_front(cb_id, contig_pages_advanced);
                     DPRINT << "cb_pop_front done\n";
 
-                    l1_read_addr += contig_pages_advanced * page_size;
+                    l1_read_addr += contig_pages_advanced * l1_scratch_page_size;
                 }
 
             }
