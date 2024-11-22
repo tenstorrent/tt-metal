@@ -14,9 +14,6 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "dev_msgs.h"
 
-extern void (* __init_array_start[])();
-extern void (* __init_array_end[])();
-
 extern void kernel_init(uint32_t kernel_init);
 extern void kernel_launch(uint32_t kernel_base_addr);
 
@@ -61,6 +58,9 @@ inline void do_crt1(uint32_t tt_l1_ptr *data_image) {
     extern uint32_t __ldm_data_end[];
     l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
 
+    extern void (* __init_array_start[])();
+    extern void (* __init_array_end[])();
+#pragma GCC unroll 0
     for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
         (**fptr)();
     }
