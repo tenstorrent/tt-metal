@@ -32,6 +32,10 @@ static bool coord_found_p(CoreCoord range, CoreCoord core) {
     return core.x >= 1 && core.x <= range.x && core.y >= 1 && core.y <= range.y;
 }
 
+static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) {
+    return coords.find(core) != coords.end();
+}
+
 static string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     std::stringstream ss;
     ss << "noc{" << core.str() << ", 0x" << std::setfill('0') << std::setw(8) << std::hex << a << ", " << std::dec << l
@@ -55,7 +59,13 @@ static void print_stack_trace(void) {
 }
 
 static void watcher_sanitize_host_noc(
-    const char* what, const metal_SocDescriptor& soc_d, const CoreCoord& core, uint64_t addr, uint32_t lbytes) {
+    const char* what,
+    const metal_SocDescriptor& soc_d,
+    const std::unordered_set<CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const CoreCoord& core,
+    uint64_t addr,
+    uint32_t lbytes) {
     if (coord_found_p(soc_d.get_pcie_cores(), core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (coord_found_p(soc_d.get_dram_cores(), core)) {
@@ -66,12 +76,12 @@ static void watcher_sanitize_host_noc(
             print_stack_trace();
             TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
         }
-    } else if (coord_found_p(soc_d.get_physical_ethernet_cores(), core)) {
+    } else if (coord_found_p(virtual_eth_cores, core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
-    } else if (coord_found_p(soc_d.grid_size, core)) {
+    } else if (coord_found_p(virtual_worker_cores, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
@@ -84,13 +94,23 @@ static void watcher_sanitize_host_noc(
 }
 
 void watcher_sanitize_host_noc_read(
-    const metal_SocDescriptor& soc_d, const CoreCoord& core, uint64_t addr, uint32_t lbytes) {
-    watcher_sanitize_host_noc("read", soc_d, core, addr, lbytes);
+    const metal_SocDescriptor& soc_d,
+    const std::unordered_set<CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const CoreCoord& core,
+    uint64_t addr,
+    uint32_t lbytes) {
+    watcher_sanitize_host_noc("read", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
 }
 
 void watcher_sanitize_host_noc_write(
-    const metal_SocDescriptor& soc_d, const CoreCoord& core, uint64_t addr, uint32_t lbytes) {
-    watcher_sanitize_host_noc("write", soc_d, core, addr, lbytes);
+    const metal_SocDescriptor& soc_d,
+    const std::unordered_set<CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const CoreCoord& core,
+    uint64_t addr,
+    uint32_t lbytes) {
+    watcher_sanitize_host_noc("write", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
 }
 
 }  // namespace tt

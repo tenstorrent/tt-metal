@@ -44,13 +44,13 @@ int main(int argc, char** argv) {
     for (int device_id = 0; device_id < num_devices; device_id++) {
         try {
             /*
-             * Silicon accelerator setup
-             */
-            Device* device = devices[device_id];
+            * Silicon accelerator setup
+            */
+            Device *device = devices[device_id];
 
             /*
-             * Setup program and command queue to execute along with its buffers and kernels to use
-             */
+            * Setup program and command queue to execute along with its buffers and kernels to use
+            */
             CommandQueue& cq = device->command_queue();
             Program program = CreateProgram();
 
@@ -60,22 +60,25 @@ int main(int argc, char** argv) {
                 program,
                 "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
                 core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+            );
 
             constexpr uint32_t single_tile_size = 2 * (32 * 32);
             constexpr uint32_t num_tiles = 50;
             constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
             tt::tt_metal::InterleavedBufferConfig dram_config{
-                .device = device,
-                .size = dram_buffer_size,
-                .page_size = dram_buffer_size,
-                .buffer_type = tt::tt_metal::BufferType::DRAM};
+                        .device= device,
+                        .size = dram_buffer_size,
+                        .page_size = dram_buffer_size,
+                        .buffer_type = tt::tt_metal::BufferType::DRAM
+            };
             tt::tt_metal::InterleavedBufferConfig l1_config{
-                .device = device,
-                .size = dram_buffer_size,
-                .page_size = dram_buffer_size,
-                .buffer_type = tt::tt_metal::BufferType::L1};
+                        .device= device,
+                        .size = dram_buffer_size,
+                        .page_size = dram_buffer_size,
+                        .buffer_type = tt::tt_metal::BufferType::L1
+            };
 
             auto l1_buffer = CreateBuffer(l1_config);
 
@@ -86,8 +89,8 @@ int main(int argc, char** argv) {
             const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
             /*
-             * Create input data and runtime arguments, then execute
-             */
+            * Create input data and runtime arguments, then execute
+            */
             std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
             EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
@@ -95,14 +98,18 @@ int main(int argc, char** argv) {
             const std::array<uint32_t, 8> runtime_args = {
                 l1_buffer->address(),
                 input_dram_buffer->address(),
-                static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(input_dram_buffer->noc_coordinates().y),
+                0,
                 output_dram_buffer->address(),
-                static_cast<uint32_t>(output_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(output_dram_buffer->noc_coordinates().y),
-                l1_buffer->size()};
+                0,
+                l1_buffer->size()
+            };
 
-            SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
+            SetRuntimeArgs(
+                program,
+                dram_copy_kernel_id,
+                core,
+                runtime_args
+            );
 
             EnqueueProgram(cq, program, false);
             tt::log_info("Started program");
@@ -110,14 +117,14 @@ int main(int argc, char** argv) {
             tt::log_info("Finished program");
 
             /*
-             * Validation & Teardown
-             */
+            * Validation & Teardown
+            */
             std::vector<uint32_t> result_vec;
             EnqueueReadBuffer(cq, output_dram_buffer, result_vec, true);
 
             pass &= input_vec == result_vec;
 
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             tt::log_error(tt::LogTest, "Test failed with exception!");
             tt::log_error(tt::LogTest, "{}", e.what());
 

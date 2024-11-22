@@ -66,16 +66,16 @@ static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<
         erisc_semaphore_address,
         start_semaphore_address,
         erisc_buffer_address,
-        static_cast<uint32_t>(device->physical_core_from_logical_core(sem_init_core, CoreType::WORKER).x),
-        static_cast<uint32_t>(device->physical_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).x),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
         worker_sem0};
     const std::array<uint32_t, 7> sender_rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),    // is_ring_start
         eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,  // handshake_addr
         erisc_buffer_address,
         erisc_semaphore_address,
-        static_cast<uint32_t>(device->physical_core_from_logical_core(sem_init_core, CoreType::WORKER).x),
-        static_cast<uint32_t>(device->physical_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).x),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
         worker_sem1};  // sample size
     const std::array<uint32_t, 5> sem_id_args = {
         worker_sem0,

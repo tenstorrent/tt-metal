@@ -171,13 +171,4 @@ inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
     return logical_dispatch_cores;
 }
 
-/// @brief Get physical core coordinate from a logical location (device ID + core coordinate)
-/// @param logical_location tt_cxy_pair describing chip and logical location core coordinate
-/// @param core_type CoreType of core to translate
-/// @return physical CoreCoord on the same chip as `logical_location`
-inline CoreCoord get_physical_core_coordinate(const tt_cxy_pair& logical_location, const CoreType& core_type) {
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(logical_location.chip);
-    return soc_desc.get_physical_core_from_logical_core(CoreCoord(logical_location.x, logical_location.y), core_type);
-}
-
 }  // namespace tt

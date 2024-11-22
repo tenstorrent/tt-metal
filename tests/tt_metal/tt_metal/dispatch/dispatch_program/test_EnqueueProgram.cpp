@@ -598,19 +598,10 @@ bool verify_rt_args(
     tt::Cluster::instance().l1_barrier(device->id());
     auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
                                             : device->worker_core_from_logical_core(logical_core);
-    std::vector<uint32_t> args_readback =
-        tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
-    log_debug(
-        tt::LogTest,
-        "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
-        expected_rt_args.size(),
-        label,
-        noc_xy,
-        logical_core.str(),
-        addr,
-        incr_val);
+    std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
-    for (int i = 0; i < expected_rt_args.size(); i++) {
+    for(int i=0; i<expected_rt_args.size(); i++){
         uint32_t expected_val = expected_rt_args[i] + incr_val;
         log_debug(
             tt::LogTest,

@@ -110,11 +110,9 @@ We use a non-blocking call so we can continue setting up our program.
 const std::vector<uint32_t> runtime_args = {
     l1_buffer.address(),
     input_dram_buffer.address(),
-    static_cast<uint32_t>(input_dram_buffer.noc_coordinates().x),
-    static_cast<uint32_t>(input_dram_buffer.noc_coordinates().y),
+    input_bank_id,
     output_dram_buffer.address(),
-    static_cast<uint32_t>(output_dram_buffer.noc_coordinates().x),
-    static_cast<uint32_t>(output_dram_buffer.noc_coordinates().y),
+    output_bank_id,
     l1_buffer.size()
 };
 
@@ -131,9 +129,9 @@ particular kernel, we have to provide:
 
 -   Where the L1 buffer starts (memory address)
 -   Where the input DRAM buffer starts (memory address)
--   The location of the input DRAM buffer\'s channel on the NOC
+-   The Bank ID of the input DRAM buffer
 -   Where the output DRAM buffer starts (memory address)
--   The location of the output DRAM buffer\'s channel on the NOC
+-   The Bank ID of the output DRAM buffer
 -   The size of the buffers
 
 ## Running the program

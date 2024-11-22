@@ -85,10 +85,6 @@ bool matmul_single_core(
     auto src1_dram_buffer = CreateBuffer(weights_config);
     auto dst_dram_buffer = CreateBuffer(dst_config);
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = M * in0_block_w * 2;
     tt_metal::CircularBufferConfig cb_src0_config =
@@ -118,11 +114,9 @@ bool matmul_single_core(
 
     std::vector<uint32_t> mm_reader_rt_args{
         src0_dram_buffer->address(),
-        (std::uint32_t)dram_src0_noc_xy.x,
-        (std::uint32_t)dram_src0_noc_xy.y,
+        0,
         src1_dram_buffer->address(),
-        (std::uint32_t)dram_src1_noc_xy.x,
-        (std::uint32_t)dram_src1_noc_xy.y,
+        0,
         (std::uint32_t)(K / in0_block_w),                      // num_blocks
         (std::uint32_t)(M * in0_block_w),                      // input 0 block num tiles
         (std::uint32_t)(N * in0_block_w),                      // input 1 block num tiles
@@ -131,8 +125,7 @@ bool matmul_single_core(
 
     std::vector<uint32_t> writer_rt_args{
         dst_dram_buffer->address(),
-        (std::uint32_t)dram_dst_noc_xy.x,
-        (std::uint32_t)dram_dst_noc_xy.y,
+        0,
         (std::uint32_t)out_subblock_h,      // num tiles per sub block m
         (std::uint32_t)out_subblock_w,      // num tiles per sub block n
         (std::uint32_t)M / out_subblock_h,  // num sub blocks m

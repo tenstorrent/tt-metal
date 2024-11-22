@@ -77,7 +77,10 @@ void Hal::initialize_bh() {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
 
-    num_nocs_ = NUM_NOCS;
+    this->num_nocs_ = NUM_NOCS;
+    this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
+    this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
+    this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
 }
 
 }  // namespace tt_metal

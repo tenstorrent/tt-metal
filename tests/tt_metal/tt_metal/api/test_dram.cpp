@@ -51,9 +51,6 @@ bool dram_single_core_db(DispatchFixture* fixture, tt_metal::Device* device) {
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
     auto dram_copy_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_db.cpp",
@@ -70,16 +67,14 @@ bool dram_single_core_db(DispatchFixture* fixture, tt_metal::Device* device) {
         dram_copy_kernel,
         core,
         {input_dram_buffer_addr,
-         (std::uint32_t)input_dram_noc_xy.x,
-         (std::uint32_t)input_dram_noc_xy.y,
-         output_dram_buffer_addr,
-         (std::uint32_t)output_dram_noc_xy.x,
-         (std::uint32_t)output_dram_noc_xy.y,
-         dram_buffer_size_bytes,
-         num_tiles,
-         l1_buffer_addr,
-         total_l1_buffer_size_tiles,
-         total_l1_buffer_size_bytes});
+        (std::uint32_t)0,
+        output_dram_buffer_addr,
+        (std::uint32_t)0,
+        dram_buffer_size_bytes,
+        num_tiles,
+        l1_buffer_addr,
+        total_l1_buffer_size_tiles,
+        total_l1_buffer_size_bytes});
 
     fixture->RunProgram(device, program);
 
@@ -105,25 +100,21 @@ bool dram_single_core(
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
     log_debug(tt::LogVerif, "Creating kernel");
     // Create the kernel
     auto dram_kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg.data_movement_cfg);
     fixture->WriteBuffer(device, input_dram_buffer, src_vec);
 
     tt_metal::SetRuntimeArgs(
-        program,
-        dram_kernel,
-        cfg.core_range,
-        {cfg.l1_buffer_addr,
-         input_dram_buffer_addr,
-         (std::uint32_t)input_dram_noc_xy.x,
-         (std::uint32_t)input_dram_noc_xy.y,
-         output_dram_buffer_addr,
-         (std::uint32_t)output_dram_noc_xy.x,
-         (std::uint32_t)output_dram_noc_xy.y,
-         cfg.dram_buffer_size});
+            program,
+            dram_kernel,
+            cfg.core_range,
+            {cfg.l1_buffer_addr,
+            input_dram_buffer_addr,
+            (std::uint32_t)0,
+            output_dram_buffer_addr,
+            (std::uint32_t)0,
+            cfg.dram_buffer_size});
 
     fixture->RunProgram(device, program);
 

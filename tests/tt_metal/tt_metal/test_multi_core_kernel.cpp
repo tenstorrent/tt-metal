@@ -89,11 +89,7 @@ void compile_and_configure_program(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 }
 
-void set_rt_args(
-    tt_metal::Program& program,
-    tt_metal::KernelHandle kernel,
-    const CoreRange& core_range,
-    const std::array<uint32_t, 4>& rt_args) {
+void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::array<uint32_t, 3> &rt_args) {
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord core = CoreCoord(x, y);
@@ -109,22 +105,19 @@ void write_same_runtime_args_to_device(
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange& core_range,
     int32_t num_tiles,
-    tt_metal::Buffer& src_dram_buffer,
-    tt_metal::Buffer& dst_dram_buffer) {
-    auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+    tt_metal::Buffer &src_dram_buffer,
+    tt_metal::Buffer &dst_dram_buffer)
+{
 
     const std::array unary_reader_args{
-        (std::uint32_t)src_dram_buffer.address(),
-        (std::uint32_t)dram_src_noc_xy.x,
-        (std::uint32_t)dram_src_noc_xy.y,
-        (std::uint32_t)num_tiles};
+    (std::uint32_t)src_dram_buffer.address(),
+    (std::uint32_t) 0,
+    (std::uint32_t)num_tiles};
 
     const std::array unary_writer_args{
-        (std::uint32_t)dst_dram_buffer.address(),
-        (std::uint32_t)dram_dst_noc_xy.x,
-        (std::uint32_t)dram_dst_noc_xy.y,
-        (std::uint32_t)num_tiles};
+    (std::uint32_t)dst_dram_buffer.address(),
+    (std::uint32_t) 0,
+    (std::uint32_t)num_tiles};
 
     set_rt_args(program, reader_kernel_id, core_range, unary_reader_args);
     set_rt_args(program, writer_kernel_id, core_range, unary_writer_args);
@@ -138,37 +131,31 @@ void write_unique_writer_runtime_args_to_device(
     const CoreRange& core_range,
     const CoreRangeSet& core_blocks,
     int32_t num_tiles,
-    tt_metal::Buffer& src_dram_buffer,
-    tt_metal::Buffer& dst_dram_buffer_1,
-    tt_metal::Buffer& dst_dram_buffer_2,
-    tt_metal::Buffer& dst_dram_buffer_3) {
-    auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
-    // All dst buffers use the same DRAM channel
-    auto dram_dst_noc_xy = dst_dram_buffer_1.noc_coordinates();
+    tt_metal::Buffer &src_dram_buffer,
+    tt_metal::Buffer &dst_dram_buffer_1,
+    tt_metal::Buffer &dst_dram_buffer_2,
+    tt_metal::Buffer &dst_dram_buffer_3
+) {
 
     // Same readers args because all kernels read from same src
     const std::array unary_reader_args{
         (std::uint32_t)src_dram_buffer.address(),
-        (std::uint32_t)dram_src_noc_xy.x,
-        (std::uint32_t)dram_src_noc_xy.y,
+        (std::uint32_t) 0,
         (std::uint32_t)num_tiles};
 
     const std::array unary_writer_args_1{
         dst_dram_buffer_1.address(),
-        (std::uint32_t)dram_dst_noc_xy.x,
-        (std::uint32_t)dram_dst_noc_xy.y,
+        (std::uint32_t) 0,
         (std::uint32_t)num_tiles};
 
     const std::array unary_writer_args_2{
         dst_dram_buffer_2.address(),
-        (std::uint32_t)dram_dst_noc_xy.x,
-        (std::uint32_t)dram_dst_noc_xy.y,
+        (std::uint32_t) 0,
         (std::uint32_t)num_tiles};
 
     const std::array unary_writer_args_3{
         dst_dram_buffer_3.address(),
-        (std::uint32_t)dram_dst_noc_xy.x,
-        (std::uint32_t)dram_dst_noc_xy.y,
+        (std::uint32_t) 0,
         (std::uint32_t)num_tiles};
 
     set_rt_args(program, reader_kernel_id, core_range, unary_reader_args);

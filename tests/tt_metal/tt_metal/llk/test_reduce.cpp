@@ -145,10 +145,11 @@ void add_reader_writer_kernels(
                 program,
                 unary_writer_kernel,
                 logical_core,
-                {dst_dram_buffer->address(),
-                 (std::uint32_t)dst_dram_buffer->noc_coordinates().x,
-                 (std::uint32_t)dst_dram_buffer->noc_coordinates().y,
-                 num_tensor_tiles / Ht});
+                {
+                    dst_dram_buffer->address(),
+                    (uint32_t)0,           // dram bank id
+                    num_tensor_tiles / Ht  // num tiles
+                });
 
             break;
         }
@@ -176,8 +177,8 @@ void add_reader_writer_kernels(
                 logical_core,
                 {
                     src_dram_buffer->address(),
-                    (std::uint32_t)src_dram_buffer->noc_coordinates().x,
-                    (std::uint32_t)src_dram_buffer->noc_coordinates().y,
+                    (uint32_t)0,  // dram bank id
+                    (uint32_t)0,  // unused
                     num_tensor_tiles,
                     NC,
                     Ht,
@@ -193,8 +194,7 @@ void add_reader_writer_kernels(
                 unary_writer_kernel,
                 logical_core,
                 {dst_dram_buffer->address(),
-                 (std::uint32_t)dst_dram_buffer->noc_coordinates().x,
-                 (std::uint32_t)dst_dram_buffer->noc_coordinates().y,
+                 (uint32_t)0,  // dram bank id
                  num_tiles});
 
             break;

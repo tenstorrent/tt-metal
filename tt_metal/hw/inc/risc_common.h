@@ -21,6 +21,8 @@
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
 #define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
 #define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
+#define NOC_X_PHYS_COORD(x) NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x)
+#define NOC_Y_PHYS_COORD(y) NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y)
 
 #define TILE_WORD_2_BIT ((256 + 64 + 32) >> 4)
 #define TILE_WORD_4_BIT ((512 + 64 + 32) >> 4)
@@ -139,7 +141,7 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 
 inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
+        uint32_t noc_id_reg = MY_NOC_ENCODING(n);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
         my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     }

@@ -155,18 +155,19 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on.
     string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    int line_num = 56;
+    int line_num = 57;
 
     string expected = fmt::format(
-        "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
+        "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
         device->id(),
         (riscv_type == DebugErisc) ? "ethnet" : "worker",
-        logical_core.x, logical_core.y,
-        phys_core.x, phys_core.y,
+        logical_core.x,
+        logical_core.y,
+        phys_core.x,
+        phys_core.y,
         risc,
         line_num,
-        kernel
-    );
+        kernel);
     expected += " Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
 
     log_info(LogTest, "Expected error: {}", expected);
@@ -179,7 +180,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 }
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertBrisc) {
+TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
@@ -191,7 +192,7 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertBrisc) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertNCrisc) {
+TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
@@ -201,7 +202,7 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertNCrisc) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc0) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
@@ -211,7 +212,7 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc0) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc1) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
@@ -221,7 +222,7 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc1) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc2) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
@@ -231,7 +232,7 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc2) {
     );
 }
 
-TEST_F(WatcherFixture, ActiveEthTestWatcherAssertErisc) {
+TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
@@ -241,7 +242,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherAssertErisc) {
     );
 }
 
-TEST_F(WatcherFixture, IdleEthTestWatcherAssertIErisc) {
+TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");

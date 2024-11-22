@@ -228,17 +228,11 @@ bool matmul_large_block(
     auto src1_dram_buffer = CreateBuffer(weights_config);
     auto dst_dram_buffer = CreateBuffer(dst_config);
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     const std::array mm_reader_rt_args{
         src0_dram_buffer->address(),
-        (std::uint32_t)dram_src0_noc_xy.x,
-        (std::uint32_t)dram_src0_noc_xy.y,
+        (std::uint32_t)0,
         src1_dram_buffer->address(),
-        (std::uint32_t)dram_src1_noc_xy.x,
-        (std::uint32_t)dram_src1_noc_xy.y,
+        (std::uint32_t)0,
         (std::uint32_t)(K / in0_block_w),     // num_blocks
         M * in0_block_w,                      // input 0 block num tiles
         N * in0_block_w,                      // input 1 block num tiles
@@ -249,17 +243,12 @@ bool matmul_large_block(
     string writer_kernel;
     if (output_rm) {
         writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
-        writer_rt_args = {
-            dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            uint(M * N)};
+        writer_rt_args = {dst_dram_buffer->address(), 0, uint(M * N)};
     } else {
         writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp";
         writer_rt_args = {
             dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
+            0,
             (std::uint32_t)out_subblock_h,      // num tiles per sub block m
             (std::uint32_t)out_subblock_w,      // num tiles per sub block n
             (std::uint32_t)M / out_subblock_h,  // num sub blocks m

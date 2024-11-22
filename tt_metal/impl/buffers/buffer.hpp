@@ -221,13 +221,9 @@ class Buffer final {
 
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord noc_coordinates(uint32_t bank_id) const;
-
-    // returns NoC coordinates of first bank buffer is in
-    CoreCoord noc_coordinates() const;
-
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;

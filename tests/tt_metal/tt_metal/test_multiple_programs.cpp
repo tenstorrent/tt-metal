@@ -165,27 +165,13 @@ void write_program_runtime_args_to_device(
     tt_metal::Buffer& src0_dram_buffer,
     tt_metal::Buffer& src1_dram_buffer,
     tt_metal::Buffer& dst_dram_buffer) {
-    auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-    auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
-
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel_id,
         core,
-        {src0_dram_buffer.address(),
-         (std::uint32_t)dram_src0_noc_xy.x,
-         (std::uint32_t)dram_src0_noc_xy.y,
-         src1_dram_buffer.address(),
-         (std::uint32_t)dram_src1_noc_xy.x,
-         (std::uint32_t)dram_src1_noc_xy.y,
-         num_tiles});
+        {src0_dram_buffer.address(), (uint32_t)0, src1_dram_buffer.address(), (uint32_t)0, num_tiles});
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        writer_kernel_id,
-        core,
-        {dst_dram_buffer.address(), (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles});
+    tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer.address(), (uint32_t)0, num_tiles});
 }
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. First program runs eltwise binary on logical core {0, 0}

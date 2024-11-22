@@ -162,8 +162,7 @@ bool test_dropout_standalone(
             core,
             {
                 src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                0,  // dram bank id
                 num_tiles,
             });
 
@@ -172,8 +171,7 @@ bool test_dropout_standalone(
             unary_writer_kernel_id,
             core,
             {dst_dram_buffer->address(),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+             0,  // dram bank id
              num_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);

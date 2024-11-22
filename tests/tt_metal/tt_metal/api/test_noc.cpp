@@ -85,8 +85,8 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
         tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
     }
 
-    tt::log_info("Logical -- Noc Coordinates Mapping");
-    tt::log_info("[Logical <-> NOC0] Coordinates");
+    tt::log_info("Logical -- Virtual Mapping");
+    tt::log_info("[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
         string output_row = "";
         for (int c = 0; c < logical_grid_size.x; c++) {
@@ -94,7 +94,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
             const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
             output_row += "{L[x" + std::to_string(c);
             output_row += "-y" + std::to_string(r);
-            output_row += "]:N[x" + std::to_string(noc_coord.x);
+            output_row += "]:V[x" + std::to_string(noc_coord.x);
             output_row += "-y" + std::to_string(noc_coord.y);
             output_row += "]}, ";
         }
@@ -108,6 +108,12 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
+
+#if COORDINATE_VIRTUALIZATION_ENABLED != 0
+    uint32_t MY_NOC_ENCODING_REG = NOC_CFG(NOC_ID_LOGICAL);
+#else
+    uint32_t MY_NOC_ENCODING_REG = NOC_NODE_ID;
+#endif
     // Ping all the Noc Nodes
     auto logical_grid_size = device->logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
@@ -115,7 +121,7 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
             auto worker_core = device->worker_core_from_logical_core(CoreCoord(x, y));
             // Read register from specific node
             uint32_t node_id_regval;
-            node_id_regval = unit_tests::basic::test_noc::read_reg(device, CoreCoord(x, y), NOC_NODE_ID);
+            node_id_regval = unit_tests::basic::test_noc::read_reg(device, CoreCoord(x, y), MY_NOC_ENCODING_REG);
             ASSERT_NE(
                 node_id_regval, unit_tests::basic::test_noc::init_value);  // Need to make sure we read in valid reg
             // Check it matches software translated xy

@@ -120,10 +120,6 @@ void matmul_tile(
 
     uint32_t num_input_tiles = 2 * M;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
@@ -200,11 +196,9 @@ void matmul_tile(
 
         reader_l1_args = {
             src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
+            0,
             src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
+            0,
             (std::uint32_t)K,
             (std::uint32_t)M,
             (std::uint32_t)N,
@@ -222,11 +216,9 @@ void matmul_tile(
 
         reader_l1_args = {
             src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
+            0,
             src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
+            0,
             1,
             1,
             1,
@@ -274,13 +266,8 @@ void matmul_tile(
         vector<uint32_t> bias(N * 512, 0);
         fixture->WriteBuffer(device, src2_dram_buffer, bias);
 
-        auto dram_src2_noc_xy = src2_dram_buffer->noc_coordinates();
         vector<uint32_t> bias_args = {
-            src2_dram_buffer->address(),
-            (std::uint32_t)dram_src2_noc_xy.x,
-            (std::uint32_t)dram_src2_noc_xy.y,
-            (std::uint32_t)N,
-            (std::uint32_t)(N * single_tile_size_bfp16b)};
+            src2_dram_buffer->address(), 0, (std::uint32_t)N, (std::uint32_t)(N * single_tile_size_bfp16b)};
 
         for (uint32_t arg : bias_args) {
             reader_l1_args.push_back(arg);
@@ -293,10 +280,7 @@ void matmul_tile(
         program,
         unary_writer_kernel,
         core,
-        {dst_dram_buffer->address(),
-         (std::uint32_t)dram_dst_noc_xy.x,
-         (std::uint32_t)dram_dst_noc_xy.y,
-         num_tiles});  // this is M * N in the multi_tile case !!
+        {dst_dram_buffer->address(), 0, num_tiles});  // this is M * N in the multi_tile case !!
 
     fixture->RunProgram(device, program);
 

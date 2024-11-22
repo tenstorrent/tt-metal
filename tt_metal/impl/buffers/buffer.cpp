@@ -425,33 +425,27 @@ CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
 }
 
-CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
-    switch (this->buffer_type_) {
-        case BufferType::DRAM:
-        case BufferType::TRACE: {
-            auto dram_channel = this->dram_channel_from_bank_id(bank_id);
-            return this->device_->dram_core_from_dram_channel(dram_channel);
-        }
-        case BufferType::L1:  // fallthrough
-        case BufferType::L1_SMALL: {
-            auto logical_core = this->logical_core_from_bank_id(bank_id);
-            return this->device_->worker_core_from_logical_core(logical_core);
-        }
-        case BufferType::SYSTEM_MEMORY: {
-            TT_THROW("Host buffer is located in system memory! Cannot retrieve NoC coordinates for it");
-        } break;
-        default: TT_THROW("Unsupported buffer type!");
-    }
-}
-
-CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
-
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
+}
+
+DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
+    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
+    uint32_t offset;
+    if (is_sharded(this->buffer_layout())) {
+        auto shard_spec = this->shard_spec();
+        uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    } else {
+        uint32_t pages_offset_within_bank = page_index / num_banks;
+        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    }
+    return this->address() + offset;
 }
 
 uint32_t Buffer::alignment() const {
