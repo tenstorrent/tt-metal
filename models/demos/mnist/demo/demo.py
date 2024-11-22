@@ -5,17 +5,15 @@
 import pytest
 import torch
 import ttnn
-
 from torchvision import transforms, datasets
 from loguru import logger
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-)
 from torch.utils.data import DataLoader
-from models.demos.mnist.reference.mnist import MnistModel
-from models.demos.mnist.tt import tt_mnist
 
 from ttnn.model_preprocessing import preprocess_model_parameters
+from models.utility_functions import disable_persistent_kernel_cache
+
+from models.demos.mnist.reference.mnist import MnistModel
+from models.demos.mnist.tt import tt_mnist
 
 
 def run_demo_dataset(device, batch_size, iterations, model_location_generator):
@@ -49,8 +47,7 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
             ttnn_predictions.append(predicted_label[i])
             logger.info(f"Iter: {iters} Sample {i}:")
             logger.info(f"Expected Label: {dataset_predictions[i]}")
-            logger.info(f"Predicted Label: {ttnn_predictions[i]}")
-
+            logger.info(f"TT Predicted Label: {ttnn_predictions[i]}")
             if dataset_predictions[i] == ttnn_predictions[i]:
                 dataset_ttnn_correct += 1
                 correct += 1
@@ -58,9 +55,9 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
         logger.info(
             f"ImageNet Inference Accuracy for iter {iters} of {batch_size} input samples : {dataset_ttnn_accuracy}"
         )
-
     accuracy = correct / (batch_size * iterations)
     logger.info(f"ImageNet Inference Accuracy for {batch_size}x{iterations} Samples : {accuracy}")
+    assert accuracy >= 0.96875, f"Expected accuracy : {0.96875} Actual accuracy: {accuracy}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

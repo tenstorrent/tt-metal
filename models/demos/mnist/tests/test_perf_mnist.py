@@ -9,16 +9,19 @@ import torch
 from loguru import logger
 from torchvision import transforms, datasets
 from torch.utils.data import DataLoader
+
+from ttnn.model_preprocessing import preprocess_model_parameters
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from models.perf.perf_utils import prep_perf_report
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.mnist.reference.mnist import MnistModel
 from models.utility_functions import is_grayskull, is_wormhole_b0
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+
+from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
+
 
 transform = transforms.Compose([transforms.ToTensor()])
 test_dataset = datasets.MNIST(root="./data", train=False, transform=None, download=True)
@@ -27,11 +30,11 @@ test_dataset = datasets.MNIST(root="./data", train=False, transform=None, downlo
 def get_expected_times(tt_mnist):
     if is_grayskull():
         return {
-            tt_mnist: (3.54, 0.00905),
+            tt_mnist: (3.54, 0.005),
         }[tt_mnist]
     elif is_wormhole_b0():
         return {
-            tt_mnist: (8.14, 0.0081),
+            tt_mnist: (3.89, 0.005),
         }[tt_mnist]
 
 
@@ -60,10 +63,9 @@ def test_performance_mnist(device, batch_size, tt_mnist, model_location_generato
     test_dataset = datasets.MNIST(root="./data", train=False, transform=transform, download=True)
     dataloader = DataLoader(test_dataset, batch_size=batch_size)
     x, labels = next(iter(dataloader))
-
     test_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=device)
     durations = []
-    for _ in range(2):
+    for _ in range(100):
         start = time.time()
 
         ttnn_output = tt_mnist.mnist(
@@ -75,7 +77,6 @@ def test_performance_mnist(device, batch_size, tt_mnist, model_location_generato
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()
-
     inference_and_compile_time, *inference_times = durations
     inference_time = sum(inference_times) / len(inference_times)
     expected_compile_time, expected_inference_time = get_expected_times(tt_mnist)
@@ -111,9 +112,9 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     num_iterations = 1
     margin = 0.03
     if is_grayskull():
-        expected_perf = 588743.96
+        expected_perf = 653017.5
     elif is_wormhole_b0():
-        expected_perf = 1338730.2
+        expected_perf = 1383185.64944
 
     command = f"pytest tests/ttnn/integration_tests/mnist/test_mnist.py::test_mnist"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -122,7 +123,7 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     expected_perf_cols = {inference_time_key: expected_perf}
 
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"tt_mnist{batch_size}",
         batch_size=batch_size,

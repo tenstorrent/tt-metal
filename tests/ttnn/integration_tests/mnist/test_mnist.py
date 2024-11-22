@@ -5,12 +5,14 @@
 import torch
 import ttnn
 import pytest
-from models.demos.mnist.reference.mnist import MnistModel
-from models.demos.mnist.tt import tt_mnist
-from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
+from torch.utils.data import DataLoader
+
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+from models.demos.mnist.reference.mnist import MnistModel
+from models.demos.mnist.tt import tt_mnist
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -40,4 +42,5 @@ def test_mnist(reset_seeds, device, batch_size, model_location_generator):
     tt_output = tt_mnist.mnist(device, batch_size, x, parameters)
 
     tt_output = ttnn.to_torch(tt_output)
+    print(tt_output.shape)
     assert_with_pcc(torch_output, tt_output, 0.99)

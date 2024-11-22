@@ -28,5 +28,3 @@ The demo receives inputs from respective dataset MNIST.
 ## Additional Information
 
 If you encounter issues when running the model, ensure that device has support for all required operations.
-
-### Owner: [sabira-mcw](https://github.com/sabira-mcw)
