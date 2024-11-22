@@ -16,7 +16,7 @@
 #include "jit_build/data_format.hpp"
 #include "jit_build/settings.hpp"
 
-#include "tt_metal/hw/inc/circular_buffer.h"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 
 namespace fs = std::filesystem;
 

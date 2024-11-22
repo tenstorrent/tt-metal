@@ -24,6 +24,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
@@ -903,8 +904,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                 circular_buffers_on_corerange.size());
             for (const shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
                 program_command_sequence.circular_buffers_on_core_ranges[i].emplace_back(cb);
-                const uint32_t cb_address = cb->address() >> 4;
-                const uint32_t cb_size = cb->size() >> 4;
+                const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                 for (const auto& buffer_index : cb->buffer_indices()) {
                     // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
@@ -913,7 +914,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                     cb_config_payload[base_index] = cb_address;
                     cb_config_payload[base_index + 1] = cb_size;
                     cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
+                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                     max_base_index = std::max(max_base_index, base_index);
                 }
             }
@@ -1359,8 +1360,8 @@ void EnqueueProgramCommand::update_device_commands(
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
-            const uint32_t cb_address = cb->address() >> 4;
-            const uint32_t cb_size = cb->size() >> 4;
+            const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+            const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             for (const auto& buffer_index : cb->buffer_indices()) {
                 // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
@@ -1369,7 +1370,7 @@ void EnqueueProgramCommand::update_device_commands(
                 cb_config_payload[base_index] = cb_address;
                 cb_config_payload[base_index + 1] = cb_size;
                 cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
+                cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             }
         }
         i++;
