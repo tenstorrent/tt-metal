@@ -14,8 +14,6 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "dev_msgs.h"
 
-extern uint32_t __ldm_bss_start[];
-extern uint32_t __ldm_bss_end[];
 extern void (* __init_array_start[])();
 extern void (* __init_array_end[])();
 
@@ -53,7 +51,9 @@ inline void l1_to_local_mem_copy(uint32_t *dst, uint32_t tt_l1_ptr *src, int32_t
 
 inline void do_crt1(uint32_t tt_l1_ptr *data_image) {
 
-    // Handle stuff typically done in crt0 in asm.  Easier to do in C
+    // Clear bss.
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     // Copy initialized data.
