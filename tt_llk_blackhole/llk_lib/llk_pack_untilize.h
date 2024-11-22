@@ -139,4 +139,5 @@ inline void _llk_pack_untilize_(
         const uint PACK_INTF_SEL = p_pacr::TWO_INTFS_ACTIVE;
         TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 1); // close block
     }
+    TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); //reset z counters
 }
