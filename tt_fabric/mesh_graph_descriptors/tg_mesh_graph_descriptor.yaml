@@ -1,0 +1,66 @@
+Chip: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 4,
+    E: 4,
+    S: 4,
+    W: 4,
+  }
+}
+
+
+Board: [
+  { name: Galaxy,
+    type: Mesh,
+    topology: [4, 8]},
+  { name: N150Gateway,
+    type: Mesh,
+    topology: [1, 1]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: N150Gateway,
+  topology: [1, 1],
+  host_mapping: [[aus-glx-11]]},
+{
+  id: 1,
+  board: N150Gateway,
+  topology: [1, 1],
+  host_mapping: [[aus-glx-11]]},
+{
+  id: 2,
+  board: N150Gateway,
+  topology: [1, 1],
+  host_mapping: [[aus-glx-11]]},
+{
+  id: 3,
+  board: N150Gateway,
+  topology: [1, 1],
+  host_mapping: [[aus-glx-11]]},
+{
+  id: 4,
+  board: Galaxy,
+  topology: [1, 1],
+  host_mapping: [[]]}
+]
+
+Graph: [
+  [[0, S0], [4, N0]],
+  [[0, S1], [4, N4]],
+  [[1, S0], [4, N8]],
+  [[1, S1], [4, N12]],
+  [[2, S0], [4, N16]],
+  [[2, S1], [4, N20]],
+  [[3, S0], [4, N24]],
+  [[3, S1], [4, N28]],
+  [[4, N0], [0, S0]],
+  [[4, N4], [0, S1]],
+  [[4, N8], [1, S0]],
+  [[4, N12], [1, S1]],
+  [[4, N16], [2, S0]],
+  [[4, N20], [2, S1]],
+  [[4, N24], [3, S0]],
+  [[4, N28], [3, S1]],
+]

@@ -1,0 +1,48 @@
+set(TT_FABRIC_OBJECTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/control_plane.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/routing_table_generator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph.cpp
+)
+
+add_library(tt_fabric ${TT_FABRIC_OBJECTS})
+
+target_link_libraries(tt_fabric PRIVATE yaml-cpp::yaml-cpp)
+target_link_libraries(
+    tt_fabric
+    PUBLIC
+        tt_metal
+        umd_device
+        metal_common_libs
+        magic_enum
+        fmt
+)
+
+target_include_directories(
+    tt_fabric
+    PUBLIC
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_options(tt_fabric PUBLIC -Wno-int-to-pointer-cast)
+
+target_precompile_headers(
+    tt_fabric
+    PRIVATE
+        <functional>
+        <map>
+        <memory>
+        <unordered_map>
+        <variant>
+        <vector>
+)
+
+set_target_properties(
+    tt_fabric
+    PROPERTIES
+        INSTALL_RPATH
+            "${PROJECT_BINARY_DIR}/lib"
+        ADDITIONAL_CLEAN_FILES
+            "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
+)
