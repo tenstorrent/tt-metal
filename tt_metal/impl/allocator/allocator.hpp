@@ -32,12 +32,25 @@ struct Allocator;
 namespace allocator {
 
 class BankManager {
-   public:
+public:
     BankManager() {}
 
-    BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr alloc_offset=0, bool disable_interleaved=false);
-    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, DeviceAddr size_bytes, DeviceAddr interleaved_address_limit, uint32_t alignment_bytes, DeviceAddr alloc_offset=0, bool disable_interleaved=false);
-    BankManager&& operator=(BankManager&& that);
+    BankManager(
+        const BufferType &buffer_type,
+        const std::vector<int64_t> &bank_descriptors,
+        DeviceAddr size_bytes,
+        uint32_t alignment_bytes,
+        DeviceAddr alloc_offset = 0,
+        bool disable_interleaved = false);
+    BankManager(
+        const BufferType &buffer_type,
+        const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor,
+        DeviceAddr size_bytes,
+        DeviceAddr interleaved_address_limit,
+        uint32_t alignment_bytes,
+        DeviceAddr alloc_offset = 0,
+        bool disable_interleaved = false);
+    BankManager &&operator=(BankManager &&that);
     ~BankManager();
     uint32_t num_banks() const;
 
@@ -45,7 +58,12 @@ class BankManager {
 
     int64_t bank_offset(uint32_t bank_id) const;
 
-    DeviceAddr allocate_buffer(DeviceAddr size, DeviceAddr page_size, bool bottom_up, const CoreRangeSet &compute_grid, std::optional<uint32_t> num_shards);
+    DeviceAddr allocate_buffer(
+        DeviceAddr size,
+        DeviceAddr page_size,
+        bool bottom_up,
+        const CoreRangeSet &compute_grid,
+        std::optional<uint32_t> num_shards);
 
     void deallocate_buffer(DeviceAddr address);
     void deallocate_all();
@@ -58,17 +76,17 @@ class BankManager {
 
     void dump_blocks(std::ofstream &out) const;
 
-    void shrink_size(DeviceAddr shrink_size, bool bottom_up=true);
+    void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
     void reset_size();
 
-   private:
+private:
     void deallocate_buffer_(DeviceAddr address);
 
     // Types of buffers allocated in the banks
     BufferType buffer_type_;
     std::unordered_set<DeviceAddr> allocated_buffers_;
-    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
-    // Set to 0 for cores/nodes with only 1 bank
+    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
+    // banks using only bank_id Set to 0 for cores/nodes with only 1 bank
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
     std::unique_ptr<Algorithm> allocator_;
     DeviceAddr interleaved_address_limit_;
@@ -106,9 +124,16 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
 
 std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator &allocator, uint32_t bank_id);
 
-DeviceAddr base_alloc(const AllocatorConfig & config, BankManager &bank_manager, DeviceAddr size, DeviceAddr page_size, bool bottom_up, std::optional<uint32_t> num_shards);
+DeviceAddr base_alloc(
+    const AllocatorConfig &config,
+    BankManager &bank_manager,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    bool bottom_up,
+    std::optional<uint32_t> num_shards);
 
-void shrink_allocator_size(Allocator &allocator, const BufferType &buffer_type, DeviceAddr shrink_size, bool bottom_up=true);
+void shrink_allocator_size(
+    Allocator &allocator, const BufferType &buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
 void reset_allocator_size(Allocator &allocator, const BufferType &buffer_type);
 
 DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, Buffer *buffer);

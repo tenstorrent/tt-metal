@@ -29,14 +29,16 @@ public:
         this->num_writes += num_writes;
         this->total_write_size += total_write_size;
     }
+
     void Update(uint32_t transaction_size, uint32_t transaction_count) {
         Update(transaction_size, transaction_size, transaction_count, transaction_count * transaction_size);
     }
+
     void Update(DispatchStats &other) {
         Update(other.max_transaction_size, other.min_transaction_size, other.num_writes, other.total_write_size);
     }
 
-    void Dump(std::ofstream &outfile,  std::map<uint32_t, uint32_t> &raw_data) {
+    void Dump(std::ofstream &outfile, std::map<uint32_t, uint32_t> &raw_data) {
         outfile << fmt::format("\t\tmax_transaction_size = {}\n", max_transaction_size);
         outfile << fmt::format("\t\tmin_transaction_size = {}\n", min_transaction_size);
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
@@ -52,12 +54,11 @@ public:
 // Class to hold dispatch write data for the DataCollector
 class DispatchData {
 public:
-    DispatchData(data_collector_t type): type(type) {}
+    DispatchData(data_collector_t type) : type(type) {}
+
     DispatchData(int type_int) : DispatchData(static_cast<data_collector_t>(type_int)) {}
 
-    void Update(uint32_t transaction_size, RISCV riscv) {
-        data[riscv][transaction_size]++;
-    }
+    void Update(uint32_t transaction_size, RISCV riscv) { data[riscv][transaction_size]++; }
 
     void Merge(const DispatchData &other) {
         for (auto &riscv_and_data : other.data) {
@@ -69,8 +70,9 @@ public:
 
     void DumpStats(std::ofstream &outfile) {
         // Only dump if this has data
-        if (data.size() == 0)
+        if (data.size() == 0) {
             return;
+        }
         outfile << fmt::format("\t{} stats:\n", type);
 
         // Track stats for all RISCS, as well as per RISC
@@ -93,13 +95,14 @@ public:
         }
 
         // For types other than binaries, just print once
-        if (type == DISPATCH_DATA_BINARY)
+        if (type == DISPATCH_DATA_BINARY) {
             outfile << "\t  Overall binaries data:\n";
+        }
         total_stats.Dump(outfile, total_data);
     }
 
 private:
-    std::map<RISCV, std::map<uint32_t, uint32_t>> data; // RISCV -> transaction size -> count
+    std::map<RISCV, std::map<uint32_t, uint32_t>> data;  // RISCV -> transaction size -> count
     data_collector_t type;
 };
 
@@ -113,9 +116,8 @@ public:
         TT_ASSERT(inst == nullptr);
         inst = this;
     };
-    ~DataCollector() {
-        inst = nullptr;
-    };
+
+    ~DataCollector() { inst = nullptr; };
 
     void RecordData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv);
     void RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups);
@@ -124,7 +126,8 @@ public:
 
 private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
-    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
+    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>>
+        program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
 };
 
@@ -176,10 +179,11 @@ string DispatchClassToString(enum dispatch_core_processor_classes proc_class, Co
                     return "";
             }
         case CoreType::ETH:
-            if (proc_class == DISPATCH_CLASS_ETH_DM0)
+            if (proc_class == DISPATCH_CLASS_ETH_DM0) {
                 return "erisc:";
-            else
+            } else {
                 return "";
+            }
         default:
             TT_THROW("Incompatible core type: {}", magic_enum::enum_name(core_type));
     }
@@ -239,7 +243,7 @@ void DataCollector::DumpData() {
     outfile.close();
 }
 
-DataCollector* DataCollector::inst = nullptr;
+DataCollector *DataCollector::inst = nullptr;
 
 void DumpDispatchDataAndClose() {
     DataCollector::inst->DumpData();
@@ -254,14 +258,15 @@ void InitDataCollector() {
     }
 }
 
-} // end anon namespae
+}  // namespace
 
 namespace tt {
 
 void RecordDispatchData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled())
+    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
         return;
+    }
 
     InitDataCollector();
     DataCollector::inst->RecordData(program, type, transaction_size, riscv);
@@ -269,8 +274,9 @@ void RecordDispatchData(Program &program, data_collector_t type, uint32_t transa
 
 void RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled())
+    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
         return;
+    }
 
     InitDataCollector();
     DataCollector::inst->RecordKernelGroups(program, core_type, kernel_groups);
@@ -278,11 +284,12 @@ void RecordKernelGroups(Program &program, CoreType core_type, std::vector<Kernel
 
 void RecordProgramRun(Program &program) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled())
+    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
         return;
+    }
 
     InitDataCollector();
     DataCollector::inst->RecordProgramRun(program);
 }
 
-} // end namepsace tt
+}  // namespace tt

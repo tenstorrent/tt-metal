@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug_tools.hpp"
+
 namespace internal {
 
 using namespace tt::tt_metal;
@@ -13,10 +14,7 @@ static T val(T v) {
     return v;
 }
 
-void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
-
-
-
+void match_device_program_data_with_host_program_data(const char *host_file, const char *device_file) {
     std::ifstream host_dispatch_dump_file;
     std::ifstream device_dispatch_dump_file;
 
@@ -25,15 +23,15 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 
     std::vector<std::pair<string, std::vector<string>>> host_map;
 
-
     string line;
     string type;
 
     while (std::getline(host_dispatch_dump_file, line)) {
-
         if (line.find("*") != string::npos) {
             continue;
-        } else if (line.find("BINARY SPAN") != string::npos or line.find("SEM") != string::npos or line.find("CB") != string::npos) {
+        } else if (
+            line.find("BINARY SPAN") != string::npos or line.find("SEM") != string::npos or
+            line.find("CB") != string::npos) {
             type = line;
         } else {
             std::vector<string> host_data = {line};
@@ -60,10 +58,10 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     device_map.push_back(device_data);
 
     bool all_match = true;
-    for (const auto& [type, host_data] : host_map) {
+    for (const auto &[type, host_data] : host_map) {
         bool match = false;
 
-        for (const std::vector<string>& device_data : device_map) {
+        for (const std::vector<string> &device_data : device_map) {
             if (host_data == device_data) {
                 tt::log_info("Matched on {}", type);
                 match = true;
@@ -86,7 +84,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 }
 
 void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
-    const char* DISPATCH_MAP_DUMP, Device* device) {
+    const char *DISPATCH_MAP_DUMP, Device *device) {
     std::string device_dispatch_dump_file_name = "device_" + std::string(DISPATCH_MAP_DUMP);
     while (true) {
         std::ifstream device_dispatch_dump_file;
@@ -155,7 +153,9 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                 break;
             case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
                 cq_file << fmt::format(
-                    " (count={}, alignment={})", val(cmd->write_packed_large.count), val(cmd->write_packed_large.alignment));
+                    " (count={}, alignment={})",
+                    val(cmd->write_packed_large.count),
+                    val(cmd->write_packed_large.alignment));
                 break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
@@ -177,25 +177,35 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                     val(cmd->debug.size),
                     val(cmd->debug.stride));
                 break;
-            case CQ_DISPATCH_CMD_DELAY: cq_file << fmt::format(" (delay={})", val(cmd->delay.delay)); break;
+            case CQ_DISPATCH_CMD_DELAY:
+                cq_file << fmt::format(" (delay={})", val(cmd->delay.delay));
+                break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
-                cq_file << fmt::format(
-                    " (num_worker_sems={})", val(cmd->set_num_worker_sems.num_worker_sems));
+                cq_file << fmt::format(" (num_worker_sems={})", val(cmd->set_num_worker_sems.num_worker_sems));
                 break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
-                cq_file << fmt::format(
-                    " (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
+                cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_DISPATCH_CMD_ILLEGAL: break;
-            case CQ_DISPATCH_CMD_GO: break;
-            case CQ_DISPATCH_CMD_SINK: break;
-            case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
-            case CQ_DISPATCH_CMD_TERMINATE: break;
-            case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
-            default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
+            case CQ_DISPATCH_CMD_ILLEGAL:
+                break;
+            case CQ_DISPATCH_CMD_GO:
+                break;
+            case CQ_DISPATCH_CMD_SINK:
+                break;
+            case CQ_DISPATCH_CMD_EXEC_BUF_END:
+                break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+                break;
+            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL:
+                break;
+            case CQ_DISPATCH_CMD_TERMINATE:
+                break;
+            case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
+                break;
+            default:
+                TT_THROW("Unrecognized dispatch command: {}", cmd_id);
+                break;
         }
     }
     return stride;
@@ -238,7 +248,9 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             case CQ_PREFETCH_CMD_EXEC_BUF_END:
                 iq_file << fmt::format(
-                    " (length={:#010x}, stride={:#010x})", val(cmd->relay_inline.length), val(cmd->relay_inline.stride));
+                    " (length={:#010x}, stride={:#010x})",
+                    val(cmd->relay_inline.length),
+                    val(cmd->relay_inline.stride));
                 stride = cmd->relay_inline.stride;
                 break;
             case CQ_PREFETCH_CMD_EXEC_BUF:
@@ -259,21 +271,27 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                 stride = cmd->debug.stride;
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_PREFETCH_CMD_ILLEGAL: break;
-            case CQ_PREFETCH_CMD_STALL: break;
-            case CQ_PREFETCH_CMD_TERMINATE: break;
-            default: break;
+            case CQ_PREFETCH_CMD_ILLEGAL:
+                break;
+            case CQ_PREFETCH_CMD_STALL:
+                break;
+            case CQ_PREFETCH_CMD_TERMINATE:
+                break;
+            default:
+                break;
         }
     }
     return stride;
 }
 
 void print_progress_bar(float progress, bool init = false) {
-    if (progress > 1.0)
+    if (progress > 1.0) {
         progress = 1.0;
+    }
     static int prev_bar_position = -1;
-    if (init)
+    if (init) {
         prev_bar_position = -1;
+    }
     int progress_bar_width = 80;
     int bar_position = static_cast<int>(progress * progress_bar_width);
     if (bar_position > prev_bar_position) {
@@ -343,10 +361,12 @@ void dump_completion_queue_entries(
             uint32_t cmd_pages =
                 (stride + dispatch_constants::TRANSFER_PAGE_SIZE - 1) / dispatch_constants::TRANSFER_PAGE_SIZE;
             page_offset += cmd_pages * dispatch_constants::TRANSFER_PAGE_SIZE;
-            if (page_addr == completion_write_ptr)
+            if (page_addr == completion_write_ptr) {
                 cq_file << fmt::format(" << write_ptr (0x{:08x})", completion_write_ptr);
-            if (page_addr == completion_read_ptr)
+            }
+            if (page_addr == completion_read_ptr) {
                 cq_file << fmt::format(" << read_ptr (0x{:08x})", completion_read_ptr);
+            }
             cq_file << std::endl;
 
             // Show which pages have data if present.
@@ -361,8 +381,9 @@ void dump_completion_queue_entries(
         } else {
             // If no valid command, just move on and try the next page
             // cq_file << fmt::format("{:#010x}: No valid dispatch command", page_addr) << std::endl;
-            if (!last_span_invalid)
+            if (!last_span_invalid) {
                 last_span_start = page_addr;
+            }
             last_span_invalid = true;
             page_offset += dispatch_constants::TRANSFER_PAGE_SIZE;
         }
@@ -449,10 +470,12 @@ void dump_issue_queue_entries(
                 iq_file << " (bad stride)";
             }
 
-            if (curr_addr == issue_write_ptr)
+            if (curr_addr == issue_write_ptr) {
                 iq_file << fmt::format(" << write_ptr (0x{:08x})", issue_write_ptr);
-            if (curr_addr == issue_read_ptr)
+            }
+            if (curr_addr == issue_read_ptr) {
                 iq_file << fmt::format(" << read_ptr (0x{:08x})", issue_read_ptr);
+            }
             iq_file << std::endl;
 
             // If it's a RELAY_INLINE command, then the data inside is dispatch commands, show them.
@@ -490,8 +513,9 @@ void dump_issue_queue_entries(
             }
         } else {
             // If not a valid command, just move on and try the next.
-            if (!last_span_invalid)
+            if (!last_span_invalid) {
                 last_span_start = curr_addr;
+            }
             last_span_invalid = true;
             offset += hal.get_alignment(HalMemType::HOST);
         }
@@ -507,10 +531,7 @@ void dump_issue_queue_entries(
 }
 
 // Define a queue type, for when they're interchangeable.
-typedef enum e_cq_queue_t {
-    CQ_COMPLETION_QUEUE = 0,
-    CQ_ISSUE_QUEUE      = 1
-} cq_queue_t;
+typedef enum e_cq_queue_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 } cq_queue_t;
 
 void dump_command_queue_raw_data(
     std::ofstream &out_file,
@@ -586,10 +607,12 @@ void dump_command_queue_raw_data(
                 uint8_t val = read_data[line_offset + idx];
                 out_file << " " << std::setfill('0') << std::setw(2) << +read_data[line_offset + idx];
             }
-            if (line_addr == write_ptr)
+            if (line_addr == write_ptr) {
                 out_file << fmt::format(" << write_ptr (0x{:08x})", write_ptr);
-            if (line_addr == read_ptr)
+            }
+            if (line_addr == read_ptr) {
                 out_file << fmt::format(" << read_ptr (0x{:08x})", read_ptr);
+            }
             out_file << std::endl;
         }
     }

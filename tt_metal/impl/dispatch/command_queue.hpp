@@ -61,21 +61,22 @@ class CommandInterface;
 using WorkerQueue = LockFreeQueue<CommandInterface>;
 
 class Command {
-   public:
+public:
     Command() {}
+
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
 };
 
 class EnqueueReadBufferCommand : public Command {
-   private:
+private:
     SystemMemoryManager& manager;
     void* dst;
     CoreType dispatch_core_type;
 
     virtual void add_prefetch_relay(HugepageDeviceCommand& command) = 0;
 
-   protected:
+protected:
     Device* device;
     uint32_t command_queue_id;
     NOC noc_index;
@@ -84,7 +85,7 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t src_page_index;
     uint32_t pages_to_read;
 
-   public:
+public:
     Buffer& buffer;
     EnqueueReadBufferCommand(
         uint32_t command_queue_id,
@@ -106,10 +107,10 @@ class EnqueueReadBufferCommand : public Command {
 };
 
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
-   private:
+private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
 
-   public:
+public:
     EnqueueReadInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -135,12 +136,12 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
 };
 
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
-   private:
+private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
     const CoreCoord core;
     const uint32_t bank_base_address;
 
-   public:
+public:
     EnqueueReadShardedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -171,15 +172,16 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
 
 class EnqueueWriteShardedBufferCommand;
 class EnqueueWriteInterleavedBufferCommand;
+
 class EnqueueWriteBufferCommand : public Command {
-   private:
+private:
     SystemMemoryManager& manager;
     CoreType dispatch_core_type;
 
     virtual void add_dispatch_write(HugepageDeviceCommand& command) = 0;
     virtual void add_buffer_data(HugepageDeviceCommand& command) = 0;
 
-   protected:
+protected:
     Device* device;
     uint32_t command_queue_id;
     NOC noc_index;
@@ -193,7 +195,7 @@ class EnqueueWriteBufferCommand : public Command {
     uint32_t pages_to_write;
     bool issue_wait;
 
-   public:
+public:
     EnqueueWriteBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -217,11 +219,11 @@ class EnqueueWriteBufferCommand : public Command {
 };
 
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
-   private:
+private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
-   public:
+public:
     EnqueueWriteInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -255,14 +257,14 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
 };
 
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
-   private:
+private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping;
     const CoreCoord core;
 
-   public:
+public:
     EnqueueWriteShardedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -300,7 +302,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
 };
 
 class EnqueueProgramCommand : public Command {
-   private:
+private:
     uint32_t command_queue_id;
     Device* device;
     NOC noc_index;
@@ -317,7 +319,7 @@ class EnqueueProgramCommand : public Command {
     // TODO: There will be multiple ids once programs support spanning multiple sub_devices
     SubDeviceId sub_device_id = SubDeviceId{0};
 
-   public:
+public:
     EnqueueProgramCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -352,7 +354,7 @@ class EnqueueProgramCommand : public Command {
 };
 
 class EnqueueRecordEventCommand : public Command {
-   private:
+private:
     uint32_t command_queue_id;
     Device* device;
     NOC noc_index;
@@ -363,7 +365,7 @@ class EnqueueRecordEventCommand : public Command {
     bool clear_count;
     bool write_barrier;
 
-   public:
+public:
     EnqueueRecordEventCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -383,7 +385,7 @@ class EnqueueRecordEventCommand : public Command {
 };
 
 class EnqueueWaitForEventCommand : public Command {
-   private:
+private:
     uint32_t command_queue_id;
     Device* device;
     SystemMemoryManager& manager;
@@ -391,7 +393,7 @@ class EnqueueWaitForEventCommand : public Command {
     CoreType dispatch_core_type;
     bool clear_count;
 
-   public:
+public:
     EnqueueWaitForEventCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -407,7 +409,7 @@ class EnqueueWaitForEventCommand : public Command {
 };
 
 class EnqueueTraceCommand : public Command {
-   private:
+private:
     uint32_t command_queue_id;
     Buffer& buffer;
     Device* device;
@@ -417,7 +419,8 @@ class EnqueueTraceCommand : public Command {
     bool clear_count;
     NOC noc_index;
     CoreCoord dispatch_core;
-   public:
+
+public:
     EnqueueTraceCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -436,12 +439,12 @@ class EnqueueTraceCommand : public Command {
 };
 
 class EnqueueTerminateCommand : public Command {
-   private:
+private:
     uint32_t command_queue_id;
     Device* device;
     SystemMemoryManager& manager;
 
-   public:
+public:
     EnqueueTerminateCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager);
 
     void process();
@@ -496,6 +499,7 @@ struct ReadEventDescriptor {
     explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
 
     void set_global_offset(uint32_t offset) { global_offset = offset; }
+
     uint32_t get_global_event_id() { return global_offset + event_id; }
 };
 
@@ -511,7 +515,7 @@ struct RuntimeArgsMetadata {
 };
 
 class HWCommandQueue {
-   public:
+public:
     HWCommandQueue(Device* device, uint32_t id, NOC noc_index);
 
     ~HWCommandQueue();
@@ -528,7 +532,7 @@ class HWCommandQueue {
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void reset_worker_state(bool reset_launch_msg_state);
 
-   private:
+private:
     uint32_t id;
     uint32_t size_B;
     std::optional<uint32_t> tid;
@@ -572,13 +576,21 @@ class HWCommandQueue {
     template <typename T>
     void enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
-    void enqueue_read_buffer(std::shared_ptr<Buffer>& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void enqueue_read_buffer(
+        std::shared_ptr<Buffer>& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
     void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
     void enqueue_write_buffer(
-        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
-    void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
+        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+        HostDataType src,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void enqueue_write_buffer(
+        Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
     void enqueue_program(Program& program, bool blocking);
-    void enqueue_record_event(const std::shared_ptr<Event>& event, bool clear_count = false, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_record_event(
+        const std::shared_ptr<Event>& event,
+        bool clear_count = false,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false);
     void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
@@ -590,10 +602,7 @@ class HWCommandQueue {
     void reset_config_buffer_mgr(const uint32_t num_entries);
 
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
-    friend void EnqueueProgramImpl(
-        CommandQueue& cq,
-        Program& program,
-        bool blocking);
+    friend void EnqueueProgramImpl(CommandQueue& cq, Program& program, bool blocking);
     friend void EnqueueReadBufferImpl(
         CommandQueue& cq,
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
@@ -607,7 +616,8 @@ class HWCommandQueue {
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer);
-    friend void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    friend void EnqueueRecordEventImpl(
+        CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event);
     friend void FinishImpl(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend CommandQueue;
@@ -636,7 +646,7 @@ class CommandQueue {
     friend class Device;
     friend class Trace;
 
-   public:
+public:
     enum class CommandQueueMode {
         PASSTHROUGH = 0,
         ASYNC = 1,
@@ -656,6 +666,7 @@ class CommandQueue {
 
     // Getters for private members
     Device* device() const { return this->device_ptr; }
+
     uint32_t id() const { return this->cq_id; }
 
     // Blocking method to wait for all commands to drain from the queue
@@ -668,6 +679,7 @@ class CommandQueue {
 
     // API for setting/getting the mode of the command queue
     void set_mode(const CommandQueueMode& mode);
+
     CommandQueueMode get_mode() const { return this->mode; }
 
     // Reference to the underlying hardware command queue, non-const because side-effects are allowed
@@ -686,10 +698,11 @@ class CommandQueue {
         static int value = parse_env<int>("TT_METAL_CQ_ASYNC_MODE", static_cast<int>(CommandQueueMode::PASSTHROUGH));
         return static_cast<CommandQueue::CommandQueueMode>(value);
     }
+
     // Determine if any CQ is using Async mode
     static bool async_mode_set() { return num_async_cqs > 0; }
 
-   private:
+private:
     // Command queue constructor
     CommandQueue(Device* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
 
@@ -709,7 +722,9 @@ class CommandQueue {
     void run_command_impl(const CommandInterface& command);
 
     bool async_mode() { return this->mode == CommandQueueMode::ASYNC; }
+
     bool trace_mode() { return this->mode == CommandQueueMode::TRACE; }
+
     bool passthrough_mode() { return this->mode == CommandQueueMode::PASSTHROUGH; }
 
     std::atomic<std::size_t> worker_thread_id = -1;

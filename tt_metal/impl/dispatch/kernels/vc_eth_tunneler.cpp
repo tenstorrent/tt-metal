@@ -19,157 +19,146 @@ static_assert(is_power_of_2(in_queue_size_words), "in_queue_size_words must be a
 static_assert(tunnel_lanes <= MAX_TUNNEL_LANES, "cannot have more than 2 tunnel directions.");
 static_assert(tunnel_lanes, "tunnel directions cannot be 0. 1 => Unidirectional. 2 => Bidirectional");
 
-constexpr uint32_t remote_receiver_x[MAX_TUNNEL_LANES] =
-    {
-        (get_compile_time_arg_val(4)  & 0xFF),
-        (get_compile_time_arg_val(5)  & 0xFF),
-        (get_compile_time_arg_val(6)  & 0xFF),
-        (get_compile_time_arg_val(7)  & 0xFF),
-        (get_compile_time_arg_val(8)  & 0xFF),
-        (get_compile_time_arg_val(9)  & 0xFF),
-        (get_compile_time_arg_val(10) & 0xFF),
-        (get_compile_time_arg_val(11) & 0xFF),
-        (get_compile_time_arg_val(12) & 0xFF),
-        (get_compile_time_arg_val(13) & 0xFF)
-    };
+constexpr uint32_t remote_receiver_x[MAX_TUNNEL_LANES] = {
+    (get_compile_time_arg_val(4) & 0xFF),
+    (get_compile_time_arg_val(5) & 0xFF),
+    (get_compile_time_arg_val(6) & 0xFF),
+    (get_compile_time_arg_val(7) & 0xFF),
+    (get_compile_time_arg_val(8) & 0xFF),
+    (get_compile_time_arg_val(9) & 0xFF),
+    (get_compile_time_arg_val(10) & 0xFF),
+    (get_compile_time_arg_val(11) & 0xFF),
+    (get_compile_time_arg_val(12) & 0xFF),
+    (get_compile_time_arg_val(13) & 0xFF)};
 
-constexpr uint32_t remote_receiver_y[MAX_TUNNEL_LANES] =
-    {
-        (get_compile_time_arg_val(4)  >> 8) & 0xFF,
-        (get_compile_time_arg_val(5)  >> 8) & 0xFF,
-        (get_compile_time_arg_val(6)  >> 8) & 0xFF,
-        (get_compile_time_arg_val(7)  >> 8) & 0xFF,
-        (get_compile_time_arg_val(8)  >> 8) & 0xFF,
-        (get_compile_time_arg_val(9)  >> 8) & 0xFF,
-        (get_compile_time_arg_val(10) >> 8) & 0xFF,
-        (get_compile_time_arg_val(11) >> 8) & 0xFF,
-        (get_compile_time_arg_val(12) >> 8) & 0xFF,
-        (get_compile_time_arg_val(13) >> 8) & 0xFF
-    };
+constexpr uint32_t remote_receiver_y[MAX_TUNNEL_LANES] = {
+    (get_compile_time_arg_val(4) >> 8) & 0xFF,
+    (get_compile_time_arg_val(5) >> 8) & 0xFF,
+    (get_compile_time_arg_val(6) >> 8) & 0xFF,
+    (get_compile_time_arg_val(7) >> 8) & 0xFF,
+    (get_compile_time_arg_val(8) >> 8) & 0xFF,
+    (get_compile_time_arg_val(9) >> 8) & 0xFF,
+    (get_compile_time_arg_val(10) >> 8) & 0xFF,
+    (get_compile_time_arg_val(11) >> 8) & 0xFF,
+    (get_compile_time_arg_val(12) >> 8) & 0xFF,
+    (get_compile_time_arg_val(13) >> 8) & 0xFF};
 
-constexpr uint32_t remote_receiver_queue_id[MAX_TUNNEL_LANES] =
-    {
-        (get_compile_time_arg_val(4)  >> 16) & 0xFF,
-        (get_compile_time_arg_val(5)  >> 16) & 0xFF,
-        (get_compile_time_arg_val(6)  >> 16) & 0xFF,
-        (get_compile_time_arg_val(7)  >> 16) & 0xFF,
-        (get_compile_time_arg_val(8)  >> 16) & 0xFF,
-        (get_compile_time_arg_val(9)  >> 16) & 0xFF,
-        (get_compile_time_arg_val(10) >> 16) & 0xFF,
-        (get_compile_time_arg_val(11) >> 16) & 0xFF,
-        (get_compile_time_arg_val(12) >> 16) & 0xFF,
-        (get_compile_time_arg_val(13) >> 16) & 0xFF
-    };
+constexpr uint32_t remote_receiver_queue_id[MAX_TUNNEL_LANES] = {
+    (get_compile_time_arg_val(4) >> 16) & 0xFF,
+    (get_compile_time_arg_val(5) >> 16) & 0xFF,
+    (get_compile_time_arg_val(6) >> 16) & 0xFF,
+    (get_compile_time_arg_val(7) >> 16) & 0xFF,
+    (get_compile_time_arg_val(8) >> 16) & 0xFF,
+    (get_compile_time_arg_val(9) >> 16) & 0xFF,
+    (get_compile_time_arg_val(10) >> 16) & 0xFF,
+    (get_compile_time_arg_val(11) >> 16) & 0xFF,
+    (get_compile_time_arg_val(12) >> 16) & 0xFF,
+    (get_compile_time_arg_val(13) >> 16) & 0xFF};
 
-constexpr DispatchRemoteNetworkType remote_receiver_network_type[MAX_TUNNEL_LANES] =
-    {
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(4)  >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(5)  >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(6)  >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(7)  >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(8)  >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(9)  >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(10) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(11) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(12) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(13) >> 24) & 0xFF)
-    };
+constexpr DispatchRemoteNetworkType remote_receiver_network_type[MAX_TUNNEL_LANES] = {
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(4) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(5) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(6) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(7) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(8) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(9) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(10) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(11) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(12) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(13) >> 24) & 0xFF)};
 
-constexpr uint32_t remote_receiver_queue_start_addr_words[MAX_TUNNEL_LANES] =
-    {
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(18),
-        get_compile_time_arg_val(20),
-        get_compile_time_arg_val(22),
-        get_compile_time_arg_val(24),
-        get_compile_time_arg_val(26),
-        get_compile_time_arg_val(28),
-        get_compile_time_arg_val(30),
-        get_compile_time_arg_val(32)
-    };
+constexpr uint32_t remote_receiver_queue_start_addr_words[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(14),
+    get_compile_time_arg_val(16),
+    get_compile_time_arg_val(18),
+    get_compile_time_arg_val(20),
+    get_compile_time_arg_val(22),
+    get_compile_time_arg_val(24),
+    get_compile_time_arg_val(26),
+    get_compile_time_arg_val(28),
+    get_compile_time_arg_val(30),
+    get_compile_time_arg_val(32)};
 
-constexpr uint32_t remote_receiver_queue_size_words[MAX_TUNNEL_LANES] =
-    {
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(17),
-        get_compile_time_arg_val(19),
-        get_compile_time_arg_val(21),
-        get_compile_time_arg_val(23),
-        get_compile_time_arg_val(25),
-        get_compile_time_arg_val(27),
-        get_compile_time_arg_val(29),
-        get_compile_time_arg_val(31),
-        get_compile_time_arg_val(33)
-    };
+constexpr uint32_t remote_receiver_queue_size_words[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(15),
+    get_compile_time_arg_val(17),
+    get_compile_time_arg_val(19),
+    get_compile_time_arg_val(21),
+    get_compile_time_arg_val(23),
+    get_compile_time_arg_val(25),
+    get_compile_time_arg_val(27),
+    get_compile_time_arg_val(29),
+    get_compile_time_arg_val(31),
+    get_compile_time_arg_val(33)};
 
-static_assert(is_power_of_2(remote_receiver_queue_size_words[0]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[1]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[2]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[3]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[4]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[5]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[6]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[7]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[8]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[9]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[0]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[1]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[2]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[3]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[4]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[5]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[6]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[7]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[8]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(
+    is_power_of_2(remote_receiver_queue_size_words[9]), "remote_receiver_queue_size_words must be a power of 2");
 
-constexpr uint32_t remote_sender_x[MAX_TUNNEL_LANES] =
-    {
-        (get_compile_time_arg_val(34) & 0xFF),
-        (get_compile_time_arg_val(35) & 0xFF),
-        (get_compile_time_arg_val(36) & 0xFF),
-        (get_compile_time_arg_val(37) & 0xFF),
-        (get_compile_time_arg_val(38) & 0xFF),
-        (get_compile_time_arg_val(39) & 0xFF),
-        (get_compile_time_arg_val(40) & 0xFF),
-        (get_compile_time_arg_val(41) & 0xFF),
-        (get_compile_time_arg_val(42) & 0xFF),
-        (get_compile_time_arg_val(43) & 0xFF)
-    };
+constexpr uint32_t remote_sender_x[MAX_TUNNEL_LANES] = {
+    (get_compile_time_arg_val(34) & 0xFF),
+    (get_compile_time_arg_val(35) & 0xFF),
+    (get_compile_time_arg_val(36) & 0xFF),
+    (get_compile_time_arg_val(37) & 0xFF),
+    (get_compile_time_arg_val(38) & 0xFF),
+    (get_compile_time_arg_val(39) & 0xFF),
+    (get_compile_time_arg_val(40) & 0xFF),
+    (get_compile_time_arg_val(41) & 0xFF),
+    (get_compile_time_arg_val(42) & 0xFF),
+    (get_compile_time_arg_val(43) & 0xFF)};
 
-constexpr uint32_t remote_sender_y[MAX_TUNNEL_LANES] =
-    {
-        (get_compile_time_arg_val(34) >> 8) & 0xFF,
-        (get_compile_time_arg_val(35) >> 8) & 0xFF,
-        (get_compile_time_arg_val(36) >> 8) & 0xFF,
-        (get_compile_time_arg_val(37) >> 8) & 0xFF,
-        (get_compile_time_arg_val(38) >> 8) & 0xFF,
-        (get_compile_time_arg_val(39) >> 8) & 0xFF,
-        (get_compile_time_arg_val(40) >> 8) & 0xFF,
-        (get_compile_time_arg_val(41) >> 8) & 0xFF,
-        (get_compile_time_arg_val(42) >> 8) & 0xFF,
-        (get_compile_time_arg_val(43) >> 8) & 0xFF
-    };
+constexpr uint32_t remote_sender_y[MAX_TUNNEL_LANES] = {
+    (get_compile_time_arg_val(34) >> 8) & 0xFF,
+    (get_compile_time_arg_val(35) >> 8) & 0xFF,
+    (get_compile_time_arg_val(36) >> 8) & 0xFF,
+    (get_compile_time_arg_val(37) >> 8) & 0xFF,
+    (get_compile_time_arg_val(38) >> 8) & 0xFF,
+    (get_compile_time_arg_val(39) >> 8) & 0xFF,
+    (get_compile_time_arg_val(40) >> 8) & 0xFF,
+    (get_compile_time_arg_val(41) >> 8) & 0xFF,
+    (get_compile_time_arg_val(42) >> 8) & 0xFF,
+    (get_compile_time_arg_val(43) >> 8) & 0xFF};
 
-constexpr uint32_t remote_sender_queue_id[MAX_TUNNEL_LANES] =
-    {
-        (get_compile_time_arg_val(34) >> 16) & 0xFF,
-        (get_compile_time_arg_val(35) >> 16) & 0xFF,
-        (get_compile_time_arg_val(36) >> 16) & 0xFF,
-        (get_compile_time_arg_val(37) >> 16) & 0xFF,
-        (get_compile_time_arg_val(38) >> 16) & 0xFF,
-        (get_compile_time_arg_val(39) >> 16) & 0xFF,
-        (get_compile_time_arg_val(40) >> 16) & 0xFF,
-        (get_compile_time_arg_val(41) >> 16) & 0xFF,
-        (get_compile_time_arg_val(42) >> 16) & 0xFF,
-        (get_compile_time_arg_val(43) >> 16) & 0xFF
-    };
+constexpr uint32_t remote_sender_queue_id[MAX_TUNNEL_LANES] = {
+    (get_compile_time_arg_val(34) >> 16) & 0xFF,
+    (get_compile_time_arg_val(35) >> 16) & 0xFF,
+    (get_compile_time_arg_val(36) >> 16) & 0xFF,
+    (get_compile_time_arg_val(37) >> 16) & 0xFF,
+    (get_compile_time_arg_val(38) >> 16) & 0xFF,
+    (get_compile_time_arg_val(39) >> 16) & 0xFF,
+    (get_compile_time_arg_val(40) >> 16) & 0xFF,
+    (get_compile_time_arg_val(41) >> 16) & 0xFF,
+    (get_compile_time_arg_val(42) >> 16) & 0xFF,
+    (get_compile_time_arg_val(43) >> 16) & 0xFF};
 
-constexpr DispatchRemoteNetworkType remote_sender_network_type[MAX_TUNNEL_LANES] =
-    {
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(34) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(35) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(36) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(37) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(38) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(39) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(40) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(41) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(42) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(43) >> 24) & 0xFF)
-    };
-
+constexpr DispatchRemoteNetworkType remote_sender_network_type[MAX_TUNNEL_LANES] = {
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(34) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(35) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(36) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(37) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(38) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(39) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(40) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(41) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(42) >> 24) & 0xFF),
+    static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(43) >> 24) & 0xFF)};
 
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(44);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(45);
@@ -181,6 +170,7 @@ constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
 #define SWITCH_THRESHOLD 16
+
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -204,7 +194,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < tunnel_lanes; i++) {
         output_queues[i].init(
-            i + tunnel_lanes, //MAX_TUNNEL_LANES,
+            i + tunnel_lanes,  // MAX_TUNNEL_LANES,
             remote_receiver_queue_start_addr_words[i],
             remote_receiver_queue_size_words[i],
             remote_receiver_x[i],
@@ -258,7 +248,7 @@ void kernel_main() {
             }
         }
         uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-        tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
+        tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
         if (launch_msg->kernel_config.exit_erisc_kernel) {
             return;
         }
@@ -268,7 +258,6 @@ void kernel_main() {
             internal_::risc_context_switch();
             switch_counter = SWITCH_THRESHOLD;
         }
-
     }
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
