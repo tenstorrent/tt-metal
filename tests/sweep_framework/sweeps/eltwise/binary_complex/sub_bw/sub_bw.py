@@ -128,6 +128,7 @@ def run(
 
     passed = []
     output_string = ""
+
     for i in range(len(torch_output_tensors)):
         torch_output_tensor = torch_output_tensors[i]
         output_tensor = torch.complex(
