@@ -945,7 +945,7 @@ Result conv2d(
                     input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
             }
         } else {
-            input_tensor_post_tm = ttnn::halo(
+            Tensor halo_output = ttnn::halo(
                 DefaultQueueId,
                 input_tensor_post_tm,
                 sliding_window_config,
@@ -956,11 +956,16 @@ Result conv2d(
                 input_tensor_post_tm.memory_config(),
                 !use_non_tile_height);
 
-            if (conv_config.reallocate_halo_output) {
-                auto move_output = ttnn::operations::core::reallocate(input_tensor_post_tm, input_tensor_post_tm.memory_config());
+            if (conv_config.deallocate_activation) {
                 ttnn::operations::core::deallocate(input_tensor_post_tm);
-                input_tensor_post_tm = move_output;
             }
+
+            if (conv_config.reallocate_halo_output) {
+                auto move_output = ttnn::operations::core::reallocate(halo_output, input_tensor_post_tm.memory_config());
+                ttnn::operations::core::deallocate(halo_output);
+                halo_output = move_output;
+            }
+            input_tensor_post_tm = halo_output;
         }
 
         // call conv micro op
