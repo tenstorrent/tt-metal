@@ -840,15 +840,15 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> tra
     }
 }
 
-Tensor allocate_tensor_on_devices(
+Tensor allocate_tensor_on_workers(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    const std::vector<Device*>& devices,
+    const std::vector<Device*>& workers,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
-    Tensor device_tensor = Tensor(devices);
+    Tensor device_tensor = Tensor(workers);
     TensorSpec tensor_spec(
         shape.logical_shape(),
         TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape));
@@ -857,8 +857,8 @@ Tensor allocate_tensor_on_devices(
     // 1. device_tensor is copied in the lambda by the main thread, which increments the ref count.
     // 2. The destruction happens in a worker thread, which doesn't decrement the ref count.
     const uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    const auto& workers = device_tensor.get_workers();
-    uint32_t num_workers = workers.size();
+    const auto& workers_in_use = device_tensor.get_workers();
+    uint32_t num_workers = workers_in_use.size();
 
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
         auto& worker = workers[worker_index];
@@ -872,7 +872,7 @@ Tensor allocate_tensor_on_devices(
             }
         });
     }
-    device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
+    device_tensor.tensor_attributes->update_main_thread_ref_count(workers_in_use.at(0), device_tensor_ref_count);
     return device_tensor;
 }
 

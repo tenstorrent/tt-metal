@@ -75,6 +75,7 @@ struct Tensor {
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
+
     // Tensor gets worker queue handle through the device
     std::vector<Device*> workers = {};
     bool deallocate_through_destructor = false;
@@ -365,11 +366,11 @@ void memcpy(
 void memcpy(Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
-Tensor allocate_tensor_on_devices(
+Tensor allocate_tensor_on_workers(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    const std::vector<Device*>& devices,
+    const std::vector<Device*>& workers,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);

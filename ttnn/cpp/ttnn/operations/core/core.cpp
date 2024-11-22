@@ -85,7 +85,7 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     Device* device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_devices(
+    return tt::tt_metal::allocate_tensor_on_workers(
         shape, data_type, layout, {device}, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
@@ -95,7 +95,7 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_devices(
+    return tt::tt_metal::allocate_tensor_on_workers(
         shape, data_type, layout, mesh_device->get_devices(), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
