@@ -60,6 +60,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Input to eltwise binary must be tilized"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "bfloat8_b is only supported on tiled layout"
+
     if not tensor_hw_as_shard_shape:
         if sharding_strategy == ttnn.ShardStrategy.BLOCK:
             if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
@@ -115,11 +120,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     else:
         if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
             True, "Shard dimensions must be divisible by 32"
-
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Input to eltwise binary must be tilized"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
 
     return False, None
 
