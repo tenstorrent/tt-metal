@@ -222,11 +222,9 @@ def test_rsqrt_example(device):
     input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.rsqrt)
     golden_tensor = golden_function(input)
-    print(golden_tensor)
     x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.rsqrt(x1_tt, fast_and_approximate_mode=True)
     tt_out = ttnn.to_torch(y_tt)
-    print(tt_out)
     status = torch.allclose(golden_tensor, tt_out)
     assert status
 
