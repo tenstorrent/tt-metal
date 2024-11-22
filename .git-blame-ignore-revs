@@ -1,2 +1,4 @@
 # CMake formatting
 0be480e4450b902174f8c1f03559a8fc6eebb827
+# clang-format tt_metal/impl
+45035b33874cdfbb1d5fff7e0230dd42e925e7fb
