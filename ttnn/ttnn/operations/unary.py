@@ -66,7 +66,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
             # Unaries with float parameter
-            # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
             # Other unaries (composite operations)
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
@@ -148,7 +147,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.gelu,
     ttnn.rsqrt,
     # Unaries with float parameter
-    # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
     ttnn.log_sigmoid,
     ttnn.softplus,
@@ -719,9 +717,6 @@ ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwargs):
     import torch
-
-    if round_mode == "None":
-        round_mode = None
 
     return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=round_mode)
 

@@ -37,9 +37,9 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
         host_data[i] = 1;
     }
 
-    tt::tt_metal::TensorLayout tensor_layout(dtype, PageConfig(Layout::TILE), mem_cfg);
-    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, input_shape, tensor_layout);
+    TensorSpec tensor_spec(input_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem_cfg));
+    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
@@ -121,9 +121,9 @@ INSTANTIATE_TEST_SUITE_P(
     EmptyTensorTest,
     ::testing::Combine(
         ::testing::Values(
-            //ttnn::Shape({}),
-            //ttnn::Shape({0}),
-            //ttnn::Shape({1}),
+            ttnn::Shape({}),
+            ttnn::Shape({0}),
+            ttnn::Shape({1}),
             ttnn::Shape({1, 2}),
             ttnn::Shape({1, 2, 3}),
             ttnn::Shape({1, 2, 3, 4}),

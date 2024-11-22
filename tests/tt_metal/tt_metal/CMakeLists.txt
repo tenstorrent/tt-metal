@@ -47,7 +47,6 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     target_include_directories(
         ${TEST}
         PRIVATE
-            ${UMD_HOME}
             ${PROJECT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/tt_metal
             ${PROJECT_SOURCE_DIR}/tt_metal/common

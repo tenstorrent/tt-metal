@@ -4,15 +4,16 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
+#include "tt_metal/buffer.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/types.hpp"
 
 #include <algorithm>
 #include <mutex>
-#include <string>
 #include <utility>
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
@@ -56,9 +57,6 @@ void validate_buffer_size_and_page_size(
         "should be divisible by buffer size",
         page_size,
         size);
-    TT_FATAL(
-        page_size % sizeof(uint32_t) == 0,
-        "Page size {} must be divisible by sizeof(uint32_t) because buffers hold uint32_t values", page_size);
 
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
@@ -515,6 +513,22 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 DeviceAddr ShardSpecBuffer::size() const {
     auto shape_in_pages_ = this->shape_in_pages();
     return shape_in_pages_[0] * shape_in_pages_[1];
+}
+
+v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
+
+void v1::DeallocateBuffer(BufferHandle buffer) { v0::DeallocateBuffer(*buffer); }
+
+void v1::WriteToBuffer(BufferHandle buffer, stl::Span<const std::byte> host_buffer) {
+    detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});
+}
+
+void v1::ReadFromBuffer(BufferHandle buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
+    detail::ReadFromBuffer(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), shard_order);
+}
+
+void v1::ReadFromShard(BufferHandle buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
+    detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), core_id);
 }
 
 }  // namespace tt_metal

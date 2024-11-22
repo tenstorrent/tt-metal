@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, is_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -25,6 +25,7 @@ def transpose(
     input_dtype=ttnn.bfloat16,
     expected_program_cache_size=None,
 ):
+    torch.manual_seed(2005)
     output_shape = list(input_shape)
     output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
 
@@ -124,9 +125,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     H = 32
     W = 32
     input_shape = (N, C, H, W)
-    # CACHE MISS since its single core
-    # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=4, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=3, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -155,8 +154,8 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32),
-    ids=["bfloat16", "float"],
+    (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b),
+    ids=["bfloat16", "float", "bfloat8_b"],
 )
 def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     if is_grayskull() and dtype == ttnn.float32:
@@ -187,6 +186,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=3, input_dtype=dtype)
 
 
+@skip_for_blackhole("GH #15234")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat8_b, ttnn.float32),
@@ -306,6 +306,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
 @pytest.mark.parametrize("h", [230])
 @pytest.mark.parametrize("w", [256])
 def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
     activation_pyt_padded = ttnn.from_torch(
@@ -339,6 +340,7 @@ def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
 @pytest.mark.parametrize("h", [8])
 @pytest.mark.parametrize("w", [256])
 def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
     activation_pyt_padded = ttnn.from_torch(
@@ -356,6 +358,7 @@ def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
 
 
 def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
     activation_pyt_padded = ttnn.from_torch(
@@ -400,6 +403,7 @@ def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache
 @pytest.mark.parametrize("h", [16])
 @pytest.mark.parametrize("w", [112])
 def test_tranpose_hw_sharded_rm(device, n, c, h, w):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
     tt_input_tensor = ttnn.from_torch(
@@ -435,6 +439,7 @@ def test_tranpose_hw_sharded_rm(device, n, c, h, w):
 
 
 def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
     tt_input_tensor = ttnn.from_torch(
@@ -490,6 +495,7 @@ def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_progr
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
 def test_tranpose_hc_rm(device, n, c, h, w):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(1, 2)
     activation_pyt_padded = ttnn.from_torch(
@@ -508,6 +514,7 @@ def test_tranpose_hc_rm(device, n, c, h, w):
 
 
 def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(1, 2)
     activation_pyt_padded = ttnn.from_torch(
@@ -545,6 +552,7 @@ def test_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache
 
 
 def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
+    torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(1, 2)
     tt_input_tensor = ttnn.from_torch(
@@ -613,9 +621,12 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
         ((32, 32, 32, 32), (1, 2)),
         ((32, 32, 32, 32), (0, 3)),
         ((32, 32, 32, 32), (1, 3)),
+        ((32, 32, 32, 32), (2, 3)),
+        ((32, 32, 32, 32), (0, 1)),
     ],
 )
 def test_transpose_bfloat8_b(device, shape, swap_dims):
+    torch.manual_seed(2005)
     input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = input.transpose(*swap_dims)
 
@@ -658,6 +669,7 @@ def test_transpose_hc(dtype, shape, device):
     [ttnn.TILE_LAYOUT],
 )
 def test_transpose_2D(dtype, shape, layout, device):
+    torch.manual_seed(2005)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
     if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[-2] % 2):
@@ -690,6 +702,7 @@ def test_transpose_2D(dtype, shape, layout, device):
     [[0, 1], [0, 2], [2, 1], [-3, -2], [-3, -1], [-2, -1]],
 )
 def test_transpose_3D(dtype, shape, layout, dims, device):
+    torch.manual_seed(2005)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
     if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[dims[-1]] % 2):
@@ -709,6 +722,7 @@ def test_transpose_3D(dtype, shape, layout, dims, device):
     [[4, 3, 1280, 40], [1, 4096, 4096]],
 )
 def test_transpose_4d_wh_rm(shape, device):
+    torch.manual_seed(2005)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(-1, -2)
 
@@ -723,6 +737,7 @@ def test_transpose_4d_wh_rm(shape, device):
     [[4, 3, 1280, 40], [1, 1, 1200, 1280], [1, 1, 4096, 4096]],
 )
 def test_transpose_4d_wh_tile(shape, device):
+    torch.manual_seed(2005)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(-1, -2)
 
@@ -743,6 +758,7 @@ def test_transpose_4d_wh_tile(shape, device):
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 def test_transpose_failures(config, memory_config, device):
     pytest.skip("Failures to fix after #13217 and #13005 are in - 5D, HC PCC issue and unaligned RM tensor")
+    torch.manual_seed(2005)
     torch_input = torch.randn(config[0], dtype=torch.bfloat16)
     torch_output = torch_input.transpose(config[1][0], config[1][1])
 
@@ -788,6 +804,7 @@ def test_transpose_failures(config, memory_config, device):
 )
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 def test_transpose_unaligned(config, memory_config, device):
+    torch.manual_seed(2005)
     # this will convert to tiled for now
     torch_input = torch.randn(config[0], dtype=torch.bfloat16)
     torch_output = torch_input.transpose(config[1][0], config[1][1])
@@ -828,10 +845,101 @@ def test_transpose_hc_padded_c(shape, device):
     [ttnn.ROW_MAJOR_LAYOUT],
 )
 def test_transpose_5d(shape, dims, layout, device):
+    torch.manual_seed(2005)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(dims[0], dims[1])
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 5, 10, 15],
+        [1, 1, 1, 2],
+        [1, 3, 2, 1],
+        [1, 17, 1, 1],
+        [1, 1, 16, 1],
+        [1, 1, 17, 1],
+        [1, 1, 1, 17],
+        [2, 1, 1, 1],
+        [2, 33, 33, 33],
+    ],
+)
+@pytest.mark.parametrize(
+    "dims",
+    [
+        (1, 2),
+        (0, 2),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.float32, ttnn.bfloat16],
+)
+def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
+    torch.manual_seed(2005)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(dims[0], dims[1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 17, 1, 1],
+        [1, 1, 16, 1],
+        [1, 1, 17, 1],
+        [1, 1, 1, 17],
+        [2, 1, 1, 1],
+        [2, 33, 33, 33],
+    ],
+)
+@pytest.mark.parametrize(
+    "dims",
+    [
+        (1, 2),
+        (0, 2),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.float32, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "pad_value",
+    [None, float("-inf")],
+)
+def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
+    torch.manual_seed(2005)
+    if pad_value is not None and is_blackhole():
+        pytest.skip("Blackhole reduce is needed for the full test to work")
+    elif dtype == ttnn.float32 and is_grayskull():
+        pytest.skip("Grayskull does not support float32")
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(dims[0], dims[1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, dims[0], dims[1], pad_value=pad_value)
+    if pad_value is not None:
+        a = ttnn.min(
+            tt_output
+        )  # if min becomes padding aware, this will fail, so feel free to delete this test then @future op writer
+        assert ttnn.to_torch(a) == float("-inf")
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)

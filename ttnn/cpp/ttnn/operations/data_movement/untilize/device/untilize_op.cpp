@@ -109,7 +109,10 @@ operation::ProgramWithCallbacks Untilize::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (this->use_multicore) {
+    auto device_is_blackhole = input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE;
+    auto in_or_out_sharded = input_tensor_a.memory_config().is_sharded() || output_tensor.memory_config().is_sharded();
+    // FIXME: Remove this restriction once multicore untilize is supported on blackhole
+    if (this->use_multicore && (in_or_out_sharded || !device_is_blackhole)) {
         return detail::untilize_multi_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     } else {
         return detail::untilize_single_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);

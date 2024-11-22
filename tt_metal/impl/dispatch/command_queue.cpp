@@ -16,8 +16,10 @@
 #include "allocator/allocator.hpp"
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
+#include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
+#include "tt_metal/command_queue.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -571,20 +573,53 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
     program_command_sequence.runtime_args_command_sequences = {};
 
     uint32_t command_count = 0;
+    // Unique RTAs
     for (uint32_t programmable_core_type_index = 0;
          programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
-        uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
+        if (hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::IDLE_ETH) {
+            // Fast dispatch not supported on IDLE_ETH yet
+            // TODO: can't just loop here as code below confuses ACTIVE/IDLE
+            continue;
+        }
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
             if (kg.total_rta_size != 0) {
-                // Reserve 2x for unique rtas as we pontentially split the cmds due to not fitting in one prefetch cmd
-                command_count += 2;
+                uint32_t num_sub_cmds = kg.core_ranges.num_cores();
+                uint32_t max_runtime_args_len = kg.total_rta_size / sizeof(uint32_t);
+                uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<decltype(unique_sub_cmds)::value_type>(
+                    max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
+                command_count += div_up(num_sub_cmds, max_packed_cmds);
             }
         }
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            uint32_t common_size = program.get_program_config(programmable_core_type_index).crta_sizes[dispatch_class];
-            if (common_size != 0) {
-                command_count++;
+    }
+    // Common RTAs
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+        auto kernel = detail::GetKernel(program, kernel_id);
+        auto programmable_core_type = kernel->get_kernel_programmable_core_type();
+        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // Fast dispatch not supported on IDLE_ETH yet
+            // TODO: can't just loop here as code below confuses ACTIVE/IDLE
+            continue;
+        }
+        uint32_t programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
+        uint32_t common_size = program.get_program_config(programmable_core_type_index)
+                                   .crta_sizes[kernel->dispatch_class()];
+        if (common_size != 0) {
+            uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
+            const auto& common_rt_args = kernel->common_runtime_args();
+            if (common_rt_args.size() > 0) {
+                CoreType core_type = hal.get_core_type(programmable_core_type_index);
+                if (core_type == CoreType::ETH) {
+                    uint32_t num_sub_cmds = kernel->logical_cores().size();
+                    uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
+                        max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, true);
+                    command_count += div_up(num_sub_cmds, max_packed_cmds);
+                } else {
+                    uint32_t num_sub_cmds = kernel->logical_coreranges().size();
+                    uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<CQDispatchWritePackedMulticastSubCmd>(
+                        max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, true);
+                    command_count += div_up(num_sub_cmds, max_packed_cmds);
+                }
             }
         }
     }
@@ -659,6 +694,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
 
         for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
+            if (common_size == 0) {
+                continue;
+            }
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                 auto kernel = detail::GetKernel(program, kernel_id);
                 if (kernel->get_kernel_core_type() != core_type) {
@@ -710,29 +748,27 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                 }
             }
 
-            if (common_size != 0) {
-                uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+            uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
 
-                // Common rtas are always expected to fit in one prefetch cmd
-                // TODO: use a linear write instead of a packed-write
-                std::visit(
-                    [&](auto&& sub_cmds) {
-                        generate_runtime_args_cmds(
-                            program_command_sequence.runtime_args_command_sequences,
-                            crta_offset,
-                            sub_cmds,
-                            common_rt_data_and_sizes,
-                            common_size / sizeof(uint32_t),
-                            common_rt_args_data,
-                            max_prefetch_command_size,
-                            packed_write_max_unicast_sub_cmds,
-                            true,
-                            core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
-                                                          : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
-                        sub_cmds.clear();
-                    },
-                    common_sub_cmds);
-            }
+            // Common rtas are always expected to fit in one prefetch cmd
+            // TODO: use a linear write instead of a packed-write
+            std::visit(
+                [&](auto&& sub_cmds) {
+                    generate_runtime_args_cmds(
+                        program_command_sequence.runtime_args_command_sequences,
+                        crta_offset,
+                        sub_cmds,
+                        common_rt_data_and_sizes,
+                        common_size / sizeof(uint32_t),
+                        common_rt_args_data,
+                        max_prefetch_command_size,
+                        packed_write_max_unicast_sub_cmds,
+                        true,
+                        core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
+                                                        : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                    sub_cmds.clear();
+                },
+                common_sub_cmds);
 
             for (auto& data_per_kernel : common_rt_data_and_sizes) {
                 for (auto& data_and_sizes : data_per_kernel) {
@@ -743,6 +779,11 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
             common_rt_args_data.clear();
         }
     }
+    TT_ASSERT(
+        command_count >= program_command_sequence.runtime_args_command_sequences.size(),
+        "Incorrect number of commands reserved {}, final size {}. Vector reallocation causes cached addresses to be incorrect.",
+        command_count,
+        program_command_sequence.runtime_args_command_sequences.size());
 
     uint32_t runtime_args_fetch_size_bytes = 0;
     for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
@@ -1930,17 +1971,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
 
     for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
         this->expected_num_workers_completed[i] = 0;
-        for (uint32_t index = 0; index < tt::tt_metal::hal.get_programmable_core_type_count(); index++) {
-            this->config_buffer_mgr[i].init_add_buffer(
-                tt::tt_metal::hal.get_dev_addr(
-                    tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-                tt::tt_metal::hal.get_dev_size(
-                    tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
-        }
-        // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the previous
-        // launch message.
-        this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
     }
+    reset_config_buffer_mgr(dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
 }
 
 void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
@@ -2992,9 +3024,10 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
                 tt::tt_metal::hal.get_dev_size(
                     tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
         }
-        // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the previous
-        // launch message.
-        this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
+        // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
+        // previous launch message.
+        // TODO(jbauman): Give correct number once async bug is fixed.
+        this->config_buffer_mgr[i].init_add_buffer(0, 1);
     }
 }
 
@@ -3067,37 +3100,6 @@ void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer
 
 inline namespace v0 {
 
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::vector<uint32_t>& dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    // TODO(agrebenisan): Move to deprecated
-    ZoneScoped;
-    tt_metal::detail::DispatchStateCheck(true);
-    Buffer& b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer)
-                    ? *(std::get<std::shared_ptr<Buffer>>(buffer))
-                    : std::get<std::reference_wrapper<Buffer>>(buffer).get();
-    // Only resizing here to keep with the original implementation. Notice how in the void*
-    // version of this API, I assume the user mallocs themselves
-    std::visit(
-        [&dst](auto&& b) {
-            using T = std::decay_t<decltype(b)>;
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
-                dst.resize(b.get().page_size() * b.get().num_pages() / sizeof(uint32_t));
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                dst.resize(b->page_size() * b->num_pages() / sizeof(uint32_t));
-            } else {
-                TT_THROW("Invalid buffer type");
-            }
-        },
-        buffer);
-
-    // TODO(agrebenisan): Move to deprecated
-    EnqueueReadBuffer(cq, buffer, dst.data(), blocking, sub_device_ids);
-}
-
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
@@ -3127,7 +3129,7 @@ void EnqueueWriteBuffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = src, .sub_device_ids = sub_device_ids});
+        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = std::move(src), .sub_device_ids = sub_device_ids});
 }
 
 void EnqueueProgram(
@@ -3480,6 +3482,40 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         default: TT_THROW("Invalid command type");
     }
     log_trace(LogDispatch, "{} running {} complete", this->name(), command.type);
+}
+
+v1::CommandQueueHandle v1::GetCommandQueue(DeviceHandle device, std::uint8_t cq_id) {
+    return v1::CommandQueueHandle{device, cq_id};
+}
+
+v1::CommandQueueHandle v1::GetDefaultCommandQueue(DeviceHandle device) { return GetCommandQueue(device, 0); }
+
+void v1::EnqueueReadBuffer(CommandQueueHandle cq, BufferHandle buffer, std::byte *dst, bool blocking) {
+    v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
+}
+
+void v1::EnqueueWriteBuffer(CommandQueueHandle cq, BufferHandle buffer, const std::byte *src, bool blocking) {
+    v0::EnqueueWriteBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, src, blocking);
+}
+
+void v1::EnqueueProgram(CommandQueueHandle cq, ProgramHandle &program, bool blocking) {
+    v0::EnqueueProgram(GetDevice(cq)->command_queue(GetId(cq)), program, blocking);
+}
+
+void v1::Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    v0::Finish(GetDevice(cq)->command_queue(GetId(cq)));
+}
+
+void v1::SetLazyCommandQueueMode(bool lazy) {
+    detail::SetLazyCommandQueueMode(lazy);
+}
+
+v1::DeviceHandle v1::GetDevice(CommandQueueHandle cq) {
+    return cq.device;
+}
+
+std::uint8_t v1::GetId(CommandQueueHandle cq) {
+    return cq.id;
 }
 
 }  // namespace tt::tt_metal

@@ -896,7 +896,7 @@ def test_unary_celu(input_shapes, param, device):
     "param",
     {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
 )
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 def test_unary_rdiv(input_shapes, param, round_mode, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
