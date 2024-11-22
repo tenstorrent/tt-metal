@@ -128,16 +128,8 @@ void Cluster::generate_cluster_descriptor() {
 
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
-        // Cannot use tt::umd::Cluster::detect_available_device_ids because that returns physical device IDs
-        std::vector<chip_id_t> physical_mmio_device_ids;
-        std::set<chip_id_t> logical_mmio_device_ids;
-        physical_mmio_device_ids = tt_SimulationDevice::detect_available_device_ids();
-        for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size();
-             logical_mmio_device_id++) {
-            logical_mmio_device_ids.insert(logical_mmio_device_id);
-        }
-        this->cluster_desc_ =
-            tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids, physical_mmio_device_ids);
+        // Passing simulator reported physical devices as logical devices.
+        this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
