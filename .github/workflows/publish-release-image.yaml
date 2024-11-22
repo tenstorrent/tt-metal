@@ -35,7 +35,7 @@ jobs:
       - name: Get the name of the wheel and set up env variables
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.arch }}
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
@@ -53,12 +53,12 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
+          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.arch }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
             pytest tests/end_to_end_tests
       - name: Tag latest if this is a major version release
-        if: ${{ is_major_version }}
+        if: ${{ inputs.is_major_version }}
         run: |
           docker pull $TAG_NAME
           docker tag $TAG_NAME $REPO_IMAGE_NAME:latest
