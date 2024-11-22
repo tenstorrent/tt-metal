@@ -14,7 +14,7 @@ using tokenizers::Tokenizer;
 
 namespace {
 
-std::string getTestDataDir() {
+std::string get_test_data_dir() {
     const char* env_var = std::getenv("TEST_DATA_DIR");
     return (env_var) ? std::string(env_var) : std::string(TEST_DATA_DIR);
 }
@@ -57,7 +57,7 @@ void test_tokenizer(std::unique_ptr<Tokenizer> tok, bool check_id_back = true) {
 }  // namespace
 
 TEST(HuggingFaceTokenizer, ExampleUsage) {
-    auto blob = load_bytes_from_file(getTestDataDir() + "/tokenizer.json");
+    auto blob = load_bytes_from_file(get_test_data_dir() + "/tokenizer.json");
     auto tok = Tokenizer::FromBlobJSON(blob);
     test_tokenizer(std::move(tok), true);
 }

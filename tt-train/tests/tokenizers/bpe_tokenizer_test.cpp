@@ -13,15 +13,15 @@
 using namespace ttml::tokenizers;
 
 namespace {
-std::string getTestDataDir() {
+std::string get_test_data_dir() {
     const char* envVar = std::getenv("TEST_DATA_DIR");
     return (envVar) ? std::string(envVar) : std::string(TEST_DATA_DIR);
 }
-}
+}  // namespace
 
 class BPETokenizerTest : public ::testing::Test {
 protected:
-    BPETokenizer tokenizer = BPETokenizer(getTestDataDir() + "/tokenizer.json");
+    BPETokenizer tokenizer = BPETokenizer(get_test_data_dir() + "/tokenizer.json");
 };
 
 TEST_F(BPETokenizerTest, EncodeAndDecode) {
