@@ -134,31 +134,38 @@ Tensor ExecuteMaximum::invoke(const Tensor& input_a, float value, const std::opt
 Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(input_a);
     {
-        Tensor atan_input = ttnn::multiply(
-            ttnn::abs(input_b, output_mem_config),
-            ttnn::reciprocal(ttnn::abs(input_a, output_mem_config), output_mem_config),
+        Tensor atan_input = ttnn::multiply(input_b,
+            ttnn::reciprocal(input_a, output_mem_config),
             std::nullopt,
             output_mem_config);
         result = ttnn::atan(atan_input, output_mem_config);
     }
     Tensor res(result);
     {
-        Tensor ib_gtz = ttnn::gtz(input_b, output_mem_config);
-        Tensor ib_gt = ttnn::gtz(input_b, output_mem_config);
-        Tensor ib_lt = ttnn::ltz(input_b, output_mem_config);
-        float pi_2 = M_PI_2;
-        Tensor neg_result = ttnn::neg(result, output_mem_config);
+        Tensor ia_gtz = ttnn::gtz(input_a, output_mem_config);
+        Tensor ia_ltz = ttnn::ltz(input_a, output_mem_config);
+        Tensor ib_ltz = ttnn::ltz(input_b, output_mem_config);
 
-        res = ttnn::where(
-            ttnn::gtz(input_a, output_mem_config),
-            ttnn::where(ib_gtz, result, neg_result),
-            ttnn::where(
-                ttnn::ltz(input_a, output_mem_config),
-                ttnn::where(
-                    ib_gt,
-                    ttnn::add(neg_result, M_PI, std::nullopt, output_mem_config),
-                    ttnn::where(ib_lt, ttnn::subtract(result, M_PI, std::nullopt, output_mem_config), M_PI)),
-                ttnn::where(ib_gt, pi_2, ttnn::where(ib_lt, -pi_2, 0.0f))));
+        Tensor altz_bgte = ttnn::logical_and(ia_ltz, ttnn::ge(input_b, 0.0), std::nullopt, output_mem_config);
+        Tensor altz_bltz = ttnn::logical_and(ia_ltz, ib_ltz, std::nullopt, output_mem_config);
+
+        Tensor a_eqz = ttnn::eqz(input_a, output_mem_config);
+        Tensor b_gtz = ttnn::gtz(input_b, output_mem_config);
+        Tensor b_eqz = ttnn::eqz(input_b, output_mem_config);
+
+
+        Tensor az_bltz = ttnn::logical_and(a_eqz, ib_ltz, std::nullopt, output_mem_config);
+        Tensor az_bgtz = ttnn::logical_and(a_eqz, b_gtz, std::nullopt, output_mem_config);
+        Tensor az_bz = ttnn::logical_and(a_eqz, b_eqz, std::nullopt, output_mem_config);
+        float pi_2 = M_PI_2;
+        res = ttnn::where(ia_gtz, result,
+                          ttnn::where(altz_bgte, ttnn::add(result, M_PI, std::nullopt, output_mem_config),
+                          ttnn::where(altz_bltz, ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
+                          ttnn::where(az_bltz , M_PI_2, ttnn::where(az_bgtz, -M_PI_2, 0.0, output_mem_config),
+                          output_mem_config),
+                          output_mem_config),
+                          output_mem_config),
+                          output_mem_config);
     }
     return res;
 }

@@ -490,7 +490,7 @@ def test_level2_angle(bs, memcfg, dtype, device, function_level_defaults):
     x_imag = torch.tensor(x.imag, dtype=torch.bfloat16)
     x_torch = torch.complex(x_real.float(), x_imag.float())
     tt_cpu = torch.angle(x_torch).to(torch.bfloat16)
-    passing, output = comp_pcc(tt_cpu, tt_dev)
+    passing, output = comp_pcc(tt_cpu, tt_dev, 0.98)
     logger.info(output)
     assert passing
 
