@@ -169,7 +169,7 @@ SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
 def GetComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=True,
     fp32_dest_acc_en=False,
     packer_l1_acc=False,
