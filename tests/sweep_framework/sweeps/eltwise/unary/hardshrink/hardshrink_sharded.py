@@ -180,21 +180,3 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
-
-
-from tests.sweep_framework.framework.permutations import *
-
-for suite in parameters.keys():
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    print(len(suite_vectors))
-    for vector in suite_vectors:
-        print(vector)
-        if invalidate_vector(vector)[0]:
-            continue
-        passed, _ = run(**vector, device=device)
-        if passed[0] != True:
-            print(passed)
-
-    ttnn.close_device(device)
