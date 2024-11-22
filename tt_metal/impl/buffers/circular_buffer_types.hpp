@@ -68,7 +68,7 @@ class CircularBufferConfig {
                 this->total_size_,
                 page_size);
         }
-        if (page_size % sizeof(uint16_t) != 0) {
+        if (page_size % 16 != 0) {
             TT_THROW("Page size must be divisible by sizeof(uint32_t) because buffers holds uint32_t values");
         }
 
