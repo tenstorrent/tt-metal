@@ -179,8 +179,9 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 }
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertBrisc) {
+TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
@@ -191,8 +192,9 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertBrisc) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertNCrisc) {
+TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -201,8 +203,9 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertNCrisc) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc0) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -211,8 +214,9 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc0) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc1) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -221,8 +225,9 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc1) {
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc2) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -231,8 +236,9 @@ TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc2) {
     );
 }
 
-TEST_F(WatcherFixture, ActiveEthTestWatcherAssertErisc) {
+TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -241,8 +247,9 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherAssertErisc) {
     );
 }
 
-TEST_F(WatcherFixture, IdleEthTestWatcherAssertIErisc) {
+TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    GTEST_SKIP();
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();

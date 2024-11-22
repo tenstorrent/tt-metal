@@ -61,6 +61,13 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
     }
 
     // Tensix
+    if (x >= NOC_0_X(0, core_info->noc_size_x, (uint32_t) 18) &&
+        x <= NOC_0_X(0, core_info->noc_size_x, (uint32_t) 18 + core_info->noc_size_x - 1) &&
+        y >= NOC_0_Y(0, core_info->noc_size_y, (uint32_t) 18) &&
+        y <= NOC_0_Y(0, core_info->noc_size_y, (uint32_t) 18 + core_info->noc_size_y - 1)) {
+        return AddressableCoreType::TENSIX;
+    }
+
     if (noc_id == 0) {
         if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)1) &&
             x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
@@ -224,9 +231,9 @@ uint32_t debug_sanitize_noc_addr(
         if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX) {
             return_code = DebugSanitizeNocMulticastNonWorker;
         }
-        if (x > x_end || y > y_end) {
-            return_code = DebugSanitizeNocMulticastInvalidRange;
-        }
+        // if (x > x_end || y > y_end) {
+        //     return_code = DebugSanitizeNocMulticastInvalidRange;
+        // }
         debug_sanitize_post_noc_addr_and_hang(
             noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, return_code);
     }

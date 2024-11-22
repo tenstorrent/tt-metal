@@ -647,7 +647,8 @@ void Device::initialize_and_launch_firmware() {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
     for (const CoreCoord &core : eth_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+        auto translated_core = this->translated_coords_from_physical_coords(core, CoreType::ETH);
+        core_info->non_worker_cores[non_worker_cores_idx++] = {translated_core.x, translated_core.y, AddressableCoreType::ETH};
     }
 
     // Determine which noc-coords are harvested

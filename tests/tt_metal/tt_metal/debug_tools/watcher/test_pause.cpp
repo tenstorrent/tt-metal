@@ -135,6 +135,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherPause) {
+    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }

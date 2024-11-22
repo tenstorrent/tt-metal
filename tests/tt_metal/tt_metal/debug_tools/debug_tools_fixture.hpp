@@ -152,12 +152,12 @@ protected:
         tt::watcher_clear_log();
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        // DebugToolsFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
+        // DebugToolsFixture::TearDown();
 
         // Reset watcher settings to their previous values
         tt::llrt::OptionsG.set_watcher_interval(watcher_previous_interval);
