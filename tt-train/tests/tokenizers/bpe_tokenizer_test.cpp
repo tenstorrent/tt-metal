@@ -14,8 +14,8 @@ using namespace ttml::tokenizers;
 
 namespace {
 std::string get_test_data_dir() {
-    const char* envVar = std::getenv("TEST_DATA_DIR");
-    return (envVar) ? std::string(envVar) : std::string(TEST_DATA_DIR);
+    const char* env_var = std::getenv("TEST_DATA_DIR");
+    return (env_var) ? std::string(env_var) : std::string(TEST_DATA_DIR);
 }
 }  // namespace
 
