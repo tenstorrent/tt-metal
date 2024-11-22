@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
-// the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_16 below.
+// the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include "dataflow_api.h"
@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_2;
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;

@@ -541,7 +541,7 @@ create_worker_circular_buffers(
     }
 
     // Dataflow Writer Kernel input CB
-    uint32_t cb_dst0_index = tt::CBIndex::c_16;
+    uint32_t cb_dst0_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_dst0_config =
         tt::tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{cb_dst0_index, df}})
             .set_page_size(cb_dst0_index, page_size_bytes);
@@ -554,7 +554,7 @@ create_worker_circular_buffers(
     // From reader -> writer kernel (I think I need this because sharing the cb_dst0_sender_workers as output
     // of reader kernel (first output) and math kernel (all subsequent outputs) doesn't seem to work because
     // it seems like the math kernels hold some of the CB state in local variables)
-    uint32_t cb_short_circuit_index = tt::CBIndex::c_17;
+    uint32_t cb_short_circuit_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_short_circuit_config =
         tt::tt_metal::CircularBufferConfig(
             (worker_pages_per_transfer * page_size_bytes) * 2, {{cb_short_circuit_index, df}})

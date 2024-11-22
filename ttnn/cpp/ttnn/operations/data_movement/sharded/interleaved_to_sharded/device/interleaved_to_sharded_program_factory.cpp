@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     if (convert_df) {
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels//compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{});
     }
