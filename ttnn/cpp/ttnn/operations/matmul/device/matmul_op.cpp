@@ -439,9 +439,9 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 && mem_config.buffer_type == BufferType::DRAM
                 && num_cores_x == 8 && num_cores_y == 8) {
 
-                in0_block_w = !transpose_mcast ? Kt / num_cores_x : Kt / num_cores_y;
-                per_core_M = !transpose_mcast ? Mt / num_cores_y : Mt / num_cores_x;
-                per_core_N = !transpose_mcast ? Nt / num_cores_x : Nt / num_cores_y;
+                in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1) : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
+                per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
+                per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
 
                 auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(input_tensor_a, input_tensor_b, per_core_M, per_core_N, in0_block_w, tt_metal::detail::TileSize(tt::DataFormat::Float16_b));
                 out_block_h = mutlti_dim_per_core_factor[0];
@@ -449,7 +449,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 in0_block_w = mutlti_dim_per_core_factor[2];
 
                 auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
-                    per_core_M, per_core_N, false, false, false);
+                    out_block_h, out_block_w, false, false, false);
                 out_subblock_h = std::get<0>(subblock_hw);
                 out_subblock_w = std::get<1>(subblock_hw);
             }
