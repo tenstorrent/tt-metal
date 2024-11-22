@@ -126,7 +126,8 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
+    DeviceAddr size_per_bank =
+        tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and this->buffer_type_ == BufferType::L1) {
         address_limit = this->interleaved_address_limit_;
@@ -223,13 +224,19 @@ DeviceAddr get_unreserved_base_address(const Allocator &allocator, const HalMemT
 
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = alloc_config.dram_bank_size - alloc_config.dram_unreserved_base - alloc_config.trace_region_size;
+    DeviceAddr dram_bank_size =
+        alloc_config.dram_bank_size - alloc_config.dram_unreserved_base - alloc_config.trace_region_size;
     std::vector<int64_t> bank_offsets(alloc_config.num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager =
-        BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, alloc_config.alignment, alloc_config.dram_unreserved_base, alloc_config.disable_interleaved);
+    allocator.dram_manager = BankManager(
+        BufferType::DRAM,
+        bank_offsets,
+        dram_bank_size,
+        alloc_config.alignment,
+        alloc_config.dram_unreserved_base,
+        alloc_config.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -259,7 +266,13 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     // Space up to L1 unreserved base is reserved for risc binaries, kernel args, debug and perf monitoring tools
     DeviceAddr l1_bank_size = alloc_config.worker_l1_size - alloc_config.l1_unreserved_base;
     std::vector<int64_t> bank_offsets(num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, alloc_config.alignment, alloc_config.l1_unreserved_base, alloc_config.disable_interleaved);
+    allocator.l1_manager = BankManager(
+        BufferType::L1,
+        bank_offsets,
+        l1_bank_size,
+        alloc_config.alignment,
+        alloc_config.l1_unreserved_base,
+        alloc_config.disable_interleaved);
 
     uint32_t bank_id = 0;
     const auto &cores = corerange_to_cores(alloc_config.worker_grid, std::nullopt, true);
@@ -379,60 +392,43 @@ void mark_allocations_unsafe(Allocator &allocator) { allocator.allocations_unsaf
 
 void mark_allocations_safe(Allocator &allocator) { allocator.allocations_unsafe = false; }
 
-void verify_safe_allocation(Allocator& allocator) {
+void verify_safe_allocation(Allocator &allocator) {
     // Inform the user that its unsafe to allocate buffers when a trace is live on device.
     // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
     // have a lifetime that ends before the trace is executed.
     // Print the warning once per device, to ensure that user output is not clobbered.
     thread_local static bool warning_generated = false;
     if (allocator.allocations_unsafe and not warning_generated) {
-        log_warning("Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed.");
+        log_warning(
+            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
+            "corrupted once a trace is executed.");
         warning_generated = true;
     }
 }
 
-const std::unordered_set<Buffer *> &get_allocated_buffers(const Allocator &allocator) { return allocator.allocated_buffers; }
+const std::unordered_set<Buffer *> &get_allocated_buffers(const Allocator &allocator) {
+    return allocator.allocated_buffers;
+}
 
 void shrink_allocator_size(
-    Allocator &allocator,
-    const BufferType &buffer_type,
-    DeviceAddr shrink_size,
-    bool bottom_up) {
+    Allocator &allocator, const BufferType &buffer_type, DeviceAddr shrink_size, bool bottom_up) {
     switch (buffer_type) {
-        case BufferType::DRAM:
-            allocator.dram_manager.shrink_size(shrink_size, bottom_up);
-            break;
-        case BufferType::L1:
-            allocator.l1_manager.shrink_size(shrink_size, bottom_up);
-            break;
-        case BufferType::L1_SMALL:
-            allocator.l1_small_manager.shrink_size(shrink_size, bottom_up);
-            break;
-        case BufferType::TRACE:
-            allocator.trace_buffer_manager.shrink_size(shrink_size, bottom_up);
-            break;
+        case BufferType::DRAM: allocator.dram_manager.shrink_size(shrink_size, bottom_up); break;
+        case BufferType::L1: allocator.l1_manager.shrink_size(shrink_size, bottom_up); break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.shrink_size(shrink_size, bottom_up); break;
+        case BufferType::TRACE: allocator.trace_buffer_manager.shrink_size(shrink_size, bottom_up); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
     }
 }
 
-void reset_allocator_size(
-    Allocator &allocator,
-    const BufferType &buffer_type) {
+void reset_allocator_size(Allocator &allocator, const BufferType &buffer_type) {
     switch (buffer_type) {
-        case BufferType::DRAM:
-            allocator.dram_manager.reset_size();
-            break;
-        case BufferType::L1:
-            allocator.l1_manager.reset_size();
-            break;
-        case BufferType::L1_SMALL:
-            allocator.l1_small_manager.reset_size();
-            break;
-        case BufferType::TRACE:
-            allocator.trace_buffer_manager.reset_size();
-            break;
+        case BufferType::DRAM: allocator.dram_manager.reset_size(); break;
+        case BufferType::L1: allocator.l1_manager.reset_size(); break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.reset_size(); break;
+        case BufferType::TRACE: allocator.trace_buffer_manager.reset_size(); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }

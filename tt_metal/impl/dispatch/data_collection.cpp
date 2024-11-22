@@ -36,7 +36,7 @@ public:
         Update(other.max_transaction_size, other.min_transaction_size, other.num_writes, other.total_write_size);
     }
 
-    void Dump(std::ofstream &outfile,  std::map<uint32_t, uint32_t> &raw_data) {
+    void Dump(std::ofstream &outfile, std::map<uint32_t, uint32_t> &raw_data) {
         outfile << fmt::format("\t\tmax_transaction_size = {}\n", max_transaction_size);
         outfile << fmt::format("\t\tmin_transaction_size = {}\n", min_transaction_size);
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
@@ -52,12 +52,10 @@ public:
 // Class to hold dispatch write data for the DataCollector
 class DispatchData {
 public:
-    DispatchData(data_collector_t type): type(type) {}
+    DispatchData(data_collector_t type) : type(type) {}
     DispatchData(int type_int) : DispatchData(static_cast<data_collector_t>(type_int)) {}
 
-    void Update(uint32_t transaction_size, RISCV riscv) {
-        data[riscv][transaction_size]++;
-    }
+    void Update(uint32_t transaction_size, RISCV riscv) { data[riscv][transaction_size]++; }
 
     void Merge(const DispatchData &other) {
         for (auto &riscv_and_data : other.data) {
@@ -99,7 +97,7 @@ public:
     }
 
 private:
-    std::map<RISCV, std::map<uint32_t, uint32_t>> data; // RISCV -> transaction size -> count
+    std::map<RISCV, std::map<uint32_t, uint32_t>> data;  // RISCV -> transaction size -> count
     data_collector_t type;
 };
 
@@ -113,9 +111,7 @@ public:
         TT_ASSERT(inst == nullptr);
         inst = this;
     };
-    ~DataCollector() {
-        inst = nullptr;
-    };
+    ~DataCollector() { inst = nullptr; };
 
     void RecordData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv);
     void RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups);
@@ -124,7 +120,8 @@ public:
 
 private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
-    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
+    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>>
+        program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
 };
 
@@ -166,22 +163,17 @@ string DispatchClassToString(enum dispatch_core_processor_classes proc_class, Co
     switch (core_type) {
         case CoreType::WORKER:
             switch (proc_class) {
-                case DISPATCH_CLASS_TENSIX_DM0:
-                    return "brisc:";
-                case DISPATCH_CLASS_TENSIX_DM1:
-                    return "ncrisc:";
-                case DISPATCH_CLASS_TENSIX_COMPUTE:
-                    return "trisc:";
-                default:
-                    return "";
+                case DISPATCH_CLASS_TENSIX_DM0: return "brisc:";
+                case DISPATCH_CLASS_TENSIX_DM1: return "ncrisc:";
+                case DISPATCH_CLASS_TENSIX_COMPUTE: return "trisc:";
+                default: return "";
             }
         case CoreType::ETH:
             if (proc_class == DISPATCH_CLASS_ETH_DM0)
                 return "erisc:";
             else
                 return "";
-        default:
-            TT_THROW("Incompatible core type: {}", magic_enum::enum_name(core_type));
+        default: TT_THROW("Incompatible core type: {}", magic_enum::enum_name(core_type));
     }
     return "";
 }
@@ -239,7 +231,7 @@ void DataCollector::DumpData() {
     outfile.close();
 }
 
-DataCollector* DataCollector::inst = nullptr;
+DataCollector *DataCollector::inst = nullptr;
 
 void DumpDispatchDataAndClose() {
     DataCollector::inst->DumpData();
@@ -254,7 +246,7 @@ void InitDataCollector() {
     }
 }
 
-} // end anon namespae
+}  // namespace
 
 namespace tt {
 
@@ -285,4 +277,4 @@ void RecordProgramRun(Program &program) {
     DataCollector::inst->RecordProgramRun(program);
 }
 
-} // end namepsace tt
+}  // namespace tt
