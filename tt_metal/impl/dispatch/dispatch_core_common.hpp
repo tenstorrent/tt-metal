@@ -38,48 +38,51 @@ enum class DispatchCoreAxis {
     COL,
 };
 
-struct DispatchCoreConfig {
+class DispatchCoreConfig {
 private:
-    DispatchCoreType type;
-    DispatchCoreAxis axis;
+    DispatchCoreType type_;
+    DispatchCoreAxis axis_;
 
 public:
     DispatchCoreConfig()
-    : type(DispatchCoreType::WORKER),
-      axis(tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW) {}
+    : type_(DispatchCoreType::WORKER),
+      axis_(tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW) {}
 
     DispatchCoreConfig(DispatchCoreType type)
-        : type(type),
-          axis(tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW) {}
+        : type_(type),
+          axis_(tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW) {}
 
-    DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type(type), axis(axis) {}
+    DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
     CoreType get_core_type() const {
-        const std::unordered_map<DispatchCoreType, CoreType> dispatch_core_type_map = {
-            {DispatchCoreType::WORKER, CoreType::WORKER},
-            {DispatchCoreType::ETH, CoreType::ETH}
-        };
-        return dispatch_core_type_map.at(type);
+        switch (type_) {
+            case DispatchCoreType::WORKER:
+                return CoreType::WORKER;
+            case DispatchCoreType::ETH:
+                return CoreType::ETH;
+            default:
+                TT_THROW("invalid dispatch core type");
+        }
     }
 
     DispatchCoreType get_dispatch_core_type() const {
-        return type;
+        return type_;
     }
 
     void set_dispatch_core_type(DispatchCoreType new_type) {
-        type = new_type;
+        type_ = new_type;
     }
 
     DispatchCoreAxis get_dispatch_core_axis() const {
-        return axis;
+        return axis_;
     }
 
     void set_dispatch_core_axis(DispatchCoreAxis new_axis) {
-        axis = new_axis;
+        axis_ = new_axis;
     }
 
     bool operator==(const DispatchCoreConfig& other) const {
-        return (type == other.type) && (axis == other.axis);
+        return (type_ == other.type_) && (axis_ == other.axis_);
     }
 };
 

@@ -92,6 +92,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
     z_t = torch.matmul(x, y)
     assert_with_pcc(z_t, z)
 
+
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
