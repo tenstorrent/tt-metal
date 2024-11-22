@@ -40,7 +40,7 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
         }
-        if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
         TT_FATAL(this->use_multicore == true, "Error");
