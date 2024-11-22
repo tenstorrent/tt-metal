@@ -53,7 +53,7 @@ tests/scripts/tgg/ @afuller-TT @ttmchiou
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu
-tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal
+tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
 tt_metal/**/requirements*.txt @tt-rkim @TT-billteng @ttmchiou
 
 # metal - dispatch
@@ -125,9 +125,9 @@ tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sank
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957
 
 # TTNN Distributed
-ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
+ttnn/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
+tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 
 # models
 /models/ @tt-rkim @uaydonat
