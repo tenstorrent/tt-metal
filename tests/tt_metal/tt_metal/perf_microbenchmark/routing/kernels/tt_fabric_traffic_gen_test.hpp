@@ -4,7 +4,6 @@
 
 #pragma once
 
-//#include "tt_metal/impl/dispatch/kernels/tt_fabric.hpp"
 #include <cstdint>
 #include <vector>
 
