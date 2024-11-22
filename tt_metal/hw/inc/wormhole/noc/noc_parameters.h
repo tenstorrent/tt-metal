@@ -13,6 +13,12 @@
 #define NOC_Y_SIZE 1
 #endif
 
+// Coordinate Virtualization is fully supported by WH NOC Hardware and Firmware.
+// Tensix cores start at coorddinate <x = 18, y = 18> in Virtual Space and are contiguous.
+#define VIRTUAL_TENSIX_START_X 18
+#define VIRTUAL_TENSIX_START_Y 18
+#define COORDINATE_VIRTUALIZATION_ENABLED 1
+
 #define NUM_NOCS 2
 #define NUM_TENSIXES 80
 
