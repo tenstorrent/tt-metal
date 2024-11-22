@@ -128,8 +128,8 @@ static Tensor reduce_impl(
             for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
                 output_tensor = reduce_impl<ReduceType::Sum>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
-            float inv_volume = 1.0f/input_tensor.volume();
-            return ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
+            float inv_volume = 1.0f/input_tensor.get_logical_volume();
+            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
