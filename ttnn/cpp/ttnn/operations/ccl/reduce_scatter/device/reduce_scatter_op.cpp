@@ -107,7 +107,7 @@ namespace operations{
 namespace ccl{
 Tensor reduce_scatter(
     const Tensor& input_tensor,
-    const int16_t scatter_dim,
+    const int32_t dim,
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config,
@@ -128,13 +128,13 @@ Tensor reduce_scatter(
 
     int16_t rank = input_tensor.get_logical_shape().rank();
 
-    int16_t dim = (scatter_dim < 0) ? rank + scatter_dim : scatter_dim;
+    int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    TT_FATAL(dim >= -rank && dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
+    TT_FATAL(scatter_dim >= -rank && scatter_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [binary_op_type, dim, num_links, output_mem_config, ccl_topology, devices, user_defined_num_workers, user_defined_num_buffers_per_channel](
+        [binary_op_type, scatter_dim, num_links, output_mem_config, ccl_topology, devices, user_defined_num_workers, user_defined_num_buffers_per_channel](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -145,7 +145,7 @@ Tensor reduce_scatter(
                 ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
                     input_tensor,
                     binary_op_type,
-                    dim,
+                    scatter_dim,
                     num_links,
                     output_mem_config,
                     user_defined_num_workers,
@@ -164,7 +164,7 @@ Tensor reduce_scatter(
 
 Tensor reduce_scatter(
     const Tensor &input_tensor,
-    const int16_t scatter_dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType reduce_op,
@@ -182,14 +182,14 @@ Tensor reduce_scatter(
 
     int16_t rank = input_tensor.get_logical_shape().rank();
 
-    int16_t dim = (scatter_dim < 0) ? rank + scatter_dim : scatter_dim;
+    int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    TT_FATAL(dim >= -rank && dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
+    TT_FATAL(scatter_dim >= -rank && scatter_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     operation::launch_op(
-        [dim, binary_op_type, num_links, output_mem_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
+        [scatter_dim, binary_op_type, num_links, output_mem_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -218,7 +218,7 @@ Tensor reduce_scatter(
             return operation::run(
                 ttnn::ReduceScatter{
                     binary_op_type,
-                    dim,
+                    scatter_dim,
                     num_links,
                     num_devices,
                     device_index,

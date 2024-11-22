@@ -69,7 +69,7 @@ namespace operations{
 namespace ccl{
 Tensor reduce_scatter(
     const Tensor &input_tensor,
-    const int16_t scatter_split_dim,
+    const int32_t dim,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const uint32_t num_links = 1,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -79,7 +79,7 @@ Tensor reduce_scatter(
 
 Tensor reduce_scatter(
     const ttnn::Tensor &input_tensor,
-    const int16_t scatter_dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,

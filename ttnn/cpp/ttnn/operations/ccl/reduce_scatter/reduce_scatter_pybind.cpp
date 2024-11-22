@@ -26,17 +26,17 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const int16_t scatter_dim,
+               const int32_t dim,
                ttnn::operations::reduction::ReduceType math_op,
                const uint32_t num_links,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
-                return self(input_tensor, scatter_dim, math_op, num_links, memory_config, topology, num_workers, num_buffers_per_channel);
+                return self(input_tensor, dim, math_op, num_links, memory_config, topology, num_workers, num_buffers_per_channel);
             },
             py::arg("input_tensor"),
-            py::arg("scatter_dim"),
+            py::arg("dim"),
             py::arg("math_op"),
             py::kw_only(),
             py::arg("num_links") = 1,
@@ -48,7 +48,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const int16_t scatter_dim,
+               const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                ttnn::operations::reduction::ReduceType math_op,
@@ -57,10 +57,10 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, scatter_dim, cluster_axis, mesh_device, math_op, num_links, output_mem_config, topology, num_workers, num_buffers_per_channel);
+                return self(input_tensor, dim, cluster_axis, mesh_device, math_op, num_links, output_mem_config, topology, num_workers, num_buffers_per_channel);
             },
             py::arg("input_tensor"),
-            py::arg("scatter_dim"),
+            py::arg("dim"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::arg("math_op"),
@@ -86,7 +86,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
-            scatter_dim (int): Dimension to perform operation
+            dim (int): Dimension to perform operation
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
@@ -107,8 +107,8 @@ void py_bind_reduce_scatter(pybind11::module& module) {
 
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
             >>> num_devices = 8
-            >>> scatter_dim = 3
-            >>> input_tensors = torch.chunk(full_tensor, num_devices, scatter_dim)
+            >>> dim = 3
+            >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
             >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
             >>> tt_input_tensors = []
@@ -116,7 +116,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
                     tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
             >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
-            >>> output = ttnn.reduce_scatter(input_tensor_mesh, scatter_dim=0, topology=ttnn.Topology.Linear)
+            >>> output = ttnn.reduce_scatter(input_tensor_mesh, dim=0, topology=ttnn.Topology.Linear)
 
         )doc");
 }

@@ -10,7 +10,7 @@ namespace ttnn::operations::ccl {
 
 ttnn::Tensor ExecuteReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
-    const int16_t scatter_dim,
+    const int32_t dim,
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -19,11 +19,11 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     const std::optional<size_t> num_buffers_per_channel) {
 
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return ttnn::operations::ccl::reduce_scatter(input_tensor, scatter_dim, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
+    return ttnn::operations::ccl::reduce_scatter(input_tensor, dim, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
 }
 ttnn::Tensor ExecuteReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
-    const int16_t scatter_dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType math_op,
@@ -34,7 +34,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     const std::optional<size_t> num_buffers_per_channel) {
 
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return ttnn::operations::ccl::reduce_scatter(input_tensor, scatter_dim, cluster_axis, mesh_device, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
+    return ttnn::operations::ccl::reduce_scatter(input_tensor, dim, cluster_axis, mesh_device, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
 }
 
 }  // namespace ttnn::operations::ccl
