@@ -16,7 +16,7 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 
-#include "tt_metal/hw/inc/circular_buffer.h"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 
 namespace tt::tt_metal {
 inline namespace v0 {

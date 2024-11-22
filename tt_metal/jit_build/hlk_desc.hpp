@@ -6,12 +6,12 @@
 
 #include <string>
 
-#include "circular_buffer.h"         // for NUM_CIRCULAR_BUFFERS
 #include "hostdevcommon/kernel_structs.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/base_types.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/utils.hpp"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"         // for NUM_CIRCULAR_BUFFERS
 
 namespace tt
 {

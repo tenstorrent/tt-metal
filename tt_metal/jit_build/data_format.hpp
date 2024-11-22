@@ -7,7 +7,8 @@
 #include <vector>
 #include "common/tt_backend_api_types.hpp"  // for DataFormat
 #include "device/tt_arch_types.h"           // for ARCH
-#include "circular_buffer.h"         // for NUM_CIRCULAR_BUFFERS
+#include "tt_metal/hw/inc/circular_buffer_constants.h"        // for NUM_CIRCULAR_BUFFERS
+
 enum class UnpackToDestMode : std::uint8_t;
 
 namespace tt {
