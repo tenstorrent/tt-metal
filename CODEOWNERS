@@ -111,7 +111,7 @@ ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @asandhupatlaTT @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
-ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT 
+ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
 ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na
@@ -122,7 +122,7 @@ tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957
+tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT
 
 # TTNN Distributed
 ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
