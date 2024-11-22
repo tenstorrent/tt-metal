@@ -283,7 +283,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
 
         h = self.norm(h, mode=mode)
 
-        # TODO: Switch to using dram-sharded LM haed and remove this
+        # TODO: Switch to using dram-sharded LM head and remove this
         # Note: workaround for sharded_to_interleaved memory corruption (#15113)
         h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
 

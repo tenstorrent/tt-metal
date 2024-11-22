@@ -439,7 +439,8 @@ class TtModelArgs:
             )
 
             # Width sharded
-            mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)  # , self.hidden_dim // self.num_devices)
+            # mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+            mlp_core_grid = self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
@@ -457,7 +458,8 @@ class TtModelArgs:
                 num_cores=mlp_core_grid.num_cores,
             )
 
-            mlp2_core_grid = self.dram_shard_core_grid_for_k(self.hidden_dim // self.num_devices)  # , self.dim)
+            # mlp2_core_grid = self.dram_shard_core_grid_for_k(self.hidden_dim // self.num_devices)
+            mlp2_core_grid = self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
@@ -968,8 +970,8 @@ class TtModelArgs:
     ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
-            num_cores = self.dram_shard_core_grid_for_k(k).num_cores
-            # num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
+            # num_cores = self.dram_shard_core_grid_for_k_and_n(k).num_cores
+            num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
             assert (
                 k % (self.tile_size * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
