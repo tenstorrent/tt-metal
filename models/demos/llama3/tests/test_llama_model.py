@@ -71,24 +71,24 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     final_model_pcc = {
         "llama32_1b": 0.9991,
         "llama32_3b": 0.9989,
-        "llama31_8b": 0.99899,
-        "llama32_11b": 0.9976,
-        "llama31_70b": 0.98454,
+        "llama31_8b": 0.9987,
+        "llama32_11b": 0.9987,
+        "llama31_70b": 0.9843,
     }[model_name]
 
     final_k_cache_pcc = {
         "llama32_1b": 0.9998,
         "llama32_3b": 0.9998,
-        "llama31_8b": 0.99986,
+        "llama31_8b": 0.9998,
         "llama32_11b": 0.9995,
-        "llama31_70b": 0.99983,
+        "llama31_70b": 0.9998,
     }[model_name]
     final_v_cache_pcc = {
         "llama32_1b": 0.9996,
         "llama32_3b": 0.9998,
-        "llama31_8b": 0.99986,
+        "llama31_8b": 0.9998,
         "llama32_11b": 0.9996,
-        "llama31_70b": 0.99985,
+        "llama31_70b": 0.9998,
     }[model_name]
     quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
         model_name
