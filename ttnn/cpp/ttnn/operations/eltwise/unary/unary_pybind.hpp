@@ -652,7 +652,7 @@ void bind_unary_rdiv(
             {2} (int): {3}.
 
         Keyword Args:
-            {4} (string): {5}. Defaults to `{6}`.
+            {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -698,7 +698,7 @@ void bind_unary_rdiv(
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::string& parameter_b,
+               const std::optional<std::string> parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                const uint8_t& queue_id) {
@@ -707,7 +707,7 @@ void bind_unary_rdiv(
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()),
             py::kw_only(),
-            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg(parameter_name_b.c_str()) = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = 0});

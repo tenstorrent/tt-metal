@@ -160,7 +160,7 @@ struct ExecuteRdiv {
         uint8_t queue_id,
         const Tensor& input_tensor,
         float value,
-        const std::string& round_mode = "None",
+        const std::optional<std::string> round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
