@@ -413,11 +413,8 @@ auto default_create_output_tensors(
     const auto& device = input_tensors.at(0).device();
     const auto& output_specs = operation.compute_output_specs(input_tensors);
     output_tensors.reserve(output_specs.size());
-    for (const auto& [output_shape, output_layout] : output_specs) {
-        output_tensors.emplace_back(create_device_tensor(
-            output_shape,
-            output_layout,
-            device));
+    for (const auto& output_spec : output_specs) {
+        output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
     return output_tensors;
 }

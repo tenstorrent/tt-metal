@@ -458,7 +458,7 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
 
-    auto tile_shape = input_tensor.get_tile().get_tile_shape();
+    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto tile_hw = (tile_shape[0] * tile_shape[1]);
     uint32_t num_tensor_tiles = input_tensor.volume() / tile_hw;
     uint32_t num_output_tiles = output_tensor.volume() / tile_hw;
@@ -548,8 +548,9 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(const 
     TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     tt::tt_metal::Program program = tt::tt_metal::Program();
-    auto tile_shape = a.get_tile().get_tile_shape();
-    auto face_shape = a.get_tile().get_face_shape();
+    auto tile = a.get_tensor_spec().tile();
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
     uint32_t num_tensor_tiles = a.volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t num_output_tiles = output.volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1], N = a.get_logical_shape()[0];
