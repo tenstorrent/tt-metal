@@ -17,7 +17,7 @@ struct SubDeviceId {
 
     Id to_index() const { return id; }
 
-    SubDeviceId& operator++() {
+    SubDeviceId &operator++() {
         id++;
         return *this;
     }
@@ -28,23 +28,17 @@ struct SubDeviceId {
         return ret;
     }
 
-    SubDeviceId& operator+=(Id n) {
+    SubDeviceId &operator+=(Id n) {
         id += n;
         return *this;
     }
 
-    bool operator==(const SubDeviceId &other) const {
-        return id == other.id;
-    }
+    bool operator==(const SubDeviceId &other) const { return id == other.id; }
 
-    bool operator!=(const SubDeviceId &other) const {
-        return id != other.id;
-    }
+    bool operator!=(const SubDeviceId &other) const { return id != other.id; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("id");
-    constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->id);
-    }
+    constexpr auto attribute_values() const { return std::forward_as_tuple(this->id); }
 };
 
 struct SubDeviceManagerId {
@@ -53,7 +47,7 @@ struct SubDeviceManagerId {
 
     Id to_index() const { return id; }
 
-    SubDeviceManagerId& operator++() {
+    SubDeviceManagerId &operator++() {
         id++;
         return *this;
     }
@@ -64,27 +58,20 @@ struct SubDeviceManagerId {
         return ret;
     }
 
-    SubDeviceManagerId& operator+=(Id n) {
+    SubDeviceManagerId &operator+=(Id n) {
         id += n;
         return *this;
     }
 
-    bool operator==(const SubDeviceManagerId &other) const {
-        return id == other.id;
-    }
+    bool operator==(const SubDeviceManagerId &other) const { return id == other.id; }
 
-    bool operator!=(const SubDeviceManagerId &other) const {
-        return id != other.id;
-    }
+    bool operator!=(const SubDeviceManagerId &other) const { return id != other.id; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("id");
-    constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->id);
-    }
+    constexpr auto attribute_values() const { return std::forward_as_tuple(this->id); }
 };
 
 }  // namespace tt::tt_metal
-
 
 namespace std {
 template <>

@@ -4,11 +4,13 @@
 
 #pragma once
 
-#include <cstdint>
 #include <emmintrin.h>
+
+#include <cstdint>
+
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/tt_stl/aligned_allocator.hpp"
 #include "tt_metal/third_party/umd/device/device_api_metal.h"
+#include "tt_metal/tt_stl/aligned_allocator.hpp"
 
 namespace tt::tt_metal {
 
@@ -70,7 +72,8 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
             }
             n -= n / sizeof(int32_t) * sizeof(int32_t);
             // Copying the last few bytes (n < 4).
-            // Overrunning dst buffer is safe, because the actual allocated space for dst is guaranteed to be at least 4 byte aligned.
+            // Overrunning dst buffer is safe, because the actual allocated space for dst is guaranteed to be at least 4
+            // byte aligned.
             if (n > 0) {
                 int32_t val = 0;
                 std::memcpy(&val, src8, n);
@@ -83,4 +86,4 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
     }
 }
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

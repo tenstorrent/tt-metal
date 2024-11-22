@@ -5,9 +5,9 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
+#include <vector>
 
 #include "tt_metal/impl/allocator/allocator.hpp"
 

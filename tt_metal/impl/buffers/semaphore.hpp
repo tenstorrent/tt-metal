@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "llrt/hal.hpp"
 #include "common/core_coord.hpp"
+#include "llrt/hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
 namespace tt {
@@ -15,18 +15,18 @@ namespace tt_metal {
 constexpr std::uint32_t NUM_SEMAPHORES = 8;
 
 class Semaphore {
-   public:
+public:
     Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value);
 
     Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type);
 
     Semaphore(const Semaphore &other);
 
-    Semaphore& operator=(const Semaphore &other);
+    Semaphore &operator=(const Semaphore &other);
 
     Semaphore(Semaphore &&other);
 
-    Semaphore& operator=(Semaphore &&other);
+    Semaphore &operator=(Semaphore &&other);
 
     uint32_t id() const { return id_; }
 
@@ -40,10 +40,10 @@ class Semaphore {
 
     bool initialized_on_logical_core(const CoreCoord &logical_core) const;
 
-   private:
-    CoreRangeSet core_range_set_;             // Ranges of cores where this semaphore is initialized
+private:
+    CoreRangeSet core_range_set_;  // Ranges of cores where this semaphore is initialized
     uint32_t id_;
-    uint32_t initial_value_;              // Initial value of semaphore
+    uint32_t initial_value_;  // Initial value of semaphore
     CoreType core_type_;
 };
 

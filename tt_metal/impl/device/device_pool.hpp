@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include "impl/debug/dprint_server.hpp"
 #include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
-#include "impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
 namespace tt {
@@ -22,7 +22,7 @@ class DevicePool {
     friend tt_metal::v1::DeviceHandle;
     friend void tt_metal::detail::CloseDevices(std::map<chip_id_t, Device *> devices);
 
-   public:
+public:
     DevicePool &operator=(const DevicePool &) = delete;
     DevicePool &operator=(DevicePool &&other) noexcept = delete;
     DevicePool(const DevicePool &) = delete;
@@ -48,8 +48,9 @@ class DevicePool {
     bool is_device_active(chip_id_t id) const;
     void register_worker_thread_for_device(tt_metal::v1::DeviceHandle device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(tt_metal::v1::DeviceHandle device);
-    const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
-   private:
+    const std::unordered_set<std::thread::id> &get_worker_thread_ids() const;
+
+private:
     ~DevicePool();
     DevicePool();
     uint8_t num_hw_cqs;
@@ -62,7 +63,7 @@ class DevicePool {
     // Used to track worker thread handles (1 worker thread created per device)
     // when we need to check if a call is made from an application thread or a
     // worker thread
-    std::unordered_map<Device*, std::thread::id> device_to_worker_thread_id;
+    std::unordered_map<Device *, std::thread::id> device_to_worker_thread_id;
     std::unordered_set<std::thread::id> worker_thread_ids;
     std::thread::id device_pool_creation_thread_id;
     bool skip_remote_devices;
@@ -79,7 +80,7 @@ class DevicePool {
     static DevicePool *_inst;
 
     // TODO remove with v0
-    tt_metal::v1::DeviceHandle get_handle(Device* device) const;
+    tt_metal::v1::DeviceHandle get_handle(Device *device) const;
 };
 
 }  // namespace tt

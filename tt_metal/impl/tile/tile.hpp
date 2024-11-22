@@ -15,23 +15,22 @@ namespace tt {
 
 namespace tt_metal {
 
-constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CHOICES = {{
-    // TODO: add other tile shapes once llk supported it
-    {{ {32, 32}, {16, 16} }},
-    {{ {16, 32}, {16, 16} }},
-    {{ {32, 16}, {16, 16} }},
-    {{ {16, 16}, {16, 16} }},
-    // this shapes are not supported yet on llk, just for host loopback
-    {{ {8, 32}, {8, 16} }},
-    {{ {4, 32}, {4, 16} }},
-    {{ {2, 32}, {2, 16} }},
-    {{ {1, 32}, {1, 16} }},
-    // this shapes are not supported yet on llk, just for host loopback
-    {{ {8, 16}, {8, 16} }},
-    {{ {4, 16}, {4, 16} }},
-    {{ {2, 16}, {2, 16} }},
-    {{ {1, 16}, {1, 16} }}
-}};
+constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CHOICES = {
+    {// TODO: add other tile shapes once llk supported it
+     {{{32, 32}, {16, 16}}},
+     {{{16, 32}, {16, 16}}},
+     {{{32, 16}, {16, 16}}},
+     {{{16, 16}, {16, 16}}},
+     // this shapes are not supported yet on llk, just for host loopback
+     {{{8, 32}, {8, 16}}},
+     {{{4, 32}, {4, 16}}},
+     {{{2, 32}, {2, 16}}},
+     {{{1, 32}, {1, 16}}},
+     // this shapes are not supported yet on llk, just for host loopback
+     {{{8, 16}, {8, 16}}},
+     {{{4, 16}, {4, 16}}},
+     {{{2, 16}, {2, 16}}},
+     {{{1, 16}, {1, 16}}}}};
 
 struct Tile {
     std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH};
@@ -41,20 +40,20 @@ struct Tile {
     uint32_t num_faces = constants::TILE_HW / constants::FACE_HW;
     uint32_t partial_face = 0;
     uint32_t narrow_tile = 0;
-    bool transpose_within_face = false; // tranpose datums within each face
-    bool transpose_of_faces = false; // transpose the face order
+    bool transpose_within_face = false;  // tranpose datums within each face
+    bool transpose_of_faces = false;     // transpose the face order
 
-    Tile(std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH}, bool transpose_tile = false) :
+    Tile(
+        std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH},
+        bool transpose_tile = false) :
         tile_shape(tile_shape) {
-
-        auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(),
-                            [this](const auto& pair) {
-                                if (pair[0] == this->tile_shape) {
-                                    this->face_shape = pair[1];
-                                    return true;
-                                }
-                                return false;
-                            });
+        auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
+            if (pair[0] == this->tile_shape) {
+                this->face_shape = pair[1];
+                return true;
+            }
+            return false;
+        });
 
         if (it == TILE_FACE_HW_CHOICES.end()) {
             TT_THROW("Tile size is not valid for our hardware");
@@ -69,8 +68,9 @@ struct Tile {
         }
 
         if (transpose_tile) {
-            TT_FATAL((this->tile_shape[0] == constants::FACE_HEIGHT || this->tile_shape[0] == constants::TILE_HEIGHT),
-                    "Tile height must equal 16 or 32 in transpose mode");
+            TT_FATAL(
+                (this->tile_shape[0] == constants::FACE_HEIGHT || this->tile_shape[0] == constants::TILE_HEIGHT),
+                "Tile height must equal 16 or 32 in transpose mode");
         }
 
         tile_hw = this->tile_shape[0] * this->tile_shape[1];

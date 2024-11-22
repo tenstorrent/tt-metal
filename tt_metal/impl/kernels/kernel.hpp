@@ -4,18 +4,18 @@
 
 #pragma once
 
-#include <vector>
 #include <map>
-#include <variant>
-#include <type_traits>
 #include <memory>
+#include <type_traits>
+#include <variant>
+#include <vector>
 
-#include "jit_build/build.hpp"
 #include "common/base_types.hpp"
+#include "jit_build/build.hpp"
+#include "runtime_args_data.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/llrt/tt_memory.h"
 #include "tt_metal/tt_stl/span.hpp"
-#include "runtime_args_data.hpp"
 
 namespace tt {
 
@@ -54,7 +54,7 @@ struct KernelSource {
 inline namespace v0 {
 
 class Kernel : public JitBuildSettings {
-   public:
+public:
     Kernel(
         const KernelSource &kernel_src,
         const CoreRangeSet &core_range_set,
@@ -81,13 +81,13 @@ class Kernel : public JitBuildSettings {
 
     const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
 
-    std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
-    RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
-    std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();
-    std::vector< std::vector< RuntimeArgsData > > & runtime_args_data();
-    void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
-    std::vector<uint32_t> & common_runtime_args();
-    RuntimeArgsData & common_runtime_args_data();
+    std::vector<uint32_t> &runtime_args(const CoreCoord &logical_core);
+    RuntimeArgsData &runtime_args_data(const CoreCoord &logical_core);
+    std::vector<std::vector<std::vector<uint32_t>>> &runtime_args();
+    std::vector<std::vector<RuntimeArgsData>> &runtime_args_data();
+    void set_runtime_args_count(CoreRangeSet &core_ranges, uint32_t count);
+    std::vector<uint32_t> &common_runtime_args();
+    RuntimeArgsData &common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
 
@@ -96,7 +96,8 @@ class Kernel : public JitBuildSettings {
     virtual RISCV processor() const = 0;
     uint32_t dispatch_class() { return this->dispatch_class_; }
 
-    virtual bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
+    virtual bool configure(
+        Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
 
     virtual Config config() const = 0;
 
@@ -109,7 +110,8 @@ class Kernel : public JitBuildSettings {
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries);
     virtual void read_binaries(Device *device) = 0;
 
-    void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
+    void validate_runtime_args_size(
+        size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core);
     void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
     void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
 
@@ -117,14 +119,14 @@ class Kernel : public JitBuildSettings {
 
     HalProgrammableCoreType get_kernel_programmable_core_type() const;
     CoreType get_kernel_core_type() const;
-    void set_full_name(const string& s) { kernel_full_name_ = s; }
-    const string& get_full_kernel_name() const override;
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-    void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
+    void set_full_name(const string &s) { kernel_full_name_ = s; }
+    const string &get_full_kernel_name() const override;
+    void process_defines(const std::function<void(const string &define, const string &value)>) const override;
+    void process_compile_time_args(const std::function<void(int i, uint32_t value)>) const override;
 
     bool is_idle_eth() const;
 
-   protected:
+protected:
     int watcher_kernel_id_;
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
@@ -136,46 +138,49 @@ class Kernel : public JitBuildSettings {
     std::unordered_map<chip_id_t, std::vector<ll_api::memory>> binaries_;
     uint8_t dispatch_class_;
     std::vector<uint32_t> compile_time_args_;
-    std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
-    std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
+    std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
+    std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_;
     std::vector<uint32_t> common_runtime_args_;
     RuntimeArgsData common_runtime_args_data_;
     std::set<CoreCoord> core_with_runtime_args_;
-    std::size_t max_runtime_args_per_core_;             // For validation
-    CoreCoord core_with_max_runtime_args_;              // For validation
-    std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
+    std::size_t max_runtime_args_per_core_;  // For validation
+    CoreCoord core_with_max_runtime_args_;   // For validation
+    std::map<std::string, std::string>
+        defines_;  // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
 
     virtual uint8_t expected_num_binaries() const = 0;
 
     virtual std::string config_hash() const = 0;
 
-   private:
+private:
     void register_kernel_with_watcher();
 };
 
 class DataMovementKernel : public Kernel {
-   public:
+public:
     DataMovementKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const DataMovementConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
+        this->dispatch_class_ =
+            magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
     ~DataMovementKernel() {}
 
     RISCV processor() const override;
 
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
+    void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
     void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+    bool configure(
+        Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
+    void process_defines(const std::function<void(const string &define, const string &value)>) const override;
 
-   private:
+private:
     const DataMovementConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -184,10 +189,11 @@ class DataMovementKernel : public Kernel {
 };
 
 class EthernetKernel : public Kernel {
-   public:
+public:
     EthernetKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const EthernetConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
+        this->dispatch_class_ =
+            magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
     ~EthernetKernel() {}
@@ -197,13 +203,14 @@ class EthernetKernel : public Kernel {
     void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
     void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+    bool configure(
+        Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
     void process_defines(const std::function<void(const string &define, const string &value)>) const override;
 
-   private:
+private:
     const EthernetConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -212,7 +219,7 @@ class EthernetKernel : public Kernel {
 };
 
 class ComputeKernel : public Kernel {
-   public:
+public:
     ComputeKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const ComputeConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
         this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
@@ -222,17 +229,18 @@ class ComputeKernel : public Kernel {
 
     RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions& build_options) const override;
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
+    void set_build_options(JitBuildOptions &build_options) const override;
+    void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
     void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+    bool configure(
+        Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
+    void process_defines(const std::function<void(const string &define, const string &value)>) const override;
 
-   private:
+private:
     const ComputeConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -242,7 +250,7 @@ class ComputeKernel : public Kernel {
 
 }  // namespace v0
 
-std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
+std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processor);
 
 }  // namespace tt_metal
 

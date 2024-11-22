@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-//#include <iomanip>
+// #include <iomanip>
 #include <set>
 
 #include "debug_helpers.hpp"
@@ -44,7 +44,7 @@ void DumpCoreNocData(Device *device, const CoreDescriptor &logical_core, noc_dat
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
         auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, addr, DPRINT_BUFFER_SIZE);
-        DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
+        DebugPrintMemLayout *l = reinterpret_cast<DebugPrintMemLayout *>(from_dev.data());
         uint32_t *data = reinterpret_cast<uint32_t *>(l->data);
 
         // Append the data for this core to existing data

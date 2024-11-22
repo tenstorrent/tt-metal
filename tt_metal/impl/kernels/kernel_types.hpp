@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include <map>
+#include <string>
+#include <vector>
+
 #include "common/base_types.hpp"
+#include "tt_metal/detail/util.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include <map>
-#include <vector>
-#include <string>
 
 namespace tt::tt_metal {
 
@@ -71,7 +71,6 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-
 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

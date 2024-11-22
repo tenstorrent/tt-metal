@@ -2,43 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <ctype.h>
+
+#include <algorithm>
 #include <iostream>
-#include <vector>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <vector>
+
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/metal_soc_descriptor.h"
 
 // FIXME: Avoid dependence on ARCH_NAME specific includes
-#include "dev_mem_map.h" // for MEM_BRISC_STAC...
-#include "eth_l1_address_map.h" // for address_map
-#include "hw/inc/dev_msgs.h"
-
-#include "third_party/umd/device/tt_arch_types.h"
-#include "third_party/umd/device/xy_pair.h"
 #include <fmt/base.h>
-#include "llrt/llrt.hpp"
-#include "llrt/tt_cluster.hpp"
 
 #include "common/core_coord.hpp"
+#include "dev_mem_map.h"         // for MEM_BRISC_STAC...
+#include "eth_l1_address_map.h"  // for address_map
 #include "hw/inc/debug/ring_buffer.h"
+#include "hw/inc/dev_msgs.h"
 #include "impl/device/device.hpp"
+#include "llrt/hal.hpp"
+#include "llrt/llrt.hpp"
 #include "llrt/rtoptions.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
-
+#include "third_party/umd/device/tt_arch_types.h"
+#include "third_party/umd/device/xy_pair.h"
 #include "watcher_device_reader.hpp"
-
-#include "llrt/hal.hpp"
 
 using namespace tt::tt_metal;
 
 using std::string;
-namespace { // Helper functions
+namespace {  // Helper functions
 
 // Helper function to get string rep of riscv type
 static const char *get_riscv_name(const CoreCoord &core, uint32_t type) {
@@ -61,7 +60,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) 
     switch (type) {
         case DebugBrisc: return MEM_BRISC_STACK_SIZE;
         case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
-        case DebugErisc: return 0; // Not managed/checked by us.
+        case DebugErisc: return 0;  // Not managed/checked by us.
         case DebugIErisc: return MEM_IERISC_STACK_SIZE;
         case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
         case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
@@ -73,12 +72,14 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) 
 }
 
 // Helper function to get string rep of noc target.
-static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, const debug_sanitize_noc_addr_msg_t *san) {
+static string get_noc_target_str(
+    Device *device, CoreDescriptor &core, int noc, const debug_sanitize_noc_addr_msg_t *san) {
     auto get_core_and_mem_type = [](Device *device, CoreCoord &noc_coord, int noc) -> std::pair<string, string> {
         // Get the physical coord from the noc coord
         const metal_SocDescriptor &soc_d = tt::Cluster::instance().get_soc_desc(device->id());
         CoreCoord phys_core = {
-            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, noc_coord.x), tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, noc_coord.y)};
+            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, noc_coord.x),
+            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, noc_coord.y)};
 
         CoreType core_type;
         try {
@@ -126,14 +127,14 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
     out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san->noc_addr));
     return out;
 }
-const launch_msg_t* get_valid_launch_message(const mailboxes_t *mbox_data) {
+const launch_msg_t *get_valid_launch_message(const mailboxes_t *mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
     if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
     }
     return &mbox_data->launch[launch_msg_read_ptr];
 }
-} // anonymous namespace
+}  // anonymous namespace
 
 namespace tt::watcher {
 
@@ -173,7 +174,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
                 "%s\n",
                 fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device->id(), phys_core, num_events)
                     .c_str());
-    }
+        }
     }
 }
 
@@ -322,8 +323,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
     if (is_eth_core) {
         if (is_active_eth_core) {
             mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX);
-        }
-        else {
+        } else {
             mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX);
         }
     }
@@ -380,7 +380,10 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
 
     // Eth core only reports erisc kernel id, uses the brisc field
     if (is_eth_core) {
-        fprintf(f, "k_id:%d", mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
+        fprintf(
+            f,
+            "k_id:%d",
+            mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
     } else {
         fprintf(
             f,
@@ -539,7 +542,8 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor &core, const string &co
         if (pause == 1) {
             paused_cores.insert({core.coord, static_cast<riscv_id_t>(risc_id)});
         } else if (pause > 1) {
-            string error_reason = fmt::format("Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
+            string error_reason = fmt::format(
+                "Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
             log_warning(error_reason.c_str());
             log_warning("{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
@@ -642,11 +646,10 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor &core, const mailboxe
     }
     DumpRunState(core, launch_msg, mbox_data->go_message.signal);
 
-
     fprintf(f, "|");
-    if (launch_msg->kernel_config.enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
-                                            DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
-                                            DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+    if (launch_msg->kernel_config.enables &
+        ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 | DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
+          DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
@@ -822,11 +825,13 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor &core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
-        case DebugSlaveIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
+        case DebugSlaveIErisc:
+            return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:
         case DebugTrisc1:
-        case DebugTrisc2: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]];
+        case DebugTrisc2:
+            return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]];
         default:
             LogRunningKernels(core, launch_msg);
             TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
