@@ -478,8 +478,13 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     if (needs_shard_or_reshard) {
         uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
-        uint32_t tensor_height = input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
-        uint32_t round_up_size = (use_non_tile_height || conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) ? 1 : tt::constants::TILE_HEIGHT;
+        uint32_t tensor_height =
+            input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
+        uint32_t round_up_size = tt::constants::TILE_HEIGHT;
+        if ((use_non_tile_height || shard_layout == TensorMemoryLayout::WIDTH_SHARDED) &&
+            input_tensor_.layout() == Layout::ROW_MAJOR) {
+            round_up_size = 1;
+        }
         uint32_t input_tensor_height_snapped_to_tile =  tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
         uint32_t tensor_width = input_tensor.get_shape()[3];
@@ -896,9 +901,8 @@ Result conv2d(
             input_width);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
-    Tensor input_tensor_post_tm_out;
     if (mm_conv) {
-        input_tensor_post_tm_out = ttnn::to_layout(
+        Tensor input_tensor_post_tm_out = ttnn::to_layout(
             input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device);
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
@@ -931,60 +935,37 @@ Result conv2d(
             .snap_to_tile = !use_non_tile_height,
         };
 
-        bool bypass_halo = (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
-            sliding_window_config.pad_hw.first==0 &&
-            sliding_window_config.pad_hw.second==0
-            );
-        if(bypass_halo) {
-            // call conv micro op
-            auto conv_output = optimized_conv_new(
-                input_tensor_post_tm,
-                weight_tensor_on_device,
-                bias_tensor_on_device,
-                sliding_window_config,
-                out_channels,
-                groups,
-                conv_config.output_layout == Layout::ROW_MAJOR,
-                conv_config.activation == "relu",
-                conv_config.math_fidelity,
-                opt_conv_op_parallel_config,
-                opt_conv_op_block_config,
-                conv_out_memory_config,
-                conv_config.dtype,
-                {batch_size, input_height, input_width, in_channels},
-                conv_config.input_channels_alignment == 16,
-                compute_kernel_config,
-                conv_config.enable_act_double_buffer,
-                conv_config.enable_weights_double_buffer,
-                conv_config.enable_split_reader,
-                conv_config.enable_subblock_padding);
-            if (conv_config.deallocate_activation) {
-                ttnn::operations::core::deallocate(input_tensor_post_tm);
+        bool bypass_halo =
+            (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
+             sliding_window_config.pad_hw.first == 0 && sliding_window_config.pad_hw.second == 0);
+
+        if (bypass_halo) {
+            if (input_tensor_post_tm.layout() == Layout::TILE) {
+                input_tensor_post_tm = ttnn::to_layout(
+                    input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
             }
-            return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
-        }
-        auto halo_output = ttnn::halo(
-            DefaultQueueId,
-            input_tensor_post_tm,
-            sliding_window_config,
-            0,
-            false,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            0,
-            input_tensor_post_tm.memory_config(),
-            !use_non_tile_height);
-        if (conv_config.deallocate_activation) {
-            ttnn::operations::core::deallocate(input_tensor_post_tm);
-        }
-        if (conv_config.reallocate_halo_output) {
-            auto move_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
-            ttnn::operations::core::deallocate(halo_output);
-            halo_output = move_output;
+        } else {
+            input_tensor_post_tm = ttnn::halo(
+                DefaultQueueId,
+                input_tensor_post_tm,
+                sliding_window_config,
+                0,
+                false,
+                parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+                0,
+                input_tensor_post_tm.memory_config(),
+                !use_non_tile_height);
+
+            if (conv_config.reallocate_halo_output) {
+                auto move_output = ttnn::operations::core::reallocate(input_tensor_post_tm, input_tensor_post_tm.memory_config());
+                ttnn::operations::core::deallocate(input_tensor_post_tm);
+                input_tensor_post_tm = move_output;
+            }
         }
 
         // call conv micro op
         auto conv_output = optimized_conv_new(
-            halo_output,
+            input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
             sliding_window_config,
