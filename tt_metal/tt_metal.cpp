@@ -19,6 +19,7 @@
 #include "tools/profiler/profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -724,11 +725,11 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                         uint32_t num_pages = circular_buffer->num_pages(buffer_index);
                         uint32_t page_size = size_in_bytes / num_pages;
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index) =
-                            addr_in_bytes >> 4;  // convert to addr in 16B words
+                            addr_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 1) =
-                            size_in_bytes >> 4;  // convert to addr in 16B words
+                            size_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 2) = num_pages;
-                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> 4;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                     }
                 }  // PROF_END("CBS")
 
