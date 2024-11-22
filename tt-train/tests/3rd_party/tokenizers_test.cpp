@@ -15,8 +15,8 @@ using tokenizers::Tokenizer;
 namespace {
 
 std::string getTestDataDir() {
-    const char* envVar = std::getenv("TEST_DATA_DIR");
-    return (envVar) ? std::string(envVar) : std::string(TEST_DATA_DIR);
+    const char* env_var = std::getenv("TEST_DATA_DIR");
+    return (env_var) ? std::string(env_var) : std::string(TEST_DATA_DIR);
 }
 
 std::string load_bytes_from_file(const std::string& path) {
