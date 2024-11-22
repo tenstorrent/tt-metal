@@ -30,3 +30,7 @@ AllowShortFunctionsOnASingleLine: All
 
 # Don't sort tt_metal headers for now
 SortIncludes: false
+
+# Left Align
+PointerAlignment: Left
+ReferenceAlignment: Left
