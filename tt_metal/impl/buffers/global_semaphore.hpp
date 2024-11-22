@@ -19,7 +19,7 @@ class Buffer;
 class Device;
 
 class GlobalSemaphore {
-public:
+   public:
     GlobalSemaphore(
         Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
@@ -42,7 +42,7 @@ public:
 
     void reset_semaphore_value();
 
-private:
+   private:
     void setup_buffer(BufferType buffer_type);
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer

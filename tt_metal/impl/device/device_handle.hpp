@@ -30,7 +30,7 @@ class DeviceHandle {
 
     DeviceHandle(DeviceKey key) : key(key) {}
 
-public:
+   public:
     DeviceHandle() = default;
 
     // TODO remove with v0

@@ -15,7 +15,7 @@ void watcher_detach(tt_metal::Device *dev);
 void watcher_sanitize_host_noc_read(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 
-int watcher_register_kernel(const string &name);
+int watcher_register_kernel(const string& name);
 
 // Helper functions for manually dumping watcher contents.
 void watcher_dump();
@@ -38,4 +38,4 @@ string watcher_get_log_file_name();
 // Helper function to get the current watcher dump count
 int watcher_get_dump_count();
 
-}  // namespace tt
+} // namespace tt

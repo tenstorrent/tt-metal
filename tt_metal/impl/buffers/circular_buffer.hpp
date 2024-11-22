@@ -12,7 +12,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class CircularBuffer {
-public:
+   public:
     CircularBuffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
 
     const CBHandle id() const { return id_; }
@@ -35,7 +35,7 @@ public:
 
     DataFormat data_format(uint32_t buffer_index) const;
 
-    const std::optional<Tile> &tile(uint32_t buffer_index) const;
+    const std::optional<Tile>& tile(uint32_t buffer_index) const;
 
     uint32_t address() const;
 
@@ -45,9 +45,11 @@ public:
 
     void assign_global_address();
 
-    void set_locally_allocated_address(uint32_t address) { this->locally_allocated_address_ = address; }
+    void set_locally_allocated_address(uint32_t address) {
+        this->locally_allocated_address_ = address;
+    }
 
-private:
+   private:
     bool uses_buffer_index(uint32_t buffer_index) const;
 
     void invalidate_locally_allocated_address();

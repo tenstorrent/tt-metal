@@ -28,11 +28,14 @@ using namespace tt::tt_metal;
 namespace tt {
 namespace watcher {
 
-#define GET_WATCHER_TENSIX_DEV_ADDR() hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_TENSIX_DEV_ADDR()                                   \
+    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
 
-#define GET_WATCHER_ERISC_DEV_ADDR() hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_ERISC_DEV_ADDR()                                    \
+    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
 
-#define GET_WATCHER_IERISC_DEV_ADDR() hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_IERISC_DEV_ADDR()                                   \
+    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
@@ -53,13 +56,13 @@ static std::atomic<bool> watcher_killed_due_to_error = false;
 static std::mutex watcher_exception_message_mutex;
 
 // Function to get the static string
-static std::string &watcher_exception_message() {
+static std::string& watcher_exception_message() {
     static std::string message = "";
     return message;
 }
 
 // Function to set the static string
-static void set_watcher_exception_message(const std::string &message) {
+static void set_watcher_exception_message(const std::string& message) {
     std::lock_guard<std::mutex> lock(watcher_exception_message_mutex);
     watcher_exception_message() = message;
 }
@@ -156,12 +159,11 @@ static void watcher_loop(int sleep_usecs) {
         // Delay the amount of time specified by the user. Don't include watcher polling time to avoid the case where
         // watcher dominates the communication links due to heavy traffic.
         double last_elapsed_time = watcher::get_elapsed_secs();
-        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double)sleep_usecs) / 1000000.) {
+        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double) sleep_usecs) / 1000000.) {
             // Odds are this thread will be killed during the usleep, the kill signal is
             // watcher::enabled = false from the main thread.
-            if (!watcher::enabled) {
+            if (!watcher::enabled)
                 break;
-            }
             usleep(1);
         }
 
@@ -170,9 +172,8 @@ static void watcher_loop(int sleep_usecs) {
 
             // If all devices are detached, we can turn off the server, it will be turned back on
             // when a new device is attached.
-            if (!watcher::enabled) {
+            if (!watcher::enabled)
                 break;
-            }
 
             fprintf(logfile, "-----\n");
             fprintf(logfile, "Dump #%d at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
@@ -212,12 +213,11 @@ void watcher_init(Device *device) {
     watcher_msg_t *data = reinterpret_cast<watcher_msg_t *>(&(watcher_init_val[0]));
 
     // Initialize watcher enable flag according to user setting.
-    data->enable = (tt::llrt::OptionsG.get_watcher_enabled()) ? WatcherEnabled : WatcherDisabled;
+    data->enable = (tt::llrt::OptionsG.get_watcher_enabled())? WatcherEnabled : WatcherDisabled;
 
     // Initialize debug status values to "unknown"
-    for (int idx = 0; idx < MAX_RISCV_PER_CORE; idx++) {
+    for (int idx = 0; idx < MAX_RISCV_PER_CORE; idx++)
         data->debug_waypoint[idx].waypoint[0] = 'X';
-    }
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
     for (int i = 0; i < NUM_NOCS; i++) {
@@ -237,14 +237,12 @@ void watcher_init(Device *device) {
     data->assert_status.which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
 
     // Initialize pause flags to 0
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
+    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++)
         data->pause_status.flags[idx] = 0;
-    }
 
     // Initialize stack usage data to unset
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
+    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++)
         data->stack_usage.max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-    }
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
@@ -268,17 +266,14 @@ void watcher_init(Device *device) {
             // Create the mask based on the feature
             uint32_t hart_mask = tt::llrt::OptionsG.get_feature_riscv_mask(delay_feature);
             switch (delay_feature) {
-                case tt::llrt::RunTimeDebugFeatureReadDebugDelay:
-                    delay_setup.read_delay_riscv_mask = hart_mask;
-                    break;
+                case tt::llrt::RunTimeDebugFeatureReadDebugDelay: delay_setup.read_delay_riscv_mask = hart_mask; break;
                 case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
                     delay_setup.write_delay_riscv_mask = hart_mask;
                     break;
                 case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
                     delay_setup.atomic_delay_riscv_mask = hart_mask;
                     break;
-                default:
-                    break;
+                default: break;
             }
 
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
@@ -303,14 +298,14 @@ void watcher_init(Device *device) {
                     } else {
                         log_warning(
                             tt::LogMetal,
-                            "TT_METAL_{}_CORES included {} core with logical coordinates {} (physical coordinates {}), "
-                            "which is not a valid core on device {}. This coordinate will be ignored by {} feature.",
+                            "TT_METAL_{}_CORES included {} core with logical coordinates {} (physical coordinates {}), which is not a valid core on device {}. This coordinate will be ignored by {} feature.",
                             tt::llrt::RunTimeDebugFeatureNames[delay_feature],
                             tt::llrt::get_core_type_name(core_type),
                             logical_core.str(),
-                            valid_logical_core ? phys_core.str() : "INVALID",
+                            valid_logical_core? phys_core.str() : "INVALID",
                             device->id(),
-                            tt::llrt::RunTimeDebugFeatureNames[delay_feature]);
+                            tt::llrt::RunTimeDebugFeatureNames[delay_feature]
+                        );
                     }
                 }
             }
@@ -328,7 +323,8 @@ void watcher_init(Device *device) {
             delay.second.read_delay_riscv_mask,
             delay.second.write_delay_riscv_mask,
             delay.second.atomic_delay_riscv_mask,
-            tt::llrt::OptionsG.get_watcher_debug_delay());
+            tt::llrt::OptionsG.get_watcher_debug_delay()
+            );
     }
 
     debug_insert_delays_msg_t debug_delays_val_zero = {0, 0, 0, 0};
@@ -347,11 +343,7 @@ void watcher_init(Device *device) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(
-                device->id(),
-                worker_core,
-                tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()),
-                GET_WATCHER_TENSIX_DEV_ADDR());
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()), GET_WATCHER_TENSIX_DEV_ADDR());
         }
     }
 
@@ -442,19 +434,17 @@ void watcher_detach(Device *old) {
 
     // If we shut down the watcher server, wait until it finishes up. Do this without holding the
     // lock because the watcher server may be waiting on it before it does its exit check.
-    if (watcher::devices.empty()) {
+    if (watcher::devices.empty())
         while (watcher::server_running) {
             ;
         }
-    }
 }
 
 int watcher_register_kernel(const string &name) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
-    if (!watcher::kernel_file) {
+    if (!watcher::kernel_file)
         watcher::create_kernel_file();
-    }
     int k_id = watcher::kernel_names.size();
     watcher::kernel_names.push_back(name);
     fprintf(watcher::kernel_file, "%d: %s\n", k_id, name.c_str());
@@ -476,9 +466,8 @@ string watcher_get_log_file_name() {
 int watcher_get_dump_count() { return watcher::dump_count; }
 
 void watcher_dump() {
-    if (!watcher::logfile) {
+    if (!watcher::logfile)
         watcher::create_log_file();
-    }
     watcher::dump(watcher::logfile);
 }
 

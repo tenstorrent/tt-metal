@@ -19,7 +19,6 @@ struct CoreDescriptorComparator {
         }
     }
 };
-
 #define CoreDescriptorSet std::set<CoreDescriptor, CoreDescriptorComparator>
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
@@ -32,10 +31,10 @@ static CoreDescriptorSet GetAllCores(tt::tt_metal::Device *device) {
             all_cores.insert({{x, y}, CoreType::WORKER});
         }
     }
-    for (const auto &logical_core : device->get_active_ethernet_cores()) {
+    for (const auto& logical_core : device->get_active_ethernet_cores()) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
-    for (const auto &logical_core : device->get_inactive_ethernet_cores()) {
+    for (const auto& logical_core : device->get_inactive_ethernet_cores()) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
 
@@ -44,7 +43,7 @@ static CoreDescriptorSet GetAllCores(tt::tt_metal::Device *device) {
 
 // Helper function to get CoreDescriptors for all cores that are used for dispatch. Should be a subset of
 // GetAllCores().
-static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device *device) {
+static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device* device) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = device->num_hw_cqs();
     CoreType dispatch_core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device->id());
@@ -56,10 +55,11 @@ static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device *device) {
 }
 
 inline uint64_t GetDprintBufAddr(tt::tt_metal::Device *device, const CoreCoord &phys_core, int risc_id) {
+
     dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
     return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
 inline int GetNumRiscs(const CoreDescriptor &core) {
-    return (core.type == CoreType::ETH) ? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+    return (core.type == CoreType::ETH)? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
 }

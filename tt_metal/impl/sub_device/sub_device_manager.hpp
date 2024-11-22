@@ -27,11 +27,9 @@ class Device;
 
 namespace detail {
 class SubDeviceManager {
-public:
+   public:
     static constexpr uint32_t MAX_NUM_SUB_DEVICES = 16;
-    static_assert(
-        MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(),
-        "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
+    static_assert(MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(), "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
     SubDeviceManager(Device *device, std::unique_ptr<Allocator> &&global_allocator);
     // Constructor used for regular sub-devices
@@ -68,7 +66,7 @@ public:
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
 
-private:
+   private:
     void validate_sub_devices() const;
     uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;
     void populate_sub_device_ids();
@@ -101,4 +99,4 @@ private:
 
 }  // namespace detail
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal

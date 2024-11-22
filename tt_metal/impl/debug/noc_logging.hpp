@@ -9,4 +9,4 @@
 namespace tt {
 void ClearNocData(tt_metal::Device *device);
 void DumpNocData(std::vector<tt_metal::Device *> devices);
-}  // namespace tt
+}

@@ -20,12 +20,12 @@
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(
-    Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type) :
+    Device* device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type) :
     device_(device), cores_(cores), initial_value_(initial_value) {
     this->setup_buffer(buffer_type);
 }
 
-GlobalSemaphore::GlobalSemaphore(Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type) :
+GlobalSemaphore::GlobalSemaphore(Device* device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type) :
     device_(device), cores_(std::move(cores)), initial_value_(initial_value) {
     this->setup_buffer(buffer_type);
 }
@@ -55,12 +55,11 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
 }
 
 std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type) {
+    Device* device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type) {
     return std::make_unique<GlobalSemaphore>(device, cores, initial_value, buffer_type);
 }
-
 std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type) {
+    Device* device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type) {
     return std::make_unique<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type);
 }
 
