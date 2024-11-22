@@ -114,7 +114,7 @@ ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape) {
     const int8_t correction_1 =(ttnn::types::TILE_SIZE - (int)padded[-1] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
     if(rank == 1)
     {
-        return ttnn::Shape({shape[0]},{padded[0]+correction_1});
+        return ttnn::Shape({1, shape[0]}, {32, padded[0]+correction_1});
     }
     const int8_t correction_2 =(ttnn::types::TILE_SIZE - (int)padded[-2] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
     switch(rank)
@@ -172,13 +172,16 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     //For view the following cases work:
     //RM: The last dimension is the same
     //Tiled: The last two dimensions are the same or there is no padding on the second last dimension
+    const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2] : 1;
+    const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
     bool this_is_view = (tensor_shape[-1] == shape[-1]) &&
         ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
-        (tensor_shape[-2]==shape[-2]) || //Second last dimension is the same
-        (shape[-2]%ttnn::types::TILE_SIZE==0 && tensor_shape[-2]%ttnn::types::TILE_SIZE==0)); //There is no padding on the second last dimension
+        (shape_second_last_dim==tensor_shape_second_last_dim) || //Second last dimension is the same
+        (shape_second_last_dim%ttnn::types::TILE_SIZE==0 && tensor_shape_second_last_dim%ttnn::types::TILE_SIZE==0)); //There is no padding on the second last dimension
+
     bool tile_tensor_view_reshape_possible = (layout == ttnn::Layout::TILE and
-        ((shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0) and (shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0)) and
-        (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1])
+        shape.with_tile_padding().rank() >= 2 and shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
+        tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]
         );
 
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or tile_tensor_view_reshape_possible) {
