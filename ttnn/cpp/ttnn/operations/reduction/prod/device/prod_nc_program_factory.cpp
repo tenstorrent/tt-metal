@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) input_is_dram, static_cast<uint32_t>(dim)};
 
     tt_metal::Buffer *output_buffer_type = output.buffer();
-    constexpr uint32_t cb_id_out = 16;
+    constexpr uint32_t cb_id_out = CBIndex::c_16;
     bool output_is_dram = output_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) cb_id_out, (std::uint32_t) output_is_dram};
 

@@ -29,7 +29,7 @@ void MAIN {
     #else
         constexpr auto cb_inp1 = cb_in1;
     #endif
-    constexpr auto cb_out0 =  tt::CBIndex::c_16;
+    constexpr auto cb_out0 =  tt::CBIndex::c_2;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 

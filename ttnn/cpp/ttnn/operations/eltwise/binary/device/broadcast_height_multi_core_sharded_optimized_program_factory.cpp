@@ -128,7 +128,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
             .set_globally_allocated_address(*a.buffer());
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_2;
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core, {{output_cb_index, out_df}})
             .set_page_size(output_cb_index, in_cb_pagesize)

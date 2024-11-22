@@ -346,7 +346,7 @@ struct signal_receiver {
 void kernel_main() {
     std::size_t arg_idx = 0;
 
-    constexpr uint32_t to_dm_sender_short_circuit_cb = tt::CBIndex::c_17;
+    constexpr uint32_t to_dm_sender_short_circuit_cb = tt::CBIndex::c_3;
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     auto args = reduce_scatter_reader_common_args_t(arg_idx, get_dataformat(cb_id_in0));
