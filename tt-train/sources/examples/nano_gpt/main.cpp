@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
     bool is_eval = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
-    app.add_option("-e,--is_eval", is_eval, "Is evaluation")->default_val(is_eval);
+    app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
 
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);

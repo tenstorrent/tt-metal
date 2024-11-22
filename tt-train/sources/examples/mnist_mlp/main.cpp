@@ -63,7 +63,6 @@ struct TrainingConfig {
     float learning_rate = 0.1;
     float momentum = 0.9F;
     float weight_decay = 0.F;
-    bool is_eval = false;
     int model_save_interval = 500;
     std::string model_path = "/tmp/mnist_mlp.msgpack";
     ttml::modules::MultiLayerPerceptronParameters mlp_config;
@@ -79,7 +78,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.learning_rate = training_config["learning_rate"].as<float>();
     config.momentum = training_config["momentum"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
-    config.is_eval = training_config["is_eval"].as<bool>();
     config.model_save_interval = training_config["model_save_interval"].as<int>();
     config.mlp_config = ttml::models::mlp::read_config(training_config["mlp_config"]);
     return config;
@@ -90,7 +88,9 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_mnist_mlp.yaml";
+    bool is_eval = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+    app.add_option("-e,--eval", config_name, "Evaluate")->default_val(is_eval);
 
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
     // 1/num_targets)
     float accuracy_before_training = evaluate(test_dataloader, model, num_targets);
     fmt::print("Accuracy of the current model training: {}%\n", accuracy_before_training * 100.F);
-    if (config.is_eval) {
+    if (is_eval) {
         return 0;
     }
 
