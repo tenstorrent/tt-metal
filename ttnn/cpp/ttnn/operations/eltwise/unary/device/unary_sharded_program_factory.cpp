@@ -79,7 +79,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // output sharded CB
-    uint32_t out_cb_id = tt::CBIndex::c_16;
+    uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig out_cb_config = tt::tt_metal::CircularBufferConfig(
                                             in_cb_pagesize * in_cb_npages,
                                             {{out_cb_id, out_df}})

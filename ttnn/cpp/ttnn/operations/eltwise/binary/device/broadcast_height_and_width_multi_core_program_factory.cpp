@@ -124,7 +124,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
 
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
     auto* cb_output_buffer = output_sharded ? dst_buffer : nullptr;
-    auto [cb_output, cb_handle_output] = create_cb(tt::CBIndex::c_16, program, all_device_cores, dst_single_tile_size, num_output_tiles, dst_cb_data_format, cb_output_buffer);
+    auto [cb_output, cb_handle_output] = create_cb(tt::CBIndex::c_2, program, all_device_cores, dst_single_tile_size, num_output_tiles, dst_cb_data_format, cb_output_buffer);
 
     auto src0_is_dram = static_cast<uint32_t>(src0_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     auto dst_is_dram = static_cast<uint32_t>(dst_buffer->buffer_type() == tt_metal::BufferType::DRAM);
