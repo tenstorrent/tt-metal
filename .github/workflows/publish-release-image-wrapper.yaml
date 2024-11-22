@@ -1,0 +1,12 @@
+name: "Create and Publish Release Docker Image"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  to_be_filled_out:
+    steps:
+      - name: This workflow will be filled out in https://github.com/tenstorrent/tt-metal/pull/15013
+        run: |
+          echo "NOOP"
