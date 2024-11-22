@@ -390,9 +390,9 @@ def test_fp32_support(input_shape, output_shape, device):
     "input_shape, output_shape",
     [
         ([0], [0, 1]),
-        ([0], [1, 0]),  # failed
+        ([0], [1, 0]),
         ([0, 5], [0, 0, 5]),
-        ([5, 0], [0, 5, 0]),  # failed
+        ([5, 0], [0, 5, 0]),
     ],
 )
 @pytest.mark.parametrize(
