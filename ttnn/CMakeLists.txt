@@ -608,6 +608,7 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
+    umd::device
     Boost::container
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
@@ -616,8 +617,6 @@ set(TTNN_PRECOMPILED_HEADERS
     ${PROJECT_SOURCE_DIR}/tt_metal/tt_stl/reflection.hpp
     ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/operation.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api_metal.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/cluster.h
     <functional>
     <map>
     <memory>
