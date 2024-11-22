@@ -342,7 +342,11 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
 
     // Just edit shape if shape has a 0 dimension
-    if tensor.volume() == 0 {
+    if (tensor.volume() == 0) {
+        TT_ASSERT(shape.volume() == 0 && "tensor's volume is 0, but shape's volume is not 0");
+        TT_ASSERT((tensor.storage_type() != StorageType::MULTI_DEVICE &&
+                   tensor.storage_type() != StorageType::MULTI_DEVICE_HOST) &&
+                   "Reshaping a multi-device tensor with 0 volume is not supported");
         return tensor.reshape(shape);
     }
 
