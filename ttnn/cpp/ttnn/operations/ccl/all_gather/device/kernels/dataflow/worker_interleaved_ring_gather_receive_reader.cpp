@@ -26,7 +26,7 @@ void kernel_main() {
 
     ASSERT(half_cb_n_pages > rem_num_pages);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     ccl::edm::WorkerToEdmReader<ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED> reader(
         ttnn::ccl::WorkerXY(eth_receiver_noc_x, eth_receiver_noc_y),

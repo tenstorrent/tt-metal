@@ -288,16 +288,16 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},
-            {tt::CB::c_in1, in1_t},
-            {tt::CB::c_in2, in2_t},
-            {tt::CB::c_in3, in3_t},
-            {tt::CB::c_in4, in4_t},
-            {tt::CB::c_intermed0, im0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
-            {tt::CB::c_intermed1, im1_t},
-            {tt::CB::c_intermed2, im2_t},
-            {tt::CB::c_intermed3, im3_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
-            {tt::CB::c_out0, out0_t},
+            {tt::CBIndex::c_0, in0_t},
+            {tt::CBIndex::c_1, in1_t},
+            {tt::CBIndex::c_2, in2_t},
+            {tt::CBIndex::c_3, in3_t},
+            {tt::CBIndex::c_4, in4_t},
+            {tt::CBIndex::c_24, im0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
+            {tt::CBIndex::c_25, im1_t},
+            {tt::CBIndex::c_26, im2_t},
+            {tt::CBIndex::c_27, im3_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
+            {tt::CBIndex::c_16, out0_t},
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -375,7 +375,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     const auto compute_kernel_1_id = CreateComputeKernel(

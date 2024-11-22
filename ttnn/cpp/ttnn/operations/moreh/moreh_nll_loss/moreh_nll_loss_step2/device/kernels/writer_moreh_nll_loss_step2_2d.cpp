@@ -9,7 +9,7 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg_val<uint32_t>(1);
     auto start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_output = tt::CB::c_out0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     const uint32_t output_tile_bytes = get_tile_size(cb_output);
     const auto output_data_format = get_dataformat(cb_output);

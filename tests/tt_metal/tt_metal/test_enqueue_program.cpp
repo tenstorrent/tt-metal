@@ -49,7 +49,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src_cb_config);
 
-    uint32_t ouput_cb_index = 16;  // output operands start at index 16
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(ouput_cb_index, single_tile_size);

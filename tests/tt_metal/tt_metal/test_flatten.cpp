@@ -117,13 +117,13 @@ int main(int argc, char **argv) {
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
-        uint32_t src0_cb_index = 0;
+        uint32_t src0_cb_index = tt::CBIndex::c_0;
         uint32_t num_input_tiles = 8;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_tiles = 1;
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);

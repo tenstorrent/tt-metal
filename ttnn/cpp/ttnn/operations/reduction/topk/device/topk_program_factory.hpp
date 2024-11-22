@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input
 
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four tiles of space
     // TODO: In theory if we have enough memory we could allocate 2*Wt tiles to reduce stalls
-    uint32_t input_cb_index = tt::CB::c_in0;
+    uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_cb_config = tt::tt_metal::CircularBufferConfig(
         cb_in_units  * value_tile_size, {{input_cb_index, input_cb_data_format}})
 		.set_page_size(input_cb_index, input_tile_size);
@@ -53,28 +53,28 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input
 
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four tiles of space
     // This CB carries the indices that are created in the reader kernel
-    uint32_t index_cb_index = tt::CB::c_in1;
+    uint32_t index_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config = tt::tt_metal::CircularBufferConfig(
         cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
 		.set_page_size(index_cb_index, index_tile_size);
     auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core, index_input_intermed0_config);
 
     // Single buffered circular buffer that holds the transposed input tiles
-    uint32_t input_transposed_cb_index = tt::CB::c_intermed0;
+    uint32_t input_transposed_cb_index = tt::CBIndex::c_24;
     tt::tt_metal::CircularBufferConfig input_transposed_cb_config = tt::tt_metal::CircularBufferConfig(
          Wt * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
 		.set_page_size(input_transposed_cb_index, input_tile_size);
     auto cb_input_transposed_tiles = tt::tt_metal::CreateCircularBuffer(program, core, input_transposed_cb_config);
 
     // Single buffered circular buffer that holds the transposed index tiles
-    uint32_t index_transposed_cb_index = tt::CB::c_intermed1;
+    uint32_t index_transposed_cb_index = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig index_transposed_cb_config = tt::tt_metal::CircularBufferConfig(
          Wt * index_tile_size, {{index_transposed_cb_index, index_cb_data_format}})
 		.set_page_size(index_transposed_cb_index, index_tile_size);
     auto cb_index_transposed_tiles = tt::tt_metal::CreateCircularBuffer(program, core, index_transposed_cb_config);
 
     // Output topk values
-    uint32_t values_cb_index = tt::CB::c_out0;
+    uint32_t values_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig values_cb_config = tt::tt_metal::CircularBufferConfig(
         num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
         .set_page_size(values_cb_index, value_tile_size);
@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input
 
 
     // Output topk indices
-    uint32_t output_ind_cb_index = tt::CB::c_out1;
+    uint32_t output_ind_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig output_ind_cb_config = tt::tt_metal::CircularBufferConfig(
         num_cb_unit * index_tile_size, {{output_ind_cb_index, index_cb_data_format}})
         .set_page_size(output_ind_cb_index, index_tile_size);
@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four tiles of space
     // TODO: In theory if we have enough memory we could allocate 2*Wt tiles to reduce stalls
-    uint32_t input_cb_index = tt::CB::c_in0;
+    uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_cb_config = tt::tt_metal::CircularBufferConfig(
         cb_in_units  * value_tile_size, {{input_cb_index, input_cb_data_format}})
 		.set_page_size(input_cb_index, input_tile_size);
@@ -270,52 +270,52 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four tiles of space
     // This CB carries the indices that are created in the reader kernel
-    uint32_t index_cb_index = tt::CB::c_in1;
+    uint32_t index_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config = tt::tt_metal::CircularBufferConfig(
         cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
 		.set_page_size(index_cb_index, index_tile_size);
     auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core, index_input_intermed0_config);
 
     // Single buffered circular buffer that holds the transposed input tiles
-    uint32_t input_transposed_cb_index = tt::CB::c_intermed0;
+    uint32_t input_transposed_cb_index = tt::CBIndex::c_24;
     tt::tt_metal::CircularBufferConfig input_transposed_cb_config = tt::tt_metal::CircularBufferConfig(
          Wt_local * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
 		.set_page_size(input_transposed_cb_index, input_tile_size);
     auto cb_input_transposed_tiles = tt::tt_metal::CreateCircularBuffer(program, core, input_transposed_cb_config);
 
     // Single buffered circular buffer that holds the transposed index tiles
-    uint32_t index_transposed_cb_index = tt::CB::c_intermed1;
+    uint32_t index_transposed_cb_index = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig index_transposed_cb_config = tt::tt_metal::CircularBufferConfig(
          Wt_local * index_tile_size, {{index_transposed_cb_index, index_cb_data_format}})
 		.set_page_size(index_transposed_cb_index, index_tile_size);
     auto cb_index_transposed_tiles = tt::tt_metal::CreateCircularBuffer(program, core, index_transposed_cb_config);
 
-    uint32_t gathered_values_cb_index = tt::CB::c_intermed2;
+    uint32_t gathered_values_cb_index = tt::CBIndex::c_26;
     tt::tt_metal::CircularBufferConfig gathered_values_cb_config = tt::tt_metal::CircularBufferConfig(
         Wt_final * value_tile_size, {{gathered_values_cb_index, value_cb_data_format}})
         .set_page_size(gathered_values_cb_index, value_tile_size);
     auto cb_gathered_topk_values_tensor = tt::tt_metal::CreateCircularBuffer(program, core, gathered_values_cb_config);
 
-    uint32_t gathered_indices_cb_index = tt::CB::c_intermed3;
+    uint32_t gathered_indices_cb_index = tt::CBIndex::c_27;
     tt::tt_metal::CircularBufferConfig gathered_indices_cb_config = tt::tt_metal::CircularBufferConfig(
         Wt_final * index_tile_size, {{gathered_indices_cb_index, index_cb_data_format}})
         .set_page_size(gathered_indices_cb_index, index_tile_size);
     auto cb_gathered_topk_indices_tensor = tt::tt_metal::CreateCircularBuffer(program, core, gathered_indices_cb_config);
 
-    uint32_t final_values_cb_index = tt::CB::c_intermed4;
+    uint32_t final_values_cb_index = tt::CBIndex::c_28;
     tt::tt_metal::CircularBufferConfig final_values_cb_config = tt::tt_metal::CircularBufferConfig(
         Wt_final * value_tile_size, {{final_values_cb_index, value_cb_data_format}})
         .set_page_size(final_values_cb_index, value_tile_size);
     auto cb_final_topk_values_tensor = tt::tt_metal::CreateCircularBuffer(program, core, final_values_cb_config);
 
-    uint32_t final_indices_cb_index = tt::CB::c_intermed5;
+    uint32_t final_indices_cb_index = tt::CBIndex::c_29;
     tt::tt_metal::CircularBufferConfig final_indices_cb_config = tt::tt_metal::CircularBufferConfig(
         Wt_final * index_tile_size, {{final_indices_cb_index, index_cb_data_format}})
         .set_page_size(final_indices_cb_index, index_tile_size);
     auto cb_final_topk_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core, final_indices_cb_config);
 
     // Output topk values
-    uint32_t values_cb_index = tt::CB::c_out0;
+    uint32_t values_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig values_cb_config = tt::tt_metal::CircularBufferConfig(
         num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
         .set_page_size(values_cb_index, value_tile_size);
@@ -323,7 +323,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
 
     // Output topk indices
-    uint32_t output_ind_cb_index = tt::CB::c_out1;
+    uint32_t output_ind_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig output_ind_cb_config = tt::tt_metal::CircularBufferConfig(
         num_cb_unit * index_tile_size, {{output_ind_cb_index, index_cb_data_format}})
         .set_page_size(output_ind_cb_index, index_tile_size);

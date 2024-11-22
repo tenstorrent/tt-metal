@@ -18,16 +18,16 @@ constexpr uint32_t num_mask_tiles = 3;
 constexpr uint32_t MASK_TILE_H_IDX = 0;
 constexpr uint32_t MASK_TILE_W_IDX = 1;
 constexpr uint32_t MASK_TILE_HW_IDX = 2;
-constexpr uint32_t cb_in0 = tt::CB::c_in0;
-constexpr uint32_t cb_in1 = tt::CB::c_in1;
-constexpr uint32_t cb_in2 = tt::CB::c_in2;
-constexpr uint32_t cb_in3 = tt::CB::c_in3;
-constexpr uint32_t bias_cb_id = tt::CB::c_in4;
-constexpr uint32_t cb_out0 = tt::CB::c_out0;
-constexpr uint32_t cb_intermed0 = tt::CB::c_intermed0;
-constexpr uint32_t cb_intermed1 = tt::CB::c_intermed1;
-constexpr uint32_t cb_intermed2 = tt::CB::c_intermed2;
-constexpr uint32_t cb_intermed3 = tt::CB::c_intermed3;
+constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+constexpr uint32_t cb_in2 = tt::CBIndex::c_2;
+constexpr uint32_t cb_in3 = tt::CBIndex::c_3;
+constexpr uint32_t bias_cb_id = tt::CBIndex::c_4;
+constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+constexpr uint32_t cb_intermed0 = tt::CBIndex::c_24;
+constexpr uint32_t cb_intermed1 = tt::CBIndex::c_25;
+constexpr uint32_t cb_intermed2 = tt::CBIndex::c_26;
+constexpr uint32_t cb_intermed3 = tt::CBIndex::c_27;
 
 ////////////////////
 // inline functions

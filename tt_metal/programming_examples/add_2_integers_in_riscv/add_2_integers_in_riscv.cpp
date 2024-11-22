@@ -48,11 +48,11 @@ int main(int argc, char **argv) {
     EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     /* Use L1 circular buffers to set input buffers */
-    constexpr uint32_t src0_cb_index = CB::c_in0;
+    constexpr uint32_t src0_cb_index = CBIndex::c_0;
     CircularBufferConfig cb_src0_config = CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    constexpr uint32_t src1_cb_index = CB::c_in1;
+    constexpr uint32_t src1_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_src1_config = CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
     CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 

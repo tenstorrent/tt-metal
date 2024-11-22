@@ -68,8 +68,8 @@ void kernel_main() {
     #endif
 
 
-    constexpr auto cb_pad = tt::CB::c_in1;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_pad = tt::CBIndex::c_1;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
 
     uint32_t pad_val_addr = get_read_ptr(cb_pad);
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);

@@ -25,13 +25,13 @@ void kernel_main() {
     const uint32_t mcast_sender_noc_x         = get_arg_val<uint32_t>(0);
     const uint32_t mcast_sender_noc_y         = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_ex_partial = tt::CB::dataflow0; // E[x] partial reduce
-    constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] partial reduce
-    constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
-    constexpr uint32_t cb_in0 = tt::CB::c_in0; // sharded cb
-    constexpr uint32_t cb_repack = tt::CB::c_intermed2;
-    constexpr uint32_t cb_repack_out = tt::CB::c_intermed7;
-    constexpr uint32_t cb_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8; // E[x] partial reduce
+    constexpr uint32_t cb_ex = tt::CBIndex::c_9; // E[x] partial reduce
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15; // E[x] global reduce
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0; // sharded cb
+    constexpr uint32_t cb_repack = tt::CBIndex::c_26;
+    constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial); // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial); // data format

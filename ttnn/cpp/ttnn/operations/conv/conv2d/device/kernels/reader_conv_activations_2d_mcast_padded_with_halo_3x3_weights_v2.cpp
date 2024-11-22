@@ -100,16 +100,16 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    constexpr uint32_t cb_id_act = tt::CB::c_in0;
-    constexpr uint32_t tilized_in0_cb_id = tt::CB::c_intermed1;
-    constexpr uint32_t cb_id_sharded_act = tt::CB::c_in3;
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CB::c_in6;
+    constexpr uint32_t cb_id_act = tt::CBIndex::c_0;
+    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
+    constexpr uint32_t cb_id_sharded_act = tt::CBIndex::c_3;
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CBIndex::c_6;
 
-    constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
+    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CB::c_in5;
+    constexpr uint32_t cb_l1_array = tt::CBIndex::c_5;
     volatile tt_l1_ptr uint32_t* l1_array = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
     // Set up local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];

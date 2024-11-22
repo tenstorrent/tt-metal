@@ -13,7 +13,7 @@ void kernel_main() {
         // Copy float from device DRAM into Core 0,0's L1
         uint32_t dram_addr  = get_arg_val<uint32_t>(0);
         uint64_t noc_addr = get_noc_addr(1, 0, dram_addr);
-        constexpr uint32_t cb_id = tt::CB::c_in0; // index=0
+        constexpr uint32_t cb_id = tt::CBIndex::c_0; // index=0
         uint32_t size = get_tile_size(cb_id);
         uint32_t l1_addr= get_write_ptr(cb_id);
         cb_reserve_back(cb_id, 0);

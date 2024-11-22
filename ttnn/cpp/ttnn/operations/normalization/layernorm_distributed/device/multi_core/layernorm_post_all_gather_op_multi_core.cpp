@@ -286,64 +286,64 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 
     // Create circular buffers
     // c_in0 -> a
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_tiles*in_single_tile_size, {{tt::CB::c_in0, in_data_format}}).set_page_size(tt::CB::c_in0, in_single_tile_size);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_tiles*in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}}).set_page_size(tt::CBIndex::c_0, in_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_src0_config );
     // c_in1 -> stats
-    CircularBufferConfig cb_stats_config = CircularBufferConfig(in1_tiles*stats_single_tile_size, {{tt::CB::c_in1, stats_data_format}}).set_page_size(tt::CB::c_in1, stats_single_tile_size);
+    CircularBufferConfig cb_stats_config = CircularBufferConfig(in1_tiles*stats_single_tile_size, {{tt::CBIndex::c_1, stats_data_format}}).set_page_size(tt::CBIndex::c_1, stats_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_stats_config );
     // c_in2 -> gamma
     if (gamma.has_value()) {
-        CircularBufferConfig cb_gamma_config = CircularBufferConfig(in2_tiles*gamma_single_tile_size, {{tt::CB::c_in2, gamma_cb_data_format}}).set_page_size(tt::CB::c_in2, gamma_single_tile_size);
+        CircularBufferConfig cb_gamma_config = CircularBufferConfig(in2_tiles*gamma_single_tile_size, {{tt::CBIndex::c_2, gamma_cb_data_format}}).set_page_size(tt::CBIndex::c_2, gamma_single_tile_size);
         CreateCircularBuffer( program, all_cores, cb_gamma_config );
     }
     // c_in3 -> beta
     if (beta.has_value()) {
-        CircularBufferConfig cb_beta_config = CircularBufferConfig(in3_tiles*beta_single_tile_size, {{tt::CB::c_in3, beta_cb_data_format}}).set_page_size(tt::CB::c_in3, beta_single_tile_size);
+        CircularBufferConfig cb_beta_config = CircularBufferConfig(in3_tiles*beta_single_tile_size, {{tt::CBIndex::c_3, beta_cb_data_format}}).set_page_size(tt::CBIndex::c_3, beta_single_tile_size);
         CreateCircularBuffer( program, all_cores, cb_beta_config );
     }
     // c_in4 -> epsilon
-    CircularBufferConfig cb_eps_config = CircularBufferConfig(in4_tiles*bfloat16_tile_size, {{tt::CB::c_in4, tt::DataFormat::Float16_b}}).set_page_size(tt::CB::c_in4, bfloat16_tile_size);
+    CircularBufferConfig cb_eps_config = CircularBufferConfig(in4_tiles*bfloat16_tile_size, {{tt::CBIndex::c_4, tt::DataFormat::Float16_b}}).set_page_size(tt::CBIndex::c_4, bfloat16_tile_size);
     CreateCircularBuffer( program, all_cores, cb_eps_config );
     // c_in5 -> reduce scalar
-    CircularBufferConfig cb_reduce_config = CircularBufferConfig(in5_tiles*bfloat16_tile_size, {{tt::CB::c_in5, tt::DataFormat::Float16_b}}).set_page_size(tt::CB::c_in5, bfloat16_tile_size);
+    CircularBufferConfig cb_reduce_config = CircularBufferConfig(in5_tiles*bfloat16_tile_size, {{tt::CBIndex::c_5, tt::DataFormat::Float16_b}}).set_page_size(tt::CBIndex::c_5, bfloat16_tile_size);
     CreateCircularBuffer( program, all_cores, cb_reduce_config );
 
     // LN and RMS shared intermediates //
     // c_intermed0 -> [mean(x**2), mean(x)]
-    CircularBufferConfig cb_intermed0_config = CircularBufferConfig(intermed0_tiles*single_tile_size, {{tt::CB::c_intermed0, cb_data_format}}).set_page_size(tt::CB::c_intermed0, single_tile_size);
+    CircularBufferConfig cb_intermed0_config = CircularBufferConfig(intermed0_tiles*single_tile_size, {{tt::CBIndex::c_24, cb_data_format}}).set_page_size(tt::CBIndex::c_24, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed0_config );
     // c_intermed2 -> var = mean(x**2) - mean(x)**2
-    CircularBufferConfig cb_intermed2_config = CircularBufferConfig(intermed2_tiles*single_tile_size, {{tt::CB::c_intermed2, cb_data_format}}).set_page_size(tt::CB::c_intermed2, single_tile_size);
+    CircularBufferConfig cb_intermed2_config = CircularBufferConfig(intermed2_tiles*single_tile_size, {{tt::CBIndex::c_26, cb_data_format}}).set_page_size(tt::CBIndex::c_26, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed2_config );
     // c_intermed3 -> var + epsilon
-    CircularBufferConfig cb_intermed3_config = CircularBufferConfig(intermed3_tiles*single_tile_size, {{tt::CB::c_intermed3, cb_data_format}}).set_page_size(tt::CB::c_intermed3, single_tile_size);
+    CircularBufferConfig cb_intermed3_config = CircularBufferConfig(intermed3_tiles*single_tile_size, {{tt::CBIndex::c_27, cb_data_format}}).set_page_size(tt::CBIndex::c_27, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed3_config );
     // c_intermed4 -> 1/sqrt(var + epsilon)
-    CircularBufferConfig cb_intermed4_config = CircularBufferConfig(intermed4_tiles*single_tile_size, {{tt::CB::c_intermed4, cb_data_format}}).set_page_size(tt::CB::c_intermed4, single_tile_size);
+    CircularBufferConfig cb_intermed4_config = CircularBufferConfig(intermed4_tiles*single_tile_size, {{tt::CBIndex::c_28, cb_data_format}}).set_page_size(tt::CBIndex::c_28, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed4_config );
     // c_intermed6 -> (x - mean(x)) * 1/sqrt(var + epsilon)
-    CircularBufferConfig cb_intermed6_config = CircularBufferConfig(intermed6_tiles*single_tile_size, {{tt::CB::c_intermed6, cb_data_format}}).set_page_size(tt::CB::c_intermed6, single_tile_size);
+    CircularBufferConfig cb_intermed6_config = CircularBufferConfig(intermed6_tiles*single_tile_size, {{tt::CBIndex::c_30, cb_data_format}}).set_page_size(tt::CBIndex::c_30, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed6_config );
 
 
     // LN-specific intermediates
     if (!is_rmsnorm) {
         // c_intermed1 -> mean(x)**2
-        CircularBufferConfig cb_intermed1_config = CircularBufferConfig(intermed1_tiles*single_tile_size, {{tt::CB::c_intermed1, cb_data_format}}).set_page_size(tt::CB::c_intermed1, single_tile_size);
+        CircularBufferConfig cb_intermed1_config = CircularBufferConfig(intermed1_tiles*single_tile_size, {{tt::CBIndex::c_25, cb_data_format}}).set_page_size(tt::CBIndex::c_25, single_tile_size);
         CreateCircularBuffer( program, all_cores, cb_intermed1_config );
         // c_intermed5 -> x - mean(x)
-        CircularBufferConfig cb_intermed5_config = CircularBufferConfig(intermed5_tiles*single_tile_size, {{tt::CB::c_intermed5, cb_data_format}}).set_page_size(tt::CB::c_intermed5, single_tile_size);
+        CircularBufferConfig cb_intermed5_config = CircularBufferConfig(intermed5_tiles*single_tile_size, {{tt::CBIndex::c_29, cb_data_format}}).set_page_size(tt::CBIndex::c_29, single_tile_size);
         CreateCircularBuffer( program, all_cores, cb_intermed5_config );
         if (beta.has_value()) {
             // Layernorm has gamma and beta so we need an extra intermediate buffer
             // c_intermed7 -> (x - mean(x)) * 1/sqrt(var + epsilon) * gamma
-            CircularBufferConfig cb_intermed7_config = CircularBufferConfig(intermed7_tiles*single_tile_size, {{tt::CB::c_intermed7, cb_data_format}}).set_page_size(tt::CB::c_intermed7, single_tile_size);
+            CircularBufferConfig cb_intermed7_config = CircularBufferConfig(intermed7_tiles*single_tile_size, {{tt::CBIndex::c_31, cb_data_format}}).set_page_size(tt::CBIndex::c_31, single_tile_size);
             CreateCircularBuffer( program, all_cores, cb_intermed7_config );
         }
     }
 
 
-    CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_tiles*out_single_tile_size, {{tt::CB::c_out0, out_data_format}}).set_page_size(tt::CB::c_out0, out_single_tile_size);
+    CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_tiles*out_single_tile_size, {{tt::CBIndex::c_16, out_data_format}}).set_page_size(tt::CBIndex::c_16, out_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_out0_config );
 
     // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns std::vector<std::shared_ptr<CircularBuffer>>

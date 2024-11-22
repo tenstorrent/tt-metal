@@ -32,8 +32,8 @@ void MAIN {
     {
         bool last_out = block == (num_blocks-1);
 
-        cb_wait_front(tt::CB::c_in0, in0_block_num_tiles);
-        cb_wait_front(tt::CB::c_in1, in1_block_num_tiles);
+        cb_wait_front(tt::CBIndex::c_0, in0_block_num_tiles);
+        cb_wait_front(tt::CBIndex::c_1, in1_block_num_tiles);
         int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
@@ -43,11 +43,11 @@ void MAIN {
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short();
-                    cb_wait_front(tt::CB::c_intermed0, out_subblock_num_tiles);
+                    cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        copy_tile(tt::CB::c_intermed0, i, i);
+                        copy_tile(tt::CBIndex::c_24, i, i);
                     }
-                    cb_pop_front(tt::CB::c_intermed0, out_subblock_num_tiles);
+                    cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
                     mm_init_short();
                 }
 
@@ -60,7 +60,7 @@ void MAIN {
                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                            matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                            matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
                             in1_index_inner_dim_offset += in1_per_core_w;
                         }
                         dst_index++;
@@ -70,18 +70,18 @@ void MAIN {
 
                 if (last_out) {
                     // Pack out to output buffer
-                    cb_reserve_back(tt::CB::c_out0, out_subblock_num_tiles);
+                    cb_reserve_back(tt::CBIndex::c_16, out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        pack_tile(i, tt::CB::c_out0);
+                        pack_tile(i, tt::CBIndex::c_16);
                     }
-                    cb_push_back(tt::CB::c_out0, out_subblock_num_tiles);
+                    cb_push_back(tt::CBIndex::c_16, out_subblock_num_tiles);
                 } else {
                     // Move partial result to interm buffer
-                    cb_reserve_back(tt::CB::c_intermed0, out_subblock_num_tiles);
+                    cb_reserve_back(tt::CBIndex::c_24, out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        pack_tile(i, tt::CB::c_intermed0);
+                        pack_tile(i, tt::CBIndex::c_24);
                     }
-                    cb_push_back(tt::CB::c_intermed0, out_subblock_num_tiles);
+                    cb_push_back(tt::CBIndex::c_24, out_subblock_num_tiles);
                 }
 
                 release_dst();
@@ -92,8 +92,8 @@ void MAIN {
 
         if (spill) enable_reload = true;
 
-        cb_pop_front(tt::CB::c_in0, in0_block_num_tiles);
-        cb_pop_front(tt::CB::c_in1, in1_block_num_tiles);
+        cb_pop_front(tt::CBIndex::c_0, in0_block_num_tiles);
+        cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);
 
     }
 

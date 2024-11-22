@@ -97,7 +97,7 @@ void kernel_main() {
 
     sender.open();
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     // We need to normalize all noc addresses to be for a consistent noc ID
     // so the remote sender core can correctly send the packet. In the future

@@ -279,14 +279,14 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         .set_page_size(src0_cb_index, single_tile_bytes);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(ouput_cb_index, single_tile_bytes);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    tt_metal::CircularBufferConfig cb_temp_reduce_tile_config = tt_metal::CircularBufferConfig(2 * single_tile_bytes, {{CB::c_in2, tt::DataFormat::Float16_b}})
-        .set_page_size(CB::c_in2, single_tile_bytes);
+    tt_metal::CircularBufferConfig cb_temp_reduce_tile_config = tt_metal::CircularBufferConfig(2 * single_tile_bytes, {{CBIndex::c_2, tt::DataFormat::Float16_b}})
+        .set_page_size(CBIndex::c_2, single_tile_bytes);
     auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
 
     add_reader_writer_kernels(program, core, test_config, src_dram_buffer, dst_dram_buffer);

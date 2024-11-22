@@ -13,11 +13,11 @@ void kernel_main() {
     constexpr uint32_t tensor_stride_size_bytes               = get_compile_time_arg_val(7);
 
 
-    constexpr uint32_t cb_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_im0 = tt::CB::c_intermed0;
-    constexpr uint32_t cb_out0 = tt::CB::c_out0;
-    constexpr uint32_t cb_out1 = tt::CB::c_out1;
-    constexpr uint32_t cb_out2 = tt::CB::c_out2;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_im0 = tt::CBIndex::c_24;
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out1 = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out2 = tt::CBIndex::c_18;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_in0);
     const DataFormat data_format = get_dataformat(cb_in0);

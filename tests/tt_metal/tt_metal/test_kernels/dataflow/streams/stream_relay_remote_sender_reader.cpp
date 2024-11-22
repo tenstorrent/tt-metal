@@ -29,7 +29,7 @@ void kernel_main() {
     const uint32_t read_page_size = cb_page_size - msg_hdr_size;
     const InterleavedAddrGen<true> src_addr_gen = {.bank_base_address = input_buffer_addr, .page_size = read_page_size};
 
-    auto cb = tt::CB::c_in0;
+    auto cb = tt::CBIndex::c_0;
 
     uint32_t sub_index = 0;
 

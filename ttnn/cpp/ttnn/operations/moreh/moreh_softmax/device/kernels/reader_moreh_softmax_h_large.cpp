@@ -13,9 +13,9 @@ void kernel_main() {
     uint32_t scaler = get_arg_val<uint32_t>(5);
     uint32_t mask_h = get_arg_val<uint32_t>(6);
 
-    constexpr auto cb_in = tt::CB::c_in0;
-    constexpr auto cb_mask = tt::CB::c_in1;
-    constexpr auto cb_scaler = tt::CB::c_in2;
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_mask = tt::CBIndex::c_1;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
 
     uint32_t l1_write_addr_in;
 

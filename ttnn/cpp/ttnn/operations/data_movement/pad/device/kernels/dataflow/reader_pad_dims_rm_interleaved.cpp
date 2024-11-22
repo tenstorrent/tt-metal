@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     #define src_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
 
-    constexpr uint32_t cb_id = tt::CB::c_in0;
+    constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
     // calculate the offset for alignment of padding in rows/sticks
     uint32_t l1_addr_partial = get_write_ptr(cb_id) + unpadded_X_nbytes;

@@ -78,7 +78,7 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 		.set_page_size(src1_cb_index, src1_single_tile_size);
 	auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
-	uint32_t output_cb_index = 16; // output operands start at index 16
+	uint32_t output_cb_index = tt::CBIndex::c_16;
 	uint32_t num_output_tiles = 2;
 	tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
 		.set_page_size(output_cb_index, dst_single_tile_size);

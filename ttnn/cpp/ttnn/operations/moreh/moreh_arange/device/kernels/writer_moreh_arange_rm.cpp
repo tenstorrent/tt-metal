@@ -16,7 +16,7 @@ void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(4);
     uint32_t element_size = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_out = tt::CB::c_out0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     uint32_t num_bytes_per_tile = TILE_WIDTH * element_size;

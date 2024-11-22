@@ -189,7 +189,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                  WORKER CB CONFIG
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
 
     // Just want a dummy DF
     tt::DataFormat df = input_buffer_page_size == 1024 ? tt::DataFormat::Bfp8 :

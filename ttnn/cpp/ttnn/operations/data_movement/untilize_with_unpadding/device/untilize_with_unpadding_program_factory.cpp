@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
                               .set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(
                                 num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
@@ -231,8 +231,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t padded_row_size_bytes = input_shape[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    create_cb(tt::CB::c_in0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
-    create_cb(tt::CB::c_out0, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
+    create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
+    create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -437,7 +437,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
     auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in0,
+        tt::CBIndex::c_0,
         program,
         all_cores,
         input_single_tile_size,
@@ -447,17 +447,17 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
     auto [output_cb_index, cb_output] =
-        create_cb(tt::CB::c_out0, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
+        create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
 
     auto [sharded_output_cb_index, cb_sharded_output] = out_sharded ? create_cb(
-                                                                          tt::CB::c_out1,
+                                                                          tt::CBIndex::c_17,
                                                                           program,
                                                                           all_cores,
                                                                           block_row_size,
                                                                           num_output_rows_unpadded,
                                                                           output_cb_data_format,
                                                                           output.buffer())
-                                                                    : std::make_tuple(tt::CB::c_out1, CBHandle{});
+                                                                    : std::make_tuple(tt::CBIndex::c_17, CBHandle{});
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();

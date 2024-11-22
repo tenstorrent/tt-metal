@@ -315,24 +315,24 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
 
     // Create circular buffers
     // in0 sharded
-    auto c_in0_config = CircularBufferConfig(in0_CB_size, {{CB::c_in0, cb_data_format}})
-        .set_page_size(CB::c_in0, single_tile_size).set_globally_allocated_address(*a.buffer());
+    auto c_in0_config = CircularBufferConfig(in0_CB_size, {{CBIndex::c_0, cb_data_format}})
+        .set_page_size(CBIndex::c_0, single_tile_size).set_globally_allocated_address(*a.buffer());
     auto cb_in0_id = CreateCircularBuffer(program, all_cores, c_in0_config);
     // im
-    auto c_im0_config = CircularBufferConfig(im0_CB_size, {{CB::c_intermed0, cb_data_format}})
-        .set_page_size(CB::c_intermed0, single_tile_size);
+    auto c_im0_config = CircularBufferConfig(im0_CB_size, {{CBIndex::c_24, cb_data_format}})
+        .set_page_size(CBIndex::c_24, single_tile_size);
     auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
     // q sharded
-    auto c_out0_config = CircularBufferConfig(out_CB_size, {{CB::c_out0, cb_data_format}})
-        .set_page_size(CB::c_out0, single_tile_size).set_globally_allocated_address(*output[0].buffer());;
+    auto c_out0_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_16, cb_data_format}})
+        .set_page_size(CBIndex::c_16, single_tile_size).set_globally_allocated_address(*output[0].buffer());;
     auto cb_out0_id = CreateCircularBuffer( program, all_cores, c_out0_config );
     // k sharded
-    auto c_out1_config = CircularBufferConfig(out_CB_size, {{CB::c_out1, cb_data_format}})
-        .set_page_size(CB::c_out1, single_tile_size).set_globally_allocated_address(*output[1].buffer());;
+    auto c_out1_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_17, cb_data_format}})
+        .set_page_size(CBIndex::c_17, single_tile_size).set_globally_allocated_address(*output[1].buffer());;
     auto cb_out1_id = CreateCircularBuffer( program, all_cores, c_out1_config );
     // v sharded
-    auto c_out2_config = CircularBufferConfig(out_CB_size, {{CB::c_out2, cb_data_format}})
-        .set_page_size(CB::c_out2, single_tile_size).set_globally_allocated_address(*output[2].buffer());;
+    auto c_out2_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_18, cb_data_format}})
+        .set_page_size(CBIndex::c_18, single_tile_size).set_globally_allocated_address(*output[2].buffer());;
     auto cb_out2_id = CreateCircularBuffer( program, all_cores, c_out2_config );
 
     auto override_runtime_args_callback = [

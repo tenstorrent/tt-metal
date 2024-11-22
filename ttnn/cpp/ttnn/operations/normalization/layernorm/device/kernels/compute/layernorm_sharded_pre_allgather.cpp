@@ -45,18 +45,18 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_scaler = tt::CB::c_in2;
-    constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
-    constexpr uint32_t cb_x = tt::CB::c_intermed0; // x minus mean
-    constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
+    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
+    constexpr uint32_t cb_x = tt::CBIndex::c_24; // x minus mean
+    constexpr uint32_t cb_ex = tt::CBIndex::c_9; // E[x] global reduce
 
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_x2 = cb_x; // x^2
-    constexpr uint32_t cb_out = tt::CB::c_out0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
-    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11; // E[x^2] partial reduce
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13; // E[x^2] partials recieved from other cores
     const uint32_t cb_reduction_out = is_second_stage_reader ? cb_out : cb_ex2;
 
 

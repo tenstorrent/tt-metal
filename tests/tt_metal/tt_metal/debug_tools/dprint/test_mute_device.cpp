@@ -48,7 +48,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     Program program = Program();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
-    constexpr uint32_t src0_cb_index = CB::c_in0;
+    constexpr uint32_t src0_cb_index = CBIndex::c_0;
     constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(
         buffer_size,

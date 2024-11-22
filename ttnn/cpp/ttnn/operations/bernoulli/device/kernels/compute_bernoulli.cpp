@@ -16,7 +16,7 @@ void MAIN {
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
     const uint32_t end_id = start_id + num_tiles;
 
-    init_sfpu(intermed_cb_id);
+    init_sfpu(intermed_cb_id, intermed_cb_id);
 
     union f2u {
         float f;

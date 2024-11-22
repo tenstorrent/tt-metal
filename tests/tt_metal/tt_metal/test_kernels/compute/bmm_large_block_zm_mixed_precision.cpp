@@ -23,10 +23,10 @@ void MAIN {
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10); // out_subblock_h * out_subblock_w;
     uint32_t batch = get_compile_time_arg_val(11); // batch dim
 
-    uint32_t in0_cb_id = tt::CB::c_in0;
-    uint32_t in1_cb_id = tt::CB::c_in1;
-    uint32_t out_cb_id = tt::CB::c_out0;
-    uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
+    uint32_t in0_cb_id = tt::CBIndex::c_0;
+    uint32_t in1_cb_id = tt::CBIndex::c_1;
+    uint32_t out_cb_id = tt::CBIndex::c_16;
+    uint32_t mm_partials_cb_id = tt::CBIndex::c_24;
 
     mm_init(in0_cb_id, in1_cb_id, out_cb_id);
 

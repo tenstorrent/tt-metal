@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr bool src1_is_dram = false;
 
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t out_cb_id = tt::CB::c_in1;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_1;
     //constexpr uint32_t is_reader = get_compile_time_arg_val(2);
     constexpr uint32_t scale_h_inv_comp = get_compile_time_arg_val(3);
     constexpr uint32_t scale_w_inv_comp = get_compile_time_arg_val(4);
@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t x_index_compute_comp = get_compile_time_arg_val(6);
 
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
 
     // assuming shard begins with a new row. TODO: generalize?
     float scale_h_inv = uint32_to_float(scale_h_inv_comp);

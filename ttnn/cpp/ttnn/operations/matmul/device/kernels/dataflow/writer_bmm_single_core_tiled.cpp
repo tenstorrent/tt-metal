@@ -19,7 +19,7 @@ void kernel_main() {
     uint32_t out_num_subblocks_w = get_arg_val<uint32_t>(9);
     uint32_t out_num_subblocks_h = get_arg_val<uint32_t>(10);
 
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     const uint32_t tile_nbytes = get_tile_size(out_cb_id);
     const DataFormat out_df = get_dataformat(out_cb_id);

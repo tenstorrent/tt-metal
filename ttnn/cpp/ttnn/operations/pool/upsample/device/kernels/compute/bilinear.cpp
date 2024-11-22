@@ -35,11 +35,11 @@ inline void reduce_h_fused(
 
 namespace NAMESPACE{
 void MAIN{
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
-    constexpr uint32_t in1_cb_id = tt::CB::c_in1;
-    constexpr uint32_t bias_cb_id = tt::CB::c_in2;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
-    constexpr uint32_t in2_cb_id = tt::CB::c_intermed0;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t in2_cb_id = tt::CBIndex::c_24;
 
     constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);

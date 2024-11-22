@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
     uint32_t dst_addr = dst_buffer->address();
 
     // configure and create circular buffer
-    uint32_t cb_id = CB::c_in0;
+    uint32_t cb_id = CBIndex::c_0;
     tt::DataFormat cb_data_format = tt::DataFormat::UInt32;
     CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(dst_N * packed_data_size * 2, {{cb_id, cb_data_format}})
 		.set_page_size(cb_id, packed_data_size);

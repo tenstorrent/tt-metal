@@ -8,7 +8,7 @@
 void kernel_main() {
 
     // Constexpr
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t src_addr                   = get_arg_val<uint32_t>(0);

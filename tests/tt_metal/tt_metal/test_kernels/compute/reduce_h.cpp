@@ -46,14 +46,14 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr bool at_start = get_compile_time_arg_val(3);
-    dummy_init<at_start>(tt::CB::c_in0, tt::CB::c_in2);
+    dummy_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2);
 #ifndef SHORT_INIT
-    reduce_init<at_start>(tt::CB::c_in0, tt::CB::c_in2);
+    reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2);
 #else
-    reduce_init_delta<at_start>(tt::CB::c_out0, tt::CB::c_in0, tt::CB::c_in2);
+    reduce_init_delta<at_start>(tt::CBIndex::c_16, tt::CBIndex::c_0, tt::CBIndex::c_2);
 #endif
 
-    cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader
+    cb_wait_front(tt::CBIndex::c_2, 1); // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
 
         constexpr int onetile = 1;
@@ -64,26 +64,26 @@ void MAIN {
             // in this case we just sequentially add to accumulator all the H-tiles in a column
             acquire_dst();
             for(uint32_t ht = 0; ht < Ht; ++ht) {
-                cb_wait_front(tt::CB::c_in0, onetile);
+                cb_wait_front(tt::CBIndex::c_0, onetile);
 #if (MATH_ONLY == 1)
-                UNPACK(( llk_unpack_AB(tt::CB::c_in0, tt::CB::c_in2, 0, 0) ));
+                UNPACK(( llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0) ));
                 // REDUCE_OP is expected to come from add_define
                 reduce_tile_math(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #endif
-                cb_pop_front(tt::CB::c_in0, onetile);
+                cb_pop_front(tt::CBIndex::c_0, onetile);
             }
 
-            cb_reserve_back(tt::CB::c_out0, onetile);
-            pack_tile(reduce_dst_idx, tt::CB::c_out0);
-            cb_push_back(tt::CB::c_out0, onetile);
+            cb_reserve_back(tt::CBIndex::c_16, onetile);
+            pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
+            cb_push_back(tt::CBIndex::c_16, onetile);
             release_dst();
         }
     }
 #ifdef SHORT_INIT
-    reduce_revert_delta(tt::CB::c_out0);
+    reduce_revert_delta(tt::CBIndex::c_16);
 #endif
 }
 }

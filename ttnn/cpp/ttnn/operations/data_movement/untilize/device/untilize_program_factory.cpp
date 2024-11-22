@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
     auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in0,
+        tt::CBIndex::c_0,
         program,
         all_cores,
         input_single_tile_size,
@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     uint32_t num_output_tiles =  ntiles_per_block * 2;
     auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0,
+        tt::CBIndex::c_16,
         program,
         all_cores,
         output_single_tile_size,
@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     uint32_t num_input_tiles = src_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
     auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in0,
+        tt::CBIndex::c_0,
         program,
         all_cores,
         input_single_tile_size,
@@ -359,7 +359,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     uint32_t num_output_tiles = out_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
     auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0,
+        tt::CBIndex::c_16,
         program,
         all_cores,
         output_single_tile_size,
@@ -743,7 +743,7 @@ operation::ProgramWithCallbacks untilize_single_core(
                               .set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(
                                 num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})

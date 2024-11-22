@@ -29,8 +29,8 @@ void kernel_main() {
     uint32_t num_elements_per_alignment = get_arg_val<uint32_t>(i++);
     uint32_t num_alignment_width = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_id_out0 = tt::CB::c_in0;
-    constexpr uint32_t cb_id_out1 = tt::CB::c_out1;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_out1 = tt::CBIndex::c_17;
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 

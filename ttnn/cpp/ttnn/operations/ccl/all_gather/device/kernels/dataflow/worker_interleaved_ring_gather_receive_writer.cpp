@@ -69,7 +69,7 @@ void kernel_main() {
     constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(15) != 0;
     #endif
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     #ifdef ROW_MAJOR_LAYOUT
         #ifdef INTERLEAVED_MEM_LAYOUT
         InterleavedAddrGen<dst_is_dram> d = {

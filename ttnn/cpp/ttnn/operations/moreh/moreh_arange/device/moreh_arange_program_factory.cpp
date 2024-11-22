@@ -31,7 +31,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         all_cores,
         tt::tt_metal::datatype_to_dataformat_converter(dtype),
         {
-            {tt::CB::c_out0, 1},
+            {tt::CBIndex::c_16, 1},
         });
 
     // Create write kernel

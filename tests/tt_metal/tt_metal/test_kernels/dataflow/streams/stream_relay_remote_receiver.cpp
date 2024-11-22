@@ -232,7 +232,7 @@ void kernel_main() {
 
     advance_phase(remote_noc_info_desc, stream_state, stream_id);
 
-    auto cb = tt::CB::c_in0;
+    auto cb = tt::CBIndex::c_0;
     stream_state.local_buffer_base_addr = stream_buffer_addr;
 
     for (uint32_t i = 0; i < num_messages_to_forward; i++) {

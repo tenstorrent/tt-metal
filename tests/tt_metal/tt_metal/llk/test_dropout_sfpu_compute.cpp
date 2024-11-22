@@ -90,12 +90,12 @@ bool test_dropout_standalone(tt_metal::Device* device, float probability, uint32
          * Use circular buffers to set input and output buffers that the
          * compute engine will use.
          */
-        constexpr uint32_t src0_cb_index = CB::c_in0;
+        constexpr uint32_t src0_cb_index = CBIndex::c_0;
         constexpr uint32_t num_input_tiles = 2;
         CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
         CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-        constexpr uint32_t output_cb_index = CB::c_out0;
+        constexpr uint32_t output_cb_index = CBIndex::c_16;
         constexpr uint32_t num_output_tiles = 2;
         CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
         CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);

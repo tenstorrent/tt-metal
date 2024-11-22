@@ -51,15 +51,15 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 2},                              // input
-            {tt::CB::c_in1, 1},                              // mask
-            {tt::CB::c_in2, 1},                              // scaler
-            {tt::CB::c_out0, 2},                             // output
-            {tt::CB::c_intermed0, 2, intermed_data_format},  // exp(x)
-            {tt::CB::c_intermed1, 1, intermed_data_format},  // reduce
-            {tt::CB::c_intermed2, 1, intermed_data_format},  // syn
-            {tt::CB::c_intermed3, 1, intermed_data_format},  // max
-            {tt::CB::c_intermed4, 1, intermed_data_format},  // tmp
+            {tt::CBIndex::c_0, 2},                              // input
+            {tt::CBIndex::c_1, 1},                              // mask
+            {tt::CBIndex::c_2, 1},                              // scaler
+            {tt::CBIndex::c_16, 2},                             // output
+            {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
+            {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce
+            {tt::CBIndex::c_26, 1, intermed_data_format},  // syn
+            {tt::CBIndex::c_27, 1, intermed_data_format},  // max
+            {tt::CBIndex::c_28, 1, intermed_data_format},  // tmp
         });
 
     // create read/wrtie kernel

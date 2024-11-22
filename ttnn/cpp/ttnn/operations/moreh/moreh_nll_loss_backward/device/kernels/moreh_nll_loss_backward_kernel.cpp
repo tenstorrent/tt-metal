@@ -13,17 +13,17 @@ void MAIN {
 
     const uint32_t tile_offset = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_divisor = tt::CB::c_in3;
-    constexpr uint32_t cb_output_grad = tt::CB::c_in0;
-    constexpr uint32_t cb_tmp_weight = tt::CB::c_intermed0;
-    constexpr uint32_t cb_tmp1 = tt::CB::c_intermed1;
-    constexpr uint32_t cb_tmp2 = tt::CB::c_intermed2;
-    constexpr uint32_t cb_input_grad = tt::CB::c_out0;
+    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
+    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
+    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
+    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    init_sfpu(cb_output_grad);
+    init_sfpu(cb_output_grad, tt::CBIndex::c_16);
 
 #if defined(DIVISOR)
         cb_wait_front(cb_divisor, onetile);

@@ -83,7 +83,7 @@ Data from Circular Buffers can be printed using the ``TileSlice`` object. It can
 | print_untilized | bool                | Whether to untilize the CB data while printing it (always done for block float formats), default ``true``.                                                   |
 +-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
-An example of how to print data from a CB (in this case, ``CB::c_intermed1``) is shown below.  Note that sampling happens relative
+An example of how to print data from a CB (in this case, ``CBIndex::c_25``) is shown below.  Note that sampling happens relative
 to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
 ``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
 back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Currently supported data
@@ -94,15 +94,15 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
     #include "debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
-        // Assuming the tile we want to print from CB::c_intermed1 is from the front the CB, print must happen after
+        // Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after
         // this call. If the tile is from the back of the CB, then print must happen after cb_reserve_back().
-        cb_wait_front(CB::c_intermed1, 1);
+        cb_wait_front(CBIndex::c_25, 1);
         ...
 
-        // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CB::c_intermed1` and print it.
-        DPRINT << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL();
+        // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CBIndex::c_25` and print it.
+        DPRINT << TSLICE(CBIndex::c_25, 0, SliceRange::hw0_32_16()) << ENDL();
         // Note that since the MATH core does not have access to CBs, so this is an invalid print:
-        DPRINT_MATH({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
+        DPRINT_MATH({ DPRINT  << TSLICE(CBIndex::c_25, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
 
         // Print a full tile
         for (int32_t r = 0; r < 32; ++r) {
@@ -118,5 +118,5 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
         }
 
         ...
-        cb_pop_front(CB::c_intermed1, 1);
+        cb_pop_front(CBIndex::c_25, 1);
     }

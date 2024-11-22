@@ -14,16 +14,16 @@ void kernel_main() {
     constexpr uint32_t k_num_heads_per_core      = get_compile_time_arg_val(5);
     constexpr uint32_t tiles_per_head            = get_compile_time_arg_val(6); // size of a K head `` ``
 
-    constexpr uint32_t cb_inq  = tt::CB::c_in0;
-    constexpr uint32_t cb_inkv = tt::CB::c_in1;
+    constexpr uint32_t cb_inq  = tt::CBIndex::c_0;
+    constexpr uint32_t cb_inkv = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_outq = tt::CB::c_out0;
+    constexpr uint32_t cb_outq = tt::CBIndex::c_16;
     #ifdef TRANSPOSE_K_HEADS
-    constexpr uint32_t cb_outk = tt::CB::c_intermed0;
+    constexpr uint32_t cb_outk = tt::CBIndex::c_24;
     #else
-    constexpr uint32_t cb_outk = tt::CB::c_out1;
+    constexpr uint32_t cb_outk = tt::CBIndex::c_17;
     #endif
-    constexpr uint32_t cb_outv = tt::CB::c_out2;
+    constexpr uint32_t cb_outv = tt::CBIndex::c_18;
 
 
     // copy one entire head_dim tile, then go to next sequence tile and do another head_dim.

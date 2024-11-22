@@ -107,6 +107,7 @@ set(GPP_FLAGS_common
     -fno-exceptions
     -Wall
     -Werror
+    -Wno-deprecated-declarations
     -Wno-unknown-pragmas
     -Wno-error=multistatement-macros
     -Wno-error=parentheses

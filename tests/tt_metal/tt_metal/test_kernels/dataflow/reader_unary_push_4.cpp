@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t src_noc_y = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 4;

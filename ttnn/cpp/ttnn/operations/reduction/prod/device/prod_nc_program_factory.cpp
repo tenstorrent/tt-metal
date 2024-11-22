@@ -80,10 +80,10 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},              // input
-            {CB::c_in1, in1_t},              // zero
-            {CB::c_intermed0, intermed0_t},  // accumulated sum
-            {CB::c_out0, out0_t},            // output
+            {CBIndex::c_0, in0_t},              // input
+            {CBIndex::c_1, in1_t},              // zero
+            {CBIndex::c_24, intermed0_t},  // accumulated sum
+            {CBIndex::c_16, out0_t},            // output
         });
 
     ////////////////////////////////////////////////////////////////////////////

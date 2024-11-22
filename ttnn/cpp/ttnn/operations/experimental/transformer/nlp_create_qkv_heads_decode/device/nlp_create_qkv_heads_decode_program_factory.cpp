@@ -47,7 +47,7 @@ namespace ttnn::operations::experimental::transformer {
         auto in_shape = input_tensor.get_legacy_shape();
         auto in_num_tiles = in_shape[-2] * in_shape[-1] / TILE_HW;
 
-        uint32_t q_output_cb_index = CB::c_out0;
+        uint32_t q_output_cb_index = CBIndex::c_16;
         tt_metal::CircularBufferConfig cb_q_output_config =
             tt_metal::CircularBufferConfig(
                 q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
@@ -58,7 +58,7 @@ namespace ttnn::operations::experimental::transformer {
         auto k_cores = k_shard_spec.grid;
         auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
-        uint32_t k_output_cb_index = CB::c_out1;
+        uint32_t k_output_cb_index = CBIndex::c_17;
         tt_metal::CircularBufferConfig cb_k_output_config =
             tt_metal::CircularBufferConfig(
                 k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
@@ -69,7 +69,7 @@ namespace ttnn::operations::experimental::transformer {
         auto v_cores = q_shard_spec.grid;
         auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
-        uint32_t v_output_cb_index = CB::c_out2;
+        uint32_t v_output_cb_index = CBIndex::c_18;
         tt_metal::CircularBufferConfig cb_v_output_config =
             tt_metal::CircularBufferConfig(
                 v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})
@@ -198,7 +198,7 @@ namespace ttnn::operations::experimental::transformer {
         auto in_cores = in_shard_spec.grid;
         auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
-        uint32_t q_output_cb_index = CB::c_out0;
+        uint32_t q_output_cb_index = CBIndex::c_16;
         tt_metal::CircularBufferConfig cb_q_output_config =
             tt_metal::CircularBufferConfig(
                 q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
@@ -209,7 +209,7 @@ namespace ttnn::operations::experimental::transformer {
         auto k_cores = k_shard_spec.grid;
         auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
-        uint32_t k_output_cb_index = CB::c_out1;
+        uint32_t k_output_cb_index = CBIndex::c_17;
         tt_metal::CircularBufferConfig cb_k_output_config =
             tt_metal::CircularBufferConfig(
                 k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
@@ -220,7 +220,7 @@ namespace ttnn::operations::experimental::transformer {
         auto v_cores = q_shard_spec.grid;
         auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
-        uint32_t v_output_cb_index = CB::c_out2;
+        uint32_t v_output_cb_index = CBIndex::c_18;
         tt_metal::CircularBufferConfig cb_v_output_config =
             tt_metal::CircularBufferConfig(
                 v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})

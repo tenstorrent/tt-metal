@@ -158,7 +158,7 @@ void MAIN {
 
             cb_reserve_back(out_cb_id, out_num_tiles);
 
-            // tilize CB::intermed1 and write to CB::c_out0
+            // tilize CB::intermed1 and write to CBIndex::c_16
             tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles);
             tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
             cb_push_back(out_cb_id, out_num_tiles);

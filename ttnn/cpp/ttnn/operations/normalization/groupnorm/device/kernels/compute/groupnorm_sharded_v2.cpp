@@ -69,34 +69,34 @@ void MAIN {
     constexpr uint32_t scaler0 = 0;
 
     // input cbs
-    constexpr uint32_t cb_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_in = tt::CB::c_intermed5;
-    constexpr uint32_t cb_scaler = tt::CB::c_in2;
-    constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
-    constexpr uint32_t cb_eps = tt::CB::c_in3;
-    constexpr uint32_t cb_gamma = tt::CB::c_in5;
-    constexpr uint32_t cb_beta = tt::CB::c_in6;
-    constexpr uint32_t cb_input_mask = tt::CB::c_intermed4;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in = tt::CBIndex::c_29;
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
+    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
+    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
 
     // interm cbs
-    constexpr uint32_t cb_repack = tt::CB::c_intermed2;
-    constexpr uint32_t cb_repack_out = tt::CB::c_intermed7;
-    constexpr uint32_t cb_x = tt::CB::c_intermed0;
-    constexpr uint32_t cb_xmm = tt::CB::c_intermed1;
-    constexpr uint32_t cb_ex_partial = tt::CB::dataflow0;
-    constexpr uint32_t cb_ex = tt::CB::dataflow1;
-    constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
-    constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CB::dataflow7;
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
+    constexpr uint32_t cb_repack = tt::CBIndex::c_26;
+    constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
+    constexpr uint32_t cb_x = tt::CBIndex::c_24;
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
+    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
     // interm cbs reuse
     constexpr uint32_t cb_fusion = cb_xmm;
     constexpr uint32_t cb_xmm2 = cb_x;
 
     // output cb
-    constexpr uint32_t cb_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     #ifdef UNTILIZE_OUT
-    constexpr uint32_t cb_out = tt::CB::c_intermed6;
+    constexpr uint32_t cb_out = tt::CBIndex::c_30;
     #else
     constexpr uint32_t cb_out = (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0) : cb_out0;
     #endif

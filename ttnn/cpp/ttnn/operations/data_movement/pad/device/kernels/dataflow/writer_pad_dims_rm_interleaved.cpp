@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     #define dst_stick_size_is_pow2 get_compile_time_arg_val(4) == 1
 
-    constexpr uint32_t cb_id = tt::CB::c_in0;
+    constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
     // #if (dst_stick_size_is_pow2)
     //     constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(5);

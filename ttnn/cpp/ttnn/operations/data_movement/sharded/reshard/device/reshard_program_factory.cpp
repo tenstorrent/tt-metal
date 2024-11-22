@@ -315,7 +315,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     auto local_core_type = local_tensor.buffer()->core_type();
     auto remote_core_type = remote_tensor.buffer()->core_type();
-    constexpr uint32_t cb_index = tt::CB::c_in0;
+    constexpr uint32_t cb_index = tt::CBIndex::c_0;
     auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto remote_cores =

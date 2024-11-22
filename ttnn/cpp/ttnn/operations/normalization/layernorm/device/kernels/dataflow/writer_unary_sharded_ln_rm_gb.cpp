@@ -25,19 +25,19 @@ void kernel_main() {
     const uint32_t gamma_tile_start_id            = get_arg_val<uint32_t>(5);
     const uint32_t beta_tile_start_id             = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t cb_gamma = tt::CB::c_in5;
-    constexpr uint32_t cb_beta = tt::CB::c_in6;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
 
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
 
     {
-        constexpr uint32_t cb_in_2 = tt::CB::c_in2;
+        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         const uint32_t scalar_w = get_arg_val<uint32_t>(1);
         generate_reduce_scaler(cb_in_2, scalar_w);
     }
     if constexpr(is_all_to_all_worker) {
-        constexpr uint32_t cb_in_4 = tt::CB::c_in4;
+        constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
         generate_reduce_scaler(cb_in_4, scalar_c);
     }

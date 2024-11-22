@@ -358,7 +358,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     uint32_t per_risc1_out_q_heads = per_core_out_q_heads / 2;
     uint32_t per_core_in_q_heads = num_q_heads / input_tensor.shard_spec().value().num_cores();
 
-    uint32_t q_output_cb_index = CB::c_out0;
+    uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
             q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
@@ -369,7 +369,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     auto k_cores = k_shard_spec.grid;
     auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
-    uint32_t k_output_cb_index = CB::c_out1;
+    uint32_t k_output_cb_index = CBIndex::c_17;
     tt_metal::CircularBufferConfig cb_k_output_config =
         tt_metal::CircularBufferConfig(
             k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
@@ -380,7 +380,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     auto v_cores = q_shard_spec.grid;
     auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
-    uint32_t v_output_cb_index = CB::c_out2;
+    uint32_t v_output_cb_index = CBIndex::c_18;
     tt_metal::CircularBufferConfig cb_v_output_config =
         tt_metal::CircularBufferConfig(
             v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})

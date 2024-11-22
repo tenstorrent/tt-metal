@@ -76,13 +76,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
 
     auto all_cores = shard_spec.grid;
-    uint32_t input_cb_index = tt::CB::c_in0;
-    uint32_t scratch_cb_index = tt::CB::c_in1;
+    uint32_t input_cb_index = tt::CBIndex::c_0;
+    uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
     uint32_t output_page_size = align(output_unit_size, dst_buffer->alignment());
     if (convert_df) {
-        out_cb_index = tt::CB::c_out0;
+        out_cb_index = tt::CBIndex::c_16;
         uint32_t input_page_size = align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})

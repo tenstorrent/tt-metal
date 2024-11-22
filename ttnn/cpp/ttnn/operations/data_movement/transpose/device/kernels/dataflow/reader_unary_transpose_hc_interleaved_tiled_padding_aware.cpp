@@ -45,11 +45,11 @@ void kernel_main() {
     }
     if constexpr (needs_padding) {
         // Add padding
-        cb_reserve_back(tt::CB::c_in1, 1);
-        uint32_t l1_write_addr = get_write_ptr(tt::CB::c_in1);
+        cb_reserve_back(tt::CBIndex::c_1, 1);
+        uint32_t l1_write_addr = get_write_ptr(tt::CBIndex::c_1);
         // Fill with padding value
         // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
-        cb_push_back(tt::CB::c_in1, 1);
+        cb_push_back(tt::CBIndex::c_1, 1);
     }
 }

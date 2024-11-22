@@ -57,23 +57,23 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_in1 = tt::CB::c_in1;
-    constexpr uint32_t cb_eps = tt::CB::c_in3;
-    constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
-    constexpr uint32_t cb_gamma = tt::CB::c_in5;
-    constexpr uint32_t cb_beta = tt::CB::c_in6;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
+    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
 
-    constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[x^2]
-    constexpr uint32_t cb_stats = tt::CB::c_in7; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats_reduced = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
-    constexpr uint32_t cb_reciprocal = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
-    constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
-    constexpr uint32_t cb_out = tt::CB::c_out0;
-    constexpr uint32_t cb_var = tt::CB::c_intermed2;
-    constexpr uint32_t cb_ex_sqr = tt::CB::c_intermed0; // E[x]^2
+    constexpr uint32_t cb_ex = tt::CBIndex::c_9; // E[x] global reduce
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12; // E[x^2]
+    constexpr uint32_t cb_stats = tt::CBIndex::c_7; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_28; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15; // E[x] global reduce
+    constexpr uint32_t cb_reciprocal = tt::CBIndex::c_27; // [E[x^2]-E[x]^2]+eps
+    constexpr uint32_t cb_fusion = tt::CBIndex::c_25; // stream gamma/beta
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_var = tt::CBIndex::c_26;
+    constexpr uint32_t cb_ex_sqr = tt::CBIndex::c_24; // E[x]^2
 
 
     #ifdef RMSNORM
@@ -83,7 +83,7 @@ void MAIN {
     #else
     binary_op_init_common(cb_stats, cb_scaler_global, cb_stats_reduced);
     constexpr uint32_t stats_tiles = 2;
-    constexpr uint32_t cb_xmm = tt::CB::c_intermed1; // x minus mean
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_25; // x minus mean
     #endif
 
 

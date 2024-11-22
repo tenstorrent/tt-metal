@@ -36,9 +36,9 @@ void kernel_main() {
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
-    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11; // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2); // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial2); // data format

@@ -69,12 +69,12 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
         program,
         std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
-        {{CB::c_in0, in0_t},    // output_grad
-         {CB::c_in1, in1_t},    // scaler
-         {CB::c_in2, in2_t},    // mask_h_w
-         {CB::c_out0, out0_t},  // bias_grad
-         {CB::c_intermed0, im0_t},
-         {CB::c_intermed1, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
+        {{CBIndex::c_0, in0_t},    // output_grad
+         {CBIndex::c_1, in1_t},    // scaler
+         {CBIndex::c_2, in2_t},    // mask_h_w
+         {CBIndex::c_16, out0_t},  // bias_grad
+         {CBIndex::c_24, im0_t},
+         {CBIndex::c_25, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp

@@ -67,7 +67,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CB::c_in5;
+    constexpr uint32_t cb_l1_array = tt::CBIndex::c_5;
     uint32_t in0_mcast_sender_semaphore_valid_addr = get_write_ptr(cb_l1_array);
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_valid_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_valid_addr);

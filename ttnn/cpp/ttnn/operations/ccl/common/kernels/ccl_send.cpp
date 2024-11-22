@@ -223,7 +223,7 @@ void kernel_main() {
     //    out when we start enabling other modes
     const uint32_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_size = get_arg_val<uint32_t>(arg_idx++);
-    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, tensor_address, page_size, tt::CB::c_in0);
+    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, tensor_address, page_size, tt::CBIndex::c_0);
     auto semaphore_id = get_arg_val<uint32_t>(arg_idx++);
     volatile uint32_t* my_edm_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_semaphore(semaphore_id));
 

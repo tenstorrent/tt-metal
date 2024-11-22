@@ -199,18 +199,18 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     // Create circular buffers
     // c_in0 -> a
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_tiles*in_single_tile_size, {{tt::CB::c_in0, in_data_format}}).set_page_size(tt::CB::c_in0, in_single_tile_size);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_tiles*in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}}).set_page_size(tt::CBIndex::c_0, in_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_src0_config );
     // c_in1 -> reduce scalar
-    CircularBufferConfig cb_reduce_config = CircularBufferConfig(in1_tiles*bfloat16_tile_size, {{tt::CB::c_in1, cb_data_format}}).set_page_size(tt::CB::c_in1, bfloat16_tile_size);
+    CircularBufferConfig cb_reduce_config = CircularBufferConfig(in1_tiles*bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}}).set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
     CreateCircularBuffer( program, all_cores, cb_reduce_config );
 
     // LN and RMS shared intermediates //
     // c_intermed0 -> xˆ2
-    CircularBufferConfig cb_intermed0_config = CircularBufferConfig(intermed0_tiles*single_tile_size, {{tt::CB::c_intermed0, cb_data_format}}).set_page_size(tt::CB::c_intermed0, single_tile_size);
+    CircularBufferConfig cb_intermed0_config = CircularBufferConfig(intermed0_tiles*single_tile_size, {{tt::CBIndex::c_24, cb_data_format}}).set_page_size(tt::CBIndex::c_24, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed0_config );
 
-    CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_tiles*out_single_tile_size, {{tt::CB::c_out0, out_data_format}}).set_page_size(tt::CB::c_out0, out_single_tile_size);
+    CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_tiles*out_single_tile_size, {{tt::CBIndex::c_16, out_data_format}}).set_page_size(tt::CBIndex::c_16, out_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_out0_config );
 
     // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns std::vector<std::shared_ptr<CircularBuffer>>

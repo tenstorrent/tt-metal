@@ -518,18 +518,18 @@ tt_metal::Program create_program_mcast_in0_in1(
                               .defines = mm_kernel_defines});
 
   // Create circular buffers
-  uint32_t src0_cb_index = 0;
+  uint32_t src0_cb_index = tt::CBIndex::c_0;
   tt_metal::CircularBufferConfig src_cb0_config = tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
     .set_page_size(src0_cb_index, in0_single_tile_size);
   auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src_cb0_config);
 
-  uint32_t src1_cb_index = 1;
+  uint32_t src1_cb_index = tt::CBIndex::c_1;
   tt_metal::CircularBufferConfig src_cb1_config = tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
     .set_page_size(src1_cb_index, in1_single_tile_size);
   auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src_cb1_config);
 
-  uint32_t output_cb_index = 16;  // output operands start at index 16
-  uint32_t interm0_cb_index = 24;
+  uint32_t output_cb_index = tt::CBIndex::c_16;
+  uint32_t interm0_cb_index = tt::CBIndex::c_24;
   std::map<uint8_t, tt::DataFormat> interim_and_out_data_format_spec = {
     {output_cb_index, output_data_format},
     {interm0_cb_index, output_data_format}

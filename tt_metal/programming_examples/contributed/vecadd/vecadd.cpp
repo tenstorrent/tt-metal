@@ -45,7 +45,7 @@ std::shared_ptr<Buffer> MakeBufferBFP16(Device *device, uint32_t n_tiles, bool s
     return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
 }
 
-CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CB cb, uint32_t size, uint32_t page_size, tt::DataFormat format)
+CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format)
 {
     CircularBufferConfig cb_src0_config = CircularBufferConfig(
         size,
@@ -64,7 +64,7 @@ CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CB cb, u
 // @param core: The core to create the circular buffer on.
 // @param cb: Which circular buffer to create (c_in0, c_in1, c_out0, c_out1, etc..). This is just an ID
 // @param n_tiles: The number of tiles the circular buffer can hold.
-CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CB cb, uint32_t n_tiles)
+CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles)
 {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
@@ -134,9 +134,9 @@ int main(int argc, char **argv)
 
     const uint32_t tiles_per_cb = 4;
     // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores and for the compute cores to stream data out.
-    CBHandle cb_a = MakeCircularBufferBFP16(program, core, tt::CB::c_in0, tiles_per_cb);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, core, tt::CB::c_in1, tiles_per_cb);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, core, tt::CB::c_out0, tiles_per_cb);
+    CBHandle cb_a = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
+    CBHandle cb_b = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
+    CBHandle cb_c = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
     EnqueueWriteBuffer(cq, a, a_data, false);
     EnqueueWriteBuffer(cq, b, b_data, false);

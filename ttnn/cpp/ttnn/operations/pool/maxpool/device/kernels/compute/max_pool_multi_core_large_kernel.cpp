@@ -96,11 +96,11 @@ void MAIN {
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(15);
     constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(16);
 
-    constexpr uint32_t in_cb_id = tt::CB::c_in0;  // and tt::CB::c_in1 for split reader
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
-    constexpr uint32_t in_tiled_cb_id = tt::CB::c_intermed0;
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
-    constexpr uint32_t interm_reduction_cb_id = tt::CB::c_intermed1;
+    constexpr uint32_t in_cb_id = tt::CBIndex::c_0;  // and tt::CBIndex::c_1 for split reader
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
 

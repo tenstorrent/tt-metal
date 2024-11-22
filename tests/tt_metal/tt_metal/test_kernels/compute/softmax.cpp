@@ -31,21 +31,21 @@ void MAIN {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
-    constexpr auto cb_fused_scale = tt::CB::c_in3;
-    constexpr auto cb_fused_attn = tt::CB::c_in4;
-    constexpr auto cb_exps = tt::CB::c_intermed0;
-    constexpr auto cb_scale_mask = tt::CB::c_intermed3;
-    constexpr auto cb_recipsumexps = tt::CB::c_intermed1;
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_fused_scale = tt::CBIndex::c_3;
+    constexpr auto cb_fused_attn = tt::CBIndex::c_4;
+    constexpr auto cb_exps = tt::CBIndex::c_24;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_27;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
 
 
     cb_wait_front(cb_bcast_scaler, 1); // comes from the reader
@@ -150,13 +150,13 @@ void MAIN {
         mul_bcast_cols_init_short();
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
-            cb_reserve_back(tt::CB::c_out0, ndst);
+            cb_reserve_back(tt::CBIndex::c_16, ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
                 // wt+wt8 since we pop Wt after the entire loop
                 mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recipsumexps, wt+wt8, 0, wt8); // tile *= 1/(sum(exp(x)))
-                pack_tile(wt8, tt::CB::c_out0);
+                pack_tile(wt8, tt::CBIndex::c_16);
             }
-            cb_push_back(tt::CB::c_out0, ndst);
+            cb_push_back(tt::CBIndex::c_16, ndst);
             REL();
         }
         cb_pop_front(cb_recipsumexps, 1);

@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(3);
     uint32_t Wt = get_arg_val<uint32_t>(4);
 
-    constexpr uint32_t cb_id_out = tt::CB::c_out0;
+    constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out);
 

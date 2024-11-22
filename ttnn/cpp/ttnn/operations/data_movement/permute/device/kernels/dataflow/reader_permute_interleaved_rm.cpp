@@ -20,12 +20,12 @@ void kernel_main() {
 
     uint32_t curr_addr = src_addr;
     for (uint32_t i = 0; i < num_rows; ++i) {
-        cb_reserve_back(tt::CB::c_in0, 1);
-        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CB::c_in0);
+        cb_reserve_back(tt::CBIndex::c_0, 1);
+        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
         noc_async_read_page(i, s0, src_buffer_l1_addr);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint16_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_buffer_l1_addr);
-        cb_push_back(tt::CB::c_in0, 1);
+        cb_push_back(tt::CBIndex::c_0, 1);
     }
 
 }

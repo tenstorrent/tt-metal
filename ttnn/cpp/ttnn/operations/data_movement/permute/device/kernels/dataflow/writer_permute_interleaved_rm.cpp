@@ -26,7 +26,7 @@ void kernel_main() {
         dest_strides[i - 1] = get_arg_val<uint32_t>(i + 2*N);
     }
 
-    uint32_t src_buffer_l1_addr = get_write_ptr(tt::CB::c_in0);
+    uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
     uint32_t curr_addr = dst_addr;
     for (uint32_t row = 0; row < num_rows; ++row) {
         // Compute multi-dimensional index for the source row
@@ -50,12 +50,12 @@ void kernel_main() {
         for(uint32_t i = 0; i < N - 1; ++i) {
             dest_linear_idx += dest_multi_idx[i] * dest_strides[i];
         }
-        cb_wait_front(tt::CB::c_in0, 1);
-        uint32_t l1_read_addr = get_read_ptr(tt::CB::c_in0);
+        cb_wait_front(tt::CBIndex::c_0, 1);
+        uint32_t l1_read_addr = get_read_ptr(tt::CBIndex::c_0);
         uint64_t dst_noc_addr = get_noc_addr(dest_linear_idx, s0);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();
-        cb_pop_front(tt::CB::c_in0, 1);
+        cb_pop_front(tt::CBIndex::c_0, 1);
     }
 
 }

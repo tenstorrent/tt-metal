@@ -367,7 +367,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
     // Circular Buffer Setup
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t cb_n_packets = 2;
     const uint32_t cb_size_in_pages = cb_n_packets * max_pages_per_chunk;
     const uint32_t CB_buffer_size = cb_n_packets * max_buffer_per_chunk;
