@@ -317,6 +317,20 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         )
     model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
 
+    if is_wormhole_b0():
+        hifi2_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+    else:
+        hifi2_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+        )
+    model_config["HiFi2_KERNEL_CONFIG"] = hifi2_kernel_config
+
     mm_h_to_4h_prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
         in0_block_w=3,

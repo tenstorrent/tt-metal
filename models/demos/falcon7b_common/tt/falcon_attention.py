@@ -261,6 +261,7 @@ class TtFalconAttentionPrefill(nn.Module):
             query_layer,
             key_layer_transposed,
             memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            compute_kernel_config=self.model_config["HiFi2_KERNEL_CONFIG"],
         )
         query_layer.deallocate()
         key_layer_transposed.deallocate()
@@ -295,6 +296,7 @@ class TtFalconAttentionPrefill(nn.Module):
             attn_weights,
             value_layer,
             memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            compute_kernel_config=self.model_config["HiFi2_KERNEL_CONFIG"],
         )
         attn_weights.deallocate()
         value_layer.deallocate()

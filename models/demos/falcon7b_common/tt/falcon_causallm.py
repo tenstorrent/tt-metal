@@ -21,13 +21,20 @@ def falcon_lm_head_matmul(
     input_tensor_a,
     input_tensor_b,
     core_grid,
+    compute_kernel_config,
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
     seq_len = input_tensor_a.shape.with_tile_padding()[2]
     if seq_len > 512:
         # TODO: Review if this path is used? If not, we can delete
-        return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
+        return ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
 
     if is_grayskull():
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
@@ -170,6 +177,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             lm_logits = falcon_lm_head_matmul(
                 hidden_states,
                 self.lm_head_weights,
+                self.model_config["HiFi2_KERNEL_CONFIG"],
                 output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                 core_grid=get_falcon_default_core_grid(hidden_states.device()),
