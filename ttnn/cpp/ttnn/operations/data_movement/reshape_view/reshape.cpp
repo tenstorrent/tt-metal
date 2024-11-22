@@ -379,6 +379,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
                    "Reshaping a multi-device tensor with 0 volume is not supported");
         return tensor.reshape(shape);
     }
+    TT_ASSERT(shape.volume() != 0 && "tensor's volume is not 0, but shape's volume is 0");
 
     bool this_is_view =
         (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
