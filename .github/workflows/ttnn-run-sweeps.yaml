@@ -100,9 +100,13 @@ on:
           - eltwise.unary.normalize_global.normalize_global
           - eltwise.unary.heaviside.heaviside
           - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardtanh.hardtanh_sharded
           - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardsigmoid.hardswish_sharded
           - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardsigmoid.hardsigmoid_sharded
           - eltwise.unary.hardshrink.hardshrink
+          - eltwise.unary.hardshrink.hardshrink_sharded
           - eltwise.unary.softmax.softmax
           - eltwise.unary.identity.identity
           - eltwise.unary.neg.neg
