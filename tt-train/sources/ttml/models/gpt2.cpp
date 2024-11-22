@@ -83,6 +83,7 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     return transformer_config;
 }
+
 YAML::Node write_config(const TransformerConfig& mlp_config) {
     YAML::Node config;
     config["num_heads"] = mlp_config.num_heads;
@@ -93,6 +94,7 @@ YAML::Node write_config(const TransformerConfig& mlp_config) {
     config["max_sequence_length"] = mlp_config.max_sequence_length;
     return config;
 }
+
 std::shared_ptr<Transformer> create(const TransformerConfig& config) {
     return std::make_shared<Transformer>(config);
 }
