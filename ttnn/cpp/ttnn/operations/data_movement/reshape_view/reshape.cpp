@@ -174,7 +174,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
     //Tiled: The last two dimensions are the same or there is no padding on the second last dimension
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2] : 1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
-    bool this_is_view = (tensor_shape[-1] == shape[-1]) &&
+    bool this_is_view = (tensor_shape[-1] == shape[-1]) && (shape.rank() >= 2) && (tensor_shape.rank() >= 2) &&
         ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
         (shape_second_last_dim==tensor_shape_second_last_dim) || //Second last dimension is the same
         (shape_second_last_dim%ttnn::types::TILE_SIZE==0 && tensor_shape_second_last_dim%ttnn::types::TILE_SIZE==0)); //There is no padding on the second last dimension
