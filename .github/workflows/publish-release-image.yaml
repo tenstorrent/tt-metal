@@ -49,7 +49,14 @@ jobs:
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/release.Dockerfile
-
+      - name: Run smoke test on the image
+        timeout-minutes: ${{ inputs.timeout }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          run_args: |
+            pytest tests/end_to_end_tests
       - name: Tag latest if this is a major version release
         if: ${{ is_major_version }}
         run: |
