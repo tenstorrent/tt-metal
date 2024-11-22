@@ -19,7 +19,7 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT),
@@ -58,7 +58,7 @@ def test_reduce_scatter_t3k_8chip_nightly(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -73,7 +73,7 @@ def test_reduce_scatter_t3k_8chip_nightly(
         t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,
@@ -95,7 +95,7 @@ def test_reduce_scatter_t3k_8chip_nightly(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT),
@@ -136,7 +136,7 @@ def test_reduce_scatter_t3k_4chip_nightly(
     pcie_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -151,7 +151,7 @@ def test_reduce_scatter_t3k_4chip_nightly(
         pcie_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,

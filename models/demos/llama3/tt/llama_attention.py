@@ -357,7 +357,7 @@ class TtLlamaAttention(LightweightModule):
         if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
                 dense_out,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -530,7 +530,7 @@ class TtLlamaAttention(LightweightModule):
         if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
                 output_11SH,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
