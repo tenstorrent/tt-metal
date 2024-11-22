@@ -62,13 +62,14 @@ foreach(arch ${ARCHITECTURES})
         string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
         add_executable(${TEST_TARGET} ${TEST_SRC})
-        target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs PRIVATE yaml-cpp::yaml-cpp)
+        target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs PRIVATE yaml-cpp::yaml-cpp tt_fabric)
         target_include_directories(
             ${TEST_TARGET}
             BEFORE
             PRIVATE
                 ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch}
                 "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+                ${PROJECT_SOURCE_DIR}/tt_fabric
                 ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
                 ${PROJECT_SOURCE_DIR}/tests
                 ${CMAKE_CURRENT_SOURCE_DIR}

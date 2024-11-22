@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "noc/noc_parameters.h"
+#include "tt_fabric/hw/inc/routing_table.h"
 
 namespace eth_l1_mem {
 
@@ -61,9 +62,13 @@ struct address_map {
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3232;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
-    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =
         (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+        (FABRIC_ROUTER_CONFIG_BASE + sizeof(tt::tt_fabric::fabric_router_l1_config_t) + 31) & ~31;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
+
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR = 0x3F000;
 
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
