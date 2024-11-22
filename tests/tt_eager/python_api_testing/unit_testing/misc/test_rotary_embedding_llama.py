@@ -156,6 +156,16 @@ def run_test_rotary_embedding_llama(
 
     position_ids = torch.arange(batch) if mode == "decode" else slice(start_pos, start_pos + seq_len)
 
+    if mode == "decode":  # Pad position_ids to batch size for decode mode
+        if fuse_qk:
+            # For fused_qk, repeat the position_ids for q and k
+            position_ids_padded = torch.cat([position_ids, position_ids])
+            pad_size = nearest_32(batch * 2) - batch * 2
+            position_ids_padded = torch.nn.functional.pad(position_ids_padded, (0, pad_size), "constant", 0)
+        else:
+            pad_size = nearest_32(batch) - batch
+            position_ids_padded = torch.nn.functional.pad(position_ids, (0, pad_size), "constant", 0)
+
     freqs_cis = freqs_cis[position_ids]
 
     # PyTorch Ground Truth output --------------------------------------------------------------------
@@ -173,18 +183,16 @@ def run_test_rotary_embedding_llama(
     tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk)
 
     if mode == "decode":
-        rope_setup_decode = TtLlamaRotarySetup(device, batch, head_dim, max_seq_len)
-        cos, sin = rope_setup_decode.get_rot_mats(position_ids)
-        tt_model.transformation_mat = rope_setup_decode.transformation_mat
-
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
         inp = [x.transpose(1, 2) for x in inp]
         # inp: [seq_len, batch, n_heads, head_dim]
 
         if fuse_qk:
-            # For fused_qk, repeat the position_ids for q and k
-            position_ids = torch.concat([position_ids, position_ids])
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
+            # Set up rope with 2 * batch size (for fused qk)
+            rope_setup_decode = TtLlamaRotarySetup(device, batch * 2, head_dim, max_seq_len)
+            tt_model.transformation_mat = rope_setup_decode.transformation_mat
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids_padded)
+
             assert (
                 batch % 8 == 0 or batch == 1
             ), "Batch size must be a multiple of 8 or less than 8 for fused_qk rotary embedding"
@@ -219,18 +227,19 @@ def run_test_rotary_embedding_llama(
             input_mem_configs = [q_input_mem_config, k_input_mem_config]
 
         else:
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
-            grid = (
-                ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True)
-                .bounding_box()
-                .grid_size()
-            )
+            # Set up rope with batch size
+            rope_setup_decode = TtLlamaRotarySetup(device, batch, head_dim, max_seq_len)
+            tt_model.transformation_mat = rope_setup_decode.transformation_mat
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids_padded)
+
+            grid = ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True)
             input_mem_configs = [
                 ttnn.create_sharded_memory_config(
-                    shape=(1, batch, ttnn.TILE_SIZE, head_dim),
-                    core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+                    shape=(ttnn.TILE_SIZE, head_dim),
+                    core_grid=grid,
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
                 )
                 for _ in range(len(inp))
             ]
@@ -448,10 +457,9 @@ def test_rotary_embedding_llama_with_program_cache(
 
     num_ops = 2  # 2 * rope
     if mode == "decode":
-        num_ops += 4  # embedding + transpose + pad + interleaved_to_sharded
+        num_ops += 3  # embedding + transpose + interleaved_to_sharded
 
-        # Extra ops to pad batch to tile size
         if batch % ttnn.TILE_SIZE != 0:
-            num_ops += 2  # pad + slice
+            num_ops += 1  # slice
 
     assert device.num_program_cache_entries() == num_ops

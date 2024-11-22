@@ -94,8 +94,8 @@ class TtLlamaRotarySetup(LightweightModule):
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
         batch = position_idxs.shape[0]
-        position_idxs = position_idxs.reshape(1, 1, 1, batch)  # [1, 1, 1, batch]
-        assert position_idxs.shape == (1, 1, 1, batch), "position idxs must be a [1, batch] tensor"
+        position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
+        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
         if on_host:
@@ -125,19 +125,14 @@ class TtLlamaRotarySetup(LightweightModule):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
-            assert rot_idxs.shape == [1, 1, 1, self.batch_size], "rot_idxs must be a [1, 1, 1, batch] tensor"
+            assert len(rot_idxs.shape) == 2 and rot_idxs.shape == [
+                1,
+                rot_idxs.shape[1],
+            ], "rot_idxs must be a [1, batch] tensor"
 
         # Send the idxs to device
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        batch = rot_idxs.shape[3]
-
-        # Pad the batch dimension to be a multiple of TILE_SIZE
-        if batch % ttnn.TILE_SIZE != 0:
-            pad_size = ttnn.TILE_SIZE - (batch % ttnn.TILE_SIZE)
-            rot_idxs = ttnn.pad(rot_idxs, [1, 1, 1, batch + pad_size], [0, 0, 0, batch], 0.0)
-            batch = rot_idxs.shape[3]
 
         embedding_layout = ttnn.TILE_LAYOUT
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
@@ -149,8 +144,9 @@ class TtLlamaRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 
-        cos = cos[:, : self.batch_size, :, :]
-        sin = sin[:, : self.batch_size, :, :]
+        if self.batch_size % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size, :, :]
+            sin = sin[:, : self.batch_size, :, :]
 
         grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
