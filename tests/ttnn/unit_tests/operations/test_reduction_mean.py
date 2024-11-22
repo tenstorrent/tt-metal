@@ -28,12 +28,12 @@ def test_mean(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("batch_size", [1, 16, None])
-@pytest.mark.parametrize("h", [32, 64, 41, 37])
+@pytest.mark.parametrize("batch_size", [(1,), (4,), (64, 4), None])
+@pytest.mark.parametrize("h", [1, 32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 def test_mean_without_dim(device, batch_size, h, w):
     torch.manual_seed(0)
-    input_shape = (batch_size, h, w) if batch_size else (h, w)
+    input_shape = (*batch_size, h, w) if batch_size else (h, w)
 
     torch_input_tensor = torch_random(input_shape, -1, 1, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, None, True)
