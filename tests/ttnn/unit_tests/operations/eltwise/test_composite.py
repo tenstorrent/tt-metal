@@ -586,6 +586,19 @@ def test_unary_composite_threshold_ttnn(input_shapes, device):
     assert comp_pass
 
 
+def test_threshold_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    threshold = 1.0
+    value = 10.0
+    golden_function = ttnn.get_golden_function(ttnn.threshold)
+    golden_tensor = golden_function(input, threshold, value)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.threshold(x1_tt, threshold, value)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
