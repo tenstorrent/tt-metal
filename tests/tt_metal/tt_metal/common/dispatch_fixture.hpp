@@ -54,16 +54,7 @@ protected:
     bool has_remote_devices_;
 
     void SetUp() override {
-        // Skip for slow dispatch for now
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
-            slow_dispatch_ = true;
-        } else {
-            tt::log_info(tt::LogTest, "Running test using Fast Dispatch");
-            slow_dispatch_ = false;
-        }
-
+        this->DetectDispatchMode();
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -117,5 +108,16 @@ protected:
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();
         log_info(tt::LogTest, "Finished running test on device {}.", device->id());
+    }
+
+    void DetectDispatchMode() {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
+            this->slow_dispatch_ = true;
+        } else {
+            tt::log_info(tt::LogTest, "Running test using Fast Dispatch");
+            this->slow_dispatch_ = false;
+        }
     }
 };

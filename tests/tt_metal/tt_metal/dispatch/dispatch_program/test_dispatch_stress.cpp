@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/logger.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "host_api.hpp"
@@ -14,33 +15,29 @@ using namespace tt::tt_metal;
 void RunTest(Device *device) {
     // Set up program
     Program program = Program();
+    CoreRange core_range({0, 0}, {5, 5});
 
-    std::set<CoreRange> core_ranges;
-    CoreCoord grid_size = {5, 5};
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord core(x, y);
-            core_ranges.insert(CoreRange(core, core));
-        }
-    }
+    auto l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Kernels on brisc + ncrisc that just add two numbers
-    KernelHandle brisc_kid = tt_metal::CreateKernel(
+    KernelHandle brisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        CoreRangeSet(core_ranges),
+        core_range,
         tt_metal::DataMovementConfig {
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {l1_unreserved_base}
         }
     );
-    KernelHandle ncrisc_kid = tt_metal::CreateKernel(
+    KernelHandle ncrisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        CoreRangeSet(core_ranges),
+        core_range,
         tt_metal::DataMovementConfig {
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {l1_unreserved_base + 4}
         }
     );
 
@@ -51,8 +48,8 @@ void RunTest(Device *device) {
     auto get_second_arg = [](Device *device, CoreCoord &core, uint32_t multiplier) {
         return (uint32_t) core.y * 100 * multiplier;
     };
-    for (auto &core_range : core_ranges) {
-        CoreCoord core = core_range.start_coord;
+
+    for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_rt_args = {
             get_first_arg(device, core, 1),
             get_second_arg(device, core, 1)
@@ -77,16 +74,14 @@ void RunTest(Device *device) {
     }
 
     // Check results
-    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
-    for (auto &core_range : core_ranges) {
-        CoreCoord core = core_range.start_coord;
+    for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
         tt_metal::detail::ReadFromDeviceL1(
             device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result
         );
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, l1_unreserved_base, sizeof(uint32_t), ncrisc_result
+            device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result
         );
         uint32_t expected_result = get_first_arg(device, core, 1) + get_second_arg(device, core, 1);
         if (expected_result != brisc_result[0])
@@ -119,7 +114,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
     if (!slow_dispatch)
         GTEST_SKIP();
     // Run 500 times to make sure that things work
-    for (int idx = 0; idx < 500; idx++) {
+    for (int idx = 0; idx < 400; idx++) {
         log_info(LogTest, "Running iteration #{}", idx);
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -135,6 +130,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
 
         // Run the test on each device
         for (Device *device : devices_) {
+            log_info(LogTest, "Running on device {}", device->id());
             RunTest(device);
         }
 

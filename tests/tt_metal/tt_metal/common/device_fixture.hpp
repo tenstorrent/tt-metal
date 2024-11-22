@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -52,34 +53,41 @@ class DeviceFixture : public ::testing::Test {
     size_t num_devices_;
 };
 
-class DeviceSingleCardFixture : public ::testing::Test {
+class DeviceSingleCardFixture : public DispatchFixture {
    protected:
     void SetUp() override {
         this->validate_dispatch_mode();
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
     void validate_dispatch_mode() {
+        this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
     }
 
-    void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+    void create_devices() {
         const chip_id_t mmio_device_id = 0;
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
-        device_ = reserved_devices_.at(mmio_device_id);
-        num_devices_ = reserved_devices_.size();
+        this->reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        this->device_ = this->reserved_devices_.at(mmio_device_id);
+        this->devices_ = tt::DevicePool::instance().get_all_active_devices();
+        this->num_devices_ = this->reserved_devices_.size();
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+        // An extra flag for if we have remote devices, as some tests are disabled for fast
+        // dispatch + remote devices.
+        this->has_remote_devices_ = num_devices > num_pci_devices;
     }
 
     tt::tt_metal::Device *device_;
     std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
-    tt::ARCH arch_;
     size_t num_devices_;
 };
 
@@ -89,8 +97,8 @@ class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
    protected:
     void SetUp() override {
         this->validate_dispatch_mode();
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        if (arch_ != tt::ARCH::BLACKHOLE) {
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        if (this->arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }
         this->create_devices();

@@ -8,7 +8,6 @@
 
 #include "host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "multi_device_fixture.hpp"
 
@@ -16,9 +15,8 @@ class GalaxyFixture : public MultiDeviceFixture {
    protected:
     void SkipTestSuiteIfNotGalaxyMotherboard()
     {
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (!(arch == tt::ARCH::WORMHOLE_B0 && num_devices >= 32))
+        if (!(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32))
         {
             GTEST_SKIP();
         }
@@ -38,6 +36,8 @@ class GalaxyFixture : public MultiDeviceFixture {
 
     void SetUp() override
     {
+        MultiDeviceFixture::SetUp();
+        this->DetectDispatchMode();
         this->SkipTestSuiteIfNotGalaxyMotherboard();
         this->InitializeDevices();
     }
@@ -69,6 +69,8 @@ class TGFixture : public GalaxyFixture
 
     void SetUp() override
     {
+        MultiDeviceFixture::SetUp();
+        this->DetectDispatchMode();
         this->SkipTestSuiteIfNotTG();
         this->InitializeDevices();
     }
@@ -90,6 +92,8 @@ class TGGFixture : public GalaxyFixture
 
     void SetUp() override
     {
+        MultiDeviceFixture::SetUp();
+        this->DetectDispatchMode();
         this->SkipTestSuiteIfNotTGG();
         this->InitializeDevices();
     }

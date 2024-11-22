@@ -254,7 +254,6 @@ bool send_over_eth(
 TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
-    ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
     CoreCoord sender_core_0 = CoreCoord(9, 6);
@@ -284,7 +283,6 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
 TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
-    ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
     CoreCoord sender_core_0 = CoreCoord(9, 0);
@@ -314,7 +312,6 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
 TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
-    ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
     CoreCoord sender_core_0 = CoreCoord(9, 6);
@@ -361,7 +358,6 @@ TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     srand(0);
-    ASSERT_TRUE(this->num_devices_ == 2);
 
     std::map<std::pair<int, CoreCoord>, std::pair<int, CoreCoord>> connectivity = {
         {{0, CoreCoord(9, 6)}, {1, CoreCoord(9, 0)}},

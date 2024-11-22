@@ -6,17 +6,16 @@
 
 #include "device_fixture.hpp"
 #include "command_queue_fixture.hpp"
+#include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -37,6 +36,7 @@ struct BankedConfig {
 namespace unit_tests::erisc::kernels {
 
 bool chip_to_chip_dram_buffer_transfer(
+    DispatchFixture* fixture,
     tt_metal::Device* sender_device,
     tt_metal::Device* receiver_device,
     const CoreCoord& eth_sender_core,
@@ -85,7 +85,7 @@ bool chip_to_chip_dram_buffer_transfer(
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
 
-    tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
+    fixture->WriteBuffer(sender_device, input_dram_buffer, inputs);
 
     const uint32_t MAX_BUFFER =
         (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
@@ -94,7 +94,7 @@ bool chip_to_chip_dram_buffer_transfer(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
-    tt_metal::detail::WriteToBuffer(output_dram_buffer, all_zeros);
+    fixture->WriteBuffer(receiver_device, output_dram_buffer, all_zeros);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
@@ -147,14 +147,11 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
+    fixture->RunProgram(sender_device, sender_program);
+    fixture->RunProgram(receiver_device, receiver_program);
 
-    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
-    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
-
-    th1.join();
-    th2.join();
     std::vector<uint32_t> dest_dram_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_dram_data);
+    fixture->ReadBuffer(receiver_device, output_dram_buffer, dest_dram_data);
     pass &= (dest_dram_data == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << output_dram_noc_xy.str() << std::endl;
@@ -287,13 +284,13 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
     }
 }
 
@@ -305,13 +302,13 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
     }
 }
 
@@ -444,13 +441,13 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
                     receiver_eth_core.str());
 
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
             }
         }
     }
