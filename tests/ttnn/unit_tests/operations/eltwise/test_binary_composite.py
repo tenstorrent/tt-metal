@@ -269,7 +269,7 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -298,7 +298,7 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -337,7 +337,7 @@ def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -362,7 +362,7 @@ def test_binary_div_scalar_ttnn(accurate_mode, round_mode, input_shapes, value, 
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (

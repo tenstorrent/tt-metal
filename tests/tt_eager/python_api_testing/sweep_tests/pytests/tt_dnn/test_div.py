@@ -25,7 +25,7 @@ mem_configs = [
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     [
