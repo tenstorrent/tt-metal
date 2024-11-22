@@ -872,7 +872,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::DispatchCoreConfig dispatch_core_config;
-        if (std::strcmp(getenv("ARCH_NAME"), "grayskull") != 0) {
+        if (tt::tt_metal::get_platform_architecture() == tt::ARCH::GRAYSKULL) {
             dispatch_core_config = tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
         } else {
             dispatch_core_config = tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::COL};
@@ -883,8 +883,8 @@ int main(int argc, char **argv) {
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        tt::log_info("device x : {}", num_cores_x);
-        tt::log_info("device y : {}", num_cores_y);
+        tt::log_debug("device x : {}", num_cores_x);
+        tt::log_debug("device y : {}", num_cores_y);
 
 
         int clock_freq_mhz = get_tt_npu_clock(device);
