@@ -60,22 +60,41 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row Major layout and bfloat8_b are not supported"
+
     if not tensor_hw_as_shard_shape:
         if sharding_strategy == ttnn.ShardStrategy.BLOCK:
-            if pre_sharded_height % Y != 0:
-                return (
-                    True,
-                    "Prod of all dimensions except the innermost must be divisible by the y coordinate of coregrid when using block sharding",
-                )
-            if pre_sharded_width % X != 0:
-                return (
-                    True,
-                    "Innermost dimension must be divisible by the x coordinate of coregrid when using block sharding",
-                )
-            if (pre_sharded_height // Y) % 32 != 0:
-                return True, "Shard height must be a multiple of input tile size"
-            if (pre_sharded_width // X) % 32 != 0:
-                return True, "Shard width must be a multiple of input tile size"
+            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+                if pre_sharded_height % y != 0:
+                    return (
+                        True,
+                        "Prod of all dimensions except the innermost must be divisible by the y coordinate of coregrid when using block sharding",
+                    )
+                if pre_sharded_width % x != 0:
+                    return (
+                        True,
+                        "Innermost dimension must be divisible by the x coordinate of coregrid when using block sharding",
+                    )
+                if (pre_sharded_height // y) // 32 <= 0:
+                    return True, "Shard height must be a atleast 32"
+                if (pre_sharded_width // x) // 32 <= 0:
+                    return True, "Shard width must be atleast 32"
+            else:
+                if pre_sharded_height % x != 0:
+                    return (
+                        True,
+                        "Prod of all dimensions except the innermost must be divisible by the x coordinate of coregrid when using block sharding",
+                    )
+                if pre_sharded_width % y != 0:
+                    return (
+                        True,
+                        "Innermost dimension must be divisible by the y coordinate of coregrid when using block sharding",
+                    )
+                if (pre_sharded_height // x) // 32 <= 0:
+                    return True, "Shard height must be a atleast 32"
+                if (pre_sharded_width // y) // 32 <= 0:
+                    return True, "Shard width must be a atleast 32"
 
         if sharding_strategy == ttnn.ShardStrategy.WIDTH:
             if pre_sharded_width % (Y * X) != 0:
@@ -102,9 +121,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                 True,
                 "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
             )
-
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "Row Major layout and bfloat8_b are not supported"
 
     return False, None
 
