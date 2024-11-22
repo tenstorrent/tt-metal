@@ -632,7 +632,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).buffer()->buffer_type()), // buffer type
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).layout()), // page layout
         static_cast<uint32_t>(this->edm_termination_mode), // (EDM) termination mode
-        static_cast<uint32_t>(tt::CB::c_in0) // cb_id
+        static_cast<uint32_t>(tt::CBIndex::c_0) // cb_id
     };
 
     auto const& input_tensor = this->op_config.get_input_tensor(0);

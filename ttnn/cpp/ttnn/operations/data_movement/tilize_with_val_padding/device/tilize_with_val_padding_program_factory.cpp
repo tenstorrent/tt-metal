@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
             .set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
@@ -253,10 +253,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t padded_row_size_bytes = output.get_legacy_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
     auto [src0_cb_index, cb_src0] =
-        create_cb(tt::CB::c_in0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
+        create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
 
     auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
+        tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -413,7 +413,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     uint32_t num_padded_rows = output.get_legacy_shape()[-2] - a.get_legacy_shape()[-2];
 
     auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in1,
+        tt::CBIndex::c_1,
         program,
         all_cores,
         input_shard_width_bytes,
@@ -422,13 +422,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         src_sharded ? a.buffer() : nullptr);
 
     auto [src1_cb_index, cb_src1] = create_cb(
-        tt::CB::c_in0, program, all_cores, input_single_tile_size, ntiles_per_batch * 2, input_cb_data_format);
+        tt::CBIndex::c_0, program, all_cores, input_single_tile_size, ntiles_per_batch * 2, input_cb_data_format);
 
     auto [src2_cb_index, cb_src2] =
-        create_cb(tt::CB::c_in2, program, all_cores, input_shard_width_bytes, 1, input_cb_data_format);
+        create_cb(tt::CBIndex::c_2, program, all_cores, input_shard_width_bytes, 1, input_cb_data_format);
 
     auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0,
+        tt::CBIndex::c_16,
         program,
         all_cores,
         output_single_tile_size,

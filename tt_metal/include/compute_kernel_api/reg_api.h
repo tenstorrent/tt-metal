@@ -9,6 +9,9 @@
 namespace ckernel {
 
 /**
+ * @deprecated This function is deprecated, please use `tile_regs_acquire()` instead.
+ * See https://github.com/tenstorrent/tt-metal/issues/5868#issuecomment-2101726935
+ *
  * Acquires an exclusive lock on the internal DST register for the current
  * Tensix core.
  *
@@ -21,6 +24,7 @@ namespace ckernel {
  *
  * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel configuration.
  */
+[[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
     MATH(( llk_math_wait_for_dest_available()  ));
 
@@ -48,6 +52,9 @@ ALWI void tile_regs_wait() {
 }
 
 /**
+ * @deprecated This function is deprecated, please use `tile_regs_release()` instead.
+ * See https://github.com/tenstorrent/tt-metal/issues/5868#issuecomment-2101726935
+ *
  * Releases the exclusive lock on the internal DST register for the current
  * Tensix core. This lock had to be previously acquired with acquire_dst. This
  * call is blocking and is only available on the compute engine.
@@ -56,6 +63,7 @@ ALWI void tile_regs_wait() {
  *
  * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel configuration.
  */
+[[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
     MATH(( llk_math_dest_section_done()  ));
 

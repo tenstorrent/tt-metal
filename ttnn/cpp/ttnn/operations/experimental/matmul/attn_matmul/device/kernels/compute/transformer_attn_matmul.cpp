@@ -58,7 +58,7 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_intermed0, onetile);
 
-            // untilize tile and write to CB::c_intermed1
+            // untilize tile and write to CBIndex::c_25
             reconfig_data_format_srca(cb_in1, cb_intermed0);
             cb_wait_front(cb_intermed0, onetile);
             untilize_init_short(cb_intermed0);
@@ -79,7 +79,7 @@ void MAIN {
         cb_wait_front(cb_intermed2, onetile);
         cb_reserve_back(out_cb_id, onetile);
 
-        // tilize CB::intermed2 and write to CB::c_out0
+        // tilize CB::intermed2 and write to CBIndex::c_16
         tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile);
         tilize_block(cb_intermed2, onetile, out_cb_id);
         cb_push_back(out_cb_id, onetile);

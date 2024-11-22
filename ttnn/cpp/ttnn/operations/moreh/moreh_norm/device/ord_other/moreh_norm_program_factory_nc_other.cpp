@@ -85,11 +85,11 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},    // input
-            {tt::CB::c_in1, in1_t},    // one
-            {tt::CB::c_out0, out0_t},  // output
-            {tt::CB::c_intermed0, im0_t, intermed_data_format},
-            {tt::CB::c_intermed1, im1_t, intermed_data_format},
+            {tt::CBIndex::c_0, in0_t},    // input
+            {tt::CBIndex::c_1, in1_t},    // one
+            {tt::CBIndex::c_16, out0_t},  // output
+            {tt::CBIndex::c_24, im0_t, intermed_data_format},
+            {tt::CBIndex::c_25, im1_t, intermed_data_format},
         });
 
     ////////////////////////////////////////////////////////////////////////////

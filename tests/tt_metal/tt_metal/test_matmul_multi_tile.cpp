@@ -178,7 +178,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         }
 
         // NOTE: intermediate and output CB share same address space since we operate it on it sequentially, not in parallel
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t intermediate_cb_index = 24;
         std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
             {ouput_cb_index, tt::DataFormat::Float16_b},

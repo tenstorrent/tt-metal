@@ -131,12 +131,12 @@ void MAIN {
     // interm3:
     //   if under untilize mode, this is the CB we write to so that we can
     //   reblock the output
-    uint32_t in0_cb                                   = tt::CB::c_in0;
-    uint32_t tilize_mode_tilized_in0_cb               = tt::CB::c_intermed0;
-    uint32_t matmul_partials_cb                       = tt::CB::c_intermed1;
-    uint32_t untilize_mode_final_matmul_partials_cb   = tt::CB::c_intermed2;
-    uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed3;
-    uint32_t out0_cb                                  = tt::CB::c_out0;
+    uint32_t in0_cb                                   = tt::CBIndex::c_0;
+    uint32_t tilize_mode_tilized_in0_cb               = tt::CBIndex::c_24;
+    uint32_t matmul_partials_cb                       = tt::CBIndex::c_25;
+    uint32_t untilize_mode_final_matmul_partials_cb   = tt::CBIndex::c_26;
+    uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_27;
+    uint32_t out0_cb                                  = tt::CBIndex::c_16;
 
     mm_init();
     for(uint32_t block = 0; block < num_blocks; block++)
@@ -150,7 +150,7 @@ void MAIN {
             cb_wait_front(in0_cb, in0_block_num_tiles);
         }
 
-        cb_wait_front(tt::CB::c_in1, in1_block_num_tiles);
+        cb_wait_front(tt::CBIndex::c_1, in1_block_num_tiles);
         int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
@@ -178,9 +178,9 @@ void MAIN {
                             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
                             if  (tilize_in) {
-                                matmul_tiles(tilize_mode_tilized_in0_cb, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                                matmul_tiles(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
                             } else {
-                                matmul_tiles(in0_cb, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                                matmul_tiles(in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
                             }
                             in1_index_inner_dim_offset += in1_per_core_w;
                         }
@@ -230,7 +230,7 @@ void MAIN {
         } else {
             cb_pop_front(in0_cb, in0_block_num_tiles);
         }
-        cb_pop_front(tt::CB::c_in1, in1_block_num_tiles);
+        cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);
     }
 
 }

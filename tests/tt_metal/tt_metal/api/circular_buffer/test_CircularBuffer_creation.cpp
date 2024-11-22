@@ -68,12 +68,21 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
         {16, cb_config.data_format},
         {24, cb_config.data_format}
     };
-    CircularBufferConfig config = CircularBufferConfig(cb_config.page_size, data_format_spec)
-        .set_page_size(0, cb_config.page_size)
-        .set_page_size(2, cb_config.page_size)
-        .set_page_size(16, cb_config.page_size)
-        .set_page_size(24, cb_config.page_size);
-    auto cb = CreateCircularBuffer(program, cr_set, config);
+    CircularBufferConfig expected_config = CircularBufferConfig(cb_config.page_size, data_format_spec)
+        .set_page_size(tt::CBIndex::c_0, cb_config.page_size)
+        .set_page_size(tt::CBIndex::c_2, cb_config.page_size)
+        .set_page_size(tt::CBIndex::c_16, cb_config.page_size)
+        .set_page_size(tt::CBIndex::c_24, cb_config.page_size);
+
+    CircularBufferConfig actual_config = CircularBufferConfig(cb_config.page_size);
+    actual_config.index(tt::CBIndex::c_0).set_page_size(cb_config.page_size).set_data_format(cb_config.data_format);
+    actual_config.index(tt::CBIndex::c_2).set_page_size(cb_config.page_size).set_data_format(cb_config.data_format);
+    actual_config.index(tt::CBIndex::c_16).set_page_size(cb_config.page_size).set_data_format(cb_config.data_format);
+    actual_config.index(tt::CBIndex::c_24).set_page_size(cb_config.page_size).set_data_format(cb_config.data_format);
+
+    EXPECT_TRUE(actual_config == expected_config);
+
+    auto cb = CreateCircularBuffer(program, cr_set, actual_config);
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         detail::CompileProgram(devices_.at(id), program);

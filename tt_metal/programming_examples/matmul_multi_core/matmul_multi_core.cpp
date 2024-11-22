@@ -127,18 +127,18 @@ void matmul_multi_core(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::
     * Config of Circular Buffer in the device L1
     * input tiles count is = 2 because it's single tile process, and double-buffer
     */
-    uint32_t src0_cb_index = CB::c_in0; //0
+    uint32_t src0_cb_index = CBIndex::c_0; //0
     uint32_t num_input_tiles = 2;
     CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = CB::c_in1; // 1
+    uint32_t src1_cb_index = CBIndex::c_1; // 1
     CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
 		.set_page_size(src1_cb_index, single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
 		.set_page_size(output_cb_index, single_tile_size);

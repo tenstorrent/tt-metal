@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
             .set_page_size(src1_cb_index, single_tile_bytes);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_buffer_tiles = 2;
         // this buffer is used in writer_unary.cpp BRISC kernel
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
