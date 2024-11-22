@@ -662,10 +662,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                                     }
                                 }
                             }
-
-                            CoreCoord physical_core = device->physical_core_from_logical_core(core_coord, core_type);
+                            CoreCoord virtual_core = device->translated_coords_from_logical_coords(core_coord, core_type);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, virtual_core)}); // uses NOC0. Needs to be properly updated to account for unicast encoding on NOC1
                         }
                     }
                 }
@@ -726,9 +725,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
                         for (auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
-                            CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
+                            CoreCoord translated_core_coords = device->translated_coords_from_logical_coords(core_coord, CoreType::ETH);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, translated_core_coords)}); // Uses NOC0 here, needs to be updated for NOC1
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
@@ -742,7 +741,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         for (const auto& mcast_dests : dst_noc_multicast_info) {
                             multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                                    this->noc_index, std::get<CoreRange>(mcast_dests.first)),
+                                    this->noc_index, std::get<CoreRange>(mcast_dests.first)), // Uses NOC0 here, needs to be updated for NOC1
                                 .num_mcast_dests = mcast_dests.second});
                         }
                     }
@@ -823,7 +822,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                         transfer_info.data.size() == write_packed_len,
                         "Not all data std::vectors in write packed semaphore cmd equal in len");
                     multicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                        .noc_xy_addr = this->device->get_noc_multicast_encoding(
+                        .noc_xy_addr = this->device->get_noc_multicast_encoding( // uses NOC0. Needs to be properly updated to account for mcast encoding on NOC1
                             this->noc_index, std::get<CoreRange>(dst_noc_info.first)),
                         .num_mcast_dests = dst_noc_info.second});
                     multicast_sem_data[i].emplace_back(
@@ -860,7 +859,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                         transfer_info.data.size() == write_packed_len,
                         "Not all data std::vectors in write packed semaphore cmd equal in len");
                     unicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                        .noc_xy_addr = this->device->get_noc_unicast_encoding(
+                        .noc_xy_addr = this->device->get_noc_unicast_encoding( // uses NOC0. Needs to be properly updated to account for mcast encoding on NOC1
                             this->noc_index, std::get<CoreCoord>(dst_noc_info.first))});
                     unicast_sem_data[i].emplace_back(
                         transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
@@ -893,8 +892,8 @@ void EnqueueProgramCommand::assemble_device_commands(
         uint32_t i = 0;
         uint32_t max_overall_base_index = 0;
         for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
-            const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_coord);
-            const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_coord);
+            const CoreCoord translated_start = device->translated_coords_from_logical_coords(core_range.start_coord, CoreType::WORKER);
+            const CoreCoord translated_end = device->translated_coords_from_logical_coords(core_range.end_coord, CoreType::WORKER);
 
             const uint32_t num_receivers = core_range.size();
             auto& cb_config_payload = cb_config_payloads[i];
@@ -920,7 +919,7 @@ void EnqueueProgramCommand::assemble_device_commands(
             }
             multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                    this->noc_index, CoreRange(translated_start, translated_end)), // uses NOC0. Needs to be properly updated to account for mcast encoding on NOC1
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_cb_config_data.emplace_back(
                 cb_config_payload.data(),
@@ -957,10 +956,10 @@ void EnqueueProgramCommand::assemble_device_commands(
             [&](auto&& cores) {
                 using T = std::decay_t<decltype(cores)>;
                 if constexpr (std::is_same_v<T, CoreRange>) {
-                    noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores);
+                    noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores); // uses NOC0. Needs to be properly updated to account for mcast encoding on NOC1
                     write_linear = false;
                 } else {
-                    noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores);
+                    noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores); // uses NOC0. Needs to be properly updated to account for unicast encoding on NOC1
                     write_linear = true;
                 }
             },
@@ -1088,14 +1087,12 @@ void EnqueueProgramCommand::assemble_device_commands(
         kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
         const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
         for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-            CoreCoord physical_start =
-                device->physical_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
-            CoreCoord physical_end =
-                device->physical_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
+            CoreCoord translated_start = device->translated_coords_from_logical_coords(core_range.start_coord, kernel_group.get_core_type());
+            CoreCoord translated_end = device->translated_coords_from_logical_coords(core_range.end_coord, kernel_group.get_core_type());
 
             multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                    this->noc_index, CoreRange(translated_start, translated_end)), // uses NOC0. Needs to be properly updated to account for mcast encoding on NOC1
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
         }
@@ -1122,11 +1119,11 @@ void EnqueueProgramCommand::assemble_device_commands(
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord physical_coord = device->physical_core_from_logical_core(
+                        CoreCoord translated_coord = device->translated_coords_from_logical_coords(
                             CoreCoord({x, y}), kernel_group.get_core_type());
                         unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                             .noc_xy_addr =
-                                this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
+                                this->device->get_noc_unicast_encoding(this->noc_index, translated_coord)});  // uses NOC0. Needs to be properly updated to account for mcast encoding on NOC1
                         unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
                     }
                 }

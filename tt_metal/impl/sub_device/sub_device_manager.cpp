@@ -295,12 +295,12 @@ void SubDeviceManager::populate_noc_data() {
         this->num_noc_mcast_txns_[i] = tensix_cores.size();
         this->noc_mcast_unicast_data_.resize(idx + this->num_noc_mcast_txns_[i] * 2);
         for (const auto& core_range : tensix_cores.ranges()) {
-            auto physical_start =
-                this->device_->physical_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
-            auto physical_end = this->device_->physical_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
-            auto physical_core_range = CoreRange(physical_start, physical_end);
+            auto translated_start =
+                this->device_->translated_coords_from_logical_coords(core_range.start_coord, CoreType::WORKER);
+            auto translated_end = this->device_->translated_coords_from_logical_coords(core_range.end_coord, CoreType::WORKER);
+            uto translated_core_range = CoreRange(translated_start, translated_end);
             this->noc_mcast_unicast_data_[idx++] =
-                this->device_->get_noc_multicast_encoding(noc_index, physical_core_range);
+                this->device_->get_translated_noc_multicast_encoding(noc_index, translated_core_range);
             this->noc_mcast_unicast_data_[idx++] = core_range.size();
         }
         this->noc_unicast_data_start_index_[i] = idx;
@@ -309,9 +309,9 @@ void SubDeviceManager::populate_noc_data() {
         for (const auto& core_range : eth_cores.ranges()) {
             this->noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
-                auto physical_core = this->device_->physical_core_from_logical_core(core, CoreType::ETH);
+                auto physical_core = this->device_->translated_coords_from_logical_coords(core, CoreType::ETH);
                 this->noc_mcast_unicast_data_[idx++] =
-                    this->device_->get_noc_unicast_encoding(noc_index, physical_core);
+                    this->device_->get_translated_noc_unicast_encoding(noc_index, translated_core);
             }
         }
         this->num_noc_unicast_txns_[i] = idx - this->noc_unicast_data_start_index_[i];

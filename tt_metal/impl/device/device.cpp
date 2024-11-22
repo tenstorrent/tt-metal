@@ -3099,6 +3099,14 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
     return worker_cores;
 }
 
+CoreCoord Device::translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
+}
+
+CoreCoord Device::translated_coords_from_physical_coords(const CoreCoord &physical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_translated_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
+}
+
 CoreCoord Device::dram_core_from_logical_core(const CoreCoord &logical_core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_dram_core_from_logical(logical_core);
@@ -3154,6 +3162,43 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y)
+        );
+    }
+}
+
+uint32_t Device::get_translated_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& translated_core) const {
+    if (this->arch() != tt::ARCH::WORMHOLE_B0) {
+        return this->get_noc_unicast_encoding(noc_index, translated_core);
+    }
+    const auto& grid_size = this->grid_size();
+    return NOC_XY_ENCODING(
+        tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.x, translated_core.x),
+        tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.y, translated_core.y)
+    );
+}
+
+uint32_t Device::get_translated_noc_multicast_encoding(uint8_t noc_index, const CoreRange& translated_cores) const {
+    if (this->arch() != tt::ARCH::WORMHOLE_B0) {
+        return this->get_noc_multicast_encoding(noc_index, translated_cores);
+    }
+    const auto& grid_size = this->grid_size();
+
+    // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
+    // Start and end translated coords are computed based on NOC_0 (identity encodings)
+    // since in the translated space, NOC_0 and NOC_1 have the same coordinate system
+    if (noc_index == 0) {
+        return NOC_MULTICAST_ENCODING(
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.x, translated_cores.start_coord.x),
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.y, translated_cores.start_coord.y),
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.x, translated_cores.end_coord.x),
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.y, translated_cores.end_coord.y)
+        );
+    } else {
+        return NOC_MULTICAST_ENCODING(
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.x, translated_cores.end_coord.x),
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.y, translated_cores.end_coord.y),
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.x, translated_cores.start_coord.x),
+            tt::tt_metal::hal.noc_coordinate(NOC::NOC_0, grid_size.y, translated_cores.start_coord.y)
         );
     }
 }

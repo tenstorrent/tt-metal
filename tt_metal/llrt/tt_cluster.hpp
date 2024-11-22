@@ -65,6 +65,8 @@ class Cluster {
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
+    CoreCoord get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const;
+    CoreCoord get_translated_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord, const CoreType& core_type) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
     uint32_t get_harvesting_mask(chip_id_t chip) const {
         return this->driver_->get_harvesting_masks_for_soc_descriptors().at(chip);

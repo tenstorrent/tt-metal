@@ -116,6 +116,9 @@ class Device {
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
+    CoreCoord translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const;
+    CoreCoord translated_coords_from_physical_coords(const CoreCoord &physical_coord, const CoreType& core_type) const;
+
     CoreCoord dram_core_from_logical_core(const CoreCoord &logical_core) const;
     std::vector<CoreCoord> dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
@@ -212,6 +215,9 @@ class Device {
 
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const;
+
+    uint32_t get_translated_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& translated_core) const;
+    uint32_t get_translated_noc_multicast_encoding(uint8_t noc_index, const CoreRange& translated_cores) const;
 
     const std::unordered_set<Buffer *> &get_allocated_buffers() const;
     const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const;
@@ -440,8 +446,8 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
     std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {
-        CoreCoord physical_start = this->physical_core_from_logical_core(core_range.start_coord, core_type);
-        CoreCoord physical_end = this->physical_core_from_logical_core(core_range.end_coord, core_type);
+        CoreCoord physical_start = this->translated_coords_from_logical_coords(core_range.start_coord, core_type);
+        CoreCoord physical_end = this->translated_coords_from_logical_coords(core_range.end_coord, core_type);
 
         uint32_t num_receivers = core_range.size();
         dst_noc_multicast_info.push_back(std::make_pair(CoreRange(physical_start, physical_end), num_receivers));
