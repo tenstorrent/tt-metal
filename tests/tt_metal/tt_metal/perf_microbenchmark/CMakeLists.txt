@@ -54,6 +54,9 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs)
+    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric_sanity.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE tt_fabric)
+    endif()
     if(${TEST_TARGET} MATCHES "test_dram_read")
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
@@ -63,6 +66,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         PRIVATE
             ${PROJECT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/tt_metal
+            ${PROJECT_SOURCE_DIR}/tt_fabric
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
             ${PROJECT_SOURCE_DIR}/tt_metal/common
             ${PROJECT_SOURCE_DIR}/tests

@@ -40,6 +40,7 @@ namespace tt {
     X(Reportify)     \
     X(GraphCompiler) \
     X(Dispatch)      \
+    X(Fabric)         \
     X(Metal)         \
     X(MetalTrace)
 
