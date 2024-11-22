@@ -5,6 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include "debug/watcher_server.hpp"
 #include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 
