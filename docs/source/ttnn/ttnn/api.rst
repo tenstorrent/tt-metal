@@ -186,8 +186,8 @@ Pointwise Unary
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
-   ttnn.square
    ttnn.sqrt
+   ttnn.square
    ttnn.swiglu
    ttnn.swish
    ttnn.tan
