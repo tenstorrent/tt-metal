@@ -59,8 +59,12 @@ struct ShardSpec {
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false,
         const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
-    }
+        grid(core_sets_),
+        shape(shard_shape_),
+        orientation(shard_orientation_),
+        halo(halo_),
+        mode(shard_mode_),
+        physical_shard_shape(std::nullopt) {}
 
     ShardSpec(
         const CoreRangeSet &core_sets_,
@@ -68,28 +72,44 @@ struct ShardSpec {
         const std::array<uint32_t, 2> &physical_shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
-        TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
+        grid(core_sets_),
+        shape(shard_shape_),
+        orientation(shard_orientation_),
+        halo(halo_),
+        mode(ShardMode::LOGICAL),
+        physical_shard_shape(physical_shard_shape_) {
+        TT_FATAL(
+            physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1],
+            "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!",
+            physical_shard_shape_[0],
+            physical_shard_shape_[1],
+            shard_shape_[0],
+            shard_shape_[1]);
     }
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
+
     const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
 
-    bool operator==(const ShardSpec& other) const;
-    bool operator!=(const ShardSpec& other) const;
+    bool operator==(const ShardSpec &other) const;
+    bool operator!=(const ShardSpec &other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode", "physical_shard_shape");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode", "physical_shard_shape");
+
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo, this->mode, this->physical_shard_shape);
+        return std::forward_as_tuple(
+            this->grid, this->shape, this->orientation, this->halo, this->mode, this->physical_shard_shape);
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const ShardSpec& spec);
+std::ostream &operator<<(std::ostream &os, const ShardSpec &spec);
 
 struct ShardSpecBuffer {
     ShardSpec tensor_shard_spec;
     std::array<uint32_t, 2> page_shape;
     std::array<uint32_t, 2> tensor2d_shape;
+
     ShardSpecBuffer(
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
@@ -101,6 +121,7 @@ struct ShardSpecBuffer {
         this->page_shape = page_shape;
         this->tensor2d_shape = tensor2d_shape;
     }
+
     ShardSpecBuffer(
         const ShardSpec &shard_spec,
         const std::array<uint32_t, 2> &page_shape,
@@ -109,11 +130,16 @@ struct ShardSpecBuffer {
         this->page_shape = page_shape;
         this->tensor2d_shape = tensor2d_shape;
     }
+
     CoreRangeSet grid() const { return tensor_shard_spec.grid; }
+
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
+
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
+
     bool halo() const { return tensor_shard_spec.halo; }
-    void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
+
+    void set_shard_spec(const ShardSpec &shard_spec) { tensor_shard_spec = shard_spec; };
 
     /* Shape in pages of the full tensor, not per core */
     std::array<uint32_t, 2> shape_in_pages() const;
@@ -164,16 +190,18 @@ struct BufferPageMapping {
 inline namespace v0 {
 
 class Buffer final {
-    struct Private { explicit Private() = default; };
+    struct Private {
+        explicit Private() = default;
+    };
 
-   public:
+public:
     static std::shared_ptr<Buffer> create(
         Device *device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<ShardSpecBuffer> &shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
@@ -183,7 +211,7 @@ class Buffer final {
         DeviceAddr page_size,
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<ShardSpecBuffer> &shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
@@ -193,8 +221,11 @@ class Buffer final {
     Buffer &operator=(Buffer &&other) = delete;
 
     Device *device() const { return device_; }
+
     Allocator *allocator() const { return allocator_; }
+
     DeviceAddr size() const { return size_; }
+
     bool is_allocated() const;
 
     // Returns address of buffer in the first bank
@@ -207,6 +238,7 @@ class Buffer final {
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
+
     CoreType core_type() const;
 
     bool is_l1() const;
@@ -238,13 +270,14 @@ class Buffer final {
     DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
     ShardSpecBuffer shard_spec() const;
-    void set_shard_spec(const ShardSpecBuffer& shard_spec);
+    void set_shard_spec(const ShardSpecBuffer &shard_spec);
 
     std::optional<uint32_t> num_cores() const;
 
-    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+    const std::shared_ptr<const BufferPageMapping> &get_buffer_page_mapping();
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
+
     std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
 
     Buffer(
@@ -253,13 +286,13 @@ class Buffer final {
         DeviceAddr page_size,
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
-        const std::optional<ShardSpecBuffer>& shard_parameter,
+        const std::optional<ShardSpecBuffer> &shard_parameter,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
         Private);
 
-   private:
+private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
         ALLOCATION_FAILED,
@@ -269,14 +302,14 @@ class Buffer final {
 
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static void deleter(Buffer* buffer);
+    static void deleter(Buffer *buffer);
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer &buffer);
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
-    Device * const device_;
-    const DeviceAddr size_; // Size in bytes
+    Device *const device_;
+    const DeviceAddr size_;  // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;
@@ -284,7 +317,7 @@ class Buffer final {
     const bool owns_data_;
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
-    Allocator * allocator_;
+    Allocator *allocator_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;
@@ -294,7 +327,7 @@ class Buffer final {
     std::atomic<bool> deallocation_requested_ = false;
 
     // These members must be only accessed on the device worker thread
-    DeviceAddr page_size_; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 

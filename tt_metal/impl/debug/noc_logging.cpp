@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-//#include <iomanip>
+// #include <iomanip>
 #include <set>
 
 #include "debug_helpers.hpp"
@@ -23,6 +23,7 @@ using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 namespace tt {
 
 static string logfile_path = "generated/noc_data/";
+
 void PrintNocData(noc_data_t noc_data, string file_name) {
     std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
@@ -44,7 +45,7 @@ void DumpCoreNocData(Device *device, const CoreDescriptor &logical_core, noc_dat
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
         auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, addr, DPRINT_BUFFER_SIZE);
-        DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
+        DebugPrintMemLayout *l = reinterpret_cast<DebugPrintMemLayout *>(from_dev.data());
         uint32_t *data = reinterpret_cast<uint32_t *>(l->data);
 
         // Append the data for this core to existing data
@@ -71,8 +72,9 @@ void DumpDeviceNocData(Device *device, noc_data_t &noc_data, noc_data_t &dispatc
 
 void DumpNocData(std::vector<Device *> devices) {
     // Skip if feature is not enabled
-    if (!tt::llrt::OptionsG.get_record_noc_transfers())
+    if (!tt::llrt::OptionsG.get_record_noc_transfers()) {
         return;
+    }
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
     for (Device *device : devices) {
@@ -86,8 +88,9 @@ void DumpNocData(std::vector<Device *> devices) {
 
 void ClearNocData(Device *device) {
     // Skip if feature is not enabled
-    if (!tt::llrt::OptionsG.get_record_noc_transfers())
+    if (!tt::llrt::OptionsG.get_record_noc_transfers()) {
         return;
+    }
 
     // This feature is incomatible with dprint since they share memory space
     TT_FATAL(

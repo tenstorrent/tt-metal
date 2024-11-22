@@ -23,6 +23,7 @@ struct TraceDescriptor {
         uint32_t num_traced_programs_needing_go_signal_multicast = 0;
         uint32_t num_traced_programs_needing_go_signal_unicast = 0;
     };
+
     // Mapping of sub_device_id to descriptor
     std::unordered_map<SubDeviceId, Descriptor> descriptors;
     // Store the keys of the map in a vector after descriptor has finished being populated
