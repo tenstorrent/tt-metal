@@ -37,14 +37,14 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "xfail": {
-        "input_spec": list(gen_unary_sharded_spec(16, 4, "row_major", "tensor_hw"))
-        + list(gen_unary_sharded_spec(16, 4, "col_major", "tensor_hw"))
-        + list(gen_unary_sharded_spec(16, 4, "row_major", "block"))
-        + list(gen_unary_sharded_spec(16, 4, "col_major", "block"))
-        + list(gen_unary_sharded_spec(16, 4, "row_major", "height"))
-        + list(gen_unary_sharded_spec(16, 4, "col_major", "height"))
-        + list(gen_unary_sharded_spec(16, 4, "row_major", "width"))
-        + list(gen_unary_sharded_spec(16, 4, "col_major", "width")),
+        "input_spec": list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "TENSOR_HW"))
+        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "TENSOR_HW"))
+        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "BLOCK"))
+        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "BLOCK"))
+        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "HEIGHT"))
+        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "HEIGHT"))
+        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "WIDTH"))
+        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "WIDTH")),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     },
