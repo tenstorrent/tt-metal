@@ -29,7 +29,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
-        "round_mode": ["None", "floor", "trunc"],
+        "round_mode": [None, "floor", "trunc"],
         "grad_dtype": [ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
@@ -43,7 +43,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
         + gen_shapes([1, 1], [256, 256], [1, 1], 4),
-        "round_mode": ["None", "floor", "trunc"],
+        "round_mode": [None, "floor", "trunc"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
