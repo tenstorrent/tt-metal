@@ -112,8 +112,8 @@ void kernel_main() {
     ASSERT(page_size > 0);
     ASSERT(half_cb_n_pages > 0);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_out0;
-    constexpr uint32_t cb_id_in_short_circuit = tt::CB::c_out1;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_id_in_short_circuit = tt::CBIndex::c_17;
     const DataFormat in0_df = get_dataformat(cb_id_in0);
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT

@@ -42,13 +42,13 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     constexpr uint32_t in_out_num_tiles = 1;
     constexpr uint32_t intermed_num_tiles = 2;
 
-    constexpr uint32_t intermed_cb_id = CB::c_intermed0;
+    constexpr uint32_t intermed_cb_id = CBIndex::c_24;
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(intermed_num_tiles * intermed_tile_size, {{intermed_cb_id, tt::DataFormat::Float32}})
             .set_page_size(intermed_cb_id, intermed_tile_size);
     CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
-    constexpr uint32_t dst_cb_id = CB::c_in0;
+    constexpr uint32_t dst_cb_id = CBIndex::c_0;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{dst_cb_id, out_data_format}})
             .set_page_size(dst_cb_id, dtype_tile_size);

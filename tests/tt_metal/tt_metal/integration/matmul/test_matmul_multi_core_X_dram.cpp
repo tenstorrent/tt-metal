@@ -48,8 +48,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
     const CoreRange all_cores(start_core, end_core);
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t interm0_cb_index = 24;
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t interm0_cb_index = tt::CBIndex::c_24;
     std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
         {ouput_cb_index, tt::DataFormat::Float16_b},
         {interm0_cb_index, tt::DataFormat::Float16_b}
@@ -58,12 +58,12 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
     int cores_c = cfg.multi_dram ? 1 : num_cores_c;
     for(int i = 0; i < cores_r; i++) {
         for(int j = 0; j < cores_c; j++) {
-            uint32_t src0_cb_index = 0;
+            uint32_t src0_cb_index = tt::CBIndex::c_0;
             uint32_t cb0_tiles = in0_block_tiles * 2;  // double buffer
             tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
 
-            uint32_t src1_cb_index = 1;
+            uint32_t src1_cb_index = tt::CBIndex::c_1;
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, single_tile_size);

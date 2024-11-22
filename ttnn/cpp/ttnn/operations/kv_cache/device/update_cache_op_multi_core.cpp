@@ -85,21 +85,21 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         std::tie(num_cores, all_cores, core_group_1, core_group_2, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2) = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_batched_heads, row_major);
         num_input_tiles = 2 * Wt; // double buffered
     }
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_cache_tiles = 2 * granularity * Wt; // double buffered
     tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(num_cache_tiles * cache_single_tile_size, {{src0_cb_index, cache_cb_data_format}})
 		.set_page_size(src0_cb_index, cache_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = tt::CB::c_in1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src1_cb_index, input_cb_data_format}})
 		.set_page_size(src1_cb_index, input_single_tile_size);
     if (shard_spec.has_value()) {
         cb_src1_config = cb_src1_config.set_globally_allocated_address(*input_tensor.buffer());
     }
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
-    uint32_t interm0_cb_index = tt::CB::c_intermed0;
-    uint32_t interm1_cb_index = tt::CB::c_intermed1;
+    uint32_t interm0_cb_index = tt::CBIndex::c_24;
+    uint32_t interm1_cb_index = tt::CBIndex::c_25;
 
     uint32_t num_interm_tiles = 2 * granularity * Wt; // double buffered
     std::map<uint8_t, tt::DataFormat> interim_data_format_spec = {
@@ -111,13 +111,13 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         .set_page_size(interm1_cb_index, interm_single_tile_size);
     auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm0_config);
 
-    uint32_t interm2_cb_index = tt::CB::c_intermed2;
+    uint32_t interm2_cb_index = tt::CBIndex::c_26;
     tt::tt_metal::CircularBufferConfig cb_interm2_config = tt::tt_metal::CircularBufferConfig(num_interm_tiles * interm_single_tile_size, {{interm2_cb_index, interm_cb_data_format}})
 		.set_page_size(interm2_cb_index, interm_single_tile_size);
     auto cb_interm2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm2_config);
 
     // Output is same tensor as cache input, so cb/tile size is same
-    uint32_t output_cb_index = tt::CB::c_out0;
+    uint32_t output_cb_index = tt::CBIndex::c_16;
 
     // Must buffer all tiles for a single head
     uint32_t num_output_tiles = B * Wt;

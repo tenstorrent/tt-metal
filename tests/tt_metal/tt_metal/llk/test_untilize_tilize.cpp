@@ -95,7 +95,7 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
     CoreCoord dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
     CoreCoord dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_tiles;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * test_config.input_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(src0_cb_index, test_config.input_single_tile_size);
@@ -110,14 +110,14 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
         dram_buffer_src1_addr = src1_dram_buffer->address();
         dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
 
-        uint32_t src1_cb_index = tt::CB::c_in1;
+        uint32_t src1_cb_index = tt::CBIndex::c_1;
         uint32_t num_input_tiles = num_tiles;
         tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * test_config.input_single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, test_config.input_single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
     }
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(
         num_output_tiles * test_config.output_single_tile_size,

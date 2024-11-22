@@ -301,7 +301,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         index_stick_size = pos_buffer->aligned_page_size();
 
         //cb pos
-        auto c_in8_config = CircularBufferConfig(pos_tensor_tile_size, {{CB::dataflow0, pos_df}}).set_page_size(CB::dataflow0, pos_tensor_tile_size);
+        auto c_in8_config = CircularBufferConfig(pos_tensor_tile_size, {{CBIndex::c_8, pos_df}}).set_page_size(CBIndex::c_8, pos_tensor_tile_size);
         auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
 
     }
@@ -316,7 +316,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         //cb page_table
-        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CB::dataflow1, page_table_df}}).set_page_size(CB::dataflow1, page_table_tile_size);
+        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CBIndex::c_9, page_table_df}}).set_page_size(CBIndex::c_9, page_table_tile_size);
         auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
@@ -331,103 +331,103 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // CBs
     // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{CB::c_in0, q_df}}).set_page_size(CB::c_in0, q_tile_size);
+    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_0, q_df}}).set_page_size(CBIndex::c_0, q_tile_size);
     auto cb_in0_id = CreateCircularBuffer(program, core_grid, c_in0_config);
 
     // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{CB::c_in1, k_df}}).set_page_size(CB::c_in1, k_tile_size);
+    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{CBIndex::c_1, k_df}}).set_page_size(CBIndex::c_1, k_tile_size);
     auto cb_in1_id = CreateCircularBuffer(program, core_grid, c_in1_config);
 
     // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{CB::c_in2, v_df}}).set_page_size(CB::c_in2, v_tile_size);
+    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{CBIndex::c_2, v_df}}).set_page_size(CBIndex::c_2, v_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
     // attn_mask input
-    auto c_in3_config = CircularBufferConfig(qk_tiles * mask_tile_size, {{CB::c_in3, mask_df}}).set_page_size(CB::c_in3, mask_tile_size);
+    auto c_in3_config = CircularBufferConfig(qk_tiles * mask_tile_size, {{CBIndex::c_3, mask_df}}).set_page_size(CBIndex::c_3, mask_tile_size);
     auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
 
     // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CB::c_in4, scalar_df}}).set_page_size(CB::c_in4, scalar_tile_size);
+    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_4, scalar_df}}).set_page_size(CBIndex::c_4, scalar_tile_size);
     auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
 
     // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CB::c_in5, scalar_df}}).set_page_size(CB::c_in5, scalar_tile_size);
+    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_5, scalar_df}}).set_page_size(CBIndex::c_5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // cb_m_in
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_in6, stats_df}}).set_page_size(CB::c_in6, stats_tile_size);
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_6, stats_df}}).set_page_size(CBIndex::c_6, stats_tile_size);
     auto cb_in6_id = CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // cb_l_in
-    auto c_in7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_in7, stats_df}}).set_page_size(CB::c_in7, stats_tile_size);
+    auto c_in7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_7, stats_df}}).set_page_size(CBIndex::c_7, stats_tile_size);
     auto c_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CB::c_intermed0, im_df}}).set_page_size(CB::c_intermed0, im_tile_size);
+    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}}).set_page_size(CBIndex::c_24, im_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
     // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_intermed1, im_df}}).set_page_size(CB::c_intermed1, im_tile_size);
+    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CBIndex::c_25, im_df}}).set_page_size(CBIndex::c_25, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_intermed2, im_df}}).set_page_size(CB::c_intermed2, im_tile_size);
+    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CBIndex::c_26, im_df}}).set_page_size(CBIndex::c_26, im_tile_size);
     auto cb_intermed2_id = CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed3, stats_df}}).set_page_size(CB::c_intermed3, stats_tile_size);
+    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_27, stats_df}}).set_page_size(CBIndex::c_27, stats_tile_size);
     auto cb_intermed3_id = CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed4, stats_df}}).set_page_size(CB::c_intermed4, stats_tile_size);
+    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_28, stats_df}}).set_page_size(CBIndex::c_28, stats_tile_size);
     auto cb_intermed4_id = CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed5, stats_df}}).set_page_size(CB::c_intermed5, stats_tile_size);
+    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_29, stats_df}}).set_page_size(CBIndex::c_29, stats_tile_size);
     auto cb_intermed5_id = CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed6, stats_df}}).set_page_size(CB::c_intermed6, stats_tile_size);
+    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_30, stats_df}}).set_page_size(CBIndex::c_30, stats_tile_size);
     auto cb_intermed6_id = CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed7, stats_df}}).set_page_size(CB::c_intermed7, stats_tile_size);
+    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_31, stats_df}}).set_page_size(CBIndex::c_31, stats_tile_size);
     auto cb_intermed7_id = CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // cb_prev_sum_2
-    auto c_out5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out5, stats_df}}).set_page_size(CB::c_out5, stats_tile_size);
+    auto c_out5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_21, stats_df}}).set_page_size(CBIndex::c_21, stats_tile_size);
     auto c_out5_id = CreateCircularBuffer(program, core_grid, c_out5_config);
 
     // cb_exp_max_diff_2
-    auto c_out6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out6, stats_df}}).set_page_size(CB::c_out6, stats_tile_size);
+    auto c_out6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_22, stats_df}}).set_page_size(CBIndex::c_22, stats_tile_size);
     auto c_out6_id = CreateCircularBuffer(program, core_grid, c_out6_config);
 
     // cb_out_accumulate_im_2
-    auto c_out7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_out7, im_df}}).set_page_size(CB::c_out7, im_tile_size);
+    auto c_out7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CBIndex::c_23, im_df}}).set_page_size(CBIndex::c_23, im_tile_size);
     auto c_out7_id = CreateCircularBuffer(program, core_grid, c_out7_config);
 
     // Output
     // cb_out_o
-    auto c_out0_config = CircularBufferConfig(out0_t * stats_tile_size, {{CB::c_out0, stats_df}}).set_page_size(CB::c_out0, stats_tile_size);
+    auto c_out0_config = CircularBufferConfig(out0_t * stats_tile_size, {{CBIndex::c_16, stats_df}}).set_page_size(CBIndex::c_16, stats_tile_size);
     auto cb_out0_id = CreateCircularBuffer( program, core_grid, c_out0_config );
 
     // cb_out_m
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out1, stats_df}}).set_page_size(CB::c_out1, stats_tile_size);
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_17, stats_df}}).set_page_size(CBIndex::c_17, stats_tile_size);
     auto cb_out1_id = CreateCircularBuffer(program, core_grid, c_out1_config);
 
     // cb_out_l
-    auto c_out2_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out2, stats_df}}).set_page_size(CB::c_out2, stats_tile_size);
+    auto c_out2_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_18, stats_df}}).set_page_size(CBIndex::c_18, stats_tile_size);
     auto c_out2_id = CreateCircularBuffer(program, core_grid, c_out2_config);
 
     // when there are worker cores
     if (intermed_output_tiles > 0){
         // cb_intermed_out
-        auto c_out3_config = CircularBufferConfig(intermed_output_tiles * stats_tile_size, {{CB::c_out3, stats_df}}).set_page_size(CB::c_out3, stats_tile_size);
+        auto c_out3_config = CircularBufferConfig(intermed_output_tiles * stats_tile_size, {{CBIndex::c_19, stats_df}}).set_page_size(CBIndex::c_19, stats_tile_size);
         auto c_out3_id = CreateCircularBuffer(program, core_grid, c_out3_config);
     }
 
     // cb_out_final
-    auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CB::c_out4, out_df}}).set_page_size(CB::c_out4, out_tile_size);
+    auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CBIndex::c_20, out_df}}).set_page_size(CBIndex::c_20, out_tile_size);
     if (is_output_sharded) {
         c_out4_config.set_globally_allocated_address(*out0_buffer);
     }

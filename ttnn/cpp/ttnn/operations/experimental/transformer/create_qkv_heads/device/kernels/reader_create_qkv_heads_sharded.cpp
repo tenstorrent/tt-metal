@@ -27,15 +27,15 @@ void kernel_main() {
     constexpr uint32_t k_size_per_group_t_bytes         = get_compile_time_arg_val(13); // total size of all K heads (expecting 1) in a group
     constexpr uint32_t v_size_per_group_t_bytes         = get_compile_time_arg_val(14); // total size of all V heads (expecting 1) in a group
 
-    constexpr uint32_t cb_in0  = tt::CB::c_in0;
+    constexpr uint32_t cb_in0  = tt::CBIndex::c_0;
 
-    constexpr uint32_t cb_outq = tt::CB::c_out0;
+    constexpr uint32_t cb_outq = tt::CBIndex::c_16;
     #ifdef TRANSPOSE_K_HEADS
-    constexpr uint32_t cb_outk = tt::CB::c_intermed0;
+    constexpr uint32_t cb_outk = tt::CBIndex::c_24;
     #else
-    constexpr uint32_t cb_outk = tt::CB::c_out1;
+    constexpr uint32_t cb_outk = tt::CBIndex::c_17;
     #endif
-    constexpr uint32_t cb_outv = tt::CB::c_out2;
+    constexpr uint32_t cb_outv = tt::CBIndex::c_18;
 
 
     // copy one entire head_dim tile, then go to next sequence tile and do another head_dim.

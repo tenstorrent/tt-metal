@@ -107,7 +107,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t split_reader = 1;
 
     // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_id = tt::CB::c_in4;
+    uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
     CircularBufferConfig in_scalar_cb_config =
@@ -118,7 +118,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
-    auto raw_in_cb_id = tt::CB::c_in2;
+    auto raw_in_cb_id = tt::CBIndex::c_2;
     uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
     CircularBufferConfig raw_in_cb_config =
@@ -129,7 +129,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
 
     // reader indices
-    auto in_reader_indices_cb_id = tt::CB::c_in3;
+    auto in_reader_indices_cb_id = tt::CBIndex::c_3;
     uint32_t in_reader_indices_cb_pagesize =
         tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
     uint32_t in_reader_indices_cb_npages = 1;
@@ -165,8 +165,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         }
     }
     // reader output == input to tilize
-    uint32_t in_cb_id_0 = tt::CB::c_in0;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_id_1 = tt::CB::c_in1;  // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_0 = tt::CBIndex::c_0;  // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_1 = tt::CBIndex::c_1;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_page_padded = ceil_multiple_of(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
@@ -186,7 +186,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     }
 
     // output of tilize == input to reduce
-    uint32_t in_tiled_cb_id = tt::CB::c_intermed0;  // tiled input
+    uint32_t in_tiled_cb_id = tt::CBIndex::c_24;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
     uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * nblocks;
     CircularBufferConfig in_tiled_cb_config =
@@ -197,7 +197,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
 
     // output of reduce == writer to write
-    uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
+    uint32_t out_cb_id = tt::CBIndex::c_16;  // output rows in RM
     // after reduction
     uint32_t out_cb_pagesize = output.shard_spec().value().shape[1] * out_nbytes / in_nblocks_c;  // there is just one row of channels after each reduction (or 1 block of c if its greater than 8 tiles)
     uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_nblocks_c;
@@ -209,7 +209,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
+        uint32_t max_pool_partials_cb_id = tt::CBIndex::c_25;  // max_pool partials
         uint32_t max_pool_partials_cb_pagesize = std::min(out_cb_pagesize, TILE_SIZE * 8 * out_nbytes);
         uint32_t max_pool_partials_cb_npages = nblocks;
         CircularBufferConfig max_pool_partials_cb_config =

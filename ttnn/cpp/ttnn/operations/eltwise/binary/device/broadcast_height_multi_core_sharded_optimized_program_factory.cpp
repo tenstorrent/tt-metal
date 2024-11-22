@@ -118,7 +118,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         (shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0),
         "Shard shapes must be multiple of TILE_HEIGHT ");
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t aligned_input_tile_nbytes =
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
@@ -128,7 +128,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
             .set_globally_allocated_address(*a.buffer());
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
-    uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core, {{output_cb_index, out_df}})
             .set_page_size(output_cb_index, in_cb_pagesize)
@@ -139,7 +139,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     uint32_t w_blk = std::min(Wt, 8u);
 
     uint32_t num_input_tiles = w_blk;
-    uint32_t src1_cb_index = CB::c_in1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
             .set_page_size(src1_cb_index, input1_tile_size);
@@ -164,7 +164,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     // const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h_sharded_optimised.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h_sharded_optimised.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 

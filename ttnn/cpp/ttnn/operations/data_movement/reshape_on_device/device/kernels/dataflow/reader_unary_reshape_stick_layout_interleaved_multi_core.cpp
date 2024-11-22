@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t old_stick_size = get_compile_time_arg_val(1);
 
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
 
     #define stick_size_is_pow2 get_compile_time_arg_val(2) == 1
     #if (stick_size_is_pow2)

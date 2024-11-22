@@ -282,7 +282,7 @@ void build_and_run_autonomous_stream_test(
     const uint32_t dram_input_buf_base_addr = input_buffer->address();
 
     // For overlay blob on relay core
-    constexpr uint32_t dummy_cb_index3 = CB::c_in3;
+    constexpr uint32_t dummy_cb_index3 = CBIndex::c_3;
     auto const& relay_stream_overlay_blob_buffer_cb_config =
         tt_metal::CircularBufferConfig(
             relay_stream_overlay_blob_size_bytes, {{dummy_cb_index3, tt::DataFormat::Float16_b}})
@@ -293,7 +293,7 @@ void build_and_run_autonomous_stream_test(
         CreateCircularBuffer(program, second_relay_core, relay_stream_overlay_blob_buffer_cb_config);
 
     // Sender/Receiver CBs for pulling in/pushing out stimulus data taht we can output compare
-    constexpr uint32_t cb_index = CB::c_in0;
+    constexpr uint32_t cb_index = CBIndex::c_0;
     const uint32_t cb_size = page_size_plus_header * read_write_cb_num_pages;
     auto const& cb_config = tt_metal::CircularBufferConfig(cb_size, {{cb_index, tt::DataFormat::Float16_b}})
                                 .set_page_size(cb_index, page_size_plus_header);
@@ -301,7 +301,7 @@ void build_and_run_autonomous_stream_test(
     auto receiver_cb = CreateCircularBuffer(program, receiver_core, cb_config);
 
     // Stream Tile Header Buffers
-    constexpr uint32_t dummy_cb_index2 = CB::c_in2;
+    constexpr uint32_t dummy_cb_index2 = CBIndex::c_2;
     auto const& stream_tile_header_buffer_cb_config =
         tt_metal::CircularBufferConfig(
             stream_tile_header_buffer_size_bytes, {{dummy_cb_index2, tt::DataFormat::Float16_b}})
@@ -315,7 +315,7 @@ void build_and_run_autonomous_stream_test(
     auto receiver_stream_tile_header_buffer_cb =
         CreateCircularBuffer(program, receiver_core, stream_tile_header_buffer_cb_config);
 
-    constexpr uint32_t dummy_cb_index = CB::c_in1;
+    constexpr uint32_t dummy_cb_index = CBIndex::c_1;
     auto const& sender_stream_buffer_cb_config =
         tt_metal::CircularBufferConfig(sender_stream_buffer_size_bytes, {{dummy_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(dummy_cb_index, sender_stream_buffer_size_bytes);

@@ -45,7 +45,7 @@ void kernel_main() {
     }
 
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
 
     uint32_t buffer_index = 0;

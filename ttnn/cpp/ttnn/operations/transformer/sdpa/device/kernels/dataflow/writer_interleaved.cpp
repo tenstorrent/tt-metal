@@ -162,8 +162,8 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
     constexpr bool is_dram = true;
-    constexpr uint32_t cb_out = tt::CB::c_out0;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr DataFormat data_format = get_dataformat(cb_out);
@@ -177,8 +177,8 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    constexpr uint32_t cb_scale_in = tt::CB::c_in4;
-    constexpr uint32_t cb_identity_scale_in = tt::CB::c_in5;
+    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);

@@ -53,11 +53,11 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
         {
-            {CB::c_in0, in0_t},
-            {CB::c_in1, in1_t},
-            {CB::c_in2, in2_t},
-            {CB::c_out0, out0_t},
-            {CB::c_out1, out1_t},
+            {CBIndex::c_0, in0_t},
+            {CBIndex::c_1, in1_t},
+            {CBIndex::c_2, in2_t},
+            {CBIndex::c_16, out0_t},
+            {CBIndex::c_17, out1_t},
         });
     bool has_input_grad = input_grad.has_value();
     bool has_other_grad = other_grad.has_value();
@@ -89,8 +89,8 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)CB::c_out0,
-        (std::uint32_t)CB::c_out1,
+        (std::uint32_t)CBIndex::c_16,
+        (std::uint32_t)CBIndex::c_17,
         (std::uint32_t)dst0_is_dram,
         (std::uint32_t)dst1_is_dram,
     };

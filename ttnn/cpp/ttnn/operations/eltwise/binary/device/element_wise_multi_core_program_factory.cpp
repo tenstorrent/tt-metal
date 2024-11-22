@@ -342,7 +342,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = src0_sharded ? num_tiles_per_shard : 2 * max_block_size;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
@@ -352,7 +352,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     num_input_tiles = src1_sharded ? num_tiles_per_shard : 2 * max_block_size;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
@@ -372,8 +372,8 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         }
         uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(max_block_size * interim0_single_tile_size, {{CB::c_intermed0, interim_cb0_format}})
-                .set_page_size(CB::c_intermed0, interim0_single_tile_size);
+            tt_metal::CircularBufferConfig(max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
+                .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
         auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
@@ -383,12 +383,12 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         }
         uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
-            tt_metal::CircularBufferConfig(max_block_size * interim1_single_tile_size, {{CB::c_intermed1, interim_cb1_format}})
-                .set_page_size(CB::c_intermed1, interim1_single_tile_size);
+            tt_metal::CircularBufferConfig(max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
+                .set_page_size(tt::CBIndex::c_4, interim1_single_tile_size);
         auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = (out_sharded || block_or_width_sharded) ? num_tiles_per_shard : 2 * max_block_size;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})

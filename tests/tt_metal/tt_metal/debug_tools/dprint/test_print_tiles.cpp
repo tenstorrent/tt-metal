@@ -111,8 +111,8 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
 
     // Create an input CB with the right data format
     uint32_t tile_size = detail::TileSize(data_format);
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CB::c_in0, data_format}})
-                                              .set_page_size(CB::c_in0, tile_size);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
+                                              .set_page_size(CBIndex::c_0, tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // Dram buffer to send data to, device will read it out of here to print

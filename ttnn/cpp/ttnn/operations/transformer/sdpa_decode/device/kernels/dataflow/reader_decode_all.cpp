@@ -107,7 +107,7 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         }
         else {
-            constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             const InterleavedAddrGen<true> addrg = {
                     .bank_base_address = pos_addr,
                     .page_size = index_stick_size_B
@@ -133,7 +133,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
-        constexpr uint32_t cb_id_page_table = tt::CB::dataflow1;
+        constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
         const InterleavedAddrGen<true> page_table_gen = {
             .bank_base_address = page_table_addr,
             .page_size = page_table_page_size
@@ -165,10 +165,10 @@ void kernel_main() {
 
     constexpr bool is_dram = true;
 
-    constexpr uint32_t cb_q_in = tt::CB::c_in0;
-    constexpr uint32_t cb_k_in = tt::CB::c_in1;
-    constexpr uint32_t cb_v_in = tt::CB::c_in2;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
 
 
     constexpr uint32_t onetile = 1;

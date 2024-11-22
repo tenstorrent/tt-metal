@@ -15,21 +15,21 @@ void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
 
     #ifdef SFPU_OP_INIT_PRE_IN0_0
-        constexpr auto cb_inp0 = tt::CB::c_intermed0;
+        constexpr auto cb_inp0 = tt::CBIndex::c_3;
     #else
         constexpr auto cb_inp0 = cb_in0;
     #endif
 
     #ifdef SFPU_OP_INIT_PRE_IN1_0
-        constexpr auto cb_inp1 = tt::CB::c_intermed1;
+        constexpr auto cb_inp1 = tt::CBIndex::c_4;
     #else
         constexpr auto cb_inp1 = cb_in1;
     #endif
-    constexpr auto cb_out0 =  tt::CB::c_out0;
+    constexpr auto cb_out0 =  tt::CBIndex::c_16;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
