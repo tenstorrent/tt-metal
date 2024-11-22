@@ -1542,19 +1542,32 @@ void EnqueueProgramCommand::write_program_command_sequence(
 }
 
 void EnqueueProgramCommand::process() {
-    const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
+    std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
         this->config_buffer_mgr.reserve(program.get_program_config_sizes());
     uint32_t sync_count = 0;
+    bool stall_first = reservation.first.need_sync;
+    bool stall_before_program = false;
     if (!program.kernel_binary_always_stored_in_ringbuffer()) {
         // Wait for all existing commands to run before writing out the kernel binary.
         sync_count = this->expected_num_workers_completed;
+        stall_before_program = !stall_first;
     } else if (reservation.first.need_sync) {
         // TODO: attempt to send RTA only without stalling.
         sync_count = reservation.first.sync_count;
+        // Check if the launch message is the only thing preventing us from
+        // sending the program. If so, we can at least send the RTAs. Ideally we
+        // would also send the kernel binaries in this case, but the rest of the
+        // code isn't set up for that.
+        auto config_sizes = program.get_program_config_sizes();
+        config_sizes[config_sizes.size() - 1] = 0;
+        const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> memory_reservation =
+            this->config_buffer_mgr.reserve(config_sizes);
+        if (!memory_reservation.first.need_sync) {
+            stall_first = false;
+            stall_before_program = true;
+        }
+        reservation = this->config_buffer_mgr.reserve(program.get_program_config_sizes());
     }
-    bool stall_first = reservation.first.need_sync;
-    // If the kernel binary isn't stored in the ringbuffer, we need to stall before writing to it.
-    bool stall_before_program = !program.kernel_binary_always_stored_in_ringbuffer() && !stall_first;
 
     // Cache is only usable if caching is enabled and program is finalized
     // If cache has a program entry but the program is not finalized, then the cache is stale
