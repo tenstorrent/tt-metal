@@ -205,9 +205,8 @@ def run_llama3_demo(
     model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_batch_size=batch_size, optimizations=optimizations)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    # TODO Miguel: Setup max sequence length depending on the model being used to actually fit on device
     # Reduce max seq len and KV cache seq_len params to speed up the test
-    model_args.max_seq_len = 512
+    model_args.max_seq_len = 1024  # TODO REVERT: Miguel: Setup max sequence length depending on the model being used to actually fit on device
     model_args.kv_seq_len = model_args.max_seq_len
 
     if single_layer:
