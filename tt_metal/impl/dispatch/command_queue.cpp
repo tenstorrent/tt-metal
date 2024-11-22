@@ -100,10 +100,10 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
-    const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord virtual_core =
+        this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
-        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
         padded_page_size * this->pages_to_read,
         this->bank_base_address);
 }
@@ -240,13 +240,13 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord virtual_core =
+        this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
         flush_prefetch,
         0,
-        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
         this->bank_base_address,
         data_size_bytes);
 }
@@ -656,10 +656,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                                     }
                                 }
                             }
-
-                            CoreCoord physical_core = device->physical_core_from_logical_core(core_coord, core_type);
+                            CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, virtual_core)});
                         }
                     }
                 }
@@ -720,9 +719,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
                         for (auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
-                            CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
+                            CoreCoord virtual_core_coords = device->virtual_core_from_logical_core(core_coord, CoreType::ETH);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, virtual_core_coords)});
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
@@ -890,8 +889,8 @@ void EnqueueProgramCommand::assemble_device_commands(
         uint32_t max_overall_index = 0;
         uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
         for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
-            const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_coord);
-            const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_coord);
+            const CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+            const CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
 
             const uint32_t num_receivers = core_range.size();
             auto& cb_config_payload = cb_config_payloads[i];
@@ -924,7 +923,7 @@ void EnqueueProgramCommand::assemble_device_commands(
             }
             multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                    this->noc_index, CoreRange(virtual_start, virtual_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_cb_config_data.emplace_back(cb_config_payload.data(), max_index * sizeof(uint32_t));
             max_overall_index = std::max(max_overall_index, max_index);
@@ -1089,14 +1088,12 @@ void EnqueueProgramCommand::assemble_device_commands(
         kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
         const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
         for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-            CoreCoord physical_start =
-                device->physical_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
-            CoreCoord physical_end =
-                device->physical_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
+            CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
+            CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
 
             multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                    this->noc_index, CoreRange(virtual_start, virtual_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
         }
@@ -1123,11 +1120,11 @@ void EnqueueProgramCommand::assemble_device_commands(
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord physical_coord = device->physical_core_from_logical_core(
+                        CoreCoord virtual_coord = device->virtual_core_from_logical_core(
                             CoreCoord({x, y}), kernel_group.get_core_type());
                         unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                             .noc_xy_addr =
-                                this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
+                                this->device->get_noc_unicast_encoding(this->noc_index, virtual_coord)});
                         unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
                     }
                 }
@@ -1738,9 +1735,9 @@ void EnqueueRecordEventCommand::process() {
             dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
         }
 
-        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
+        CoreCoord dispatch_virtual_core = this->device->virtual_core_from_logical_core(dispatch_location, core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
-            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_physical_core)};
+            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_virtual_core)};
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
@@ -1978,8 +1975,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
             enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
         }
     }
-    this->physical_enqueue_program_dispatch_core =
-        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
+    this->virtual_enqueue_program_dispatch_core =
+        device->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, this->id);
@@ -2057,8 +2054,8 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
         }
         go_msg_t reset_launch_message_read_ptr_go_signal;
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
-        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->physical_enqueue_program_dispatch_core.x;
-        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->physical_enqueue_program_dispatch_core.y;
+        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core.x;
+        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core.y;
         for (uint8_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
@@ -2534,7 +2531,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         this->device,
         this->noc_index,
         program,
-        this->physical_enqueue_program_dispatch_core,
+        this->virtual_enqueue_program_dispatch_core,
         this->manager,
         this->get_config_buffer_mgr(sub_device_index),
         expected_workers_completed,
@@ -2627,7 +2624,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     auto trace_inst = this->device->get_trace(trace_id);
     auto command = EnqueueTraceCommand(
-        this->id, this->device, this->manager, trace_inst->desc, *trace_inst->buffer, this->expected_num_workers_completed, this->noc_index, this->physical_enqueue_program_dispatch_core);
+        this->id, this->device, this->manager, trace_inst->desc, *trace_inst->buffer, this->expected_num_workers_completed, this->noc_index, this->virtual_enqueue_program_dispatch_core);
 
     this->enqueue_command(command, false, {});
 
