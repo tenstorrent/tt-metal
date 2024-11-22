@@ -174,6 +174,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
                    "Reshaping a multi-device tensor with 0 volume is not supported");
         return tensor.reshape(shape);
     }
+    TT_ASSERT(shape.volume() != 0 && "tensor's volume is not 0, but shape's volume is 0");
 
     // This is a constraint Torch places on reshape I was assuming, but it causes half of the codebase to fail if added
     // Validate_transform(tensor_shape, shape)
