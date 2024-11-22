@@ -6,10 +6,12 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_fabric/control_plane.hpp"
 //#include "tt_metal/impl/dispatch/cq_commands.hpp"
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
+#include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
 
 using std::vector;
 using namespace tt;
@@ -45,10 +47,16 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
 
+    // TODO: use eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE which should be 0x19900, set test results size back
+    // to 0x7000
     constexpr uint32_t default_tunneler_queue_start_addr = 0x19000;
     constexpr uint32_t default_tunneler_queue_size_bytes = 0x4000; // maximum queue (power of 2)
     constexpr uint32_t default_tunneler_test_results_addr = 0x39000; // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
-    constexpr uint32_t default_tunneler_test_results_size = 0x7000; // 256kB total L1 in ethernet core - 0x39000
+    constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
+    static_assert(
+        default_tunneler_test_results_addr + default_tunneler_test_results_size <=
+            eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR,
+        "Tunneler test results buffer exceeds available memory");
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
@@ -159,6 +167,11 @@ int main(int argc, char **argv) {
     };
 
     try {
+        const std::filesystem::path tg_mesh_graph_desc_path =
+            std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
+            "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
+        auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
+
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id >= num_devices) {
             log_info(LogTest,
@@ -297,15 +310,10 @@ int main(int argc, char **argv) {
 
         auto tunneler_l_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/impl/dispatch/kernels/tt_fabric_router.cpp",
+            "tt_fabric/impl/kernels/tt_fabric_router.cpp",
             tunneler_logical_core,
             tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_l_compile_args,
-                .defines = defines
-            }
-        );
-
+                .noc = tt_metal::NOC::NOC_0, .compile_args = tunneler_l_compile_args, .defines = defines});
 
         std::vector<uint32_t> tunneler_r_compile_args =
             {
@@ -319,16 +327,10 @@ int main(int argc, char **argv) {
 
         auto tunneler_r_kernel = tt_metal::CreateKernel(
             program_r,
-            "tt_metal/impl/dispatch/kernels/tt_fabric_router.cpp",
+            "tt_fabric/impl/kernels/tt_fabric_router.cpp",
             r_tunneler_logical_core,
             tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_r_compile_args,
-                .defines = defines
-            }
-        );
-
-
+                .noc = tt_metal::NOC::NOC_0, .compile_args = tunneler_r_compile_args, .defines = defines});
 
         log_info(LogTest, "Starting test...");
 

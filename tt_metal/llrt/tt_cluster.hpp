@@ -202,6 +202,10 @@ class Cluster {
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
 
+    // Returns map of connected chip ids to active ethernet cores
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+        chip_id_t chip_id) const;
+
     // Returns vector of unique tunnels originating from mmio device.
     // Each vector entry is another vector of remote devices on that tunnel.
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
@@ -242,9 +246,7 @@ class Cluster {
 
     // Reserves ethernet cores in cluster for tunneling
     void reserve_ethernet_cores_for_tunneling();
-    // Returns map of connected chip ids to active ethernet cores
-    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
-        chip_id_t chip_id) const;
+
     void initialize_ethernet_sockets();
 
     // Set tunnels from mmio
