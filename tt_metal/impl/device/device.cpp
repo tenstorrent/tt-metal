@@ -68,15 +68,6 @@ uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId
     return this->active_sub_device_manager_->sub_device(sub_device_id).num_cores(core_type);
 }
 
-std::vector<uint32_t> Device::get_noc_encoding_for_active_eth_cores(NOC noc_index) {
-    auto active_ethernet_cores = this->get_active_ethernet_cores(true);
-    std::vector<uint32_t> noc_encodings = {};
-    noc_encodings.reserve(active_ethernet_cores.size());
-    for (const auto& core : active_ethernet_cores) {
-        noc_encodings.push_back(this->get_noc_unicast_encoding(noc_index, ethernet_core_from_logical_core(core)));
-    }
-    return noc_encodings;
-}
 /* Get all dispatch cores associated with this device. On return, my_dispatch_cores contains dispatch cores used by
  * this device (split between cores on this device itself and if this is a remote device, the mmio device dispatch
  * cores being used by this device). On return, other_dispatch_cores contains dispatch cores on this device that are
@@ -770,11 +761,11 @@ void Device::configure_kernel_variant(
     const string& path,
     const std::vector<uint32_t>& compile_args,
     CoreCoord kernel_core,
-    CoreCoord kernel_physical_core,
+    CoreCoord kernel_translated_core,
     CoreType dispatch_core_type,
-    CoreCoord upstream_physical_core,
-    CoreCoord downstream_physical_core,
-    CoreCoord downstream_slave_physical_core,
+    CoreCoord upstream_translated_core,
+    CoreCoord downstream_translated_core,
+    CoreCoord downstream_slave_translated_core,
     std::map<string, string> defines_in,
     NOC my_noc_index,
     NOC upstream_noc_index,
@@ -790,18 +781,20 @@ void Device::configure_kernel_variant(
         hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) :
         is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
         hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
-
+    NOC my_noc = this->arch() == tt::ARCH::WORMHOLE_B0 ? NOC::NOC_0 : my_noc_index;
+    NOC upstream_noc = this->arch() == tt::ARCH::WORMHOLE_B0 ? NOC::NOC_0 : upstream_noc_index;
+    NOC downstream_noc = this->arch() == tt::ARCH::WORMHOLE_B0 ? NOC::NOC_0 : downstream_noc_index;
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, kernel_physical_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, kernel_physical_core.y))},
+        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc, grid_size.x, kernel_translated_core.x))},
+        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc, grid_size.y, kernel_translated_core.y))},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_slave_physical_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc, grid_size.x, upstream_translated_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc, grid_size.y, upstream_translated_core.y))},
+        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc, grid_size.x, downstream_translated_core.x))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc, grid_size.y, downstream_translated_core.y))},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc, grid_size.x, downstream_slave_translated_core.x))},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc, grid_size.y, downstream_slave_translated_core.y))},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
@@ -1836,7 +1829,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.dispatch_core_type = dispatch_core_type;
 
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(prefetch_location.chip, get_physical_core_coordinate(prefetch_location, dispatch_core_type));
+                settings.worker_physical_core = tt_cxy_pair(prefetch_location.chip, this->translated_coords_from_logical_coords(prefetch_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
                 //prefetch needs three semaphores.
                 settings.semaphores.push_back(0);
@@ -1854,7 +1847,7 @@ void Device::setup_tunnel_for_remote_devices() {
 
             for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(dispatch_location.chip, get_physical_core_coordinate(dispatch_location, dispatch_core_type));
+                settings.worker_physical_core = tt_cxy_pair(dispatch_location.chip, this->translated_coords_from_logical_coords(dispatch_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
                 //dispatch needs one semaphore.
                 settings.semaphores.push_back(0);
@@ -1904,7 +1897,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     //N300, T3K 1, 2 CQ case
                     settings.semaphores = std::vector<uint32_t>(num_prefetchers);
                     tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, this->translated_coords_from_logical_coords(mux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                     settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(num_hw_cqs);
                     settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
@@ -1912,7 +1905,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
 
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, this->translated_coords_from_logical_coords(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
@@ -1921,7 +1914,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     //TG, TGG 1, 2 CQ case
                     settings.semaphores = std::vector<uint32_t>(MAX_SWITCH_FAN_IN);
                     tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, this->translated_coords_from_logical_coords(mux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                     settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                     settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(1);
@@ -1929,12 +1922,12 @@ void Device::setup_tunnel_for_remote_devices() {
                     tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
                     if (num_prefetchers == 8) {
                         tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 1);
-                        settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
+                        settings.worker_physical_core = tt_cxy_pair(mux_location.chip, this->translated_coords_from_logical_coords(mux_location, dispatch_core_type));
                         tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
                     }
 
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, this->translated_coords_from_logical_coords(demux_location, dispatch_core_type));
                     settings.semaphores.clear();
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
@@ -1943,14 +1936,14 @@ void Device::setup_tunnel_for_remote_devices() {
 
                     settings.semaphores = std::vector<uint32_t>(num_prefetchers / 2);
                     demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 1);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, this->translated_coords_from_logical_coords(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
                     demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 2);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, this->translated_coords_from_logical_coords(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
@@ -1965,8 +1958,8 @@ void Device::setup_tunnel_for_remote_devices() {
             tt_cxy_pair us_location = dispatch_core_manager::instance().tunneler_core(us_device, device_id, channel, cq_id);
             tt_cxy_pair local_location = dispatch_core_manager::instance().us_tunneler_core_local(device_id, channel, cq_id);
 
-            settings.worker_physical_core = tt_cxy_pair(us_location.chip, get_physical_core_coordinate(us_location, CoreType::ETH));
-            settings.eth_partner_physical_core = tt_cxy_pair(local_location.chip, get_physical_core_coordinate(local_location, CoreType::ETH));
+            settings.worker_physical_core = tt_cxy_pair(us_location.chip, this->translated_coords_from_logical_coords(us_location, CoreType::ETH));
+            settings.eth_partner_physical_core = tt_cxy_pair(local_location.chip, this->translated_coords_from_logical_coords(local_location, CoreType::ETH));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp";
             settings.cb_start_address = 0x19000;
             settings.cb_size_bytes = 0x4000;
@@ -1990,7 +1983,7 @@ void Device::setup_tunnel_for_remote_devices() {
             settings.dispatch_core_type = dispatch_core_type;
 
             tt_cxy_pair mux_d_location = dispatch_core_manager::instance().mux_d_core(device_id, channel, cq_id);
-            settings.worker_physical_core = tt_cxy_pair(mux_d_location.chip, get_physical_core_coordinate(mux_d_location, dispatch_core_type));
+            settings.worker_physical_core = tt_cxy_pair(mux_d_location.chip, this->translated_coords_from_logical_coords(mux_d_location, dispatch_core_type));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_mux.cpp";
             settings.semaphores = std::vector<uint32_t>(num_hw_cqs);
             settings.consumer_semaphore_id = 0;
@@ -2002,7 +1995,7 @@ void Device::setup_tunnel_for_remote_devices() {
 
             uint32_t demux_vcs = settings.vc_count - 1;
             tt_cxy_pair demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 0);
-            settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
+            settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, this->translated_coords_from_logical_coords(demux_d_location, dispatch_core_type));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
             settings.producer_semaphore_id = 0;
             settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
@@ -2014,7 +2007,7 @@ void Device::setup_tunnel_for_remote_devices() {
             if (tunnel.size() > 2 && demux_vcs > 1) {
                 //TG/TGG 1-2 CQs
                 demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 1);
-                settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
+                settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, this->translated_coords_from_logical_coords(demux_d_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                 settings.producer_semaphore_id = 0;
                 settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
@@ -2032,7 +2025,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.producer_semaphore_id = 2;
                 settings.consumer_slave_semaphore_id = 3;
                 tt_cxy_pair prefetch_d_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(prefetch_d_location.chip, get_physical_core_coordinate(prefetch_d_location, dispatch_core_type));
+                settings.worker_physical_core = tt_cxy_pair(prefetch_d_location.chip, this->translated_coords_from_logical_coords(prefetch_d_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
                 settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                 settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size();
@@ -2053,7 +2046,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 CoreCoord compute_grid_size = this->compute_with_storage_grid_size();
                 settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
                 tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(dispatch_d_location.chip, get_physical_core_coordinate(dispatch_d_location, dispatch_core_type));
+                settings.worker_physical_core = tt_cxy_pair(dispatch_d_location.chip, this->translated_coords_from_logical_coords(dispatch_d_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
                 tunnel_core_allocations[DISPATCH_D].push_back(std::make_tuple(dispatch_d_location, settings));
                 settings.semaphores.clear();
@@ -2076,7 +2069,7 @@ void Device::setup_tunnel_for_remote_devices() {
                         settings.producer_semaphore_id = 0; // sync with producer (prefetcher)
                     }
                     tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-                    settings.worker_physical_core = tt_cxy_pair(dispatch_s_location.chip, get_physical_core_coordinate(dispatch_s_location, dispatch_core_type));
+                    settings.worker_physical_core = tt_cxy_pair(dispatch_s_location.chip, this->translated_coords_from_logical_coords(dispatch_s_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp";
                     tunnel_core_allocations[DISPATCH_S].push_back(std::make_tuple(dispatch_s_location, settings));
                     settings.semaphores.clear();
@@ -2197,6 +2190,10 @@ void Device::compile_command_queue_programs() {
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
             CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_core, dispatch_core_type);
+
+            CoreCoord prefetch_translated_core = this->translated_coords_from_physical_coords(prefetch_physical_core, dispatch_core_type);
+            CoreCoord dispatch_translated_core = this->translated_coords_from_physical_coords(dispatch_physical_core, dispatch_core_type);
+
             uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -2219,6 +2216,7 @@ void Device::compile_command_queue_programs() {
             // dispatch_s location and flow control vars initialized as invalid. Will be set if dispatch_s is enabled for the given configuration.
             tt_cxy_pair dispatch_s_core = tt_cxy_pair(0xff, 0xff, 0xff);
             CoreCoord dispatch_s_physical_core = {0xff, 0xff};
+            CoreCoord dispatch_s_translated_core = {0xff, 0xff};
             uint32_t dispatch_s_buffer_base = 0xff;
             uint32_t dispatch_s_sem = 0xff; // used by dispatch_s to sync with prefetch
             uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);; // used by dispatch_d to signal that dispatch_s can send go signal
@@ -2226,6 +2224,7 @@ void Device::compile_command_queue_programs() {
                 // Skip allocating dispatch_s for multi-CQ configurations with ethernet dispatch
                 dispatch_s_core = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
                 dispatch_s_physical_core = get_physical_core_coordinate(dispatch_s_core, dispatch_core_type);
+                dispatch_s_translated_core = this->translated_coords_from_physical_coords(dispatch_s_physical_core, dispatch_core_type);
                 uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                 if (dispatch_core_type == CoreType::WORKER) {
                     // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -2279,11 +2278,11 @@ void Device::compile_command_queue_programs() {
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
                 prefetch_core,
-                prefetch_physical_core,
+                prefetch_translated_core,
                 dispatch_core_type,
                 CoreCoord{0, 0},
-                dispatch_physical_core,
-                dispatch_s_physical_core,
+                dispatch_translated_core,
+                dispatch_s_translated_core,
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
@@ -2338,11 +2337,11 @@ void Device::compile_command_queue_programs() {
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_core,
-                dispatch_physical_core,
+                dispatch_translated_core,
                 dispatch_core_type,
-                prefetch_physical_core,
+                prefetch_translated_core,
                 CoreCoord{0, 0},
-                dispatch_s_physical_core,
+                dispatch_s_translated_core,
                 std::map<string, string> {},
                 my_noc_index,
                 dispatch_upstream_noc_index,
@@ -2368,10 +2367,10 @@ void Device::compile_command_queue_programs() {
                     "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",
                     dispatch_s_compile_args,
                     dispatch_s_core,
-                    dispatch_s_physical_core,
+                    dispatch_s_translated_core,
                     dispatch_core_type,
-                    prefetch_physical_core,
-                    dispatch_physical_core,
+                    prefetch_translated_core,
+                    dispatch_translated_core,
                     CoreCoord{0, 0},
                     std::map<string, string> {},
                     dispatch_s_noc_index,
