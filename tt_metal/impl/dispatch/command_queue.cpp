@@ -1966,8 +1966,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
             enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
         }
     }
-    this->physical_enqueue_program_dispatch_core =
-        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
+    this->virtual_enqueue_program_dispatch_core =
+        device->translated_coords_from_logical_coords(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, this->id);
@@ -2045,8 +2045,8 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
         }
         go_msg_t reset_launch_message_read_ptr_go_signal;
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
-        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->physical_enqueue_program_dispatch_core.x;
-        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->physical_enqueue_program_dispatch_core.y;
+        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core.x;
+        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core.y;
         for (uint8_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
@@ -2522,7 +2522,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         this->device,
         this->noc_index,
         program,
-        this->physical_enqueue_program_dispatch_core,
+        this->virtual_enqueue_program_dispatch_core,
         this->manager,
         this->get_config_buffer_mgr(sub_device_index),
         expected_workers_completed,
@@ -2615,7 +2615,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     auto trace_inst = this->device->get_trace(trace_id);
     auto command = EnqueueTraceCommand(
-        this->id, this->device, this->manager, trace_inst->desc, *trace_inst->buffer, this->expected_num_workers_completed, this->noc_index, this->physical_enqueue_program_dispatch_core);
+        this->id, this->device, this->manager, trace_inst->desc, *trace_inst->buffer, this->expected_num_workers_completed, this->noc_index, this->virtual_enqueue_program_dispatch_core);
 
     this->enqueue_command(command, false, {});
 

@@ -12,7 +12,8 @@
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
 #define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
 #define NOC_0_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
-
+#define TRANSLATED_NOC_0_X(noc_index, noc_size_x, x) NOC_0_X(noc_index, noc_size_x, x)
+#define TRANSLATED_NOC_0_Y(noc_index, noc_size_y, y) NOC_0_Y(noc_index, noc_size_y, y)
 ////
 
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = 2;  // all writes share cmd buf
