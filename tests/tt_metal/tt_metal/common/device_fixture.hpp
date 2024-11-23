@@ -12,44 +12,44 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
-class DeviceFixture : public ::testing::Test {
+class DeviceFixture : public DispatchFixture {
    protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (not slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+        this->validate_dispatch_mode();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         // Some CI machines have lots of cards, running all tests on all cards is slow
         // Coverage for multidevices is decent if we just confirm 2 work
+        this->num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::GRAYSKULL && num_devices_ > 2) {
-            num_devices_ = 2;
+            this->num_devices_ = 2;
         }
 
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-        devices_ = tt::DevicePool::instance().get_all_active_devices();
+        this->create_devices(ids);
     }
 
-    void TearDown() override {
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-        for (unsigned int id = 0; id < devices_.size(); id++) {
-            if (devices_.at(id)->is_initialized()) {
-                tt::tt_metal::CloseDevice(devices_.at(id));
-            }
+    void validate_dispatch_mode() {
+        this->slow_dispatch_ = true;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            tt::log_info(
+                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
+            GTEST_SKIP();
         }
     }
 
-    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
-    tt::ARCH arch_;
+    void create_devices(const std::vector<chip_id_t>& device_ids) {
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        tt::DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        this->devices_ = tt::DevicePool::instance().get_all_active_devices();
+        this->num_devices_ = this->devices_.size();
+    }
+
     size_t num_devices_;
 };
 
@@ -79,11 +79,6 @@ class DeviceSingleCardFixture : public DispatchFixture {
         this->device_ = this->reserved_devices_.at(mmio_device_id);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         this->num_devices_ = this->reserved_devices_.size();
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        // An extra flag for if we have remote devices, as some tests are disabled for fast
-        // dispatch + remote devices.
-        this->has_remote_devices_ = num_devices > num_pci_devices;
     }
 
     tt::tt_metal::Device *device_;

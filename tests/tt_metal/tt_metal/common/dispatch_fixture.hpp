@@ -17,13 +17,21 @@
 class DispatchFixture : public ::testing::Test {
    public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
+    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
         const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
             tt::tt_metal::CommandQueue& cq = device->command_queue();
             tt::tt_metal::EnqueueProgram(cq, program, false);
+            if (!skip_finish) {
+                tt::tt_metal::Finish(cq);
+            }
+        }
+    }
+    void FinishCommands(tt::tt_metal::Device* device) {
+        if (!this->IsSlowDispatch()) {
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
             tt::tt_metal::Finish(cq);
         }
     }
@@ -51,17 +59,12 @@ protected:
     tt::ARCH arch_;
     std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
     bool slow_dispatch_;
-    bool has_remote_devices_;
 
     void SetUp() override {
         this->DetectDispatchMode();
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        // An extra flag for if we have remote devices, as some tests are disabled for fast
-        // dispatch + remote devices.
-        this->has_remote_devices_ = num_devices > num_pci_devices;
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             if (SkipTest(id))

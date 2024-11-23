@@ -9,6 +9,7 @@
 #include <random>
 
 #include "device_fixture.hpp"
+#include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
@@ -45,6 +46,7 @@ const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& 
 }
 
 bool eth_direct_sender_receiver_kernels(
+    DispatchFixture* fixture,
     tt_metal::Device* sender_device,
     tt_metal::Device* receiver_device,
     const size_t& byte_size,
@@ -125,17 +127,24 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
+    std::thread t1;
+    std::thread t2;
+    if (fixture->IsSlowDispatch()) {
+        t1 = std::thread([&]() { fixture->RunProgram(sender_device, sender_program); });
+        t2 = std::thread([&]() { fixture->RunProgram(receiver_device, receiver_program); });
+    } else {
+        fixture->RunProgram(sender_device, sender_program, true);
+        fixture->RunProgram(receiver_device, receiver_program, true);
+    }
 
-    std::thread th1 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(sender_device, sender_program);
-    });
-    std::thread th2 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(receiver_device, receiver_program);
-    });
+    fixture->FinishCommands(sender_device);
+    fixture->FinishCommands(receiver_device);
 
-    th1.join();
-    th2.join();
-    // tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
+    if (fixture->IsSlowDispatch()) {
+        t1.join();
+        t2.join();
+    }
+
     auto readback_vec = llrt::read_hex_vec_from_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
@@ -397,6 +406,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
             continue;
         }
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             WORD_SIZE,
@@ -405,6 +415,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             4 * WORD_SIZE,
@@ -413,6 +424,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             256 * WORD_SIZE,
@@ -421,6 +433,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             1000 * WORD_SIZE,
@@ -446,6 +459,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
             continue;
         }
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             WORD_SIZE,
@@ -454,6 +468,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             4 * WORD_SIZE,
@@ -462,6 +477,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             256 * WORD_SIZE,
@@ -470,6 +486,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             1000 * WORD_SIZE,
@@ -495,6 +512,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                     continue;
                 }
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     WORD_SIZE,
@@ -503,6 +521,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     4 * WORD_SIZE,
@@ -511,6 +530,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     256 * WORD_SIZE,
@@ -519,6 +539,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     1000 * WORD_SIZE,
@@ -542,6 +563,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             WORD_SIZE,
@@ -550,6 +572,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             WORD_SIZE,
@@ -561,6 +584,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             WORD_SIZE * 256,
@@ -569,6 +593,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             WORD_SIZE * 256,
@@ -580,6 +605,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             WORD_SIZE * 1024,
@@ -588,6 +614,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             WORD_SIZE * 1024,
@@ -599,6 +626,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_0,
             device_1,
             WORD_SIZE * MAX_NUM_WORDS,
@@ -607,6 +635,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             device_1,
             device_0,
             WORD_SIZE * MAX_NUM_WORDS,
@@ -629,6 +658,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         for (int i = 0; i < 10; i++) {
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                static_cast<DispatchFixture*>(this),
                 device_0,
                 device_1,
                 WORD_SIZE,
@@ -639,6 +669,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
         }
         for (int i = 0; i < 10; i++) {
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                static_cast<DispatchFixture*>(this),
                 device_1,
                 device_0,
                 WORD_SIZE,
@@ -685,6 +716,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         int num_words = rand() % max_words + 1;
 
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+            static_cast<DispatchFixture*>(this),
             send_chip,
             receiver_chip,
             WORD_SIZE * num_words,
@@ -734,6 +766,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
             int num_words = rand() % max_words + 1;
 
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                static_cast<DispatchFixture*>(this),
                 send_chip,
                 receiver_chip,
                 num_bytes_per_send * num_words,
@@ -761,6 +794,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                     continue;
                 }
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     WORD_SIZE,
@@ -769,6 +803,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     4 * WORD_SIZE,
@@ -777,6 +812,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     256 * WORD_SIZE,
@@ -785,6 +821,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
                     sender_device,
                     receiver_device,
                     1000 * WORD_SIZE,

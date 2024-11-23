@@ -16,9 +16,6 @@ class MultiDeviceFixture : public DispatchFixture {
    protected:
     void SetUp() override {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->has_remote_devices_ = num_devices > num_pci_devices;
     }
 };
 
