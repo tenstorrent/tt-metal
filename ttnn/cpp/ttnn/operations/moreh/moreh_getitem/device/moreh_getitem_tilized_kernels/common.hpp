@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 #define FACE_WIDTH 16
