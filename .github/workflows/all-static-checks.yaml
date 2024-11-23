@@ -212,21 +212,45 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Extract PR commit SHA and repository info
           pr_commit_sha=$(jq -r .pull_request.head.sha < "$GITHUB_EVENT_PATH")
           repo_full_name=${{ github.repository }}
+          branch_name=${{ github.head_ref }}
 
-          # Query the workflow runs for the latest commit
+          echo "Checking all-post-commit status for commit: $pr_commit_sha on branch: $branch_name"
+
+          # Query the workflow runs for the PR branch
           api_response=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-            "https://api.github.com/repos/$repo_full_name/actions/runs?event=workflow_dispatch&branch=${{ github.head_ref }}")
+            "https://api.github.com/repos/$repo_full_name/actions/runs?event=workflow_dispatch&branch=$branch_name")
 
-          # Parse the JSON response for the 'all-post-commit' workflow
-          apc_status=$(echo "$api_response" | jq -r --arg commit "$pr_commit_sha" '
-            .workflow_runs[] | select(.head_sha == $commit and .name == "all-post-commit") | .conclusion')
+          # Parse the JSON response to find the latest run for the given commit
+          latest_run=$(echo "$api_response" | jq -r --arg commit "$pr_commit_sha" '
+            .workflow_runs | map(select(.head_sha == $commit and .name == "all-post-commit"))
+            | sort_by(.run_started_at) | last')
 
-          if [ "$apc_status" == "success" ]; then
-            echo "all-post-commit passed for the latest commit."
-          else
-            echo "all-post-commit has not passed for the latest commit."
+          # Ensure a run was found
+          if [ -z "$latest_run" ] || [ "$latest_run" == "null" ]; then
+            echo "No all-post-commit workflow runs found for the commit $pr_commit_sha."
             echo "API Response: $api_response"
             exit 1
           fi
+
+          # Extract status and conclusion of the latest run
+          workflow_status=$(echo "$latest_run" | jq -r .status)
+          workflow_conclusion=$(echo "$latest_run" | jq -r .conclusion)
+
+          echo "Workflow status: $workflow_status"
+          echo "Workflow conclusion: $workflow_conclusion"
+
+          # Check if the workflow completed successfully
+          if [ "$workflow_status" != "completed" ]; then
+            echo "all-post-commit workflow is not completed yet (status: $workflow_status)."
+            exit 1
+          fi
+
+          if [ "$workflow_conclusion" != "success" ]; then
+            echo "all-post-commit did not pass (conclusion: $workflow_conclusion)."
+            exit 1
+          fi
+
+          echo "all-post-commit passed successfully for the latest commit."
