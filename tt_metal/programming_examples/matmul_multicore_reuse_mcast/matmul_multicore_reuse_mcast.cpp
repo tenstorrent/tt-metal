@@ -209,7 +209,7 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
 
     tt_metal::InterleavedBufferConfig dram_config_C{
                     .device= device,
-                    .size = dram_buffer_B_size,
+                    .size = dram_buffer_C_size,
                     .page_size = single_tile_size,
                     .buffer_type = tt_metal::BufferType::DRAM
         };
@@ -460,9 +460,9 @@ int main(int argc, char **argv) {
         // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
 
         /* Create source data */
-        constexpr uint32_t M = 3200;  // user-defined
-        constexpr uint32_t N = 3200;  // user-defined
-        constexpr uint32_t K = 3200;  // user-defined
+        constexpr uint32_t M = 3584;  // user-defined
+        constexpr uint32_t N = 3072;  // user-defined
+        constexpr uint32_t K = 768;  // user-defined
         constexpr uint32_t B = 1;  // user-defined
 
         uint32_t Mt = M / TILE_HEIGHT;
