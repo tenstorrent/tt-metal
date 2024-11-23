@@ -102,17 +102,10 @@ void SliceDeviceOperation::validate_with_output_tensors(
             (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
             "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(
-            (output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
-            "An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary. For example, the final dimension needs to be divisible by 2 for bfloat16. The resulting tensor shape is {}, which is not 4B aligned as the last dimension is {}",
-                        output_tensor_shape[-1], input_tensor_a.element_size());
         if (has_step) {
             for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
                 TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
             }
-        }
-        else {
-            TT_FATAL(this->slice_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0, "Slice needs to start at an aligned position");
         }
     }
 }

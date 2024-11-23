@@ -752,8 +752,37 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
-        ([8732, 4], 1, 0, -1, 4, ttnn.TILE_LAYOUT),  # Need tensor for this or a padding aware tiled kernel
         ([1, 7], 0, 0, -1, 1, ttnn.ROW_MAJOR_LAYOUT),  # page size must equal buffer size
+        ([1, 8, 2, 2], 2, -1, -1, 1, ttnn.TILE_LAYOUT),  # Buffer size and page size should be larger than 0 bytes
+        ([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),  # Difference in expected shape as it's a 1D tensor
+    ),
+)
+def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
+    pytest.skip("These tests are known to fail")
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    slice_obj = slice(start, end, step)
+
+    # Prepare indices for slicing in the specified dimension
+    indices = [slice(None)] * len(input_shape)  # By default, select all elements along every dimension
+    indices[dim] = slice_obj  # Apply slicing to the target dimension
+    indices = tuple(indices)
+
+    # Apply slicing to the input_tensor
+    torch_output_tensor = torch_input[indices]
+
+    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn_tensor[indices]
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (
+        ([8732, 4], 1, 0, -1, 4, ttnn.TILE_LAYOUT),  # Need tensor for this or a padding aware tiled kernel
         (
             [1, 7, 71, 64],
             3,
@@ -762,12 +791,9 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
             1,
             ttnn.ROW_MAJOR_LAYOUT,
         ),  # An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary
-        ([1, 8, 2, 2], 2, -1, -1, 1, ttnn.TILE_LAYOUT),  # Buffer size and page size should be larger than 0 bytes
-        ([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),  # Difference in expected shape as it's a 1D tensor
     ),
 )
-def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
-    pytest.skip("These tests are expected to fail at the moment")
+def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, device):
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     slice_obj = slice(start, end, step)

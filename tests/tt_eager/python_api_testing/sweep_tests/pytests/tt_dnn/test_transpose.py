@@ -14,6 +14,7 @@ from models.utility_functions import skip_for_grayskull
 shape_wh = [
     [[1, 1, 32, 32]],  # Single core
     [[3, 1, 320, 384]],  # Multi core
+    [[1, 1024, 5, 1280]],  # Non page-aligned
 ]
 
 
