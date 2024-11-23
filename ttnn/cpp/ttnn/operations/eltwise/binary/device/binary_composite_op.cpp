@@ -271,8 +271,13 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0, div_result);
 }
 
-Tensor ExecutePrelu::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::prelu_sfpu(input, scalar);
+Tensor ExecutePrelu::invoke(const Tensor& input, float weight, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::prelu_sfpu(input, weight);
+}
+
+Tensor ExecutePrelu::invoke(const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& output_mem_config) {
+    float scalar_weight = weight[0];
+    return ttnn::prelu_sfpu(input, scalar_weight);
 }
 
 Tensor ExecutePrelu::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -286,6 +291,7 @@ Tensor ExecutePrelu::invoke(const Tensor& input_a, const Tensor& input_b, const 
         reshape[1] = s_a[1];
         b = ttnn::reshape(input_b, ttnn::Shape(reshape));
     }
+
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
     return result;
 }

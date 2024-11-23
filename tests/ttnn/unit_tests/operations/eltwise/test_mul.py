@@ -108,8 +108,9 @@ def test_multiply_with_scalar_sharded(device, scalar, batch_size, output_memory_
     torch_input_tensor_a = torch.rand((batch_size, 16, 384, 384), dtype=torch.float32)
     torch_output_tensor = scalar * torch_input_tensor_a
 
+    # GS has smaller L1 than WH
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device
     )
     output = ttnn.mul(input_tensor_a, scalar, memory_config=output_memory_config)
     output = ttnn.to_torch(output)
