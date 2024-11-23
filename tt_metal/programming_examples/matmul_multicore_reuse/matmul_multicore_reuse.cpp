@@ -179,7 +179,7 @@ void matmul_multicore_reuse(std::vector<bfloat16>& a, std::vector<bfloat16>& b, 
 
     tt_metal::InterleavedBufferConfig dram_config_C{
                     .device= device,
-                    .size = dram_buffer_B_size,
+                    .size = dram_buffer_C_size,
                     .page_size = single_tile_size,
                     .buffer_type = tt_metal::BufferType::DRAM
         };
