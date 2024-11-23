@@ -120,24 +120,6 @@ void wait_until_cores_done(
 
 }  // namespace internal_
 
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
-    uint64_t relo_addr;
-    if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-        // Move addresses in the local memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-    }
-#ifdef NCRISC_HAS_IRAM
-    else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-        // Move addresses in the trisc memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
-    }
-#endif
-    else {
-        relo_addr = addr;
-    }
-    return relo_addr;
-}
-
 }  // namespace llrt
 
 }  // namespace tt
