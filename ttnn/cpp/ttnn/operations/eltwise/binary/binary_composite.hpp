@@ -252,6 +252,11 @@ struct ExecutePrelu
 
     static Tensor invoke(
         const Tensor& input_tensor,
+        const std::array<float, 1>& weight,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
         float scalar,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
