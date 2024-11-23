@@ -70,20 +70,20 @@ static Tensor full(
         }
         return output;
     } else {
-        // TODO: #14974 - Extend to support multi-device storage.
-        auto device_buffer =
-            std::get<DeviceStorage>(optional_output_tensor.value().tensor_attributes->storage).get_buffer();
-        bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+        const auto buffers = optional_output_tensor->buffers();
+        const bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
-        if (using_fast_dispatch && !devices.empty()) {
-            auto& cmd_queue = devices.at(0)->command_queue(queue_id);
-            if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
-                tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.get_ptr(), false);
+        for (auto* buffer : buffers) {
+            if (using_fast_dispatch) {
+                auto& cmd_queue = buffer->device()->command_queue(queue_id);
+                if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
+                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.get_ptr(), /*blocking=*/false);
+                } else {
+                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
+                }
             } else {
-                tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.data(), false);
+                tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
             }
-        } else {
-            tt::tt_metal::detail::WriteToBuffer(*device_buffer, owned_buffer.get());
         }
 
         return *optional_output_tensor;
