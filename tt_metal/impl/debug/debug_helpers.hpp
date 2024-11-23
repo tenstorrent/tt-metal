@@ -11,7 +11,7 @@
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
-    bool operator()(const CoreDescriptor &x, const CoreDescriptor &y) const {
+    bool operator()(const CoreDescriptor& x, const CoreDescriptor& y) const {
         if (x.coord == y.coord) {
             return x.type < y.type;
         } else {
@@ -22,7 +22,7 @@ struct CoreDescriptorComparator {
 #define CoreDescriptorSet std::set<CoreDescriptor, CoreDescriptorComparator>
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-static CoreDescriptorSet GetAllCores(tt::tt_metal::Device *device) {
+static CoreDescriptorSet GetAllCores(tt::tt_metal::Device* device) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size = device->logical_grid_size();
@@ -54,12 +54,11 @@ static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device* device) {
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(tt::tt_metal::Device *device, const CoreCoord &phys_core, int risc_id) {
-
-    dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
+inline uint64_t GetDprintBufAddr(tt::tt_metal::Device* device, const CoreCoord& phys_core, int risc_id) {
+    dprint_buf_msg_t* buf = device->get_dev_addr<dprint_buf_msg_t*>(phys_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
     return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
-inline int GetNumRiscs(const CoreDescriptor &core) {
-    return (core.type == CoreType::ETH)? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+inline int GetNumRiscs(const CoreDescriptor& core) {
+    return (core.type == CoreType::ETH) ? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
 }

@@ -23,19 +23,17 @@ inline namespace v0 {
 using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
-   public:
+public:
     // Static circular buffer spec
-    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec) :
+    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
         total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
         this->set_config(data_format_spec);
     }
 
     // Dynamic circular buffer spec
     CircularBufferConfig(
-        uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec, const Buffer &buffer) :
-        total_size_(total_size),
-        dynamic_cb_(true),
-        max_size_(buffer.size()) {
+        uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer) :
+        total_size_(total_size), dynamic_cb_(true), max_size_(buffer.size()) {
         if (not buffer.is_l1()) {
             TT_THROW("Only L1 buffers can have an associated circular buffer!");
         }
@@ -64,9 +62,7 @@ class CircularBufferConfig {
         }
         if (this->total_size_ % page_size != 0) {
             TT_THROW(
-                "Total circular buffer size {} B must be divisible by page size {} B",
-                this->total_size_,
-                page_size);
+                "Total circular buffer size {} B must be divisible by page size {} B", this->total_size_, page_size);
         }
         if (page_size % sizeof(uint32_t) != 0) {
             TT_THROW("Page size must be divisible by sizeof(uint32_t) because buffers holds uint32_t values");
@@ -91,7 +87,7 @@ class CircularBufferConfig {
         return *this;
     }
 
-    CircularBufferConfig set_globally_allocated_address(const Buffer &buffer) {
+    CircularBufferConfig set_globally_allocated_address(const Buffer& buffer) {
         if (not buffer.is_l1()) {
             TT_THROW("Only L1 buffers can have an associated circular buffer!");
         }
@@ -107,22 +103,21 @@ class CircularBufferConfig {
         return *this;
     }
 
-    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> &tiles() const {
-        return this->tiles_;
-    }
+    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const { return this->tiles_; }
 
     uint32_t total_size() const { return this->total_size_; }
 
     std::optional<uint32_t> globally_allocated_address() const { return this->globally_allocated_address_; }
 
-    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> &data_formats() const {
+    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats() const {
         return this->data_formats_;
     }
 
-    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> &page_sizes() const { return this->page_sizes_; }
+    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes() const { return this->page_sizes_; }
     const Buffer* shadow_global_buffer;
-   private:
-    void set_config(const std::map<uint8_t, tt::DataFormat> &data_format_spec) {
+
+private:
+    void set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
         if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
             TT_THROW(
                 "Only {} circular buffer slots are available but data formats are specified for {} indices",
@@ -130,7 +125,7 @@ class CircularBufferConfig {
                 data_format_spec.size());
         }
 
-        for (const auto &[buffer_index, data_format] : data_format_spec) {
+        for (const auto& [buffer_index, data_format] : data_format_spec) {
             if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
                 TT_THROW(
                     "Buffer index ({}) exceeds max number of circular buffers per core ({})",

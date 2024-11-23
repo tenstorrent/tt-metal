@@ -33,22 +33,20 @@ v1::EventHandle::EventHandle() : EventHandle(std::make_shared<Event>()) {}
 v1::EventHandle v1::EnqueueRecordEvent(CommandQueueHandle cq) {
     EventHandle event{};
     v0::EnqueueRecordEvent(
-        GetDevice(cq)->command_queue(GetId(cq)), static_cast<const std::shared_ptr<v0::Event> &>(event));
+        GetDevice(cq)->command_queue(GetId(cq)), static_cast<const std::shared_ptr<v0::Event>&>(event));
     return event;
 }
 
 void v1::EnqueueWaitForEvent(CommandQueueHandle cq, EventHandle event) {
     v0::EnqueueWaitForEvent(
-        GetDevice(cq)->command_queue(GetId(cq)), static_cast<const std::shared_ptr<v0::Event> &>(event));
+        GetDevice(cq)->command_queue(GetId(cq)), static_cast<const std::shared_ptr<v0::Event>&>(event));
 }
 
 void v1::EventSynchronize(EventHandle event) {
-    v0::EventSynchronize(static_cast<const std::shared_ptr<v0::Event> &>(event));
+    v0::EventSynchronize(static_cast<const std::shared_ptr<v0::Event>&>(event));
 }
 
-bool v1::EventQuery(EventHandle event) {
-    return v0::EventQuery(static_cast<const std::shared_ptr<v0::Event> &>(event));
-}
+bool v1::EventQuery(EventHandle event) { return v0::EventQuery(static_cast<const std::shared_ptr<v0::Event>&>(event)); }
 
 void v1::DeviceSynchronize(DeviceHandle device) { v0::Synchronize(device); }
 
