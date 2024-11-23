@@ -8,8 +8,6 @@ void kernel_main() {
     int i{0};
     const auto input_addr = get_arg_val<uint32_t>(i++);
     const bool input_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto decimal = get_arg_val<uint32_t>(i++);
-    const auto recip_p_decimal = get_arg_val<uint32_t>(i++);
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto Wt = get_arg_val<uint32_t>(i++);
     const auto tile_offset = get_arg_val<uint32_t>(i++);
@@ -18,8 +16,6 @@ void kernel_main() {
     uint32_t cb_id{0};
     const auto cb_id_input = cb_id++;
     const auto cb_id_one = cb_id++;
-    const auto cb_id_decimal = cb_id++;
-    const auto cb_id_recip_p_decimal = cb_id++;
     const auto cb_id_mask_w = cb_id++;
 
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
@@ -34,8 +30,6 @@ void kernel_main() {
     Scalar one;
     one.f = 1.0f;
     fill_cb_with_value(cb_id_one, one.u);
-    fill_cb_with_value(cb_id_decimal, decimal);
-    fill_cb_with_value(cb_id_recip_p_decimal, recip_p_decimal);
 
     constexpr uint32_t TILE_W = 32;
     const bool do_mask_w = (origin_w % TILE_W) != 0;
