@@ -10,6 +10,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 
+using namespace tt::tt_metal;
+
 namespace tt {
 
 namespace tt_metal {

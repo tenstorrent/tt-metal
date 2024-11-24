@@ -17,6 +17,8 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::ccl::barrier::detail {
 
 

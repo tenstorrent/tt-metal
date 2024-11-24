@@ -9,8 +9,10 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(

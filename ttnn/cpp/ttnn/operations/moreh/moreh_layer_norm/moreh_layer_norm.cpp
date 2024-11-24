@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/moreh/moreh_layer_norm/device/moreh_layer_norm_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_layer_norm {
 std::vector<std::optional<Tensor>> MorehLayerNorm::invoke(
     const Tensor& input,

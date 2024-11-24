@@ -15,6 +15,7 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 

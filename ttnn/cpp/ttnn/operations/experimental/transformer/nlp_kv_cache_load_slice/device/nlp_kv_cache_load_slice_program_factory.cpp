@@ -9,6 +9,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;

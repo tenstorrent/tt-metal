@@ -14,7 +14,7 @@
 
 using namespace	tt;
 using namespace constants;
-
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math, bool inplace) {

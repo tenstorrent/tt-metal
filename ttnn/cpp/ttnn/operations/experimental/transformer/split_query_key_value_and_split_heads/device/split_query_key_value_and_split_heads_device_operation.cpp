@@ -6,6 +6,8 @@
 
 #include "split_query_key_value_and_split_heads_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>& input_tensors,

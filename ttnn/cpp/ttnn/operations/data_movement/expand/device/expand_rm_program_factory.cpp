@@ -16,6 +16,8 @@
 #include "impl/kernels/kernel_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::expand {
 ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::ExpandRowMajorFactory::create(
     const operation_attributes_t& operation_attributes,
