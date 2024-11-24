@@ -142,7 +142,15 @@ static Tensor full(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return full_impl(ttnn::DefaultQueueId, shape, value, data_type, layout, {device}, output_mem_config, std::nullopt);
+    return full_impl(
+        ttnn::DefaultQueueId,
+        shape,
+        value,
+        data_type,
+        layout,
+        device ? std::vector<Device*>{device} : std::vector<Device*>{},
+        output_mem_config,
+        std::nullopt);
 }
 
 // TODO: #14974 - Can this be deleted?
