@@ -10,11 +10,11 @@
 using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::detail {
-operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
+tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
 
-operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
 

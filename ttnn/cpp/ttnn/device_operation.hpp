@@ -259,7 +259,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
 
-    const auto enqueue_or_launch_program = [=](Program& program) {
+    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -276,8 +276,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program.set_runtime_id(device_operation_id);
 
-        GraphTracker::instance().track_program(&program);
-        if(GraphTracker::instance().hook_program(&program)) {
+        tt::tt_metal::GraphTracker::instance().track_program(&program);
+        if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
         }
 
@@ -305,8 +305,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program->set_runtime_id(device_operation_id);
 
-        GraphTracker::instance().track_program(program.get());
-        if(GraphTracker::instance().hook_program(program.get())) {
+        tt::tt_metal::GraphTracker::instance().track_program(program.get());
+        if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
 
@@ -456,7 +456,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     ZoneScopedN("Run Device Operation");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
-    GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
+    tt::tt_metal::GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
 
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
@@ -487,7 +487,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     }
     */
 
-    GraphTracker::instance().track_function_end(tensor_return_value);
+    tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
 }
 

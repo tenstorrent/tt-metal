@@ -177,7 +177,7 @@ struct FullRep {
 };
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
+    const ttnn::SimpleShape& logical_shape, const tt::tt_metal::Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
     TT_FATAL(logical_shape.rank() >= 2 && logical_shape.rank() <= 4, "Only 2D, 3D, and 4D tensors are supported. Shape: {}", "Error", logical_shape, padding);
 
     auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;

@@ -16,7 +16,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
+    tt::tt_metal::DispatchCoreType dispatch_core_type,
     MeshType mesh_type = MeshType::RowMajor,
     const std::pair<size_t, size_t>& offset = std::pair<size_t, size_t>(0, 0),
     const std::vector<int>& physical_device_ids = {});
@@ -33,10 +33,10 @@ std::vector<int> get_t3k_physical_device_ids_ring();
 std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device);
 
 // Get the distributed tensor config from a tensor.
-DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
+tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
 
 // Given a multi-device tensor and a device, returns the tensor on the given device.
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device);
+Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::Device* device);
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
 
@@ -48,7 +48,7 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
 
 // Given a list of per-device shards, return a multi-device tensor
 Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy);
+    const std::vector<Tensor>& tensors, tt::tt_metal::StorageType storage_type, const tt::tt_metal::DistributedTensorConfig& strategy);
 
 }  // namespace ttnn::distributed::api
 
