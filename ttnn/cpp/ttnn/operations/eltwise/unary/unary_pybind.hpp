@@ -1319,7 +1319,7 @@ void bind_unary_composite_int(py::module& module, const unary_operation_t& opera
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_floats(
+void bind_unary_composite_threshold(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name_a,
@@ -1342,8 +1342,23 @@ void bind_unary_composite_floats(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 1.0
+            >>> {4} = 10.0
             >>> output = {1}(tensor, {2}, {4})
         )doc",
         operation.base_name(),
@@ -1975,11 +1990,11 @@ void py_module(py::module& module) {
         ttnn::selu,
         "scale", "Scale value", 1.0507,
         "alpha", "Alpha value", 1.67326);
-    detail::bind_unary_composite_floats(
+    detail::bind_unary_composite_threshold(
         module,
         ttnn::threshold,
         "threshold", "Threshold value",
-        "value", "Value value",
+        "value", "Replacing value",
         R"doc(Performs threshold function on :attr:`input_tensor`, :attr:`threshold`, :attr:`value`.)doc");
     detail::bind_unary_composite_int_with_default(
         module,
