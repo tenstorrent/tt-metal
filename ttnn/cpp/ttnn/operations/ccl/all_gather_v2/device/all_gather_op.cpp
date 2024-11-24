@@ -150,7 +150,6 @@ Tensor all_gather_v2(
     //         program = tt::tt_metal::Program{}; // Initialize each Program
     //         return &program;
     //     });
-    TT_FATAL(num_links == 1, "all_gather op is only supported for num_links == 1, but has {}", num_links);
     tt::log_info(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     tt::log_info(tt::LogOp, "DEBUG: line_fabric is created");
 

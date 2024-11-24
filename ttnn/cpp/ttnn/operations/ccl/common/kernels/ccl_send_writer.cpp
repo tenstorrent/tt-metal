@@ -187,8 +187,9 @@ void kernel_main() {
             // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            // shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
+            // shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            shape_t const& global_offset = command_tensor.tensor_slice_offset + command_tensor.worker_start_offset_in_slice;
 
             uint32_t curr_page_idx = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
 
@@ -220,6 +221,8 @@ void kernel_main() {
                 ASSERT(command_tensor.tensor_shape.z == 1);
                 ASSERT(command_tensor.tensor_slice_shape.w == 1);
                 ASSERT(command_tensor.tensor_slice_shape.z == 1);
+
+                DPRINT << "iter "<< p << " curr_tile_id: " << curr_page_idx << ENDL();
 
                 DPRINT << "cb_wait_front\n";
                 cb_wait_front(cb_id, n_pages);
@@ -257,17 +260,17 @@ void kernel_main() {
                             get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, 1), // use noc_id = 1 for local writes on writer
                             payload_size_bytes
                         );
-                        DPRINT << "l1_read_addr: " << (uint32_t)l1_read_addr << ENDL();
-                        DPRINT << "payload_l1_address: " << (uint32_t)payload_l1_address << ENDL();
-                        DPRINT << "noc_addr: " << (uint64_t)noc_addr << ENDL();
-                        DPRINT << "noc_addr_local: " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, 1) << ENDL();
-                        DPRINT << "size packetheader: " << (uint32_t)sizeof(tt::fabric::PacketHeader) << ENDL();
-                        DPRINT << "payload_size_bytes: " << (uint32_t)payload_size_bytes << ENDL();
+                        // DPRINT << "l1_read_addr: " << (uint32_t)l1_read_addr << ENDL();
+                        // DPRINT << "payload_l1_address: " << (uint32_t)payload_l1_address << ENDL();
+                        // DPRINT << "noc_addr: " << (uint64_t)noc_addr << ENDL();
+                        // DPRINT << "noc_addr_local: " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, 1) << ENDL();
+                        // DPRINT << "size packetheader: " << (uint32_t)sizeof(tt::fabric::PacketHeader) << ENDL();
+                        // DPRINT << "payload_size_bytes: " << (uint32_t)payload_size_bytes << ENDL();
                         // DPRINT << "CHKPT2\n";
                         // Write the mcast packet (forward)
-                        DPRINT << "dest_noc_xy.x: " << (uint32_t)dest_noc_xy.x << ENDL();
-                        DPRINT << "dest_noc_xy.y: " << (uint32_t)dest_noc_xy.y << ENDL();
-                        DPRINT << "dest_addr: " << (uint32_t)dest_addr << ENDL();
+                        // DPRINT << "dest_noc_xy.x: " << (uint32_t)dest_noc_xy.x << ENDL();
+                        // DPRINT << "dest_noc_xy.y: " << (uint32_t)dest_noc_xy.y << ENDL();
+                        // DPRINT << "dest_addr: " << (uint32_t)dest_addr << ENDL();
                         // DPRINT << "CHKPT3\n";
                         size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
                         if (has_forward_fabric_connection) {
@@ -366,12 +369,12 @@ void kernel_main() {
 
             auto sem_inc_noc_addr = get_noc_addr(dest_noc_x, dest_noc_y, dest_sem_addr);
             noc_semaphore_inc(sem_inc_noc_addr, 1);
-            DPRINT << "Send sync signal to " << (uint64_t)sem_inc_noc_addr << "\n";
-            DPRINT << "dest_sem_addr: " << (uint32_t)dest_sem_addr << "\n";
-            DPRINT << "dest_noc_x: " << (uint32_t)dest_noc_x << "\n";
-            DPRINT << "dest_noc_y: " << (uint32_t)dest_noc_y << "\n";
-            DPRINT << "forward_direction_num_hops: " << (uint32_t)forward_direction_num_hops << "\n";
-            DPRINT << "backward_direction_num_hops: " << (uint32_t)backward_direction_num_hops << "\n";
+            // DPRINT << "Send sync signal to " << (uint64_t)sem_inc_noc_addr << "\n";
+            // DPRINT << "dest_sem_addr: " << (uint32_t)dest_sem_addr << "\n";
+            // DPRINT << "dest_noc_x: " << (uint32_t)dest_noc_x << "\n";
+            // DPRINT << "dest_noc_y: " << (uint32_t)dest_noc_y << "\n";
+            // DPRINT << "forward_direction_num_hops: " << (uint32_t)forward_direction_num_hops << "\n";
+            // DPRINT << "backward_direction_num_hops: " << (uint32_t)backward_direction_num_hops << "\n";
 
             if (has_forward_fabric_connection) {
                 const size_t pkt_addr = some_buffering_addr;

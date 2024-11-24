@@ -153,8 +153,9 @@ void kernel_main() {
             // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            // shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
+            // shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            shape_t const& global_offset = command_tensor.tensor_slice_offset + command_tensor.worker_start_offset_in_slice;
 
             uint32_t curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
 
@@ -184,7 +185,7 @@ void kernel_main() {
                 ASSERT(command_tensor.tensor_slice_shape.w == 1);
                 ASSERT(command_tensor.tensor_slice_shape.z == 1);
 
-                // DPRINT << "iter "<< p << " curr_tile_id: " << curr_tile_id << ENDL();
+                DPRINT << "iter "<< p << " curr_tile_id: " << curr_tile_id << ENDL();
                 DPRINT << "local_l1_scratch_buffer_address: " << local_l1_scratch_buffer_address << ENDL();
 
                 read_wrapped_chunk_from_output_tensor_to_address(
