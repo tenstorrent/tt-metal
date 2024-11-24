@@ -19,6 +19,7 @@ class FreeList : public Algorithm {
     };
 
     FreeList(DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment, SearchPolicy search_policy);
+    ~FreeList();
     void init();
 
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const;
