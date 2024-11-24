@@ -42,6 +42,7 @@ class Conv:
         activation="",
         fused_op=True,
         width_sharding=False,
+        output_layout=ttnn.TILE_LAYOUT,
     ) -> None:
         if fused_op:
             self.weights, self.bias = fold_bn_to_conv_weights_bias(model, path)
@@ -57,6 +58,7 @@ class Conv:
         self.out_channels = self.weights.shape[0]
         self.act_block_h = act_block_h
         self.reshard = reshard
+        self.output_layout = output_layout
 
         if width_sharding:
             self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -86,6 +88,7 @@ class Conv:
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             reallocate_halo_output=False,
+            output_layout=self.output_layout,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h

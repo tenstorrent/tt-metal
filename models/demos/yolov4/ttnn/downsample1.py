@@ -5,6 +5,8 @@
 import torch
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
 class Down1:
@@ -15,7 +17,7 @@ class Down1:
             torch_model = model.torch_model
         self.torch_model = torch_model
         self.conv1 = Conv(torch_model, "down1.conv1", [1, 320, 320, 3], (1, 1, 1, 1), act_block_h=128)
-        self.conv2 = Conv(torch_model, "down1.conv2", [1, 320, 320, 32], (2, 2, 1, 1), reshard=True)
+        self.conv2 = Conv(torch_model, "down1.conv2", [1, 320, 320, 32], (2, 2, 1, 1))
         self.conv3 = Conv(torch_model, "down1.conv3", [1, 160, 160, 64], (1, 1, 0, 0), deallocate=False)
         self.conv4 = Conv(torch_model, "down1.conv4", [1, 160, 160, 64], (1, 1, 0, 0))
         self.conv5 = Conv(torch_model, "down1.conv5", [1, 160, 160, 64], (1, 1, 0, 0), deallocate=False)
@@ -29,6 +31,13 @@ class Down1:
         output_tensor = ttnn.mish(output_tensor)
         output_tensor_split = self.conv2(device, output_tensor)
         output_tensor_split = ttnn.mish(output_tensor_split)
+
+        shard_grid = get_shard_grid_from_num_cores(50, device)
+        shard_spec = ttnn.ShardSpec(shard_grid, (512, 64), ttnn.ShardOrientation.ROW_MAJOR, False)
+        in_sharded_mem_config_conv_5 = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
+        output_tensor_split = ttnn.to_memory_config(output_tensor_split, memory_config=in_sharded_mem_config_conv_5)
 
         output_tensor_left = self.conv3(device, output_tensor_split)
         output_tensor_left = ttnn.mish(output_tensor_left)
