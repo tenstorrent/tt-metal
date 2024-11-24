@@ -50,8 +50,8 @@ struct AllGatherFusedOpSignaler {
     );
 
     void init_all_gather(
-        Program& program,
-        Device const* device,
+        tt::tt_metal::Program& program,
+        tt::tt_metal::Device const* device,
 
         CoreRangeSet const& all_gather_workers,
         std::vector<CoreCoord>& all_gather_worker_cores
@@ -100,8 +100,8 @@ struct MatmulFusedOpSignaler {
     );
 
     void init_fused_op(
-        Program& program,
-        Device const* device,
+        tt::tt_metal::Program& program,
+        tt::tt_metal::Device const* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI
     );
