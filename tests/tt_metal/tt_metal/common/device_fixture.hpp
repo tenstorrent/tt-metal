@@ -64,11 +64,12 @@ class DeviceSingleCardFixture : public DispatchFixture {
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
     void validate_dispatch_mode() {
-        this->slow_dispatch_ = false;
+        this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
+        if (!slow_dispatch) {
+            tt::log_info(
+                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
     }
