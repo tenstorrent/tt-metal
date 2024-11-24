@@ -36,7 +36,7 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
     }
 
     void TearDown() override {
-        if (!IsSkipped()) {
+        if (this->device_ != nullptr) {
             tt::tt_metal::CloseDevice(this->device_);
         }
     }
@@ -71,7 +71,7 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
             device_id, this->num_cqs_, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     }
 
-    tt::tt_metal::Device *device_;
+    tt::tt_metal::Device *device_ = nullptr;
     tt::ARCH arch_;
     uint8_t num_cqs_;
 };
