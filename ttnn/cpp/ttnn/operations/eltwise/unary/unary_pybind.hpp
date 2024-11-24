@@ -1113,7 +1113,7 @@ void bind_unary_composite_floats_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
-    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_dtype = "BFLOAT16, BFLOAT8_B",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1123,8 +1123,8 @@ void bind_unary_composite_floats_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
-            {5} (float): {6}. Defaults to `{7}`.
+            {2} (float, optional): {3}. Defaults to `{4}`.
+            {5} (float, optional): {6}. Defaults to `{7}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1146,7 +1146,7 @@ void bind_unary_composite_floats_with_default(
             {9}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor, {2} = {4}, {5} = {7})
         )doc",
         operation.base_name(),
