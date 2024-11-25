@@ -74,6 +74,14 @@ jobs:
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
+  debug-diff:
+    needs: diff
+    runs-on: ubuntu-latest
+    run: |
+      echo "test_everything: ${{ needs.diff.outputs.test_everything }}"
+      echo "test_tt_metal: ${{ needs.diff.outputs.test_tt_metal }}"
+      echo "test_ttnn: ${{ needs.diff.outputs.test_ttnn }}"
+
   build-wheels:
     needs: build-artifact
     strategy:
@@ -124,7 +132,7 @@ jobs:
     needs:
       - build-artifact
       - diff
-    if: needs.diff.outputs.test_everything == 'true'
+    if: ${{ needs.diff.outputs.test_everything == 'true' }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -143,7 +151,7 @@ jobs:
     needs:
       - build-artifact
       - diff
-    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true'
+    if: ${{ needs.diff.outputs.test_everything == 'true' || needs.diff.outputs.test_tt_metal == 'true' }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -162,7 +170,7 @@ jobs:
     needs:
       - build-wheels
       - diff
-    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true'
+    if: ${{ needs.diff.outputs.test_everything == 'true' || needs.diff.outputs.test_tt_metal == 'true' }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -181,7 +189,7 @@ jobs:
     needs:
       - build-wheels
       - diff
-    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true' || needs.diff.outputs.test_ttnn == 'true'
+    if: ${{ needs.diff.outputs.test_everything == 'true' || needs.diff.outputs.test_tt_metal == 'true' || needs.diff.outputs.test_ttnn == 'true' }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -200,7 +208,7 @@ jobs:
     needs:
       - build-wheels
       - diff
-    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true' || needs.diff.outputs.test_ttnn == 'true'
+    if: ${{ needs.diff.outputs.test_everything == 'true' || needs.diff.outputs.test_tt_metal == 'true' || needs.diff.outputs.test_ttnn == 'true' }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -219,7 +227,7 @@ jobs:
     needs:
       - build-artifact
       - diff
-    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true'
+    if: ${{ needs.diff.outputs.test_everything == 'true' || needs.diff.outputs.test_tt_metal == 'true' }}
     secrets: inherit
     strategy:
       fail-fast: false
