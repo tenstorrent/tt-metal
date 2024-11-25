@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "tt_metal/distributed/mesh_device.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
@@ -22,6 +24,8 @@ class SimpleDevice {
     SimpleDevice(tt::tt_metal::distributed::MeshDevice* mesh_device) : metal_device_{mesh_device} {}
     SimpleDevice(const SimpleDevice&) = default;
     SimpleDevice& operator=(const SimpleDevice&) = default;
+    SimpleDevice(SimpleDevice&&) = delete;
+    SimpleDevice& operator=(SimpleDevice&&) = delete;
 
     std::vector<tt::tt_metal::Device*> get_devices() {
         if (auto* device = std::get_if<tt::tt_metal::Device*>(&metal_device_); device != nullptr) {
@@ -33,35 +37,6 @@ class SimpleDevice {
 
    private:
     std::variant<tt::tt_metal::Device*, tt::tt_metal::distributed::MeshDevice*> metal_device_;
-};
-
-class OptionalSimpleDevice {
-   public:
-    // Allow implicit conversions for transparent migration.
-    OptionalSimpleDevice(std::nullopt_t) {}
-    OptionalSimpleDevice(SimpleDevice device) : device_(std::make_optional<SimpleDevice>(device)) {}
-
-    // TODO: some of these won't be needed, as we unify the APIs.
-    OptionalSimpleDevice(const std::optional<std::reference_wrapper<tt::tt_metal::Device>>& device) :
-        device_(device.has_value() ? std::make_optional<SimpleDevice>(&device->get()) : std::nullopt) {}
-    OptionalSimpleDevice(
-        const std::optional<std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>>& mesh_device) :
-        device_(mesh_device.has_value() ? std::make_optional<SimpleDevice>(&mesh_device->get()) : std::nullopt) {}
-    OptionalSimpleDevice(std::reference_wrapper<tt::tt_metal::Device> device) :
-        device_(std::make_optional<SimpleDevice>(&device.get())) {}
-    OptionalSimpleDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device) :
-        device_(std::make_optional<SimpleDevice>(&mesh_device.get())) {}
-
-    OptionalSimpleDevice(tt::tt_metal::Device& device) : device_(std::make_optional<SimpleDevice>(&device)) {}
-    OptionalSimpleDevice(tt::tt_metal::distributed::MeshDevice& mesh_device) :
-        device_(std::make_optional<SimpleDevice>(&mesh_device)) {}
-
-    bool has_value() { return device_.has_value(); }
-    SimpleDevice* operator->() { return &(*device_); }
-    SimpleDevice operator*() { return *device_; }
-
-   private:
-    std::optional<SimpleDevice> device_;
 };
 
 }  // namespace ttnn
