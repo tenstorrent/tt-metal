@@ -6,11 +6,6 @@ on:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    with:
-      arch: '["wormhole_b0"]'
-    secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
@@ -18,6 +13,6 @@ jobs:
       tracy: true
     secrets: inherit
   tg-model-perf-tests:
-    needs: [build-artifact, build-artifact-profiler]
+    needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
