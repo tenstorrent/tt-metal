@@ -6,6 +6,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "prefix_scan_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm {
 
 void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {

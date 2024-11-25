@@ -67,8 +67,8 @@ std::tuple<FullLikeOperation::operation_attributes_t, FullLikeOperation::tensor_
     return {
         operation_attributes_t{
             fill_value,
-            dtype.value_or(input.tensor_attributes->dtype),
-            layout.value_or(input.tensor_attributes->layout),
+            dtype.value_or(input.dtype()),
+            layout.value_or(input.layout()),
             memory_config.value_or(input.memory_config())},
         tensor_args_t{input}};
 }

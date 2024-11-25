@@ -259,16 +259,21 @@ def test_zeros(device, input_shape):
     [
         [32, 32],
         [5, 96, 64],
+        [1, 50257],
     ],
 )
 @pytest.mark.parametrize(
     "fill_value",
     [-5.25, 0, 1.0],
 )
-def test_full(device, input_shape, fill_value):
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE],
+)
+def test_full(device, input_shape, fill_value, layout):
     torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
 
-    tensor = ttnn.full(input_shape, device=device, fill_value=fill_value)
+    tensor = ttnn.full(input_shape, device=device, fill_value=fill_value, layout=layout)
     assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
@@ -347,22 +352,42 @@ def test_arange(device, start, end, step):
         [1, 1, 32, 32],
         [1, 1, 320, 384],
         [1, 3, 320, 384],
+        [1, 3, 180, 64],
         [2, 640, 64, 64],
         [2, 1280, 64, 64],
     ],
 )
 def test_empty(device, input_shapes):
-    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
-    torch_output_tensor = torch.empty(torch_input_tensor.shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert list(torch_output_tensor.shape) == list(output_tensor.shape)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 1, 32, 32],
+        [1, 1, 320, 384],
+        [1, 3, 320, 384],
+        [1, 3, 180, 64],
+        [2, 640, 64, 64],
+        [2, 1280, 64, 64],
+    ],
+)
+def test_empty_multi_device(mesh_device, input_shapes):
+    torch_output_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
+
+    output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(mesh_device))
+    for output_tensor in output_tensors:
+        assert list(torch_output_tensor.shape) == list(output_tensor.shape)
 
 
 @pytest.mark.parametrize(

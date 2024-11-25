@@ -281,7 +281,7 @@ void generate_sender_worker_kernels(
             info.termination_addr);
     }
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     log_trace(tt::LogTest, "\tSenderWriter CT Args");
     for (auto const& arg : sender_worker_writer_compile_args) {
         log_trace(tt::LogTest, "\t\t{}", arg);

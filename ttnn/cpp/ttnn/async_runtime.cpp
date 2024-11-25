@@ -7,6 +7,8 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 void write_buffer(

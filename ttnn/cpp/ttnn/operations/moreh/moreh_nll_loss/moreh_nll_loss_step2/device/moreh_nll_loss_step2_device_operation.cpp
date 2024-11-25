@@ -4,6 +4,8 @@
 
 #include "moreh_nll_loss_step2_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
 MorehNllLossStep2DeviceOperation::program_factory_t MorehNllLossStep2DeviceOperation::select_program_factory(

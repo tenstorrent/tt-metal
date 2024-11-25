@@ -125,23 +125,23 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},  // output_grad
-            {CB::c_in1, in1_t},  // input
-            {CB::c_in2, in2_t},  // mean
-            {CB::c_in3, in3_t},  // rstd
-            {CB::c_in4, in4_t},  // one
-            {CB::c_in5, in5_t},  // inner_size(==n)
-            {CB::c_in6, in6_t},
-            {CB::c_in7, in7_t},
-            {CB::c_out0, out0_t},  // input_grad
-            {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
-            {CB::c_intermed2, im2_t},
-            {CB::c_intermed3, im3_t},
-            {CB::c_intermed4, im4_t},
-            {CB::c_intermed5, im5_t},
-            {CB::c_intermed6, im6_t},
-            {CB::c_intermed7, im7_t},
+            {CBIndex::c_0, in0_t},  // output_grad
+            {CBIndex::c_1, in1_t},  // input
+            {CBIndex::c_2, in2_t},  // mean
+            {CBIndex::c_3, in3_t},  // rstd
+            {CBIndex::c_4, in4_t},  // one
+            {CBIndex::c_5, in5_t},  // inner_size(==n)
+            {CBIndex::c_6, in6_t},
+            {CBIndex::c_7, in7_t},
+            {CBIndex::c_16, out0_t},  // input_grad
+            {CBIndex::c_24, im0_t},
+            {CBIndex::c_25, im1_t},
+            {CBIndex::c_26, im2_t},
+            {CBIndex::c_27, im3_t},
+            {CBIndex::c_28, im4_t},
+            {CBIndex::c_29, im5_t},
+            {CBIndex::c_30, im6_t},
+            {CBIndex::c_31, im7_t},
         });
 
     ////////////////////////////////////////////////////////////////////////////

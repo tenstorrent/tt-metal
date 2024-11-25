@@ -10,7 +10,7 @@ void kernel_main()
     uint32_t n_tiles = get_arg_val<uint32_t>(1);
 
     // The circular buffer that we are going to read from and write to DRAM
-    constexpr uint32_t cb_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Address generator for the output buffer. This is faster than doing plain DRAM writes.

@@ -10,6 +10,7 @@
 namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
@@ -56,30 +57,30 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const uint32_t cb_size = 2;
 
     // Reader writes input tiles to this
-    const uint32_t input_cb_id = tt::CB::c_in0;
+    const uint32_t input_cb_id = tt::CBIndex::c_0;
     const auto input_cb = create_circular_buffer(input_cb_id, cb_size, input_tile_size, input_format);
 
     // Reader writes scaling tile to this CB. We need it because the reduce LLK requires a scaling factor tile.
-    const uint32_t scalar_cb_id = tt::CB::c_in2;
+    const uint32_t scalar_cb_id = tt::CBIndex::c_2;
     const auto scalar_cb = create_circular_buffer(scalar_cb_id, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute writes transposed tile (loopback)
-    const uint32_t intermed_cb_id0 = tt::CB::c_intermed0;
+    const uint32_t intermed_cb_id0 = tt::CBIndex::c_24;
     const auto intermed_cb0 =
         create_circular_buffer(intermed_cb_id0, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute writes reduced tile for writer
-    const uint32_t intermed_cb_id1 = tt::CB::c_intermed1;
+    const uint32_t intermed_cb_id1 = tt::CBIndex::c_25;
     const auto intermed_cb1 =
         create_circular_buffer(intermed_cb_id1, cb_size, intermediary_tile_size, intermediary_format);
 
     // Writer concats and writes back to compute
-    const uint32_t intermed_cb_id2 = tt::CB::c_intermed2;
+    const uint32_t intermed_cb_id2 = tt::CBIndex::c_26;
     const auto intermed_cb2 =
         create_circular_buffer(intermed_cb_id2, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute transposes and writes back to writer
-    const uint32_t output_cb_id = tt::CB::c_out0;
+    const uint32_t output_cb_id = tt::CBIndex::c_16;
     const auto output_cb = create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
 
     const bfloat16 bfloat_scaler_value = bfloat16(1.0f);

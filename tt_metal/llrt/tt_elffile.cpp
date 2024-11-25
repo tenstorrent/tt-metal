@@ -38,12 +38,6 @@ enum {
 };
 #endif
 
-// Sadly the toolchain's usurped some machine numbers.  With any luck
-// this will go away at some point.
-#define EM_RISCV_GRAYSKULL 242
-#define EM_RISCV_WORMHOLE 0x5151
-#define EM_RISCV_BLACKHOLE 0x6151
-
 // We have to translate these two instructions
 static constexpr uint32_t insn_opc_auipc = 0x00000017;
 static constexpr uint32_t insn_opc_lui = 0x00000037;
@@ -220,10 +214,7 @@ void ElfFile::Impl::LoadImage() {
     if (hdr.e_type != ET_EXEC)
         TT_THROW("{}: not an executable", path_);
 
-    if (hdr.e_machine != EM_RISCV
-        // Hopefully these can go way at some point.
-        && hdr.e_machine != EM_RISCV_GRAYSKULL && hdr.e_machine != EM_RISCV_WORMHOLE &&
-        hdr.e_machine != EM_RISCV_BLACKHOLE)
+    if (hdr.e_machine != EM_RISCV)
         TT_THROW("{}: incompatible architecture {}", path_, hdr.e_machine);
 
     if (!hdr.e_phoff || hdr.e_phoff & (sizeof(address_t) - 1) || hdr.e_phentsize != sizeof(Elf32_Phdr) ||
@@ -252,7 +243,7 @@ void ElfFile::Impl::LoadImage() {
 
         log_debug(
             tt::LogLLRuntime,
-            "{}: loadable segment {}: [{x},+{x}/{x})@{x}",
+            "{}: loadable segment {}: [{},+{}/{})@{}",
             path_,
             unsigned(GetSegments().size()),
             phdr.p_vaddr,
@@ -264,7 +255,7 @@ void ElfFile::Impl::LoadImage() {
         // Require loadable segments to be nicely aligned
         if ((phdr.p_offset | phdr.p_vaddr) & (sizeof(word_t) - 1))
             TT_THROW(
-                "{}: loadable segment {} is misaligned, [{x},+{x}/{x})@{x}",
+                "{}: loadable segment {} is misaligned, [{},+{}/{})@{}",
                 path_,
                 unsigned(GetSegments().size()),
                 phdr.p_vaddr,
@@ -301,7 +292,7 @@ void ElfFile::Impl::LoadImage() {
         if ((section.sh_flags & SHF_ALLOC || section.sh_type == SHT_RELA || section.sh_type == SHT_SYMTAB) &&
             (section.sh_offset | section.sh_addr) & (sizeof(word_t) - 1))
             TT_THROW(
-                "{}: section {} is misaligned [{x},+{x})@{x}",
+                "{}: section {} is misaligned [{},+{})@{}",
                 path_,
                 GetName(section),
                 section.sh_addr,
@@ -310,7 +301,7 @@ void ElfFile::Impl::LoadImage() {
         // If it's allocatable, make sure it's in a segment.
         if (section.sh_flags & SHF_ALLOC && GetSegmentIx(section) < 0)
             TT_THROW(
-                "{}: allocatable section {} [{x},+{x})@{x} is not in known segment",
+                "{}: allocatable section {} [{},+{})@{} is not in known segment",
                 path_,
                 GetName(section),
                 section.sh_addr,
@@ -457,7 +448,7 @@ void ElfFile::Impl::XIPify() {
         // be out of bounds (and probably fail),
         // but we kind of want that anyway
         if (ELF32_R_TYPE((&reloc)[1].r_info) != R_RISCV_RELAX)
-            log_debug(tt::LogLLRuntime, "{}: Relocation at {x} is not relaxed", path_, reloc.r_offset);
+            log_debug(tt::LogLLRuntime, "{}: Relocation at {} is not relaxed", path_, reloc.r_offset);
     };
 
     unsigned num_reloc_sections = 0;
@@ -490,7 +481,7 @@ void ElfFile::Impl::XIPify() {
             auto &reloc = relocs[ix];
             if (reloc.r_offset & 3 || reloc.r_offset - section.sh_addr >= section.sh_size)
                 TT_THROW(
-                    "{}: relocation @ {x} is {} section {}",
+                    "{}: relocation @ {} is {} section {}",
                     path_,
                     reloc.r_offset,
                     reloc.r_offset & 3 ? "misaligned in" : "outside of",
@@ -505,7 +496,7 @@ void ElfFile::Impl::XIPify() {
             if (bool(sub_reloc) != (type == R_RISCV_ADD32) || (sub_reloc && sub_reloc->r_offset != reloc.r_offset))
             unpaired_sub:
                 TT_THROW(
-                    "{}: unpaired {} reloc at {x}",
+                    "{}: unpaired {} reloc at {}",
                     path_,
                     sub_reloc ? "sub32" : "add32",
                     (sub_reloc ? sub_reloc : &reloc)->r_offset);
@@ -514,7 +505,7 @@ void ElfFile::Impl::XIPify() {
                 bool sub_is_to_text = IsTextSymbol(*sub_symbol);
                 if (is_to_text != sub_is_to_text)
                     TT_THROW(
-                        "{}: mismatched add32/sub32 relocs at {x} & {x}", path_, reloc.r_offset, sub_reloc->r_offset);
+                        "{}: mismatched add32/sub32 relocs at {} & {}", path_, reloc.r_offset, sub_reloc->r_offset);
             }
             sub_reloc = nullptr;
             if (type == R_RISCV_SUB32) {
@@ -544,7 +535,7 @@ void ElfFile::Impl::XIPify() {
                 case R_RISCV_PCREL_HI20:
                     if (is_to_text && !is_from_text)
                         TT_THROW(
-                            "{}: segment-crossing {} relocation found at {x}", path_, r_names[kind][0], reloc.r_offset);
+                            "{}: segment-crossing {} relocation found at {}", path_, r_names[kind][0], reloc.r_offset);
 
                     if (!is_to_text && kind == ABS)
                         break;
@@ -556,7 +547,7 @@ void ElfFile::Impl::XIPify() {
                         break;
                     // Emit dynamic reloc
                     log_debug(
-                        tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {x}", path_, reloc.r_offset);
+                        tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {}", path_, reloc.r_offset);
                     address_t value =
                         (symbol->st_value + reloc.r_addend - GetSegments().front().address);
                     Write32(section, reloc.r_offset, value);
@@ -566,16 +557,16 @@ void ElfFile::Impl::XIPify() {
 
                 case R_RISCV_JAL:
                     if (is_from_text != is_to_text)
-                        TT_THROW("{}: segment-crossing R_RISCV_JAL relocation found at {x}", path_, reloc.r_offset);
+                        TT_THROW("{}: segment-crossing R_RISCV_JAL relocation found at {}", path_, reloc.r_offset);
                     break;
 
                 case R_RISCV_CALL:
                 case R_RISCV_CALL_PLT:
-                    TT_THROW("{}: R_RISCV_CALL{,_PLT} relocation found at {x}", path_, reloc.r_offset);
+                    TT_THROW("{}: R_RISCV_CALL_PLT relocation found at {}", path_, reloc.r_offset);
                     break;
 
                 case R_RISCV_32_PCREL:
-                    TT_THROW("{}: R_RISCV_32_PCREL relocation found at {x}", path_, reloc.r_offset);
+                    TT_THROW("{}: R_RISCV_32_PCREL relocation found at {}", path_, reloc.r_offset);
                     break;
             }
         }
@@ -611,7 +602,7 @@ void ElfFile::Impl::XIPify() {
                         goto found;
                 }
                 TT_THROW(
-                    "{}: {} relocation at {x} has no matching {}",
+                    "{}: {} relocation at {} has no matching {}",
                     path_,
                     r_names[kind][true],
                     lo_reloc->r_offset,
@@ -626,7 +617,7 @@ void ElfFile::Impl::XIPify() {
             for (auto &slot : composed[kind]) {
                 if (slot.second.lo_relocs.empty())
                     TT_THROW(
-                        "{}: R_RISCV_{}HI20 relocation at {x} has no matching R_RISCV_{}LO12",
+                        "{}: R_RISCV_{}HI20 relocation at {} has no matching R_RISCV_{}LO12",
                         path_,
                         r_names[kind][false],
                         r_names[kind][true],
@@ -650,14 +641,14 @@ void ElfFile::Impl::XIPify() {
                 uint32_t insn = Read32(section, hi_reloc->r_offset);
                 log_debug(
                     tt::LogLLRuntime,
-                    "{}: translating {} at {x} to {}",
+                    "{}: translating {} at {} to {}",
                     path_,
                     r_names[kind][false],
                     hi_reloc->r_offset,
                     r_names[HWM - 1 - kind][false]);
                 if ((insn & insn_mask_u) != (kind == ABS ? insn_opc_lui : insn_opc_auipc))
                     TT_THROW(
-                        "{}: translating instruction at {x} is not `{}'",
+                        "{}: translating instruction at {} is not `{}'",
                         path_,
                         hi_reloc->r_offset,
                         kind == ABS ? "lui" : "auipc");
@@ -676,7 +667,7 @@ void ElfFile::Impl::XIPify() {
                     uint32_t insn = Read32(section, lo_reloc->r_offset);
                     log_debug(
                         tt::LogLLRuntime,
-                        "{}: translating R_RISCV{}_LO12 at {x} to R_RISCV{}_LO12",
+                        "{}: translating R_RISCV{}_LO12 at {} to R_RISCV{}_LO12",
                         path_,
                         r_names[kind][true],
                         lo_reloc->r_offset,

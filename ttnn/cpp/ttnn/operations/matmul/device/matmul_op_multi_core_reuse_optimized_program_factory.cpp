@@ -61,8 +61,8 @@ operation::ProgramWithCallbacks create_program(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    auto in0_tile = in0.get_tile();
-    auto in1_tile = in1.get_tile();
+    auto in0_tile = in0.get_tensor_spec().tile();
+    auto in1_tile = in1.get_tensor_spec().tile();
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
     auto in1_tile_shape = in1_tile.get_tile_shape();
@@ -296,7 +296,7 @@ operation::ProgramWithCallbacks create_program(
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
@@ -498,8 +498,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     bool untilize_out) {
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
-    auto in0_tile_shape = a.get_tile().get_tile_shape();
-    auto in1_tile_shape = b.get_tile().get_tile_shape();
+    auto in0_tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tensor_spec().tile().get_tile_shape();
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),

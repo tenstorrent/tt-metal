@@ -20,6 +20,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/host_api.hpp"
 
+using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
@@ -258,6 +259,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     auto pyCoreRangeSet = static_cast<py::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+        .def(py::init<>([](const std::vector<CoreRange>& core_ranges) { return CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges)); }))
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,

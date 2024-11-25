@@ -126,7 +126,7 @@ void generate_receiver_worker_kernels(
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode
 ) {
     // Just want a dummy DF
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     tt::DataFormat df = page_size == 1024 ? tt::DataFormat::Bfp8 :
                         page_size == 2048 ? tt::DataFormat::Float16 :
                                                          tt::DataFormat::Float32;
@@ -248,7 +248,7 @@ void generate_sender_worker_kernels(
         (uint32_t)device->ethernet_core_from_logical_core(edm_core).y,
         num_buffers_per_edm_channel
     };
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     log_info(tt::LogTest, "\tSenderWriter CT Args");
     for (auto const& arg : sender_worker_writer_compile_args) {
         log_info(tt::LogTest, "\t\t{}", arg);

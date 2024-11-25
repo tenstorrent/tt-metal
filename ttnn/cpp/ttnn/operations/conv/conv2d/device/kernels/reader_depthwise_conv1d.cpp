@@ -68,7 +68,7 @@ void kernel_main() {
     #endif
 
     // LOOP TO FILL READER INDICES
-    constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
+    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t reader_idx = 0;

@@ -51,15 +51,15 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 2},                                                                  // output
-            {tt::CB::c_in1, 2},                                                                  // output_grad
-            {tt::CB::c_in2, 1},                                                                  // scaler
-            {tt::CB::c_in3, 1},                                                                  // mask
-            {tt::CB::c_out0, 2},                                                                 // input_grad
-            {tt::CB::c_intermed0, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
-            {tt::CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
-            {tt::CB::c_intermed3,
+            {tt::CBIndex::c_0, 2},                                                                  // output
+            {tt::CBIndex::c_1, 2},                                                                  // output_grad
+            {tt::CBIndex::c_2, 1},                                                                  // scaler
+            {tt::CBIndex::c_3, 1},                                                                  // mask
+            {tt::CBIndex::c_16, 2},                                                                 // input_grad
+            {tt::CBIndex::c_24, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
+            {tt::CBIndex::c_27,
              2,
              fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // add(output * output_grad)
         });

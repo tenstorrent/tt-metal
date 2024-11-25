@@ -39,7 +39,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     Program program = Program();
 
     // Create circular buffer
-    auto cb_index = tt::CB::c_intermed0;
+    auto cb_index = tt::CBIndex::c_24;
     CreateCircularBuffer(
         program,
         all_cores,

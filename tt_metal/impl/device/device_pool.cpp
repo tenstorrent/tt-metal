@@ -7,6 +7,8 @@
 #include <numa.h>
 
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/debug/noc_logging.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
 
 using namespace tt::tt_metal;
@@ -179,19 +181,19 @@ void DevicePool::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     DispatchCoreType dispatch_core_type,
-    const std::vector<uint32_t> &l1_bank_remap) noexcept {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
 
     if (_inst == nullptr) {
-        static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
+        static DevicePool device_pool{};
         _inst = &device_pool;
     }
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
     _inst->num_hw_cqs = num_hw_cqs;
-    _inst->l1_bank_remap = l1_bank_remap;
+    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
     // Track the thread where the Device Pool was created. Certain functions
     // modifying the state of this instance, for example those responsible for
     // (un)registering worker threads, can only be called in the creation thread
@@ -388,12 +390,7 @@ void DevicePool::init_firmware_on_active_devices() const {
     }
 }
 
-DevicePool::DevicePool(
-    const std::vector<chip_id_t>& device_ids,
-    const uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const std::vector<uint32_t>& l1_bank_remap) {
+DevicePool::DevicePool() {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);

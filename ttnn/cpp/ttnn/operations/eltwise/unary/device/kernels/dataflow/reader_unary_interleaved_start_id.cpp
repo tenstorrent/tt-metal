@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-//#include "debug/dprint.h"
-
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);

@@ -10,6 +10,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::reduction::detail {
 
 using namespace tt::constants;
@@ -38,7 +40,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     const uint32_t H = input_shape[2];
     const uint32_t W = input_shape[3];
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_unit_size = round_up_to_mul32(num_input_units * input_unit_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -46,7 +48,7 @@ operation::ProgramWithCallbacks argmax_single_core(
             .set_page_size(src0_cb_index, aligned_input_unit_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t intermed0_cb_index = tt::CB::c_intermed0;
+    uint32_t intermed0_cb_index = tt::CBIndex::c_24;
     uint32_t num_intermed0_units = B*C*H;
     uint32_t aligned_intermed0_unit_size = num_intermed0_units * output_unit_size;
     tt::tt_metal::CircularBufferConfig intermed0_cb_config =
@@ -137,7 +139,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const uint32_t H = input_shape[2];
     const uint32_t W = input_shape[3];
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_unit_size = round_up_to_mul32(num_input_units * input_unit_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -145,7 +147,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .set_page_size(src0_cb_index, aligned_input_unit_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t intermed0_cb_index = tt::CB::c_intermed0;
+    uint32_t intermed0_cb_index = tt::CBIndex::c_24;
     uint32_t num_intermed0_units = B*C*H;
     uint32_t aligned_intermed0_unit_size = num_intermed0_units * output_unit_size;
     tt::tt_metal::CircularBufferConfig intermed0_cb_config =
@@ -154,7 +156,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .set_page_size(intermed0_cb_index, aligned_intermed0_unit_size);  /// page size shouldn't matter here
     auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, intermed0_cb_config);
 
-    uint32_t intermed1_cb_index = tt::CB::dataflow0;
+    uint32_t intermed1_cb_index = tt::CBIndex::c_8;
     uint32_t num_intermed1_units = B*C*H;
     uint32_t aligned_intermed1_unit_size = round_up_to_mul32(num_intermed1_units * input_unit_size);
     tt::tt_metal::CircularBufferConfig intermed1_cb_config =
@@ -163,7 +165,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .set_page_size(intermed1_cb_index, aligned_intermed1_unit_size);  /// page size shouldn't matter here
     auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, intermed1_cb_config);
 
-    uint32_t out0_cb_index = tt::CB::c_out0;
+    uint32_t out0_cb_index = tt::CBIndex::c_16;
     uint32_t num_out0_units = B*C*H;
     uint32_t aligned_out0_unit_size = num_out0_units * output_unit_size;
     tt::tt_metal::CircularBufferConfig out0_cb_config =

@@ -793,7 +793,7 @@ void detail::Program_::init_semaphores(const Device &device, const CoreCoord &lo
         llrt::write_hex_vec_to_core(
             device.id(),
             device.physical_core_from_logical_core(logical_core, core_type),
-            {semaphore.get().initial_value()},
+            std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
 }
@@ -842,7 +842,7 @@ void detail::Program_::set_cb_data_fmt(Device *device, const std::vector<CoreRan
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
                 build_options.set_cb_dataformat_all_cores(
-                    static_cast<CB>(buffer_index), circular_buffer->data_format(buffer_index));
+                    static_cast<CBIndex>(buffer_index), circular_buffer->data_format(buffer_index));
             }
         }
     }
@@ -857,7 +857,7 @@ void detail::Program_::set_cb_tile_dims(Device *device, const std::vector<CoreRa
                 auto tile = circular_buffer->tile(buffer_index);
                 if (tile.has_value()) {
                     build_options.set_cb_tile_dims_all_cores(
-                        static_cast<CB>(buffer_index),
+                        static_cast<CBIndex>(buffer_index),
                         tile->get_num_faces(),
                         tile->get_partial_face(),
                         tile->get_face_shape()[0],
@@ -865,12 +865,12 @@ void detail::Program_::set_cb_tile_dims(Device *device, const std::vector<CoreRa
                         tile->get_tile_shape()[0],
                         tile->get_tile_shape()[1]);
                     build_options.set_cb_tile_size_all_cores(
-                        static_cast<CB>(buffer_index),
+                        static_cast<CBIndex>(buffer_index),
                         tile->get_tile_size(circular_buffer->data_format(buffer_index)));
                 } else {
                     Tile t;
                     build_options.set_cb_tile_size_all_cores(
-                        static_cast<CB>(buffer_index),
+                        static_cast<CBIndex>(buffer_index),
                         t.get_tile_size(circular_buffer->data_format(buffer_index)));
                 }
 

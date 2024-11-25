@@ -197,7 +197,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
     // Read any error codes and handle accordingly
-    enum CB cb = static_cast<enum CB>(ts->cb_id);
+    enum CBIndex cb = static_cast<enum CBIndex>(ts->cb_id);
     switch (ts->return_code) {
         case DPrintOK:
             break; // Continue to print the tile slice
@@ -376,6 +376,20 @@ void WriteInitMagic(Device *device, const CoreCoord& phys_core, int hart_id, boo
     std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, base_addr);
+
+    // Prevent race conditions during runtime by waiting until the init value is actually written
+    // DPrint is only used for debug purposes so this delay should not be a big issue.
+    // 1. host will read remote and think the wpos is 0. so it'll go and poll the data
+    // 2. the packet will arrive to set the wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC
+    // 3. the actual host polling function will read wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC
+    // 4. now we will access wpos at the starting magic which is incorrect
+    uint32_t num_tries = 100000;
+    while (num_tries-- > 0) {
+        auto result = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, 4);
+        if (result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) return;
+        else if (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled) return;
+    }
+    TT_THROW("Timed out writing init magic");
 } // WriteInitMagic
 
 // Checks if our magic value was cleared by the device code
@@ -386,9 +400,8 @@ bool CheckInitMagicCleared(Device *device, const CoreCoord& phys_core, int hart_
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetDprintBufAddr(device, phys_core, hart_id);
 
-    std::vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
     auto result = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, 4);
-    return (result[0] != initbuf[0]);
+    return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
 } // CheckInitMagicCleared
 
 DebugPrintServerContext::DebugPrintServerContext() {
@@ -953,7 +966,8 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     }
                 break;
                 default:
-                    TT_THROW("Unexpected debug print type code");
+                    TT_THROW("Unexpected debug print type wpos {:#x} rpos {:#x} code {} chip {} phy {}, {}",
+                        wpos, rpos, (uint32_t)code, chip_id, phys_core.x, phys_core.y);
             }
 
             // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves

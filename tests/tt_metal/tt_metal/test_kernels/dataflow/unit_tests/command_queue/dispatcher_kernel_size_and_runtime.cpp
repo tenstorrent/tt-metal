@@ -5,7 +5,6 @@
 #include <cstdint>
 
 #include "c_tensix_core.h"
-#include "circular_buffer.h"
 #include "core_config.h"
 #include "dataflow_api.h"
 #include "debug/dprint.h"

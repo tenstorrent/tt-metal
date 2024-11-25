@@ -7,6 +7,8 @@
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_adam {
 std::vector<std::optional<Tensor>> MorehAdam::invoke(
     const Tensor& param_in,

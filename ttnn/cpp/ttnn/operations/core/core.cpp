@@ -73,15 +73,12 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& tensor, MeshDevice* mesh_device, const std::optional<MemoryConfig>& memory_config) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     // Currently no direct sharded write support in BLACKHOLE due to alignment issue
-    if(mem_config.is_sharded ()  and (mesh_device->arch() == tt::ARCH::BLACKHOLE)) {
-        auto interleaved_tensor =  tensor.to(mesh_device, ttnn::DRAM_MEMORY_CONFIG);
+    if (mem_config.is_sharded() and (mesh_device->arch() == tt::ARCH::BLACKHOLE)) {
+        auto interleaved_tensor = tensor.to(mesh_device, ttnn::DRAM_MEMORY_CONFIG);
         return ttnn::interleaved_to_sharded(ttnn::DefaultQueueId, interleaved_tensor, mem_config, std::nullopt);
-    }
-    else {
+    } else {
         return tensor.to(mesh_device, mem_config);
     }
-
-
 }
 
 ttnn::Tensor allocate_tensor_on_device(

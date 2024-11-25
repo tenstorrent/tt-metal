@@ -12,6 +12,8 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::sliding_window {
 
 owned_buffer::Buffer<bfloat16> ref_conv_op(

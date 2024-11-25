@@ -108,12 +108,13 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
     const auto input_rank = tensor_args.input.get_legacy_shape().rank();
+    auto INF = std::numeric_limits<float>::infinity();
     if (dim == input_rank - 1)
-        return ProgramFactoryW{};
+        return ProgramFactoryWOther{};
     else if (dim == input_rank - 2)
-        return ProgramFactoryH{};
+        return ProgramFactoryHOther{};
     else
-        return ProgramFactoryOther{};
+        return ProgramFactoryNCOther{};
 }
 
 void MorehNormOperation::validate_on_program_cache_miss(

@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement{
 

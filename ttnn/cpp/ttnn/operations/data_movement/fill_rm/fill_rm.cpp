@@ -8,6 +8,8 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/constants.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement{
 
 ttnn::Tensor FillRMOperation::invoke(uint8_t queue_id, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const ttnn::Tensor& any, float val_hi, float val_lo, const std::optional<ttnn::MemoryConfig>& memory_config) {

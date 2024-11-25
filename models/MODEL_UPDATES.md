@@ -4,6 +4,14 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## November 18, 2024
+
+### [Llama 3.2 - 1B/3B/11B](demos/llama3)
+- Created a new shared codebase for the Llama3 family of models, with newly added support for Llama3.2-1B/3B/11B.
+
+### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)
+- Added support for the `ttnn.experimental.rotary_embedding_llama` op in decode mode, eliminating unnecessary device transfers of rotation matrices.
+
 ## October 21, 2024
 
 ### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)

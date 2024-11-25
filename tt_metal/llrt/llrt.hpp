@@ -62,12 +62,24 @@ ll_api::memory get_risc_binary(string const &path,
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
+template<typename DType>
 void write_hex_vec_to_core(
     chip_id_t chip,
     const CoreCoord &core,
-    const std::vector<uint32_t> &hex_vec,
+    const std::vector<DType>& hex_vec,
     uint64_t addr,
-    bool small_access = false);
+    bool small_access = false) {
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+}
+template<typename DType>
+void write_hex_vec_to_core(
+    chip_id_t chip,
+    const CoreCoord &core,
+    tt::stl::Span<const DType> hex_vec,
+    uint64_t addr,
+    bool small_access = false) {
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+}
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
@@ -107,24 +119,6 @@ void wait_until_cores_done(
     chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms = 0);
 
 }  // namespace internal_
-
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
-    uint64_t relo_addr;
-    if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-        // Move addresses in the local memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-    }
-#ifdef NCRISC_HAS_IRAM
-    else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-        // Move addresses in the trisc memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
-    }
-#endif
-    else {
-        relo_addr = addr;
-    }
-    return relo_addr;
-}
 
 }  // namespace llrt
 

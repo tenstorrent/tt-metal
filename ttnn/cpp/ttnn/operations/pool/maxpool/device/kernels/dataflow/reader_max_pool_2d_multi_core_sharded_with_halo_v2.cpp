@@ -65,10 +65,10 @@ void kernel_main() {
 
     constexpr uint32_t TILE_WIDTH = 32;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
-    constexpr uint32_t in_shard_cb_id = tt::CB::c_in2;    // local input shard
-    constexpr uint32_t in_reader_indices_cb_id = tt::CB::c_in3;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
+    constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;    // local input shard
+    constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
 
     constexpr uint32_t ROW_HW = 64;
 

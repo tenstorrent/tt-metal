@@ -51,8 +51,37 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
     return grad_tensor;
 }
 
+std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
+    const Tensor& grad, const Tensor& input, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
+    if (!max.has_value()) {
+        Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
+        Tensor in_grad = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(in_grad);
+        return grad_tensor;
+    }else if(!min.has_value()) {
+        Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
+        Tensor in_grad = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(in_grad);
+        return grad_tensor;
+    }
+    Tensor minT = ttnn::le(input, min.value(), std::nullopt, output_memory_config);
+    Tensor maxT = ttnn::ge(input, max.value(), std::nullopt, output_memory_config);
+    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
+    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
     const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryBackwardClamp::invoke(grad, input, min, max, output_mem_config);
+}
+
+std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
+    const Tensor& grad, const Tensor& input, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
     return ExecuteUnaryBackwardClamp::invoke(grad, input, min, max, output_mem_config);
 }
 
@@ -106,12 +135,12 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftplus::invoke(
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<string> round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
-    if (round_mode == "None") {
+    if (round_mode == std::nullopt) {
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(ttnn::neg(grad, output_mem_config),

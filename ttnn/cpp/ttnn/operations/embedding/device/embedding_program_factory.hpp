@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             buffering * num_tiles_per_block * output_single_tile_size, {{output_cb_index, output_cb_data_format}})

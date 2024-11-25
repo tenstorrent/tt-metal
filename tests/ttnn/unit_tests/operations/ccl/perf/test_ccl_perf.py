@@ -141,7 +141,7 @@ def test_all_gather_on_t3000(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT),
@@ -171,7 +171,7 @@ def test_reduce_scatter_on_t3000(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -187,7 +187,7 @@ def test_reduce_scatter_on_t3000(
         t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,
@@ -210,7 +210,7 @@ def test_reduce_scatter_on_t3000(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT),
@@ -239,7 +239,7 @@ def test_reduce_scatter_on_n300(
     n300_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -254,7 +254,7 @@ def test_reduce_scatter_on_n300(
         n300_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,

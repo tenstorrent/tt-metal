@@ -141,6 +141,7 @@ class TtMixtralAttention(LightweightModule):
         )
 
         self.compute_kernel = self.model_args.get_compute_kernel_config()
+        self.compute_kernel_reduce = self.model_args.get_compute_kernel_config_reduce()
         self.compute_kernel_attn = self.model_args.get_compute_kernel_attn_config()
 
         self.core_grid = self.model_args.max_grid_size
@@ -274,7 +275,10 @@ class TtMixtralAttention(LightweightModule):
         dense_outputs_11BH = ttnn.all_gather(dense_out_11BH, dim=2, num_links=1)
 
         # return the sum of the outputs
-        dense_outputs_11BH = ttnn.matmul(self.reduce_mask, dense_outputs_11BH)
+
+        dense_outputs_11BH = ttnn.matmul(
+            self.reduce_mask, dense_outputs_11BH, compute_kernel_config=self.compute_kernel_reduce
+        )
         return dense_outputs_11BH
 
     def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):

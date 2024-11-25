@@ -125,7 +125,7 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(matmul_fused_op_signaler.num_fused_op_cores_to_signal)
     };
 
-    uint32_t cb_id_in0 = tt::CB::c_in0;
+    uint32_t cb_id_in0 = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_in0_config =
         tt::tt_metal::CircularBufferConfig(
             page_size * datacopy_buffer_size, {{cb_id_in0, cb_data_format}})

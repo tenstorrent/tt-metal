@@ -15,6 +15,7 @@
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 
 namespace ttnn::operations::downsample::detail {
@@ -431,7 +432,7 @@ operation::ProgramWithCallbacks downsample_single_core(
     TT_ASSERT(output_shard_height % TILE_HEIGHT == 0);
     uint32_t num_rows_of_output_tiles = output_shard_height / TILE_HEIGHT;
 
-    uint32_t input_cb_index = tt::CB::c_in0;
+    uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_input_tiles_in_row * num_rows_of_input_tiles;
     tt::tt_metal::CircularBufferConfig input_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -449,7 +450,7 @@ operation::ProgramWithCallbacks downsample_single_core(
 
     // CB to store halo data
     // hardcode to store 1 row of tiles
-    uint32_t halo_prev_input_cb_index = tt::CB::c_in1;
+    uint32_t halo_prev_input_cb_index = tt::CBIndex::c_1;
     uint32_t halo_prev_input_cb_max_rows_of_tiles = 4;
     uint32_t num_halo_prev_cb_input_tiles = num_input_tiles_in_row * halo_prev_input_cb_max_rows_of_tiles;
     tt::tt_metal::CircularBufferConfig halo_prev_input_cb_config =
@@ -465,7 +466,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_halo_prev_cb_input_tiles,
         input_single_tile_size * num_halo_prev_cb_input_tiles);
 
-    uint32_t halo_next_input_cb_index = tt::CB::c_in2;
+    uint32_t halo_next_input_cb_index = tt::CBIndex::c_2;
     uint32_t halo_next_input_cb_max_rows_of_tiles = 33;  // TODO: Remove hardcoding
     uint32_t num_halo_next_cb_input_tiles = num_input_tiles_in_row * halo_next_input_cb_max_rows_of_tiles;
     tt::tt_metal::CircularBufferConfig halo_next_input_cb_config =
@@ -484,7 +485,7 @@ operation::ProgramWithCallbacks downsample_single_core(
     // CB to store reader pattern array
     // read pattern array size == output_height
     uint32_t reader_pattern_array_size = output_shard_height;
-    uint32_t reader_pattern_array_cb_index = tt::CB::c_intermed1;
+    uint32_t reader_pattern_array_cb_index = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig reader_pattern_array_cb_config =
         tt::tt_metal::CircularBufferConfig(
             reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, tt::DataFormat::Float16_b}})
@@ -499,7 +500,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         4 * reader_pattern_array_size);
 
     // untilized CB has size - [32, full width]
-    uint32_t untilize_cb_index = tt::CB::c_intermed2;
+    uint32_t untilize_cb_index = tt::CBIndex::c_26;
     uint32_t num_tiles_untilize_cb = num_input_tiles_in_row;
     tt::tt_metal::CircularBufferConfig untilize_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -515,7 +516,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         untilized_single_tile_size * num_tiles_untilize_cb);
 
     uint32_t num_output_tiles = num_output_tiles_in_row * num_rows_of_output_tiles;
-    uint32_t untilize_downsampled_cb_index = tt::CB::c_intermed3;
+    uint32_t untilize_downsampled_cb_index = tt::CBIndex::c_27;
     uint32_t num_tiles_untilize_downsampled_cb =
         num_output_tiles;  // untilize downsampled cb size == output size per core
     tt::tt_metal::CircularBufferConfig untilize_downsampled_cb_config =
@@ -532,7 +533,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_tiles_untilize_downsampled_cb,
         untilized_single_tile_size * num_tiles_untilize_downsampled_cb);
 
-    uint32_t final_tilize_output_cb_index = tt::CB::c_out0;
+    uint32_t final_tilize_output_cb_index = tt::CBIndex::c_16;
     uint32_t num_tiles_final_tilize_output_cb = num_output_tiles;  // final output cb size == output size per core
     tt::tt_metal::CircularBufferConfig final_tilize_output_cb_config =
         tt::tt_metal::CircularBufferConfig(

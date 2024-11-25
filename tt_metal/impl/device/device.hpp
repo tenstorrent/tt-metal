@@ -72,7 +72,7 @@ class Device {
         const uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
-        const std::vector<uint32_t> &l1_bank_remap = {},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_core = 0,
         uint32_t completion_queue_reader_core = 0);
@@ -253,9 +253,9 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
+    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false);
     void initialize_cluster();
-    std::unique_ptr<Allocator> initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
+    std::unique_ptr<Allocator> initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
     void initialize_build();
     void initialize_device_kernel_defines();
     void build_firmware();
@@ -383,7 +383,7 @@ class Device {
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
     const std::vector<SubDeviceId> &get_sub_device_ids() const;
    private:
-    void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap);
+    void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
     SubDeviceManagerId get_next_sub_device_manager_id();
     void reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager>& sub_device_manager);
     void MarkAllocationsUnsafe();
