@@ -44,9 +44,9 @@ class CommandQueueFixture : public DispatchFixture {
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const chip_id_t device_id = 0;
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
         this->device_ =
-            tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
+            tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
     }
 };
 
@@ -90,10 +90,10 @@ class CommandQueueSingleCardFixture : virtual public DispatchFixture {
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
         const chip_id_t mmio_device_id = 0;
         this->reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
+            {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         if (enable_remote_chip) {
             for (const auto &[id, device] : this->reserved_devices_) {
@@ -144,8 +144,8 @@ class CommandQueueMultiDeviceFixture : public DispatchFixture {
             chip_ids.push_back(id);
         }
 
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         for (const auto &[id, device] : reserved_devices_) {
             devices_.push_back(device);
         }

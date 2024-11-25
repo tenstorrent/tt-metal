@@ -40,8 +40,8 @@ class N300DeviceFixture : public MultiDeviceFixture {
                 ids.push_back(id);
             }
 
-            const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+            const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {
             GTEST_SKIP();
