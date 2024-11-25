@@ -179,7 +179,6 @@ on:
           - eltwise.unary.mish.mish
           - eltwise.unary.mish.mish_sharded
           - eltwise.unary.multigammaln.multigammaln
-          - eltwise.unary.multigammaln.multigammaln_sharded
           - eltwise.unary.isfinite.isfinite
           - eltwise.unary.isfinite.isfinite_sharded
           - eltwise.unary.isinf.isinf
