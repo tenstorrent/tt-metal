@@ -174,9 +174,13 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         1,                          // NC
     };
 
+    std::string compute_kernel_path;
+    if(out_sharded) compute_kernel_path = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp";
+    else compute_kernel_path = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h_interleaved.cpp";
+
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+        compute_kernel_path,
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -193,7 +197,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+            compute_kernel_path,
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

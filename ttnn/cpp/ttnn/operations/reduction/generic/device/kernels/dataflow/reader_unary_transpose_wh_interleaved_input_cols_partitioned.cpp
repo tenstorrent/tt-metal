@@ -36,23 +36,40 @@ void kernel_main() {
 
     uint32_t w = curr_col_in_batch;
 
-    // this reader will read a NHW tensor in NWH order
-    for (uint32_t i = 0; i < num_cols; i++) {
+    uint32_t row_chunk = 8;
+    for (uint32_t i = 0; i < num_cols; i += row_chunk) {
+        uint32_t chunk_end = std::min(i + row_chunk, num_cols);
         uint32_t curr_id = col_start_tile_id;
-        for (uint32_t j = 0; j < Ht; j++) {
-            cb_reserve_back(cb_id_in0, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(curr_id, s, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
-            curr_id += Wt;  // stride in H
-        }
-        w++;
-        if (w == Wt) {
-            col_start_tile_id = curr_id - Wt + 1;
-            w = 0;
-        } else {
-            col_start_tile_id++;
+        uint32_t reset_curr_id = curr_id;
+        uint32_t reset_w = w;
+        uint32_t reset_col_start = col_start_tile_id;
+
+        // row wise read for a chunk of columns(max 8)
+        for (uint32_t j = 0; j < Ht; ++j) {
+            w = reset_w;
+            col_start_tile_id = reset_col_start;
+            for (uint32_t k = i; k < chunk_end; ++k) {
+
+
+                cb_reserve_back(cb_id_in0, onetile);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                noc_async_read_tile(curr_id, s, l1_write_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, onetile);
+
+                ++w;
+
+                if (w == Wt) {
+                    col_start_tile_id = curr_id + (Ht - j - 1) * Wt  + 1;
+                    curr_id = col_start_tile_id + j*Wt;
+                    w = 0;
+                }
+                else {
+                    ++curr_id;
+                    ++col_start_tile_id;
+                }
+            }
+            curr_id = reset_curr_id + (j+1) * Wt; // stride in H
         }
     }
 }
