@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// clang-format off
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
-// clang-format on
+#include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
 packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
 packet_output_queue_state_t output_queues[MAX_TUNNEL_LANES];
@@ -180,7 +179,58 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
-#define SWITCH_THRESHOLD 16
+constexpr uint32_t vc_eth_tunneler_input_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(48),
+    get_compile_time_arg_val(49),
+    get_compile_time_arg_val(50),
+    get_compile_time_arg_val(51),
+    get_compile_time_arg_val(52),
+    get_compile_time_arg_val(53),
+    get_compile_time_arg_val(54),
+    get_compile_time_arg_val(55),
+    get_compile_time_arg_val(56),
+    get_compile_time_arg_val(57),
+};
+
+constexpr uint32_t vc_eth_tunneler_input_remote_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(58),
+    get_compile_time_arg_val(59),
+    get_compile_time_arg_val(60),
+    get_compile_time_arg_val(61),
+    get_compile_time_arg_val(62),
+    get_compile_time_arg_val(63),
+    get_compile_time_arg_val(64),
+    get_compile_time_arg_val(65),
+    get_compile_time_arg_val(66),
+    get_compile_time_arg_val(67),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(68),
+    get_compile_time_arg_val(69),
+    get_compile_time_arg_val(70),
+    get_compile_time_arg_val(71),
+    get_compile_time_arg_val(72),
+    get_compile_time_arg_val(73),
+    get_compile_time_arg_val(74),
+    get_compile_time_arg_val(75),
+    get_compile_time_arg_val(76),
+    get_compile_time_arg_val(77),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_remote_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(78),
+    get_compile_time_arg_val(79),
+    get_compile_time_arg_val(80),
+    get_compile_time_arg_val(81),
+    get_compile_time_arg_val(82),
+    get_compile_time_arg_val(83),
+    get_compile_time_arg_val(84),
+    get_compile_time_arg_val(85),
+    get_compile_time_arg_val(86),
+    get_compile_time_arg_val(87),
+};
+
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -199,10 +249,10 @@ void kernel_main() {
             remote_sender_x[i],
             remote_sender_y[i],
             remote_sender_queue_id[i],
-            remote_sender_network_type[i]);
-    }
+            remote_sender_network_type[i],
+            vc_eth_tunneler_input_scratch_buffers[i],
+            vc_eth_tunneler_input_remote_scratch_buffers[i]);
 
-    for (uint32_t i = 0; i < tunnel_lanes; i++) {
         output_queues[i].init(
             i + tunnel_lanes, //MAX_TUNNEL_LANES,
             remote_receiver_queue_start_addr_words[i],
@@ -212,7 +262,9 @@ void kernel_main() {
             remote_receiver_queue_id[i],
             remote_receiver_network_type[i],
             &input_queues[i],
-            1);
+            1,
+            vc_eth_tunneler_output_scratch_buffers[i],
+            vc_eth_tunneler_output_remote_scratch_buffers[i]);
     }
 
     if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
@@ -227,11 +279,24 @@ void kernel_main() {
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
     uint32_t switch_counter = 0;
+    uint32_t heartbeat = 0;
     while (!all_outputs_finished) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
         switch_counter++;
-        all_outputs_finished = switch_counter >= SWITCH_THRESHOLD;
+        all_outputs_finished = switch_counter >= PACKET_QUEUE_ETH_SWITCH_LOOPS;
         for (uint32_t i = 0; i < tunnel_lanes; i++) {
+            input_queues[i].handle_recv();
+            output_queues[i].handle_recv();
+
+            // No progress will be made when either of the queues are waiting
+            // If we are waiting too long, no progress will be made, and
+            // the while loop will exit
+            if (input_queues[i].queue_is_waiting() || output_queues[i].queue_is_waiting()) {
+                all_outputs_finished = false;
+                continue;
+            }
+
             if (input_queues[i].get_curr_packet_valid()) {
                 bool full_packet_sent;
                 uint32_t words_sent =
@@ -243,7 +308,7 @@ void kernel_main() {
                 }
             }
             output_queues[i].prev_words_in_flight_check_flush();
-            if (switch_counter >= SWITCH_THRESHOLD) {
+            if (switch_counter >= PACKET_QUEUE_ETH_SWITCH_LOOPS) {
                 bool output_finished = output_queues[i].is_remote_finished();
                 if (output_finished) {
                     uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
@@ -264,9 +329,9 @@ void kernel_main() {
         }
         // need to optimize this.
         // context switch to base fw is very costly.
-        if (switch_counter >= SWITCH_THRESHOLD) {
+        if (switch_counter >= PACKET_QUEUE_ETH_SWITCH_LOOPS) {
             internal_::risc_context_switch();
-            switch_counter = SWITCH_THRESHOLD;
+            switch_counter = PACKET_QUEUE_ETH_SWITCH_LOOPS;
         }
 
     }

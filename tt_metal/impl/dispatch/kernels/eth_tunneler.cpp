@@ -2,16 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// clang-format off
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
-// clang-format on
+#include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
-#define NUM_BIDIR_TUNNELS 1
-#define NUM_TUNNEL_QUEUES (NUM_BIDIR_TUNNELS * 2)
-
-packet_input_queue_state_t input_queues[NUM_TUNNEL_QUEUES];
-packet_output_queue_state_t output_queues[NUM_TUNNEL_QUEUES];
+packet_input_queue_state_t input_queues[NUM_TUNNEL_QUEUES_BIDIR];
+packet_output_queue_state_t output_queues[NUM_TUNNEL_QUEUES_BIDIR];
 
 constexpr uint32_t endpoint_id_start_index = get_compile_time_arg_val(0);
 constexpr uint32_t tunnel_lanes = get_compile_time_arg_val(1);
@@ -19,26 +15,26 @@ constexpr uint32_t in_queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t in_queue_size_words = get_compile_time_arg_val(3);
 constexpr uint32_t in_queue_size_bytes = in_queue_size_words * PACKET_WORD_SIZE_BYTES;
 static_assert(is_power_of_2(in_queue_size_words), "in_queue_size_words must be a power of 2");
-static_assert(tunnel_lanes <= NUM_TUNNEL_QUEUES, "cannot have more than 2 tunnel directions.");
+static_assert(tunnel_lanes <= NUM_TUNNEL_QUEUES_BIDIR, "cannot have more than 2 tunnel directions.");
 static_assert(tunnel_lanes, "tunnel directions cannot be 0. 1 => Unidirectional. 2 => Bidirectional");
 
-constexpr uint32_t remote_receiver_x[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_receiver_x[NUM_TUNNEL_QUEUES_BIDIR] = {
     (get_compile_time_arg_val(4) & 0xFF), (get_compile_time_arg_val(5) & 0xFF)};
 
-constexpr uint32_t remote_receiver_y[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_receiver_y[NUM_TUNNEL_QUEUES_BIDIR] = {
     (get_compile_time_arg_val(4) >> 8) & 0xFF, (get_compile_time_arg_val(5) >> 8) & 0xFF};
 
-constexpr uint32_t remote_receiver_queue_id[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_receiver_queue_id[NUM_TUNNEL_QUEUES_BIDIR] = {
     (get_compile_time_arg_val(4) >> 16) & 0xFF, (get_compile_time_arg_val(5) >> 16) & 0xFF};
 
-constexpr DispatchRemoteNetworkType remote_receiver_network_type[NUM_TUNNEL_QUEUES] = {
+constexpr DispatchRemoteNetworkType remote_receiver_network_type[NUM_TUNNEL_QUEUES_BIDIR] = {
     static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(4) >> 24) & 0xFF),
     static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(5) >> 24) & 0xFF)};
 
-constexpr uint32_t remote_receiver_queue_start_addr_words[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_receiver_queue_start_addr_words[NUM_TUNNEL_QUEUES_BIDIR] = {
     get_compile_time_arg_val(6), get_compile_time_arg_val(8)};
 
-constexpr uint32_t remote_receiver_queue_size_words[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_receiver_queue_size_words[NUM_TUNNEL_QUEUES_BIDIR] = {
     get_compile_time_arg_val(7), get_compile_time_arg_val(9)};
 
 static_assert(
@@ -46,16 +42,16 @@ static_assert(
 static_assert(
     is_power_of_2(remote_receiver_queue_size_words[1]), "remote_receiver_queue_size_words must be a power of 2");
 
-constexpr uint32_t remote_sender_x[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_sender_x[NUM_TUNNEL_QUEUES_BIDIR] = {
     (get_compile_time_arg_val(10) & 0xFF), (get_compile_time_arg_val(11) & 0xFF)};
 
-constexpr uint32_t remote_sender_y[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_sender_y[NUM_TUNNEL_QUEUES_BIDIR] = {
     (get_compile_time_arg_val(10) >> 8) & 0xFF, (get_compile_time_arg_val(11) >> 8) & 0xFF};
 
-constexpr uint32_t remote_sender_queue_id[NUM_TUNNEL_QUEUES] = {
+constexpr uint32_t remote_sender_queue_id[NUM_TUNNEL_QUEUES_BIDIR] = {
     (get_compile_time_arg_val(10) >> 16) & 0xFF, (get_compile_time_arg_val(11) >> 16) & 0xFF};
 
-constexpr DispatchRemoteNetworkType remote_sender_network_type[NUM_TUNNEL_QUEUES] = {
+constexpr DispatchRemoteNetworkType remote_sender_network_type[NUM_TUNNEL_QUEUES_BIDIR] = {
     static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(10) >> 24) & 0xFF),
     static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(11) >> 24) & 0xFF)};
 
@@ -67,6 +63,27 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(14);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(15);
+
+constexpr uint32_t eth_tunneler_input_scratch_buffers[NUM_TUNNEL_QUEUES_BIDIR] = {
+    get_compile_time_arg_val(16),
+    get_compile_time_arg_val(17)
+};
+
+constexpr uint32_t eth_tunneler_input_remote_scratch_buffers[NUM_TUNNEL_QUEUES_BIDIR] = {
+    get_compile_time_arg_val(18),
+    get_compile_time_arg_val(19)
+};
+
+constexpr uint32_t eth_tunneler_output_scratch_buffers[NUM_TUNNEL_QUEUES_BIDIR] = {
+    get_compile_time_arg_val(20),
+    get_compile_time_arg_val(21)
+};
+
+constexpr uint32_t eth_tunneler_output_remote_scratch_buffers[NUM_TUNNEL_QUEUES_BIDIR] = {
+    get_compile_time_arg_val(22),
+    get_compile_time_arg_val(23)
+};
+
 
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
@@ -86,12 +103,12 @@ void kernel_main() {
             remote_sender_x[i],
             remote_sender_y[i],
             remote_sender_queue_id[i],
-            remote_sender_network_type[i]);
-    }
+            remote_sender_network_type[i],
+            eth_tunneler_input_scratch_buffers[i],
+            eth_tunneler_input_remote_scratch_buffers[i]);
 
-    for (uint32_t i = 0; i < tunnel_lanes; i++) {
         output_queues[i].init(
-            i + NUM_TUNNEL_QUEUES,
+            i + NUM_TUNNEL_QUEUES_BIDIR,
             remote_receiver_queue_start_addr_words[i],
             remote_receiver_queue_size_words[i],
             remote_receiver_x[i],
@@ -99,14 +116,15 @@ void kernel_main() {
             remote_receiver_queue_id[i],
             remote_receiver_network_type[i],
             &input_queues[i],
-            1);
+            1,
+            eth_tunneler_output_scratch_buffers[i],
+            eth_tunneler_output_remote_scratch_buffers[i]);
     }
 
     if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
-
     write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
 
     bool timeout = false;
@@ -115,8 +133,12 @@ void kernel_main() {
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
     uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
+    uint32_t switch_counter = 0;
+    uint32_t heartbeat = 0;
     while (!all_outputs_finished && !timeout) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
+        switch_counter++;
         if (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
@@ -126,14 +148,22 @@ void kernel_main() {
         }
         all_outputs_finished = true;
         for (uint32_t i = 0; i < tunnel_lanes; i++) {
+            input_queues[i].handle_recv();
+            output_queues[i].handle_recv();
+
+            // No progress will be made when either of the queues are waiting
+            // If we are waiting too long, no progress will be made, and
+            // the while loop will exit
+            if (input_queues[i].queue_is_waiting() || output_queues[i].queue_is_waiting()) {
+                all_outputs_finished = false;
+                continue;
+            }
+
             if (input_queues[i].get_curr_packet_valid()) {
                 bool full_packet_sent;
                 uint32_t words_sent =
                     output_queues[i].forward_data_from_input(0, full_packet_sent, input_queues[i].get_end_of_cmd());
-                // data_words_sent += words_sent;
-                // if ((words_sent > 0) && (timeout_cycles > 0)) {
                 progress_timestamp = get_timestamp_32b();
-                //}
             }
             output_queues[i].prev_words_in_flight_check_flush();
             bool output_finished = output_queues[i].is_remote_finished();
@@ -152,9 +182,13 @@ void kernel_main() {
         if (launch_msg->kernel_config.exit_erisc_kernel) {
             return;
         }
+
         // need to optimize this.
         // context switch to base fw is very costly.
-        internal_::risc_context_switch();
+        if (switch_counter >= PACKET_QUEUE_ETH_SWITCH_LOOPS) {
+            internal_::risc_context_switch();
+            switch_counter = PACKET_QUEUE_ETH_SWITCH_LOOPS;
+        }
     }
 
     if (!timeout) {

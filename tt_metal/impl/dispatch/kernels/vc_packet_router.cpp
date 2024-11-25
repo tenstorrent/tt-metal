@@ -205,6 +205,40 @@ constexpr uint8_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
 
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
 packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
+constexpr uint32_t vc_packet_router_input_scratch_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(36),
+        get_compile_time_arg_val(37),
+        get_compile_time_arg_val(38),
+        get_compile_time_arg_val(39),
+    };
+
+constexpr uint32_t vc_packet_router_input_remote_scratch_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(40),
+        get_compile_time_arg_val(41),
+        get_compile_time_arg_val(42),
+        get_compile_time_arg_val(43),
+    };
+
+constexpr uint32_t vc_packet_router_output_scratch_buffers[MAX_SWITCH_FAN_OUT] =
+    {
+        get_compile_time_arg_val(44),
+        get_compile_time_arg_val(45),
+        get_compile_time_arg_val(46),
+        get_compile_time_arg_val(47),
+    };
+
+constexpr uint32_t vc_packet_router_output_remote_scratch_buffers[MAX_SWITCH_FAN_OUT] =
+    {
+        get_compile_time_arg_val(48),
+        get_compile_time_arg_val(49),
+        get_compile_time_arg_val(50),
+        get_compile_time_arg_val(51),
+    };
+
+packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
 
 void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
@@ -214,6 +248,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < router_lanes; i++) {
         input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
                         remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], remote_rx_network_type[i],
+                        vc_packet_router_input_scratch_buffers[i],
+                        vc_packet_router_input_remote_scratch_buffers[i],
                         input_packetize[i], input_packetize_log_page_size[i],
                         input_packetize_local_sem[i], input_packetize_upstream_sem[i],
                         input_packetize_src_endpoint[i], input_packetize_dest_endpoint[i]);
@@ -221,6 +257,8 @@ void kernel_main() {
         output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
                               &input_queues[i], 1,
+                              vc_packet_router_output_scratch_buffers[i],
+                              vc_packet_router_output_remote_scratch_buffers[i],
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);
