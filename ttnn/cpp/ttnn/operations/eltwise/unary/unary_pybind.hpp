@@ -903,25 +903,38 @@ template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-        Returns a copy of same tensor :attr:`input_tensor`; useful for profiling the SFPU.
+        Returns a copy of the same tensor :attr:`input_tensor`; useful for profiling the SFPU.
         This shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.float16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
         ttnn::identity.base_name(),
@@ -947,21 +960,21 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_power(py::module& module, const unary_operation_t& operation, const std::string& supported_dtype="BFLOAT16", const std::string& info_doc = "") {
+void bind_power(py::module& module, const unary_operation_t& operation, const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             exponent (float, int): the exponent value.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -976,20 +989,20 @@ void bind_power(py::module& module, const unary_operation_t& operation, const st
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - {2}
+               * - BFLOAT16, BFLOAT8_B
                  - TILE
                  - 2, 3, 4
 
-            {3}
+            {2}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> exponent = 2
             >>> output = {1}(tensor, exponent)
         )doc",
         ttnn::pow.base_name(),
         ttnn::pow.python_fully_qualified_name(),
-        supported_dtype,
-        info_doc);
+        note);
 
     bind_registered_operation(
         module,
@@ -1771,28 +1784,45 @@ void bind_unary_operation_with_diag(py::module& module, const unary_operation_t&
 template <typename unary_operation_t>
 void bind_dropout(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, seed: uint32_t, probability: float, scale: float, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        .. math::
+            \verb|{0}|(\\mathrm{{input\\_tensor}}_i)
 
-            Args:
-                * :attr:`input_tensor`
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                * :attr:`seed` (uint32_t): seed used for RNG
-                * :attr:`probability` (float): Dropout probability. In average total_elems * probability elements will be zero out.
-                * :attr:`scale` (float): Scales output tensor. In general scale == 1.0/(1.0-probability)
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Keyword Args:
+            seed (uint32_t): seed used for RNG.
+            probability (float): Dropout probability. In average total_elems * probability elements will be zero out.
+            scale (float): Scales output tensor. In general scale == 1.0/(1.0-probability).
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Example:
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, seed=42, probability=0.2, scale= 1.0/(1.0 - probability))
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> seed = 124
+            >>> prob = 0.2
+            >>> output = {1}(tensor, seed=seed, probability=prob, scale= 1.0/(1.0 - prob))
         )doc",
         ttnn::dropout.base_name(),
         ttnn::dropout.python_fully_qualified_name());
@@ -1966,7 +1996,7 @@ void py_module(py::module& module) {
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
-    detail::bind_power(module, ttnn::pow, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_power(module, ttnn::pow);
 
     // unary composite imported into ttnn
     detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
