@@ -12,12 +12,11 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 
-TEST_F(DeviceFixture, InitializeGlobalSemaphores) {
+TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
     auto cores_vec = corerange_to_cores(cores);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device = devices_.at(id);
+    for (auto device : devices_) {
         {
             uint32_t initial_value = 1;
             auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(device, cores, initial_value);
@@ -44,7 +43,7 @@ TEST_F(DeviceFixture, InitializeGlobalSemaphores) {
     }
 }
 
-TEST_F(DeviceFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
+TEST_F(DispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     std::vector<CoreRangeSet> cores{CoreRange({0, 0}, {1, 1}), CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {5, 6})};
     std::vector<std::vector<CoreCoord>> cores_vecs;
     cores_vecs.reserve(cores.size());
@@ -52,8 +51,7 @@ TEST_F(DeviceFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     for (const auto& crs : cores) {
         cores_vecs.push_back(corerange_to_cores(crs));
     }
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device = devices_.at(id);
+    for (auto device : devices_) {
         {
             std::vector<std::unique_ptr<tt::tt_metal::GlobalSemaphore>> global_semaphores;
             global_semaphores.reserve(cores.size());
@@ -77,12 +75,11 @@ TEST_F(DeviceFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     }
 }
 
-TEST_F(DeviceFixture, ResetGlobalSemaphores) {
+TEST_F(DispatchFixture, ResetGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
     auto cores_vec = corerange_to_cores(cores);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device = devices_.at(id);
+    for (auto device : devices_) {
         {
             uint32_t initial_value = 1;
             std::vector<uint32_t> overwrite_value = {2};
