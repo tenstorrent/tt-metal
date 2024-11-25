@@ -74,7 +74,7 @@ void kernel_main() {
             uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
             noc_async_read(src_noc_addr, l1_write_addr, block_width_bytes);
             stick_id++;
-            l1_write_addr += block_width_bytes;
+            l1_write_addr += padded_block_width_bytes;
         }
     } else {
         DPRINT << "Unaligned Case:" << ENDL();
@@ -87,7 +87,7 @@ void kernel_main() {
             noc_async_read_barrier();
             noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, block_width_bytes);
             stick_id++;
-            l1_write_addr += block_width_bytes;
+            l1_write_addr += padded_block_width_bytes;
         }
     }
     DPRINT << "out of if clause" << ENDL();
