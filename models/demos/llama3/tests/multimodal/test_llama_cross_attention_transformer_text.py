@@ -41,9 +41,10 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "batch",
-    (1,),
+    (1, 2),
     ids=[
         "batch_1",
+        "batch_2",
     ],
 )
 @torch.no_grad()
@@ -231,7 +232,7 @@ def test_llama_cross_attention_transformer_text_inference(
                     full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                     xattn_caches=tt_xattn_cache,
                     current_pos=None,
-                    rot_mat=rot_mats,
+                    rot_mats=rot_mats,
                     transformation_mats=transformation_mats,
                     user_id=b,
                     mode=mode,
@@ -267,6 +268,8 @@ def test_llama_cross_attention_transformer_text_inference(
                 model_args.num_devices,
                 start_pos=cur_pos - 1,
             )
+            tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
+            rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)
 
             transformation_mats = None
 
@@ -313,7 +316,7 @@ def test_llama_cross_attention_transformer_text_inference(
                 full_text_row_masked_out_mask_11SD=None,
                 xattn_caches=tt_xattn_cache,
                 current_pos=tt_position_id,
-                rot_mat=rot_mats,
+                rot_mats=rot_mats,
                 transformation_mats=transformation_mats,
                 mode=mode,
                 text_only_inference=TEXT_ONLY,

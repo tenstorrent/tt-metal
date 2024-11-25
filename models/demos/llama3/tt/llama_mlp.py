@@ -139,7 +139,7 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=w2_out.memory_config(),
             )
             # ttnn.deallocate(w2_out)
-            return w2_out_reduced
+            result = w2_out_reduced
         else:
             result = w2_out
 
