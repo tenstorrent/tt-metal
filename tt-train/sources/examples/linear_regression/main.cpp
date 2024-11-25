@@ -12,6 +12,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/generators.hpp"
+#include "models/linear_regression.hpp"
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
@@ -66,18 +67,18 @@ int main() {
     const uint32_t batch_size = 128;
     auto train_dataloader = DataLoader(training_dataset, batch_size, /* shuffle */ true, collate_fn);
 
-    auto model = ttml::modules::LinearLayer(num_features, num_targets);
+    auto model = ttml::models::linear_regression::create(num_features, num_targets);
 
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F);
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
-    auto optimizer = ttml::optimizers::SGD(model.parameters(), sgd_config);
+    auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
     int training_step = 0;
     const int num_epochs = 10;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
-            auto output = model(data);
+            auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
             auto loss_float = ttml::core::to_vector(loss->get_value())[0];
             fmt::print("Step: {} Loss: {}\n", training_step++, loss_float);

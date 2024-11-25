@@ -75,7 +75,7 @@ int main() {
         ttml::core::zeros(ttml::core::create_shape({batch_size, 1, 1, num_targets}), device));
 
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
-        .m_input_features = num_features, .m_hidden_features = {128}, .m_output_features = num_targets};
+        .input_features = num_features, .hidden_features = {128}, .output_features = num_targets};
     auto model = ttml::modules::MultiLayerPerceptron(model_params);
 
     auto mode = tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH;

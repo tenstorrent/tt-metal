@@ -8,8 +8,6 @@
 #include <initializer_list>
 #include <vector>
 
-#include "core/ttnn_fwd.hpp"
-
 namespace ttml::core {
 
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name);
