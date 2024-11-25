@@ -150,6 +150,7 @@ int main(int argc, char **argv) {
     assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
     bool pass = true;
+    bool is_eth_timeout = false;
 
     std::map<string, string> defines = {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
@@ -918,6 +919,14 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
+        vector<uint32_t> tunnuler_results = tt::llrt::read_hex_vec_from_core(
+                device->id(), tunneler_phys_core, tunneler_test_results_addr, tunneler_test_results_size);
+        is_eth_timeout |= ((tunnuler_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_TIMEOUT));
+
+        vector<uint32_t> r_tunnuler_results = tt::llrt::read_hex_vec_from_core(
+                device->id(), r_tunneler_phys_core, tunneler_test_results_addr, tunneler_test_results_size);
+        is_eth_timeout |= ((r_tunnuler_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_TIMEOUT));
+
         vector<vector<uint32_t>> tx_results;
         vector<vector<uint32_t>> tx_results_r;
         vector<vector<uint32_t>> rx_results;
@@ -1281,7 +1290,10 @@ int main(int argc, char **argv) {
 
     tt::llrt::OptionsG.set_kernels_nullified(false);
 
-    if (pass) {
+    if (is_eth_timeout) {
+        log_info(LogTest, "Test timeout because of ethernet tunneler not set up in time (the other core is not )");
+        return 0;
+    } else if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
     } else {
