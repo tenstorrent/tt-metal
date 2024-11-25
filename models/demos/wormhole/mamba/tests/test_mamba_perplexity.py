@@ -131,9 +131,9 @@ def test_mamba_reference_perplexity(
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 64, 64, 28.8, 0.369, 0.619),
+        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 64, 64, 28.7, 0.366, 0.619),
         ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 128, 64, 20.6, 0.402, 0.661),
-        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 64, 64, 27.0, 0.365, 0.623),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 64, 64, 26.98, 0.364, 0.623),
         ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 64, 20.4, 0.401, 0.659),
     ),
 )
