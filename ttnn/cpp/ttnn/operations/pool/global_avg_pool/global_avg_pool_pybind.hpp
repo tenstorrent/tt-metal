@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/pool/avgpool/avg_pool.hpp"
+#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -64,23 +64,6 @@ void bind_global_avg_pool2d(py::module& module) {
 
 void py_module(py::module& module) {
     detail::bind_global_avg_pool2d(module);
-    module.def(
-        "avg_pool2d",
-        &avg_pool2d,
-        py::arg().noconvert(),
-        py::kw_only(),
-        py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("dtype").noconvert() = std::nullopt,
-        R"doc(
-        Average Pool 2D
-        It operates on tensors that have channels as the last dimension.
-
-        +----------+----------------------------+------------+-------------------------------+----------+
-        | Argument | Description                | Data type  | Valid range                   | Required |
-        +==========+============================+============+===============================+==========+
-        | act      | Input activations tensor   | Tensor     |                               | Yes      |
-        +----------+----------------------------+------------+-------------------------------+----------+
-    )doc");
 }
 
 }  // namespace avgpool

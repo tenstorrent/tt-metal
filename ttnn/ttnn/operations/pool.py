@@ -43,7 +43,3 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
-
-avg_pool2d = ttnn.register_python_operation(name="ttnn.avg_pool2d", golden_function=golden_global_avg_pool2d)(
-    ttnn._ttnn.operations.pool.avg_pool2d
-)
