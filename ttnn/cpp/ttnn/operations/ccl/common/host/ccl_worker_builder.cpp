@@ -296,32 +296,32 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
     args.push_back(forward_fabric_connection.has_value() ? 1 : 0);
     if (forward_fabric_connection.has_value()) {
         TT_FATAL(forward_direction_distance_to_end_of_line > 0, "Forward direction distance to end of line must be greater than 0");
-        log_info(tt::LogOp, "ccl_send_writer has forward fabric connection");
-        log_info(tt::LogOp, "\tedm_noc_x: {}", forward_fabric_connection.value().edm_noc_x);
-        log_info(tt::LogOp, "\tedm_noc_y: {}", forward_fabric_connection.value().edm_noc_y);
-        log_info(tt::LogOp, "\tedm_buffer_base_addr: {}", forward_fabric_connection.value().edm_buffer_base_addr);
-        log_info(tt::LogOp, "\tnum_buffers_per_channel: {}", forward_fabric_connection.value().num_buffers_per_channel);
-        log_info(tt::LogOp, "\tedm_l1_sem_addr: {}", forward_fabric_connection.value().edm_l1_sem_addr);
-        log_info(tt::LogOp, "\tedm_connection_handshake_addr: {}", forward_fabric_connection.value().edm_connection_handshake_addr);
-        log_info(tt::LogOp, "\tedm_worker_location_info_addr: {}", forward_fabric_connection.value().edm_worker_location_info_addr);
-        log_info(tt::LogOp, "\tbuffer_size_bytes: {}", forward_fabric_connection.value().buffer_size_bytes);
-        log_info(tt::LogOp, "\tbuffer_index_semaphore_id: {}", forward_fabric_connection.value().buffer_index_semaphore_id);
+        log_trace(tt::LogOp, "ccl_send_writer has forward fabric connection");
+        log_trace(tt::LogOp, "\tedm_noc_x: {}", forward_fabric_connection.value().edm_noc_x);
+        log_trace(tt::LogOp, "\tedm_noc_y: {}", forward_fabric_connection.value().edm_noc_y);
+        log_trace(tt::LogOp, "\tedm_buffer_base_addr: {}", forward_fabric_connection.value().edm_buffer_base_addr);
+        log_trace(tt::LogOp, "\tnum_buffers_per_channel: {}", forward_fabric_connection.value().num_buffers_per_channel);
+        log_trace(tt::LogOp, "\tedm_l1_sem_addr: {}", forward_fabric_connection.value().edm_l1_sem_addr);
+        log_trace(tt::LogOp, "\tedm_connection_handshake_addr: {}", forward_fabric_connection.value().edm_connection_handshake_addr);
+        log_trace(tt::LogOp, "\tedm_worker_location_info_addr: {}", forward_fabric_connection.value().edm_worker_location_info_addr);
+        log_trace(tt::LogOp, "\tbuffer_size_bytes: {}", forward_fabric_connection.value().buffer_size_bytes);
+        log_trace(tt::LogOp, "\tbuffer_index_semaphore_id: {}", forward_fabric_connection.value().buffer_index_semaphore_id);
         ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(forward_fabric_connection.value(), sender_worker_forward_flow_control_semaphore_id, sender_worker_forward_buffer_index_semaphore_id, args);
         logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
     }
     args.push_back(backward_fabric_connection.has_value() ? 1 : 0);
     if (backward_fabric_connection.has_value()) {
         TT_FATAL(backward_direction_distance_to_end_of_line > 0, "Backward direction distance to end of line must be greater than 0");
-        log_info(tt::LogOp, "ccl_send_writer has backward fabric connection");
-        log_info(tt::LogOp, "\tedm_noc_x: {}", backward_fabric_connection.value().edm_noc_x);
-        log_info(tt::LogOp, "\tedm_noc_y: {}", backward_fabric_connection.value().edm_noc_y);
-        log_info(tt::LogOp, "\tedm_buffer_base_addr: {}", backward_fabric_connection.value().edm_buffer_base_addr);
-        log_info(tt::LogOp, "\tnum_buffers_per_channel: {}", backward_fabric_connection.value().num_buffers_per_channel);
-        log_info(tt::LogOp, "\tedm_l1_sem_addr: {}", backward_fabric_connection.value().edm_l1_sem_addr);
-        log_info(tt::LogOp, "\tedm_connection_handshake_addr: {}", backward_fabric_connection.value().edm_connection_handshake_addr);
-        log_info(tt::LogOp, "\tedm_worker_location_info_addr: {}", backward_fabric_connection.value().edm_worker_location_info_addr);
-        log_info(tt::LogOp, "\tbuffer_size_bytes: {}", backward_fabric_connection.value().buffer_size_bytes);
-        log_info(tt::LogOp, "\tbuffer_index_semaphore_id: {}", backward_fabric_connection.value().buffer_index_semaphore_id);
+        log_trace(tt::LogOp, "ccl_send_writer has backward fabric connection");
+        log_trace(tt::LogOp, "\tedm_noc_x: {}", backward_fabric_connection.value().edm_noc_x);
+        log_trace(tt::LogOp, "\tedm_noc_y: {}", backward_fabric_connection.value().edm_noc_y);
+        log_trace(tt::LogOp, "\tedm_buffer_base_addr: {}", backward_fabric_connection.value().edm_buffer_base_addr);
+        log_trace(tt::LogOp, "\tnum_buffers_per_channel: {}", backward_fabric_connection.value().num_buffers_per_channel);
+        log_trace(tt::LogOp, "\tedm_l1_sem_addr: {}", backward_fabric_connection.value().edm_l1_sem_addr);
+        log_trace(tt::LogOp, "\tedm_connection_handshake_addr: {}", backward_fabric_connection.value().edm_connection_handshake_addr);
+        log_trace(tt::LogOp, "\tedm_worker_location_info_addr: {}", backward_fabric_connection.value().edm_worker_location_info_addr);
+        log_trace(tt::LogOp, "\tbuffer_size_bytes: {}", backward_fabric_connection.value().buffer_size_bytes);
+        log_trace(tt::LogOp, "\tbuffer_index_semaphore_id: {}", backward_fabric_connection.value().buffer_index_semaphore_id);
         ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(backward_fabric_connection.value(), sender_worker_backward_flow_control_semaphore_id, sender_worker_backward_buffer_index_semaphore_id, args);
         logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
     }
@@ -331,7 +331,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         args.push_back(sync_details.value().num_signals);
         for (size_t i = 0; i < sync_details.value().num_signals; ++i) {
             auto const noc_coord = this->device->physical_core_from_logical_core(sync_details.value().core, CoreType::WORKER);
-            log_info(tt::LogOp, "ccl_send_writer on device {} adding sync signal dest to (y={},x={},id={})", this->device->id(), noc_coord.y, noc_coord.x, sync_details.value().sem_ids[i]);
+            log_trace(tt::LogOp, "ccl_send_writer on device {} adding sync signal dest to (y={},x={},id={})", this->device->id(), noc_coord.y, noc_coord.x, sync_details.value().sem_ids[i]);
             args.push_back(sync_details.value().sem_ids[i]);
             args.push_back(noc_coord.x);
             args.push_back(noc_coord.y);
@@ -344,10 +344,10 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
     }
 
-    log_info(tt::LogOp, "ccl_send_writer Generating {} ccl send commands", slices.size());
+    log_trace(tt::LogOp, "ccl_send_writer Generating {} ccl send commands", slices.size());
     emit_ccl_send_slice_sequence_commands(slices, args);
 
-    log_info(tt::LogOp, "ccl_send_writer Sender Worker has {} RT Args: {}", args.size(), args);
+    log_trace(tt::LogOp, "ccl_send_writer Sender Worker has {} RT Args: {}", args.size(), args);
 
     return args;
 }
@@ -365,6 +365,8 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
 
+    log_trace(tt::LogOp, "ccl_send_reader Sender Worker has {} CT Args: {}", args.size(), args);
+
     return args;
 }
 
@@ -380,6 +382,8 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(output_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
+
+    log_trace(tt::LogOp, "ccl_send_writer Sender Worker has {} CT Args: {}", args.size(), args);
 
     return args;
 }

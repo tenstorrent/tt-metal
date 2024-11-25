@@ -10,11 +10,10 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "debug/dprint.h"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
-
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
@@ -132,9 +131,9 @@ void kernel_main() {
     // Don't use CBs because there appears to be a bug if we have the same producer/consumer core to a given CB
     // Instead, open up the CB and use it as a raw scratch space6
 
-    // #ifdef DEBUG_PRINT_ENABLED
-    // DPRINT << "ccl_send_reader has " << (uint32_t)num_commands << " commands" << ENDL();
-    // #endif
+    #ifdef DEBUG_PRINT_ENABLED
+    DPRINT << "ccl_send_reader has " << (uint32_t)num_commands << " commands" << ENDL();
+    #endif
 
     for (std::size_t i = 0; i < num_commands; ++i) {
         // Generalized would be to get the command header info and then dispatch accordingly - if the command type is singular
@@ -144,30 +143,17 @@ void kernel_main() {
         std::size_t new_arg_idx = arg_idx;
 
         {
-            // print_tensor_command(i, command_tensor);
+            print_tensor_command(i, command_tensor);
             ASSERT(command_tensor.worker_pages_per_slice > 0);
 
             // CURRENTLY ONLY SUPPORTS WRAPPED TENSOR ITERATION COMMANDS
             // Implemented really inefficiently for now - in the future we can do more efficient packing and also change
             // the tensor read API to require the information in a more efficient way (less intermediate calculations)
-            // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            // shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            // shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
             shape_t const& global_offset = command_tensor.tensor_slice_offset + command_tensor.worker_start_offset_in_slice;
 
             uint32_t curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
-
-            // DPRINT << "valid_worker_slice_shape.w: " << valid_worker_slice_shape.w << ENDL();
-            // DPRINT << "valid_worker_slice_shape.z: " << valid_worker_slice_shape.z << ENDL();
-            // DPRINT << "valid_worker_slice_shape.y: " << valid_worker_slice_shape.y << ENDL();
-            // DPRINT << "valid_worker_slice_shape.x: " << valid_worker_slice_shape.x << ENDL();
-            // DPRINT << "global_offset.w: " << global_offset.w << ENDL();
-            // DPRINT << "global_offset.z: " << global_offset.z << ENDL();
-            // DPRINT << "global_offset.y: " << global_offset.y << ENDL();
-            // DPRINT << "global_offset.x: " << global_offset.x << ENDL();
-            // DPRINT << "curr_tile_id: " << curr_tile_id << ENDL();
 
             uint32_t offset_into_worker_slice = 0;
             bool last_page_of_worker = false;
