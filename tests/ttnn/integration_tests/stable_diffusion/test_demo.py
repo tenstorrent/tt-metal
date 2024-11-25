@@ -29,6 +29,8 @@ from models.demos.wormhole.stable_diffusion.demo.demo import test_demo_diffusion
     ((512, 512),),
 )
 def test_demo_sd(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
     demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
 
 
@@ -48,4 +50,6 @@ def test_demo_sd(device, reset_seeds, input_path, num_prompts, num_inference_ste
     ((512, 512),),
 )
 def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
     demo_db(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
