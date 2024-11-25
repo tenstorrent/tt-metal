@@ -1,14 +1,11 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 import ttnn
 import time
-from pathlib import Path
 
-from torchvision import models
 from loguru import logger
 import ttnn
 from models.utility_functions import (
@@ -33,7 +30,7 @@ def get_expected_times(tt_lenet):
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
-    [128],
+    [64],
 )
 @pytest.mark.parametrize(
     "tt_lenet",
@@ -44,21 +41,17 @@ def get_expected_times(tt_lenet):
 def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator, reset_seeds):
     disable_persistent_kernel_cache()
     num_classes = 10
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     test_input, images, outputs = lenet_utils.get_test_data(batch_size)
 
     pt_model_path = model_location_generator("model.pt", model_subdir="LeNet")
-    torch_LeNet, state_dict = lenet_utils.load_torch_lenet(pt_model_path, num_classes)
-    model = torch_LeNet.float()
-    model = torch_LeNet.eval()
-    torch_output = model(test_input)
-    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = batch_size if mesh_device_flag else batch_size / 2
+    torch_lenet, state_dict = lenet_utils.load_torch_lenet(pt_model_path, num_classes)
+    model = torch_lenet.float()
     inputs_mesh_mapper = None
-    weights_mesh_mapper = None
     output_mesh_composer = None
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
@@ -67,22 +60,17 @@ def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator,
         )
 
     parameters = lenet_utils.custom_preprocessor_device(parameters, device=mesh_device)
-
-    x = test_input
     x = test_input.permute(0, 2, 3, 1)
     x = ttnn.from_torch(x, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
     durations = []
-    for _ in range(2):
+    for _ in range(100):
         start = time.time()
 
-        ttnn_output = tt_lenet.Lenet(
+        ttnn_output = tt_lenet.lenet(
             mesh_device=mesh_device,
-            model=model,
             input_tensor=x,
             batch_size=batch_size,
             parameters=parameters,
-            num_classes=num_classes,
-            reset_seeds=reset_seeds,
             mesh_mapper=inputs_mesh_mapper,
             mesh_composer=output_mesh_composer,
         )
@@ -118,7 +106,7 @@ def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator,
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
-    [128],
+    [64],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal(batch_size, reset_seeds):
@@ -127,16 +115,17 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     margin = 0.03
 
     if is_wormhole_b0():
-        expected_perf = 235836.45
+        expected_perf = 62689.81422
 
     command = f"pytest tests/ttnn/integration_tests/lenet/test_lenet_wh.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_perf}
 
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"tt_lenet{batch_size}",
         batch_size=batch_size,

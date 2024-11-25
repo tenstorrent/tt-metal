@@ -27,5 +27,3 @@ This command will initiate the test for the demo dataset, allowing you to observ
 ## Inputs
 
 The demo accepts inputs from the MNIST dataset, which consists of a large collection of labeled handwritten digits. The dataset provides a diverse range of examples, enabling the model to learn and generalize effectively. Each input consists of a grayscale image of a handwritten digit, which is processed through the model to produce a predicted classification.
-
-### Owner: [sabira-mcw](https://github.com/sabira-mcw)
