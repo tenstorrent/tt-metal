@@ -258,7 +258,7 @@ struct Tensor {
         } else if (storage_type == tt::tt_metal::StorageType::MULTI_DEVICE) {
             std::vector<Buffer*> buffers;
             auto storage = std::get<MultiDeviceStorage>(this->get_storage());
-            for (auto buffer : storage.get_buffers()) {
+            for (const auto& buffer : storage.get_buffers()) {
                 buffers.push_back(buffer.get());
             }
             return buffers;

@@ -61,6 +61,7 @@ static Tensor full(
         shape.logical_shape(),
         TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout), MemoryConfig{}, shape));
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.padded_shape().volume());
+    // TODO: 15061 - Generalize the header to support generic vector / view types.
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
     if (!optional_output_tensor.has_value()) {
@@ -133,6 +134,7 @@ static Tensor full_impl(
     }
 }
 
+// TODO: #14974 - Can this be deleted, as it is only used in tests?
 template <typename T>
 static Tensor full(
     const tt::tt_metal::LegacyShape& shape,
@@ -153,7 +155,7 @@ static Tensor full(
         std::nullopt);
 }
 
-// TODO: #14974 - Can this be deleted?
+// TODO: #14974 - Can this be deleted, as it is only used in tests?
 static Tensor zeros(
     const tt::tt_metal::LegacyShape& shape,
     const DataType data_type = DataType::BFLOAT16,
@@ -164,7 +166,7 @@ static Tensor zeros(
     return full(shape, 0.0f, data_type, layout, device, output_mem_config);
 }
 
-// TODO: #14974 - Can this be deleted?
+// TODO: #14974 - Can this be deleted, as it is only used in tests?
 static Tensor ones(
     const tt::tt_metal::LegacyShape& shape,
     const DataType data_type = DataType::BFLOAT16,
