@@ -114,6 +114,7 @@ Pointwise Unary
    ttnn.cosh
    ttnn.deg2rad
    ttnn.digamma
+   ttnn.dropout
    ttnn.elu
    ttnn.eqz
    ttnn.erf
@@ -161,6 +162,7 @@ Pointwise Unary
    ttnn.normalize_global
    ttnn.normalize_hw
    ttnn.polygamma
+   ttnn.pow
    ttnn.prelu
    ttnn.rad2deg
    ttnn.rdiv
@@ -306,7 +308,6 @@ Pointwise Binary
    ttnn.logical_and_
    ttnn.logical_or_
    ttnn.logical_xor_
-   ttnn.pow
    ttnn.rpow
    ttnn.ldexp
    ttnn.logical_and
