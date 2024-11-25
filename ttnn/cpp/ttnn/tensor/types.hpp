@@ -275,6 +275,7 @@ struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
     BufferType buffer_type = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec = std::nullopt;
+    bool keep_l1_aligned = false;
     bool is_sharded() const;
     bool is_l1() const;
     bool is_dram() const;

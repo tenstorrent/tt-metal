@@ -14,7 +14,7 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
-    const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index, bool keep_l1_aligned) {
+    const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
