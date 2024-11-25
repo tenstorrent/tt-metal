@@ -5,6 +5,8 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "sliding_window.hpp"
 
+using namespace tt::tt_metal;
+
 namespace py = pybind11;
 namespace ttnn::operations::sliding_window {
 

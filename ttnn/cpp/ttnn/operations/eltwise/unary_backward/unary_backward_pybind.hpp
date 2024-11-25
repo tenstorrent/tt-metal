@@ -723,7 +723,7 @@ void bind_unary_backward_optional_float_params_with_default(
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_float_string_default(
+void bind_unary_backward_rdiv(
     py::module& module,
     const unary_backward_operation_t& operation,
     const std::string& parameter_name_a,
@@ -744,7 +744,7 @@ void bind_unary_backward_float_string_default(
             {2} (float): {3}.
 
         Keyword args:
-            {4} (string, optional): {5}. Defaults to `{6}`.
+            {4} (string, optional): {5}. Defaults to None.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -770,7 +770,7 @@ void bind_unary_backward_float_string_default(
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> input = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
             >>> {2} = 0.5
-            >>> output = {1}(grad_tensor, input, {2}, {4} = {6})
+            >>> output = {1}(grad_tensor, input, {2}, {4} = None)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -792,7 +792,7 @@ void bind_unary_backward_float_string_default(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               string parameter_b,
+               const std::optional<string> parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -800,7 +800,7 @@ void bind_unary_backward_float_string_default(
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()),
             py::kw_only(),
-            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg(parameter_name_b.c_str()) = std::nullopt,
             py::arg("memory_config") = std::nullopt});
 }
 
@@ -1353,7 +1353,7 @@ void py_module(py::module& module) {
         20.0,
         R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward_float_string_default(
+    detail::bind_unary_backward_rdiv(
         module,
         ttnn::rdiv_bw,
         "scalar",

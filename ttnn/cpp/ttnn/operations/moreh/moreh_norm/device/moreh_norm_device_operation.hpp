@@ -48,11 +48,11 @@ struct MorehNormOperation {
     using shape_return_value_t = Shape;
     using tensor_return_value_t = Tensor;
 
-    DEFINE_PROGRAM_FACTORY(ProgramFactoryW)
-    DEFINE_PROGRAM_FACTORY(ProgramFactoryH)
-    DEFINE_PROGRAM_FACTORY(ProgramFactoryOther)
+    DEFINE_PROGRAM_FACTORY(ProgramFactoryWOther)
+    DEFINE_PROGRAM_FACTORY(ProgramFactoryHOther)
+    DEFINE_PROGRAM_FACTORY(ProgramFactoryNCOther)
 
-    using program_factory_t = std::variant<ProgramFactoryW, ProgramFactoryH, ProgramFactoryOther>;
+    using program_factory_t = std::variant<ProgramFactoryWOther, ProgramFactoryHOther, ProgramFactoryNCOther>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

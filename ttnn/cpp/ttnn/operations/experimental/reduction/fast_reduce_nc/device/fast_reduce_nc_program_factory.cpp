@@ -93,23 +93,23 @@ operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, con
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::CircularBufferConfig cb_scr0_config =
-        tt_metal::CircularBufferConfig(in0_t*single_tile_size, {{CB::c_in0, cb_data_format}})
-            .set_page_size(CB::c_in0, single_tile_size);
+        tt_metal::CircularBufferConfig(in0_t*single_tile_size, {{CBIndex::c_0, cb_data_format}})
+            .set_page_size(CBIndex::c_0, single_tile_size);
     auto cb_scr0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
 
     tt_metal::CircularBufferConfig cb_scr1_config =
-        tt_metal::CircularBufferConfig(in1_t*cb_1_tile_size, {{CB::c_in1, cb_1_data_format}})
-            .set_page_size(CB::c_in1, cb_1_tile_size);
+        tt_metal::CircularBufferConfig(in1_t*cb_1_tile_size, {{CBIndex::c_1, cb_1_data_format}})
+            .set_page_size(CBIndex::c_1, cb_1_tile_size);
     auto cb_scr1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_scr1_config);
 
     tt_metal::CircularBufferConfig cb_intermed0_config =
-        tt_metal::CircularBufferConfig(intermed0_t*intermed_cb_single_tile_size, {{CB::c_intermed0, intermed_cb_data_format}})
-            .set_page_size(CB::c_intermed0, intermed_cb_single_tile_size);
+        tt_metal::CircularBufferConfig(intermed0_t*intermed_cb_single_tile_size, {{CBIndex::c_24, intermed_cb_data_format}})
+            .set_page_size(CBIndex::c_24, intermed_cb_single_tile_size);
     auto cb_intermed0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(out0_t*single_tile_size, {{CB::c_out0, cb_data_format}})
-            .set_page_size(CB::c_out0, single_tile_size);
+        tt_metal::CircularBufferConfig(out0_t*single_tile_size, {{CBIndex::c_16, cb_data_format}})
+            .set_page_size(CBIndex::c_16, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     ////////////////////////////////////////////////////////////////////////////

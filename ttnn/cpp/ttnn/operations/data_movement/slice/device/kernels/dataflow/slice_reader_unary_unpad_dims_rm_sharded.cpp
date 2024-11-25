@@ -20,8 +20,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t * chunk_start_id           = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 3));
     tt_l1_ptr uint32_t * chunk_num_sticks         = (tt_l1_ptr uint32_t*)(chunk_start_id + 1);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
 
     cb_reserve_back(cb_out0, num_sticks_unpadded);
     uint32_t l1_read_addr = get_write_ptr(cb_in0);

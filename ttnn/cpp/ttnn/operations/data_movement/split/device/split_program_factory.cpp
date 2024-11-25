@@ -7,6 +7,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::detail {
 
 void setup_runtime(

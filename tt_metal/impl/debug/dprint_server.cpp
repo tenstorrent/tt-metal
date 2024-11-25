@@ -197,7 +197,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
     // Read any error codes and handle accordingly
-    enum CB cb = static_cast<enum CB>(ts->cb_id);
+    enum CBIndex cb = static_cast<enum CBIndex>(ts->cb_id);
     switch (ts->return_code) {
         case DPrintOK:
             break; // Continue to print the tile slice

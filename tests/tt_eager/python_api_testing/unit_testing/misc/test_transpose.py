@@ -9,7 +9,7 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_grayskull, is_blackhole
+from models.utility_functions import is_grayskull, is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -644,7 +644,7 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
 )
 @pytest.mark.parametrize(
     "shape",
-    [(1, 32, 12, 100), (1, 12, 32, 100), (1, 35, 7, 7), (1, 1, 1, 1)],
+    [(1, 32, 12, 100), (1, 12, 32, 100), (1, 35, 7, 7), (1, 1, 1, 1), (1, 12, 32, 100)],
 )
 def test_transpose_hc(dtype, shape, device):
     if is_grayskull() and dtype == ttnn.float32:
@@ -691,7 +691,7 @@ def test_transpose_2D(dtype, shape, layout, device):
 )
 @pytest.mark.parametrize(
     "shape",
-    [[32, 1, 32], [32, 1, 12], [1, 1, 35], [1, 16, 32], [2, 34, 8]],
+    [[32, 1, 32], [32, 1, 12], [1, 1, 35], [1, 16, 32], [2, 34, 8], (32, 12, 100), (6, 33, 34)],
 )
 @pytest.mark.parametrize(
     "layout",
@@ -699,7 +699,14 @@ def test_transpose_2D(dtype, shape, layout, device):
 )
 @pytest.mark.parametrize(
     "dims",
-    [[0, 1], [0, 2], [2, 1], [-3, -2], [-3, -1], [-2, -1]],
+    [
+        [0, 1],
+        [0, 2],
+        [2, 1],
+        [-3, -2],
+        [-3, -1],
+        [-2, -1],
+    ],
 )
 def test_transpose_3D(dtype, shape, layout, dims, device):
     torch.manual_seed(2005)
@@ -750,14 +757,14 @@ def test_transpose_4d_wh_tile(shape, device):
 @pytest.mark.parametrize(
     "config",
     [
-        [[64, 4, 49, 32], [-2, -1], ttnn.ROW_MAJOR_LAYOUT],  # Page size must be divisible by sizeof(uint32_t)
         [[1, 1370, 1, 3, 1280], [0, -2], ttnn.TILE_LAYOUT],  # untilize doesn't work with 4D
-        [[12, 3], [0, 1], ttnn.ROW_MAJOR_LAYOUT],  # need tensor for this one
+        [[1, 50, 1, 3, 768], [0, -2], ttnn.TILE_LAYOUT],  # untilize doesn't work with 4D
+        [[21843, 768], [0, 1], ttnn.ROW_MAJOR_LAYOUT],  # circular buffer overflow
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 def test_transpose_failures(config, memory_config, device):
-    pytest.skip("Failures to fix after #13217 and #13005 are in - 5D, HC PCC issue and unaligned RM tensor")
+    pytest.skip("Failing pytorch 2.0 trace sweeps")
     torch.manual_seed(2005)
     torch_input = torch.randn(config[0], dtype=torch.bfloat16)
     torch_output = torch_input.transpose(config[1][0], config[1][1])
@@ -793,6 +800,8 @@ def test_transpose_failures(config, memory_config, device):
         [[1, 9, 8, 14], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # unaligned RM that fallsback to tiled
         [[1, 9, 8, 2], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # unaligned RM that fallsback to tiled
         [[1, 2, 8, 2], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # unaligned RM that fallsback to tiled
+        [[64, 4, 49, 32], [-2, -1], ttnn.ROW_MAJOR_LAYOUT],  # Page size must be divisible by sizeof(uint32_t)
+        [[12, 3], [0, 1], ttnn.ROW_MAJOR_LAYOUT],  # need tensor for this one
         [
             [1, 8, 4096, 40],
             [1, 2],
@@ -943,3 +952,62 @@ def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
         assert ttnn.to_torch(a) == float("-inf")
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("h", [18])
+@pytest.mark.parametrize("w", [65])
+@pytest.mark.parametrize("dim0", [1])
+@pytest.mark.parametrize("dim1", [2])
+def test_transpose_forge_llama(device, b, h, w, dim0, dim1):
+    torch.manual_seed(2005)
+
+    torch_input_tensor = torch_random((b, h, w), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(dim0, dim1)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.transpose(input_tensor, dim0, dim1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("h", [2])
+@pytest.mark.parametrize("w", [3])
+@pytest.mark.parametrize("dim0", [-1])
+@pytest.mark.parametrize("dim1", [-2])
+def test_transpose_forge_basic(device, b, h, w, dim0, dim1):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch_random((1, b, h, w), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(dim0, dim1)
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.transpose(input_tensor, dim0, dim1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("b", [6])
+@pytest.mark.parametrize("h", [33])
+@pytest.mark.parametrize("w", [34])
+@pytest.mark.parametrize("dim0", [1])
+@pytest.mark.parametrize("dim1", [0])
+def test_transpose_forge_hc(device, b, h, w, dim0, dim1):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch_random((1, b, h, w), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(dim0, dim1)
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.transpose(input_tensor, dim0, dim1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)

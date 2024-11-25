@@ -43,10 +43,10 @@ void kernel_main() {
     const uint32_t beta_tile_start_id             = get_arg_val<uint32_t>(7);
     const uint32_t input_mask_tile_start_id             = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_gamma = tt::CB::c_in5;
-    constexpr uint32_t cb_beta = tt::CB::c_in6;
-    constexpr uint32_t cb_out0 = tt::CB::c_out0;
-    constexpr uint32_t cb_input_mask = tt::CB::c_intermed4;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
 
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
@@ -74,18 +74,18 @@ void kernel_main() {
             cb_push_back(cb_input_mask, block_w);
 
             if (i == 0 and b == 0) {
-                constexpr uint32_t cb_in_2 = tt::CB::c_in2;
+                constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
                 const uint32_t scalar_w = get_arg_val<uint32_t>(1);
                 generate_reduce_scaler(cb_in_2, scalar_w);
 
 
                 if constexpr(is_mcast_sender) {
-                    constexpr uint32_t cb_in_4 = tt::CB::c_in4;
+                    constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
                     const uint32_t scalar_c = get_arg_val<uint32_t>(0);
                     generate_reduce_scaler(cb_in_4, scalar_c);
                 }
 
-                constexpr uint32_t eps_cb_id = tt::CB::c_in3;
+                constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
                 const uint32_t eps = get_arg_val<uint32_t>(2);
                 generate_bcast_col_scalar(eps_cb_id, eps);
 

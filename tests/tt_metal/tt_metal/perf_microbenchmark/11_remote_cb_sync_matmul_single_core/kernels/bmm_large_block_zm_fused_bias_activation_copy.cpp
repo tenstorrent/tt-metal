@@ -20,10 +20,10 @@ void MAIN {
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(7); // out_subblock_h * out_subblock_w;
     constexpr uint32_t num_layers = get_compile_time_arg_val(8); // untilize output
 
-    constexpr uint32_t in0_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in1_cb_id = tt::CB::c_in1;
-    constexpr uint32_t sync_cb_id = tt::CB::c_in2;
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
+    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t sync_cb_id = tt::CBIndex::c_2;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     for (uint32_t l = 0; l < num_layers; ++l) {
 

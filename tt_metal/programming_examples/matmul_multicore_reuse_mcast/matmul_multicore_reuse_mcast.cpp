@@ -209,7 +209,7 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
 
     tt_metal::InterleavedBufferConfig dram_config_C{
                     .device= device,
-                    .size = dram_buffer_B_size,
+                    .size = dram_buffer_C_size,
                     .page_size = single_tile_size,
                     .buffer_type = tt_metal::BufferType::DRAM
         };
@@ -225,17 +225,17 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
     * Config of Circular Buffer in the device L1
     * input tiles count is = 2 because it's single tile process, and double-buffer
     */
-    uint32_t src0_cb_index = CB::c_in0; //0
+    uint32_t src0_cb_index = CBIndex::c_0; //0
     CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_CB_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = CB::c_in1; // 1
+    uint32_t src1_cb_index = CBIndex::c_1; // 1
     CircularBufferConfig cb_src1_config = CircularBufferConfig(in1_CB_size, {{src1_cb_index, cb_data_format}})
 		.set_page_size(src1_cb_index, single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
         {output_cb_index, cb_data_format},
@@ -460,9 +460,9 @@ int main(int argc, char **argv) {
         // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
 
         /* Create source data */
-        constexpr uint32_t M = 3200;  // user-defined
-        constexpr uint32_t N = 3200;  // user-defined
-        constexpr uint32_t K = 3200;  // user-defined
+        constexpr uint32_t M = 3584;  // user-defined
+        constexpr uint32_t N = 3072;  // user-defined
+        constexpr uint32_t K = 768;  // user-defined
         constexpr uint32_t B = 1;  // user-defined
 
         uint32_t Mt = M / TILE_HEIGHT;

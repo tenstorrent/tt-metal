@@ -133,7 +133,7 @@ class TtLlamaMLP(LightweightModule):
         if self.args.is_multichip:
             w2_out_reduced = ttnn.reduce_scatter(
                 w2_out,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=w2_out.memory_config(),

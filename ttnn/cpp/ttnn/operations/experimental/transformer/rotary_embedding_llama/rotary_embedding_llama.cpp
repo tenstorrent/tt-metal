@@ -6,6 +6,8 @@
 
 #include "device/rotary_embedding_llama_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 Tensor RotaryEmbeddingLlamaOperation::invoke(

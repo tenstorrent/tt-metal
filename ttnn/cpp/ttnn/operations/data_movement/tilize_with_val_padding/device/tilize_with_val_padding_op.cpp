@@ -8,6 +8,8 @@
 #include "tilize_with_val_padding_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) const {

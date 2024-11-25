@@ -44,8 +44,8 @@ void bind_unary_composite_optional_floats_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float or ttnn.Tensor): {3}. Defaults to `{4}`.
-            {5} (float or ttnn.Tensor): {6}. Defaults to `{7}`.
+            {2} (float or ttnn.Tensor): {3}. Defaults to `None`.
+            {5} (float or ttnn.Tensor): {6}. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -67,8 +67,13 @@ void bind_unary_composite_optional_floats_with_default(
             {10}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, 5.0, 7.0)
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> min_tensor = ttnn.from_torch(torch.tensor([[0, 2], [0,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> max_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(input_tensor, min_tensor, max_tensor)
+
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(input_tensor, min = 2, max = 9)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -351,7 +356,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            fast_and_approximate_mode (bool): Use the fast and approximate mode.
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -375,8 +380,8 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             {3}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, fast_and_approximate_mode=true)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, fast_and_approximate_mode=True)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1113,7 +1118,7 @@ void bind_unary_composite_floats_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
-    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_dtype = "BFLOAT16, BFLOAT8_B",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1123,8 +1128,8 @@ void bind_unary_composite_floats_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
-            {5} (float): {6}. Defaults to `{7}`.
+            {2} (float, optional): {3}. Defaults to `{4}`.
+            {5} (float, optional): {6}. Defaults to `{7}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1146,7 +1151,7 @@ void bind_unary_composite_floats_with_default(
             {9}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor, {2} = {4}, {5} = {7})
         )doc",
         operation.base_name(),
@@ -1264,17 +1269,30 @@ void bind_unary_composite_int(py::module& module, const unary_operation_t& opera
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
+            {2} (int): {3}.
 
         Keyword args:
-            {2} (int): {3}.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2})
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, 3)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1301,7 +1319,7 @@ void bind_unary_composite_int(py::module& module, const unary_operation_t& opera
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_floats(
+void bind_unary_composite_threshold(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name_a,
@@ -1324,8 +1342,23 @@ void bind_unary_composite_floats(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 1.0
+            >>> {4} = 10.0
             >>> output = {1}(tensor, {2}, {4})
         )doc",
         operation.base_name(),
@@ -1957,11 +1990,11 @@ void py_module(py::module& module) {
         ttnn::selu,
         "scale", "Scale value", 1.0507,
         "alpha", "Alpha value", 1.67326);
-    detail::bind_unary_composite_floats(
+    detail::bind_unary_composite_threshold(
         module,
         ttnn::threshold,
         "threshold", "Threshold value",
-        "value", "Value value",
+        "value", "Replacing value",
         R"doc(Performs threshold function on :attr:`input_tensor`, :attr:`threshold`, :attr:`value`.)doc");
     detail::bind_unary_composite_int_with_default(
         module,
