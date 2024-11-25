@@ -6,6 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;

@@ -7,6 +7,7 @@
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul.hpp"
 
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::matmul::detail {
 

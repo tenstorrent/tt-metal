@@ -12,6 +12,7 @@
 
 using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::embedding_backward::detail {
 

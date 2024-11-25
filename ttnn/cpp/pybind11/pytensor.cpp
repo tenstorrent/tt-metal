@@ -19,6 +19,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
+using namespace tt::tt_metal;
+
 namespace py = pybind11;
 
 namespace ttnn::tensor {

@@ -6,6 +6,8 @@
 
 #include "hc_sum_reduce_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm {
 
 void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {

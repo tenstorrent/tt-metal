@@ -7,6 +7,8 @@
 #include "device/repeat_and_interleave_eltwise_mul_op.hpp"
 #include "ttnn/common/constants.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm {
 
 ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(

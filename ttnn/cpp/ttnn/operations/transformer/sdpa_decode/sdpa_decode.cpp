@@ -8,6 +8,8 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace {
 inline uint32_t get_chunk_size(uint32_t s) {
     /*

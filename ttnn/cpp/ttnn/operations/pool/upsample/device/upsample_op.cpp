@@ -15,6 +15,7 @@
 
 namespace ttnn::operations::upsample {
 using namespace tt;
+using namespace tt::tt_metal;
 
 void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);

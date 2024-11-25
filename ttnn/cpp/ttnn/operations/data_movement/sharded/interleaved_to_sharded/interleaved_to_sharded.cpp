@@ -9,6 +9,8 @@
 #include "interleaved_to_sharded.hpp"
 #include "tt_metal/common/work_split.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement{
 
 ttnn::Tensor InterleavedToShardedOperation::invoke(

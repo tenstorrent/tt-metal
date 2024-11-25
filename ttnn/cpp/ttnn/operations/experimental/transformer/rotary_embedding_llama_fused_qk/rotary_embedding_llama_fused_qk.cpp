@@ -6,6 +6,8 @@
 
 #include "device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::invoke(

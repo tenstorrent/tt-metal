@@ -4,6 +4,8 @@
 
 #include "non_zero_indices_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 namespace operations::data_movement {

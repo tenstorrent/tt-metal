@@ -8,6 +8,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 

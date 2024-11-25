@@ -7,6 +7,8 @@
 #include "tt_metal/common/assert.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::unary::utils {
 
 namespace {

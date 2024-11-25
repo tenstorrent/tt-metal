@@ -10,6 +10,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::reduction::detail {
 
 using namespace tt::constants;

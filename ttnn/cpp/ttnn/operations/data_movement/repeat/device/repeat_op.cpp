@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 
 namespace ttnn::operations::data_movement {

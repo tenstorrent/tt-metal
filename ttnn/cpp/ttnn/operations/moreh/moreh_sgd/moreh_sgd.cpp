@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/moreh/moreh_sgd/device/moreh_sgd_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_sgd {
 std::vector<std::optional<Tensor>> MorehSgd::invoke(
     const Tensor& param_in,

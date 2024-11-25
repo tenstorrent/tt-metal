@@ -25,6 +25,7 @@
 #include <ranges>
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 // Notes on abbreviations:
 // cw = clockwise

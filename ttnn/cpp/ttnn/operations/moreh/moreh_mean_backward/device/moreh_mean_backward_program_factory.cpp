@@ -12,6 +12,8 @@
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
+using namespace tt::tt_metal;
+
 void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {

@@ -5,6 +5,8 @@
 #include "argmax_op.hpp"
 #include "argmax_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::reduction {
 
 void ArgMax::validate_with_output_tensors(

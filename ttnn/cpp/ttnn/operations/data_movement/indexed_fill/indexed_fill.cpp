@@ -6,6 +6,8 @@
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 #include "ttnn/common/constants.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement{
 
 ttnn::Tensor IndexedFillOperation::invoke(uint8_t queue_id, const ttnn::Tensor& batch_id, const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, const std::optional<ttnn::MemoryConfig>& memory_config, int64_t dim) {

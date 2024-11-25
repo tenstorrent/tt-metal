@@ -11,6 +11,8 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "pybind11/stl.h"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::distributed {
 
 namespace py = pybind11;

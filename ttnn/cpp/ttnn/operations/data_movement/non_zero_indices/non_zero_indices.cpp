@@ -9,6 +9,8 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/constants.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 

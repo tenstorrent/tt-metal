@@ -18,6 +18,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/host_api.hpp"
 
+using namespace tt::tt_metal;
 
 namespace py = pybind11;
 

@@ -5,6 +5,8 @@
 #include "plusone_op.hpp"
 #include "plusone_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental {
 
 void PlusOne::validate_with_output_tensors(

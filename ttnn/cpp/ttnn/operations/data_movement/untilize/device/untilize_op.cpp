@@ -8,6 +8,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "untilize_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 namespace untilize_helpers {

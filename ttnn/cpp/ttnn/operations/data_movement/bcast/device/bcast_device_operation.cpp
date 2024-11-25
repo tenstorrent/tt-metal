@@ -9,6 +9,7 @@
 // using namespace tt;
 // using namespace tt_metal;
 // using namespace constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 

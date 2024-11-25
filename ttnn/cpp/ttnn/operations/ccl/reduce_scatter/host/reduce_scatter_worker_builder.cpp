@@ -11,6 +11,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace ccl {
 namespace reduce_scatter_detail {

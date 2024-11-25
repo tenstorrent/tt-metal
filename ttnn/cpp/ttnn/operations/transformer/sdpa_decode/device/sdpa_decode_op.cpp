@@ -7,6 +7,8 @@
 #include "sdpa_decode_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::transformer {
 
 void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {

@@ -15,6 +15,8 @@
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
+using namespace tt::tt_metal;
+
 namespace py = pybind11;
 
 namespace {

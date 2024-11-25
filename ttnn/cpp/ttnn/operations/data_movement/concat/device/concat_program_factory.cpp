@@ -10,8 +10,9 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace {
 

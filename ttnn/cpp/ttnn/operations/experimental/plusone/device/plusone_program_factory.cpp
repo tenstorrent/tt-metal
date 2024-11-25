@@ -13,6 +13,7 @@
 namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks plusone_single_core(
     const Tensor &input) {

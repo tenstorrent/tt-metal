@@ -10,6 +10,7 @@
 namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const Tensor& a,

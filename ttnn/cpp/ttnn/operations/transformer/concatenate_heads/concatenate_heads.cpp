@@ -7,6 +7,8 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::transformer {
 
 struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NLPConcatHeadsDeviceOperation {

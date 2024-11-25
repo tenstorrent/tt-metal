@@ -11,6 +11,7 @@
 
 #include "slice_op.hpp"
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 
 namespace ttnn::operations::data_movement::detail {
