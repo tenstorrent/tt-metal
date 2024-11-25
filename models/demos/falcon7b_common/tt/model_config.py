@@ -320,9 +320,9 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     if is_wormhole_b0():
         hifi2_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
+            math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
     else:
         hifi2_kernel_config = ttnn.GrayskullComputeKernelConfig(

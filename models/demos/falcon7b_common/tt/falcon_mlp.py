@@ -357,7 +357,7 @@ class TtFalconMLPDecode(nn.Module):
         hidden_states = falcon_dense_h_to_4h_matmul(
             x,
             self.dense_h_to_4h_weights,
-            self.model_config["HiFi2_KERNEL_CONFIG"],
+            compute_kernel_config=self.model_config["HiFi2_KERNEL_CONFIG"],
             fused_activation="gelu",
             output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],

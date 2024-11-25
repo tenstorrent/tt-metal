@@ -170,11 +170,11 @@ class TestParametrized:
             # ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.15),
             # ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.1),
             # ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.4),
-            # ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.35),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.35),
             # ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.1),
             # ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.75),
             # ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.6),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.11),
+            # ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.11),
         ),
         ids=[
             # "prefill_seq128_bf16_dram",
@@ -187,8 +187,8 @@ class TestParametrized:
             # "decode_batch32_1024_bf16_l1",
             # "decode_batch32_1024_bf16_l1_sharded",
             # "decode_batch32_2047_bf16_dram",
-            # "decode_batch32_2047_bf16_l1",
-            "decode_batch32_2047_bf16_l1_sharded",
+            "decode_batch32_2047_bf16_l1",
+            # "decode_batch32_2047_bf16_l1_sharded",
         ],
     )
     @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True, ids=["noasync", "async"])

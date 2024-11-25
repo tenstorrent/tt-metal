@@ -177,7 +177,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             lm_logits = falcon_lm_head_matmul(
                 hidden_states,
                 self.lm_head_weights,
-                self.model_config["HiFi2_KERNEL_CONFIG"],
+                compute_kernel_config=self.model_config["HiFi2_KERNEL_CONFIG"],
                 output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                 core_grid=get_falcon_default_core_grid(hidden_states.device()),
