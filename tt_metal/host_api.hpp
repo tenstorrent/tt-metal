@@ -42,6 +42,12 @@ class Event;
 class Buffer;
 class GlobalSemaphore;
 
+namespace experimental {
+
+class GlobalCircularBuffer;
+
+}  // namespace experimental
+
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
@@ -297,7 +303,7 @@ uint32_t CreateSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::unique_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -315,7 +321,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::unique_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -327,6 +333,31 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 // clang-format on
 std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+
+namespace experimental {
+
+// clang-format off
+/**
+ * Creates a global circular buffer on the specified sender and receiver cores with the given size.
+ * sender_receiver_core_mapping specifies which sender cores will communicate with which receiver cores.
+ *
+ * Return value: std::shared_ptr<GlobalCircularBuffer>
+ *
+ * | Argument                     | Description                                                      | Type                                                      | Valid Range  | Required |
+ * |------------------------------|------------------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device                       | The device to create the circular buffer on                      | Device *                                                  |              | Yes      |
+ * | sender_receiver_core_mapping | Mapping of sender to receiver cores used for the circular buffer | const std::unordered_map<CoreCoord, CoreRangeSet> &       |              | Yes      |
+ * | size                         | Circular Buffer size                                             | uint32_t                                                  |              | Yes      |
+ * | buffer_type                  | Buffer type to store the global circular buffer                  | BufferType                                                | L1 types     | No       |
+ */
+// clang-format on
+std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
+    Device* device,
+    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type = BufferType::L1);
+
+}  // namespace experimental
 
 // clang-format off
 /**

@@ -36,7 +36,6 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
         "Global semaphore can only be created for L1 buffer types");
     TT_FATAL(this->device_ != nullptr, "Device cannot be null");
     TT_FATAL(this->cores_.num_cores() > 0, "CoreRangeSet must have at least one core");
-    const auto& device_grid_size = this->device_->compute_with_storage_grid_size();
     uint32_t num_cores = this->cores_.num_cores();
     auto shard_parameters =
         ShardSpecBuffer(this->cores_, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {num_cores, 1});

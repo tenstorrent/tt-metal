@@ -25,6 +25,7 @@
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -1134,6 +1135,18 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
 }
+
+namespace experimental {
+
+std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
+    Device* device,
+    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);
+}
+
+}  // namespace experimental
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
     return Buffer::create(
