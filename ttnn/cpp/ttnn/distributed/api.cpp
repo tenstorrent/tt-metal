@@ -6,9 +6,11 @@
 
 #include <memory>
 
+#include "tt_metal/tt_stl/overloaded.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;
 
@@ -140,7 +142,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     return physical_device_ids;
 }
 
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device) {
+std::vector<Device*> get_devices_for_tensor(const Tensor& tensor, MeshDevice& mesh_device) {
     // For multi-device tensors, returns the number of workers capped by the number of buffers
     // Otherwise, returns all available workes from mesh_device.
     auto get_workers_for_tensor = [&tensor, &mesh_device]() {
@@ -156,14 +158,11 @@ std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice&
         const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
 
         return std::visit(
-            [&](const auto& strategy) {
-                using StrategyType = std::decay_t<decltype(strategy)>;
-                if constexpr (std::is_same_v<StrategyType, ShardTensor2D>) {
-                    return mesh_device.get_view()->get_devices(strategy.shard_mesh);
-                } else {
-                    return get_workers_for_tensor();
-                }
-            },
+            tt::stl::overloaded{
+                [&](const ShardTensor2D& s) {
+                    return mesh_device.get_view()->get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
+                },
+                [&](const auto&) { return get_workers_for_tensor(); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
         return tensor.workers;
