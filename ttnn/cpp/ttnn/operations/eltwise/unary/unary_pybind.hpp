@@ -789,15 +789,28 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
         ttnn::sigmoid_accurate.base_name(),
@@ -829,23 +842,40 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
+            ops_chain (list[ttnn.UnaryWithParam]): list of unary ops to be chained.
 
         Keyword Args:
-            ops_chain (list[ttnn.UnaryWithParam]): List of unary ops to be chained.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.randn([32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> ops_chain = [
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False),
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
             >>> output = {1}(tensor, ops_chain)
         )doc",
         ttnn::unary_chain.base_name(),
