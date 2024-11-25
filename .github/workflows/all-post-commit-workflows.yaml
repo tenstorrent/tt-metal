@@ -74,13 +74,19 @@ jobs:
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
-  debug-diff:
-    needs: diff
-    runs-on: ubuntu-latest
-    run: |
-      echo "test_everything: ${{ needs.diff.outputs.test_everything }}"
-      echo "test_tt_metal: ${{ needs.diff.outputs.test_tt_metal }}"
-      echo "test_ttnn: ${{ needs.diff.outputs.test_ttnn }}"
+#  debug-diff:
+#    needs: diff
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Debug
+#        env:  # Pass outputs as environment variables
+#          TEST_EVERYTHING: ${{ needs.diff.outputs.test_everything }}
+#          TEST_TT_METAL: ${{ needs.diff.outputs.test_tt_metal }}
+#          TEST_TTNN: ${{ needs.diff.outputs.test_ttnn }}
+#        run: |
+#          echo "test_everything: $TEST_EVERYTHING"
+#          echo "test_tt_metal: $TEST_TT_METAL"
+#          echo "test_ttnn: $TEST_TTNN"
 
   build-wheels:
     needs: build-artifact
