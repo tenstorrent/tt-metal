@@ -19,7 +19,7 @@ inline void _llk_pack_untilize_configure_addrmod_() {
     static_assert(!diagonal, "Diagonal not supported");
 
     addr_mod_pack_t{
-        .y_src = {.incr = 0, .clr = 0}, 
+        .y_src = {.incr = 0, .clr = 0},
     }
     .set(ADDR_MOD_0);
 
@@ -27,10 +27,9 @@ inline void _llk_pack_untilize_configure_addrmod_() {
     //     .y_src = { .incr = 1, .clr = 0},
     // }.set(ADDR_MOD_1);
 
-    // addr_mod_pack_t{
-    //     .y_src = { .incr = 0, .clr = 1 },
-    //     .z_src = { .incr = 1, .clr = 0 },
-    // }.set(ADDR_MOD_2);
+    addr_mod_pack_t{
+        .z_src = { .clr = 1 },
+    }.set(ADDR_MOD_2);
 
 }
 
@@ -40,22 +39,26 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr uint MOP_INNER_LOOP = block_ct_dim;
-    const uint MOP_OUTER_LOOP = face_r_dim;
+
+    // Loop until face_r_dim - 1.
+    // Last row of face needs to be handled differently depending on num_faces, block_ct and full_ct.
+    const uint MOP_OUTER_LOOP = face_r_dim - 1;
+
     const uint PACK_INTF_SEL = (num_faces>1) ? p_pacr::TWO_INTFS_ACTIVE: p_pacr::SINGLE_INTF_ACTIVE;
 
     /*
     Each pack instruction does 2x16 datums if (num_faces>1)
     Each row of 16 datums, has a stride of 16 from dest read
-    Dest row read in inner loop: 
-    tile 0: row 0, row 16 
+    Dest row read in inner loop:
+    tile 0: row 0, row 16
     tile 1: row 64, row 80
     .
     tile block_ct_dim-1: row 64*(block_ct_dim-1), row 64*(block_ct_dim-1)+16
     */
 
     ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP, 
-        MOP_INNER_LOOP, 
+        MOP_OUTER_LOOP,
+        MOP_INNER_LOOP,
         TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, 0, PACK_INTF_SEL, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0),
         TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0) // w cnt points to the next tile
     );
@@ -90,9 +93,9 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
 inline void _llk_pack_untilize_init_(
-    const std::uint32_t pack_src_format, 
-    const std::uint32_t pack_dst_format, 
-    const std::uint32_t face_r_dim = FACE_R_DIM, 
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces = 4) {
     static_assert(!diagonal, "Diagonal not supported");
     _llk_pack_untilize_configure_addrmod_<diagonal>();
@@ -114,30 +117,60 @@ inline void _llk_pack_untilize_init_(
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
 inline void _llk_pack_untilize_(
-    const std::uint32_t address, 
+    const std::uint32_t address,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM, 
-    const std::uint32_t num_faces = 4, 
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t num_faces = 4,
     const std::uint32_t tile_dst_offset = 0) {
 
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
     program_packer_destination(address);
     const std::uint32_t num_faces_per_rdim_tile = (num_faces>2) ? 2 : 1;
+    const uint PACK_INTF_SEL = (num_faces>1) ? p_pacr::TWO_INTFS_ACTIVE: p_pacr::SINGLE_INTF_ACTIVE;
 
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011); //reset ch0 zw counters
     TT_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011); //reset ch0 xy counters
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset);
-    
+
     for (std::uint32_t face=0; face<num_faces_per_rdim_tile; face++) {
         ckernel::ckernel_template::run(instrn_buffer);
+
+        //-----------------------------------------------------------------------
+        // Handle last row of face, i.e. last outer_loop iteration of MOP.
+        // Start OP is the same for all cases.
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0 W counter
+
+        // Inner loop of MOP.
+        for (std::uint32_t i = 0; i < block_ct_dim; i++)
+        {
+            // Close block if it is the last PACR instruction of the block.
+            if ((face == num_faces_per_rdim_tile - 1) && (i == block_ct_dim - 1) && (block_ct_dim == full_ct_dim))
+            {
+                TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_INTF_SEL, 0, 0/*MEGAROW*/, p_pacr::NO_CTXT_CTRL, 0, 1);
+            }
+            else
+            {
+                TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_INTF_SEL, 0, 1/*MEGAROW*/, p_pacr::NO_CTXT_CTRL, 0, 0);
+            }
+
+            TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0); // w cnt points to the next tile
+        }
+
+        // End OP.
+        TTI_INCADCXY(p_setadc::PAC, 0, 0, 1, 0); //inc ch0_y counters
+        if (block_ct_dim != full_ct_dim)
+        {
+            // update l1 address
+            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+            TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+            TTI_NOP;
+        }
+        //-----------------------------------------------------------------------
+
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1); // z cnt increments by 2xface_r_dimxFACE_C_DIM
         TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); //reset ch0_y counters
     }
 
-    if constexpr (block_ct_dim == full_ct_dim) {
-        constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
-        const uint PACK_INTF_SEL = p_pacr::TWO_INTFS_ACTIVE;
-        TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 1); // close block
-    }
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); //reset z counters
 }

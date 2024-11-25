@@ -77,7 +77,7 @@ inline void _llk_unpack_tilize_init_(const std::uint32_t unpack_src_format=0, co
     cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
     //Force x-dim to 1024
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>(0 | (Tile_x_dim<<16));
-    //Force z-dim to CNT_ZDIM/4
+    //Force z-dim to 1 as X dim is set to cover the entire tile, so no need to iterate over faces.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 0, 0xffff0000>(0 | (Tile_z_dim<<16));
 
     //Force x-end for Unpackers to 1024

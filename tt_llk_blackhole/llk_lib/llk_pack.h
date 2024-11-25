@@ -128,7 +128,9 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         const uint PACK_INTF_SEL_1 = 0b1010;
         const uint MOP_INNER_LOOP = 1;
         const uint MOP_OUTER_LOOP = 2;
-        const uint replay_buf_len = 16;
+
+        // Last row of half-tile (16 rows) is different between halves, so can't be replayed.
+        const uint replay_buf_len = 15;
 
         //This replay buffer finishes 2 faces
         load_replay_buf(0, replay_buf_len, false,
@@ -152,20 +154,20 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
                 TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0);
                 TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0);
                 TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0);
-                TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 1);
+                // Last PACR instruction of the half-tile must go separately in the MOP. This is to be able to override it, to ensure that for the second half the tile is closed correctly.
 
             }
         );
 
-        // ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_0, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0));
-        // tmp.set_last_inner_loop_instr(TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_0, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0));
-        // tmp.set_last_outer_loop_instr(TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0));
-
         ckernel::ckernel_template tmp(
             MOP_OUTER_LOOP,
             MOP_INNER_LOOP,
-            TT_OP_REPLAY(0, replay_buf_len, 0, 0)
+            TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+            TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 0) // don't close tile
         );
+
+        // Close the tile only when it is actually done.
+        tmp.set_last_outer_loop_instr(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 1));
 
         if constexpr (write_tile_header) {
             tmp.set_end_ops(

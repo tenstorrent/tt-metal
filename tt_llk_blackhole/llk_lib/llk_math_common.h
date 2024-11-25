@@ -16,18 +16,17 @@ using namespace ckernel::math;
 
 template <bool untilize_en = false, bool skip_inputs = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format) {
-    // Need to wait for all DEST accesses to be finished before changing 
+    // Need to wait for all DEST accesses to be finished before changing
     // remap_addrs and swizzle_32b bits
     tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0) {
-    };  // Wait for previous packs to finish before claiming all dest
+    while (semaphore_read(semaphore::MATH_PACK) > 0) {};  // Wait for previous packs to finish before claiming all dest
 
     //Untilize mode needs dest read access with a stride of 16
     //Following bits are needed for enabling stride of 16
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(untilize_en);
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(untilize_en);
-    
-    // Legacy mode for ZEROACC 
+
+    // Legacy mode for ZEROACC
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(1);
 
     if constexpr (skip_inputs == false){
@@ -174,7 +173,7 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
 }
 
 inline std::uint32_t _llk_math_get_compute_special_value_flags_() {
-    return reg_read(RISCV_DEBUG_REG_FPU_STICKY_BITS); 
+    return reg_read(RISCV_DEBUG_REG_FPU_STICKY_BITS);
 }
 
 inline void _llk_math_clear_compute_special_value_flags_() {
