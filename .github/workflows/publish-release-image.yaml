@@ -20,7 +20,9 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         arch: [grayskull, wormhole_b0]
-    runs-on: ubuntu-latest
+    runs-on:
+      - build-docker
+      - in-service
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,6 +39,7 @@ jobs:
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Get the name of the wheel and set up env variables
+        id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.arch }}
@@ -53,17 +56,51 @@ jobs:
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/release.Dockerfile
+  smoke-test-docker-image:
+    needs: create-docker-image
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        test_group:
+          [
+              {
+                arch: grayskull,
+                runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+                cmd: pytest tests/end_to_end_tests,
+              },
+              {
+                arch: wormhole_b0,
+                runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+                cmd: pytest tests/end_to_end_tests,
+              }
+          ]
+    runs-on: ${{ matrix.test_group.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Run smoke test on the image
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.arch }}
+          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.test_group.arch }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
-            pytest tests/end_to_end_tests
+            ${{ matrix.test_group.cmd }}
+  tag-docker-image-as-latest:
+    needs: [smoke-test-docker-image, create-docker-image]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    runs-on:
+      - build-docker
+      - in-service
+    steps:
       - name: Tag latest if this is a major version release
         if: ${{ inputs.is_major_version }}
         run: |
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.arch }}
+          TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           docker tag $TAG_NAME $REPO_IMAGE_NAME:latest
           docker push $REPO_IMAGE_NAME:latest
