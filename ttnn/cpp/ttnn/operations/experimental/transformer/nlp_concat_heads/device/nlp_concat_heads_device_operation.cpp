@@ -4,6 +4,8 @@
 
 #include "nlp_concat_heads_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP ConcatHeads op

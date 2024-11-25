@@ -12,8 +12,8 @@ void kernel_main()
     uint32_t n_tiles = get_arg_val<uint32_t>(2);
 
     // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_in1 = tt::CB::c_in1;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM

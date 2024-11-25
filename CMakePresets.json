@@ -47,6 +47,12 @@
         "targets": ["all"]
       },
       {
+        "name": "debug",
+        "configurePreset": "default",
+        "configuration": "Debug",
+        "targets": ["all"]
+      },
+      {
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
         "configuration": "RelWithDebInfo",

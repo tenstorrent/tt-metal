@@ -585,7 +585,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     }
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
@@ -1344,7 +1344,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         in1_CB_size / in1_single_tile_size,
         in1_CB_size);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
@@ -1648,12 +1648,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
-    auto in0_tile = a.get_tile();
-    auto in1_tile = b.get_tile();
+    auto in0_tile = a.get_tensor_spec().tile();
+    auto in1_tile = b.get_tensor_spec().tile();
     // cannot use the output tensor tile directly as that might be changed by user override
-    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
-    auto in0_tile_shape = a.get_tile().get_tile_shape();
-    auto in1_tile_shape = b.get_tile().get_tile_shape();
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1768,7 +1768,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             out_buffer,
             in0_tile,
             in1_tile,
-            bias.has_value() ? bias->get_tile() : output_tile,
+            bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
             output_tile,
             in0_data_format,
             in1_data_format,
@@ -1805,7 +1805,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             out_buffer,
             in0_tile,
             in1_tile,
-            bias.has_value() ? bias->get_tile() : output_tile,
+            bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
             output_tile,
             in0_data_format,
             in1_data_format,

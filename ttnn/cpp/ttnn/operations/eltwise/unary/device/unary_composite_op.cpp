@@ -543,11 +543,9 @@ Tensor _selu(const Tensor& x, const float scale, const float alpha, const std::o
 }
 
 // threshold(a,t,v) = (a <= t)*v + (a > t)*a
-Tensor _threshold(const Tensor& input_tensor, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t0 = ttnn::subtract(input_tensor, threshold, std::nullopt, output_mem_config);
-    Tensor t1 = ttnn::multiply(ttnn::lez(t0), value, std::nullopt, output_mem_config);
-    Tensor t2 = ttnn::multiply(ttnn::gtz(t0, output_mem_config), input_tensor, std::nullopt, output_mem_config);
-    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
+Tensor ExecuteUnaryCompositeThreshold::invoke(const Tensor& input_tensor, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor sub_result = ttnn::subtract(input_tensor, threshold, std::nullopt, output_mem_config);
+    return ttnn::where(ttnn::lez(sub_result), value, input_tensor, output_mem_config);
 }
 
 std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
@@ -699,7 +697,8 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 }
 
 //rdiv
-Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::string& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+    TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
     Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);

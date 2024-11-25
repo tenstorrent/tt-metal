@@ -8,6 +8,8 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 ttnn::Tensor RotaryEmbeddingOperation::invoke(

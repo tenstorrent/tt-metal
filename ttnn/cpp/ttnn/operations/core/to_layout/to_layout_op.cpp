@@ -80,20 +80,20 @@ Tensor to_layout_impl(
         const auto padded_shape = shape.with_tile_padding();
         if (layout == ttnn::ROW_MAJOR_LAYOUT and intended_shape != padded_shape) {
             return true;
-        } else if (
-            auto tile = tensor.tile();
-            layout == ttnn::TILE_LAYOUT and (padded_shape.rank() < 2 or padded_shape[-1] % tile.get_tile_shape()[1] != 0 or
-                                             padded_shape[-2] % tile.get_tile_shape()[0] != 0)) {
-            return true;
-        } else {
-            return false;
         }
+        if (layout == ttnn::TILE_LAYOUT) {
+            auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+            if (padded_shape.rank() < 2 or padded_shape[-1] % tile_shape[1] != 0 or padded_shape[-2] % tile_shape[0] != 0) {
+                return true;
+            }
+        }
+        return false;
     };
 
     const auto intended_shape = tensor_arg.get_shape();
 
     auto tensor = tensor_arg;
-    const auto& tile = tensor.tile();
+    const auto tile = tensor.get_tensor_spec().tile();
 
     SmallVector<uint32_t> output_shape;
     if (layout == ttnn::TILE_LAYOUT and intended_shape.rank() < 2) {

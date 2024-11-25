@@ -107,8 +107,8 @@ class FabricEriscDatamoverBuilder {
         FabricEriscDatamoverConfig const& config);
 
     static FabricEriscDatamoverBuilder build(
-        Device* device,
-        Program& program,
+        tt::tt_metal::Device* device,
+        tt::tt_metal::Program& program,
         CoreCoord const& ethernet_core,
         chip_id_t local_chip_id,
         chip_id_t peer_chip_id,
@@ -209,7 +209,7 @@ struct EdmLineFabricOpInterface {
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
     // than available will result in an error.
-    SenderWorkerAdapterSpec uniquely_connect_worker(Device* device, Direction direction);
+    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::Device* device, Direction direction);
 
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;

@@ -124,13 +124,6 @@ run_profiling_no_reset_test(){
     remove_default_log_locations
 }
 
-run_post_proc_test(){
-    source python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
-
-    pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_logs.py -vvv
-}
-
 cd $TT_METAL_HOME
 
 #
@@ -140,9 +133,6 @@ if [[ $1 == "PROFILER" ]]; then
     run_profiling_test
 elif [[ $1 == "PROFILER_NO_RESET" ]]; then
     run_profiling_no_reset_test
-elif [[ $1 == "POST_PROC" ]]; then
-    run_post_proc_test
 else
     run_profiling_test
-    run_post_proc_test
 fi

@@ -6,6 +6,8 @@
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const tt::tt_metal::LegacyShape& shape) {
@@ -82,11 +84,11 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
     if(!output_tensors.empty() && output_tensors[0].has_value()){
-        const auto output_shape_required = std::get<0>(this->compute_output_specs(input_tensors)[0]);
+        const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
         const auto& out_tensor = output_tensors[0].value();
         TT_FATAL(out_tensor.get_padded_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_padded_shape());
     }
-    auto output_tensor_shape = std::get<0>(this->compute_output_specs(input_tensors)[0]);
+    auto output_tensor_shape = this->compute_output_specs(input_tensors)[0].logical_shape();
     if (has_step) { // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
@@ -102,17 +104,10 @@ void SliceDeviceOperation::validate_with_output_tensors(
             (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
             "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(
-            (output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
-            "An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary. For example, the final dimension needs to be divisible by 2 for bfloat16. The resulting tensor shape is {}, which is not 4B aligned as the last dimension is {}",
-                        output_tensor_shape[-1], input_tensor_a.element_size());
         if (has_step) {
             for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
                 TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
             }
-        }
-        else {
-            TT_FATAL(this->slice_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0, "Slice needs to start at an aligned position");
         }
     }
 }

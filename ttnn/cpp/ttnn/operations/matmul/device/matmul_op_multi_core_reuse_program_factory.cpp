@@ -100,7 +100,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             .set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
         {output_cb_index, out_cb_data_format}, {interm0_cb_index, out_cb_data_format}};

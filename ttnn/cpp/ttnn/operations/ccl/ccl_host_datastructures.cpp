@@ -6,6 +6,8 @@
 #include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace ccl {
 
@@ -63,7 +65,7 @@ CCLOpConfig::CCLOpConfig(
     topology(topology),
     is_row_major(input_tensors.at(0).get_layout() == Layout::ROW_MAJOR) {
         if(input_tensors.at(0).get_layout() == Layout::TILE) {
-            this->tile = input_tensors.at(0).get_tile();
+            this->tile = input_tensors.at(0).tensor_spec().tile();
             this->page_size = this->tile.get_tile_size(this->df);
             //this->page_size = input_tensors.at(0).buffer()->page_size();
         } else {

@@ -315,7 +315,7 @@ void kernel_main() {
 
     hang_toggle(hang_toggle_semaphore);
 
-    auto cb = tt::CB::c_in0;
+    auto cb = tt::CBIndex::c_0;
     bool very_first_message = true;
 
     uint32_t message_id = 0;

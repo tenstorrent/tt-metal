@@ -16,6 +16,8 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::auto_format {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, const MemoryConfig& mem_config) {

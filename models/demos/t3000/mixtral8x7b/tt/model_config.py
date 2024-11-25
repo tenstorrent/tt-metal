@@ -424,6 +424,12 @@ class TtModelArgs:
             packer_l1_acc=True,
         )
 
+        self.compute_kernel_config_reduce = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
         self.compute_kernel_attn_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
@@ -471,6 +477,9 @@ class TtModelArgs:
 
     def get_compute_kernel_config(self):
         return self.compute_kernel_config
+
+    def get_compute_kernel_config_reduce(self):
+        return self.compute_kernel_config_reduce
 
     def get_compute_kernel_attn_config(self):
         return self.compute_kernel_attn_config

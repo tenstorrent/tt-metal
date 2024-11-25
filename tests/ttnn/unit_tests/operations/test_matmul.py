@@ -81,6 +81,18 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
     assert_with_pcc(torch_input_tensor, output_tensor, 1)
 
 
+@pytest.mark.parametrize("m, k, n", [(784, 192, 576), (576, 192, 784), (486, 792, 352), (966, 123, 561)])
+def test_pytorch_2_0_failed_cases(device, m, k, n):
+    x = torch.ones((m, k), dtype=torch.float32)
+    y = torch.ones((k, n), dtype=torch.float32)
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.matmul(x_tt, y_tt)
+    z = ttnn.to_torch(z_tt)
+    z_t = torch.matmul(x, y)
+    assert_with_pcc(z_t, z)
+
+
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])

@@ -185,9 +185,15 @@ class LlamaVision:
         )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        tt_h_trace_input = tt_h
         B = tokens.shape[0]
         # Do on-device transformations of inputs before forward
-        tt_xattn_mask_transform, tt_full_text_mask_expand_1NSH_transform = self.model.transform_decode_inputs_device(
+        (
+            tt_h,
+            tt_xattn_mask_transform,
+            tt_full_text_mask_expand_1NSH_transform,
+        ) = self.model.transform_decode_inputs_device(
+            tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             B=B,
@@ -204,7 +210,15 @@ class LlamaVision:
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
 
-        return trace_id, tt_logits_rm, tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, rot_mats
+        return (
+            trace_id,
+            tt_logits_rm,
+            tt_h_trace_input,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            tt_position_id,
+            rot_mats,
+        )
 
     def decode_forward_trace(
         self,

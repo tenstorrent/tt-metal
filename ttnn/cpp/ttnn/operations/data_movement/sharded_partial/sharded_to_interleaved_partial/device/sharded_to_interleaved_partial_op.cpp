@@ -8,6 +8,7 @@
 
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 

@@ -115,25 +115,25 @@ namespace ttnn::operations::experimental::transformer {
         uint32_t v_size = block_ht*num_tiles_per_group[2]*single_tile_size*groups_per_block;
 
         // qkv tensor
-        auto c_in0_config = CircularBufferConfig(input_size, {{CB::c_in0, data_format}}).set_page_size(CB::c_in0, single_tile_size).set_globally_allocated_address(*input_tensor.buffer());
+        auto c_in0_config = CircularBufferConfig(input_size, {{CBIndex::c_0, data_format}}).set_page_size(CBIndex::c_0, single_tile_size).set_globally_allocated_address(*input_tensor.buffer());
         auto cb_in0_id = CreateCircularBuffer(program, all_cores, c_in0_config);
 
         // q sharded
-        auto c_out0_config = CircularBufferConfig(q_size, {{CB::c_out0, data_format}})
-            .set_page_size(CB::c_out0, single_tile_size).set_globally_allocated_address(*output[0].buffer());
+        auto c_out0_config = CircularBufferConfig(q_size, {{CBIndex::c_16, data_format}})
+            .set_page_size(CBIndex::c_16, single_tile_size).set_globally_allocated_address(*output[0].buffer());
         auto cb_out0_id = CreateCircularBuffer( program, all_cores, c_out0_config );
         // k sharded
-        auto c_out1_config = CircularBufferConfig(k_size, {{CB::c_out1, data_format}})
-            .set_page_size(CB::c_out1, single_tile_size).set_globally_allocated_address(*output[1].buffer());
+        auto c_out1_config = CircularBufferConfig(k_size, {{CBIndex::c_17, data_format}})
+            .set_page_size(CBIndex::c_17, single_tile_size).set_globally_allocated_address(*output[1].buffer());
         auto cb_out1_id = CreateCircularBuffer( program, all_cores, c_out1_config );
         // v sharded
-        auto c_out2_config = CircularBufferConfig(v_size, {{CB::c_out2, data_format}})
-            .set_page_size(CB::c_out2, single_tile_size).set_globally_allocated_address(*output[2].buffer());
+        auto c_out2_config = CircularBufferConfig(v_size, {{CBIndex::c_18, data_format}})
+            .set_page_size(CBIndex::c_18, single_tile_size).set_globally_allocated_address(*output[2].buffer());
         auto cb_out2_id = CreateCircularBuffer( program, all_cores, c_out2_config );
 
         if (transpose_k) {
-            auto c_im0_config = CircularBufferConfig(k_size, {{CB::c_intermed0, data_format}})
-                .set_page_size(CB::c_intermed0, single_tile_size);
+            auto c_im0_config = CircularBufferConfig(k_size, {{CBIndex::c_24, data_format}})
+                .set_page_size(CBIndex::c_24, single_tile_size);
             auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
         }
 

@@ -23,12 +23,12 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(8);
     const uint32_t stats_addr = get_arg_val<uint32_t>(9);
 
-    constexpr uint32_t cb_inp = tt::CB::c_in0;
-    constexpr uint32_t cb_stats = tt::CB::c_in1;
-    constexpr uint32_t cb_gamma = tt::CB::c_in2;
-    constexpr uint32_t cb_beta = tt::CB::c_in3;
-    constexpr uint32_t cb_eps = tt::CB::c_in4;
-    constexpr uint32_t cb_reduce = tt::CB::c_in5;
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
+    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);

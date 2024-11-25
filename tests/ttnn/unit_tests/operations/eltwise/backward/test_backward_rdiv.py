@@ -19,7 +19,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 @pytest.mark.parametrize(
     "round_mode",
     (
-        "None",
+        None,
         "trunc",
         "floor",
     ),
@@ -31,10 +31,6 @@ def test_bw_rdiv(input_shapes, scalar, round_mode, device):
 
     tt_output_tensor_on_device = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
 
-    in_data.retain_grad()
-
-    if round_mode == "None":
-        round_mode = None
     golden_function = ttnn.get_golden_function(ttnn.rdiv_bw)
     golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
 

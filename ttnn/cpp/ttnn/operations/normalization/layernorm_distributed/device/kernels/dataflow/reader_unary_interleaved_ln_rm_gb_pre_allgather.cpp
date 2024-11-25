@@ -18,8 +18,8 @@ void kernel_main() {
     const uint32_t Wt        = get_arg_val<uint32_t>(2);  // Width in tiles
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
 
-    constexpr uint32_t cb_inp = tt::CB::c_in0;
-    constexpr uint32_t cb_reduce = tt::CB::c_in1;
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);

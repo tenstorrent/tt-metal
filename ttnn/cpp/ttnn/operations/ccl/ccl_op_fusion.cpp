@@ -6,6 +6,8 @@
 #include "tt_metal/impl/program/program.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace experimental {
 namespace ccl {

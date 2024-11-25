@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t W_size_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(8);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
 
     const uint32_t stick_size_bytes = W_size_bytes;
 

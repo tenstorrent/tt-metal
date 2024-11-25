@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <stdint.h>
 
 #include <cstring>
@@ -71,7 +73,7 @@ class ArgFetcher {
     })
 
 template <bool DRAM>
-FORCE_INLINE InterleavedAddrGenFast<DRAM> InterleavedAddrGenFastHelper_(uint32_t addr, tt::CB cb, uint32_t idx) {
+FORCE_INLINE InterleavedAddrGenFast<DRAM> InterleavedAddrGenFastHelper_(uint32_t addr, tt::CBIndex cb, uint32_t idx) {
     uint32_t tile_bytes = get_tile_size(cb);
     auto data_format = get_dataformat(cb);
 
@@ -82,7 +84,7 @@ FORCE_INLINE InterleavedAddrGenFast<DRAM> InterleavedAddrGenFastHelper_(uint32_t
 }
 
 template <typename AddrGen>
-FORCE_INLINE void noc_async_read_tile_helper(tt::CB cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
+FORCE_INLINE void noc_async_read_tile_helper(tt::CBIndex cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
     cb_reserve_back(cb, num_tiles);
     uint32_t addr = get_write_ptr(cb);
     noc_async_read_tile(tile_idx, addr_gen, addr);
@@ -91,7 +93,7 @@ FORCE_INLINE void noc_async_read_tile_helper(tt::CB cb, uint32_t num_tiles, uint
 }
 
 template <typename AddrGen>
-FORCE_INLINE void noc_async_write_tile_helper(tt::CB cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
+FORCE_INLINE void noc_async_write_tile_helper(tt::CBIndex cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
     cb_wait_front(cb, num_tiles);
     uint32_t l1_read_addr = get_read_ptr(cb);
     noc_async_write_tile(tile_idx, addr_gen, l1_read_addr);

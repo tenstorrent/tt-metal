@@ -13,6 +13,7 @@
 namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks plusone_single_core(
     const Tensor &input) {
@@ -33,7 +34,7 @@ operation::ProgramWithCallbacks plusone_single_core(
     const auto &input_shape = input.get_legacy_shape();
     const uint32_t W = input_shape[0];
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_unit_size = round_up_to_mul32(num_input_units * input_unit_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =

@@ -10,6 +10,8 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/distributed/api.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 bool can_deallocate(const Tensor& input_tensor, bool from_multi_device = false) {

@@ -18,11 +18,11 @@ void kernel_main() {
     uint32_t weight_decay = get_arg_val<uint32_t>(i); i++;
     uint32_t one = get_arg_val<uint32_t>(i); i++;
 
-    constexpr auto cb_param_in = tt::CB::c_in0;
-    constexpr auto cb_grad = tt::CB::c_in1;
-    constexpr auto cb_momentum_in = tt::CB::c_in2;
+    constexpr auto cb_param_in = tt::CBIndex::c_0;
+    constexpr auto cb_grad = tt::CBIndex::c_1;
+    constexpr auto cb_momentum_in = tt::CBIndex::c_2;
 
-    constexpr auto cb_scalar_args = tt::CB::c_intermed0;
+    constexpr auto cb_scalar_args = tt::CBIndex::c_24;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
