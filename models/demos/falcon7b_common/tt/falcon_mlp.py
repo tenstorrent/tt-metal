@@ -5,7 +5,11 @@
 import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.falcon7b_common.tt.model_utils import (
+    get_falcon_default_core_grid,
+    get_weights_cached,
+    get_default_hifi2_kernel_config,
+)
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from torch import nn
 from models.utility_functions import (
@@ -50,7 +54,6 @@ def falcon_dense_h_to_4h_matmul(
     input_tensor_a,
     input_tensor_b,
     core_grid,
-    compute_kernel_config,
     fused_activation=None,
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
@@ -64,7 +67,7 @@ def falcon_dense_h_to_4h_matmul(
             input_tensor_b,
             memory_config=output_mem_config,
             dtype=output_dtype,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=get_default_hifi2_kernel_config(),
         )
 
     if is_grayskull():
@@ -357,7 +360,6 @@ class TtFalconMLPDecode(nn.Module):
         hidden_states = falcon_dense_h_to_4h_matmul(
             x,
             self.dense_h_to_4h_weights,
-            compute_kernel_config=self.model_config["HiFi2_KERNEL_CONFIG"],
             fused_activation="gelu",
             output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
