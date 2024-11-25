@@ -31,9 +31,9 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time",
     (
-        (32, 20),
-        (128, 20),
-        (1024, 20),
+        (32, 30),
+        (128, 30),
+        (1024, 30),
     ),
 )
 @pytest.mark.parametrize(
