@@ -83,6 +83,10 @@ class TtTransformer(LightweightModule):
         page_table=None,
         get_last_token=-1,
     ):
+        # No-op if callers already provide the right memory config
+        if mode == "decode":
+            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+
         for layer in self.layers:
             x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode, page_table)
 

@@ -56,7 +56,7 @@ class TtModelArgs:
         "ATTN_OUTPUT",
         "ATTN_W_LAYOUT",
         # Decoder
-        "DEC_SKIP_OUTPUT",
+        "DECODE_RESIDUAL",
         "OUTPUT_MM",
     )
 
@@ -92,15 +92,15 @@ class TtModelArgs:
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.DEFAULT_CKPT_DIR
-            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
+            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
             assert os.path.isfile(
                 self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
+            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please set LLAMA_TOKENIZER_PATH=..."
             if not os.path.exists(self.DEFAULT_CACHE_PATH):
                 os.makedirs(self.DEFAULT_CACHE_PATH)
             assert os.path.exists(
                 self.DEFAULT_CACHE_PATH
-            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
+            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please set LLAMA_CACHE_PATH=..."
             # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         #            assert os.path.isfile(
         #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
@@ -208,6 +208,12 @@ class TtModelArgs:
             )
 
             # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
+            self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
             self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
@@ -228,6 +234,18 @@ class TtModelArgs:
             )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+
+            residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+            self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (
+                    self.tile_padded_batch_rows,
+                    self.dim // residual_grid.num_cores // self.num_devices,
+                ),
+                residual_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
@@ -267,9 +285,7 @@ class TtModelArgs:
                 do_per_core_N = (
                     self.dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
                 )
-                self.model_config[
-                    "ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"
-                ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=do_core_grid_size,
                     in0_block_w=self.dim
                     // self.tile_size
@@ -285,7 +301,7 @@ class TtModelArgs:
                     mcast_in0=True,
                 )
             else:
-                self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"] = None
+                self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = self.matmul_config(
                 m=1024, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(8, 8)
@@ -367,9 +383,6 @@ class TtModelArgs:
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
-            self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
-            )
 
             # Useful core grid based on batch size
             if self.max_batch_size == 32:
@@ -426,7 +439,8 @@ class TtModelArgs:
             )
 
             # Width sharded
-            mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+            # mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+            mlp_core_grid = self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
@@ -444,7 +458,8 @@ class TtModelArgs:
                 num_cores=mlp_core_grid.num_cores,
             )
 
-            mlp2_core_grid = self.dram_shard_core_grid_for_k(self.hidden_dim // self.num_devices)
+            # mlp2_core_grid = self.dram_shard_core_grid_for_k(self.hidden_dim // self.num_devices)
+            mlp2_core_grid = self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
@@ -887,13 +902,14 @@ class TtModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 4
-        max_cols = 8  # Maximum number of rows or columns
-        max_cores = max_rows * max_cols  # Maximum number of cores (8x2 grid)
+        max_rows = 8
+        max_cols = 8
+        max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
+        target = 32
         possible_cores = [k for k in range(1, max_cores + 1) if N % k == 0]
-        possible_cores.sort(reverse=True)  # Start checking from the largest number of cores
+        possible_cores.sort(key=lambda x: abs(x - target))  # Sort by closest to target
 
         for cores in possible_cores:
             # Try to find a grid configuration with the current number of cores
@@ -908,15 +924,58 @@ class TtModelArgs:
             f"Cannot find a grid configuration for {N} tiles that evenly divides into {max_cores} cores of max size {max_rows}x{max_cols}."
         )
 
+    def dram_shard_core_grid_for_k_and_n(self, k: int, n: int) -> Tuple[int, int]:
+        rows, cols = self.find_grid_k_n(k // self.tile_size, n // self.tile_size)
+        return ttnn.CoreGrid(x=cols, y=rows)
+
+    def find_grid_k_n(self, K, N):
+        """
+        Find the number of rows and columns for a grid of cores such that
+        the total number of tiles N can be evenly divided among the cores.
+        Each core will have the same integer number of tiles.
+        The grid size is limited to a maximum of 2 rows and 8 columns.
+
+        Parameters:
+            N (int): Total number of tiles to be distributed.
+
+        Returns:
+            tuple: A tuple (rows, cols) representing the grid dimensions.
+
+        Raises:
+            AssertionError: If it's not possible to find such a grid configuration.
+        """
+        max_rows = 4
+        max_cols = 8  # Maximum number of rows or columns
+        max_cores = max_rows * max_cols  # Maximum number of cores (8x2 grid)
+
+        # Find all possible numbers of cores that divide N and are less than or equal to max_cores
+        possible_cores = [c for c in range(1, max_cores + 1) if K % c == 0 and N % c == 0]
+        possible_cores.sort(reverse=True)  # Start checking from the largest number of cores
+
+        for cores in possible_cores:
+            # Try to find a grid configuration with the current number of cores
+            for rows in range(1, max_rows + 1):
+                if cores % rows == 0:
+                    cols = cores // rows
+                    if cols <= max_cols:
+                        return rows, cols
+
+        # If no configuration is found, assert an error
+        raise AssertionError(
+            f"Cannot find a grid configuration such that both {K} and {N} tiles evenly divide into cores of max size {max_rows}x{max_cols}."
+        )
+
     def dram_matmul_config(
         self, m: int, k: int, n: int, num_cores=None
     ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
-            # Default to using 2 rows of 8 cores as this is fastest, but use 1 row if K is too small
-            # Warning: this does not handle the case in which K is too large for 2 rows of 8 cores
-            # In that case override grid_size or update this logic to do so
-            num_cores = self.dram_shard_core_grid_for_k(k).num_cores
+            # num_cores = self.dram_shard_core_grid_for_k_and_n(k).num_cores
+            num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
+            assert (
+                k % (self.tile_size * num_cores) == 0
+            ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
+            # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=math.ceil(k / (self.tile_size * num_cores)),
             per_core_M=math.ceil(m / self.tile_size),

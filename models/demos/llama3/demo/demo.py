@@ -378,6 +378,7 @@ def run_llama3_demo(
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
+        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         if tt_model.args.num_devices > 1:
             tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
@@ -399,6 +400,7 @@ def run_llama3_demo(
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
+        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         if tt_model.args.num_devices > 1:
             tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
@@ -716,7 +718,7 @@ def run_llama3_demo(
         "single_layer",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [

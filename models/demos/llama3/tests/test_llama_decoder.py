@@ -92,7 +92,8 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
 
         decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            ttnn.DRAM_MEMORY_CONFIG,
+            # ttnn.DRAM_MEMORY_CONFIG,
+            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
         # Run TT model

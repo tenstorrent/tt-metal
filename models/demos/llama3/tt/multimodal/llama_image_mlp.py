@@ -100,7 +100,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
 
         # All reduce
-        if self.args.num_devices > 1:
+        if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
             w2_out_gathered = ttnn.all_gather(c_proj_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             pre_bias_output = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None

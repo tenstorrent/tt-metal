@@ -219,7 +219,7 @@ class TtLlamaImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # All reduce
-        if self.num_devices > 1:
+        if self.num_devices > 1:  # replace with reduce_scatter and all_gather
             dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
