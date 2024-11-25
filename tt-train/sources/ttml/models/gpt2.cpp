@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "models.hpp"
+#include "gpt2.hpp"
 
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+
+namespace ttml::models::gpt2 {
 
 Transformer::Transformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
@@ -54,6 +56,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
 }
+
 ttml::autograd::TensorPtr Transformer::operator()(
     const ttml::autograd::TensorPtr& x,
     const ttml::autograd::TensorPtr& positions,
@@ -70,25 +73,34 @@ ttml::autograd::TensorPtr Transformer::operator()(
     return log_softmax;
 }
 
-BigramFCModel::BigramFCModel(uint32_t vocab_size, uint32_t num_tokens, uint32_t hidden_dim) {
-    // make vocab_size divisible by 32
-    vocab_size = (vocab_size + 31) / 32 * 32;
-
-    // create layers
-    emb = std::make_shared<ttml::modules::Embedding>(vocab_size, hidden_dim);
-    fc1 = std::make_shared<ttml::modules::LinearLayer>(hidden_dim, num_tokens);
-
-    create_name("bigram_fc_model");
-
-    register_module(emb, "emb");
-    register_module(fc1, "fc1");
+TransformerConfig read_config(const YAML::Node& config) {
+    TransformerConfig transformer_config;
+    transformer_config.num_heads = config["num_heads"].as<uint32_t>();
+    transformer_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
+    transformer_config.dropout_prob = config["dropout_prob"].as<float>();
+    transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
+    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
+    transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
+    return transformer_config;
 }
 
-ttml::autograd::TensorPtr BigramFCModel::operator()(
-    ttml::autograd::TensorPtr x,
-    [[maybe_unused]] const ttml::autograd::TensorPtr& positions,
-    [[maybe_unused]] const ttml::autograd::TensorPtr& masks) const {
-    x = (*emb)(x);
-    x = (*fc1)(x);
-    return x;
+YAML::Node write_config(const TransformerConfig& mlp_config) {
+    YAML::Node config;
+    config["num_heads"] = mlp_config.num_heads;
+    config["embedding_dim"] = mlp_config.embedding_dim;
+    config["dropout_prob"] = mlp_config.dropout_prob;
+    config["num_blocks"] = mlp_config.num_blocks;
+    config["vocab_size"] = mlp_config.vocab_size;
+    config["max_sequence_length"] = mlp_config.max_sequence_length;
+    return config;
 }
+
+std::shared_ptr<Transformer> create(const TransformerConfig& config) {
+    return std::make_shared<Transformer>(config);
+}
+std::shared_ptr<Transformer> create(const YAML::Node& config) {
+    TransformerConfig transformer_config = read_config(config);
+    return std::make_shared<Transformer>(transformer_config);
+}
+
+}  // namespace ttml::models::gpt2
