@@ -15,6 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
+    bool keep_l1_aligned = true;
     tt::tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
@@ -94,7 +95,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole) {
+    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole or keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
         if (is_blackhole) {
@@ -245,7 +246,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             bool aligned = (src_is_dram ? curr_idx_w % dram_alignment == 0 : true);
-            aligned = aligned and !(is_blackhole);
+            aligned = aligned and !(is_blackhole) and !(keep_l1_aligned);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 //TODO: is this right, leaving non BH case the same for now, should investigate
