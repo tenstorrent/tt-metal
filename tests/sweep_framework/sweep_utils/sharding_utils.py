@@ -56,14 +56,15 @@ def gen_sharded_spec_unary(num_shapes, y, x, max_tensor_size=4 * 1024 * 1024):
             elif sharding_strategy == "BLOCK":
                 min_shard_size_y = 32 * y
                 min_shard_size_x = 32 * x
-                mul_x = random.randint(1, 10)
-                mul_y = random.randint(1, 64 // mul_x)
 
                 input_shape = random.choice(
-                    _gen_reshape_args_from_volume(mul_y * min_shard_size_y, step=1, out_dims=rank - 1)
+                    _gen_reshape_args_from_volume(
+                        max_tensor_size // (min_shard_size_x * min_shard_size_y), step=1, out_dims=rank
+                    )
                 )
                 input_shape = list(input_shape["reshape_dims"])
-                input_shape.append(mul_x * min_shard_size_x)
+                input_shape[-1] *= min_shard_size_y
+                input_shape[-2] *= min_shard_size_x
 
             elif sharding_strategy == "WIDTH" or sharding_strategy == "HEIGHT":
                 # if shard_width % total_cores != 0: raise RuntimeError("Invalid sharding core_grid")
