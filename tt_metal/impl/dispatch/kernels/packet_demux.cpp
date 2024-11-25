@@ -180,7 +180,23 @@ constexpr uint32_t output_depacketize_remove_header[MAX_SWITCH_FAN_OUT] =
         (get_compile_time_arg_val(29) >> 24) & 0x1
     };
 
+constexpr uint32_t demux_input_scratch_buffer = get_compile_time_arg_val(30);
+constexpr uint32_t demux_input_remote_scratch_buffer = get_compile_time_arg_val(31);
 
+constexpr uint32_t demux_output_scratch_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(32),
+        get_compile_time_arg_val(33),
+        get_compile_time_arg_val(34),
+        get_compile_time_arg_val(35)
+    };
+constexpr uint32_t demux_output_remote_scratch_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(36),
+        get_compile_time_arg_val(37),
+        get_compile_time_arg_val(38),
+        get_compile_time_arg_val(39)
+    };
 
 inline uint8_t dest_output_queue_id(uint32_t dest_endpoint_id) {
     uint32_t dest_endpoint_index = dest_endpoint_id - endpoint_id_start_index;
@@ -196,16 +212,20 @@ void kernel_main() {
     write_test_results(test_results, PQ_TEST_MISC_INDEX+3, dest_endpoint_output_map_lo);
     write_test_results(test_results, PQ_TEST_MISC_INDEX+4, endpoint_id_start_index);
 
+    input_queue.init(0, rx_queue_start_addr_words, rx_queue_size_words,
+                     remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type,
+                     demux_input_scratch_buffer, demux_input_remote_scratch_buffer);
+
     for (uint32_t i = 0; i < demux_fan_out; i++) {
         output_queues[i].init(i + 1, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
                               &input_queue, 1,
+                              demux_output_scratch_buffers[i],
+                              demux_output_remote_scratch_buffers[i],
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);
     }
-    input_queue.init(0, rx_queue_start_addr_words, rx_queue_size_words,
-                     remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type);
 
     if (!wait_all_src_dest_ready(&input_queue, 1, output_queues, demux_fan_out, timeout_cycles)) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
@@ -270,9 +290,6 @@ void kernel_main() {
 
     if (timeout) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-        // DPRINT << "demux timeout" << ENDL();
-        // // input_queue.dprint_object();
-        // output_queues[0].dprint_object();
     } else {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
