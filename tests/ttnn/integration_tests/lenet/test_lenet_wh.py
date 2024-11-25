@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,23 +16,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
-    [128],
+    [64],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_lenet_inference(mesh_device, batch_size, model_location_generator, reset_seeds):
     num_classes = 10
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = (2 * batch_size) if mesh_device_flag else batch_size
     test_input, images, outputs = lenet_utils.get_test_data(batch_size)
 
     pt_model_path = model_location_generator("model.pt", model_subdir="LeNet")
-    torch_LeNet, state_dict = lenet_utils.load_torch_lenet(pt_model_path, num_classes)
-    model = torch_LeNet.float()
-    model = torch_LeNet.eval()
+    torch_lenet, state_dict = lenet_utils.load_torch_lenet(pt_model_path, num_classes)
+    model = torch_lenet.float()
     torch_output = model(test_input)
-
-    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = batch_size if mesh_device_flag else batch_size / 2
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
@@ -42,17 +39,13 @@ def test_lenet_inference(mesh_device, batch_size, model_location_generator, rese
 
     parameters = lenet_utils.custom_preprocessor_device(parameters, device=mesh_device)
 
-    x = test_input
     x = test_input.permute(0, 2, 3, 1)
     x = ttnn.from_torch(x, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
-    tt_output = tt_lenet.Lenet(
+    tt_output = tt_lenet.lenet(
         x,
-        model,
         batch_size,
-        num_classes,
         mesh_device,
         parameters,
-        reset_seeds,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
     )
