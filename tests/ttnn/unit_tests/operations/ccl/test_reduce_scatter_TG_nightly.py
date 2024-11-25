@@ -145,7 +145,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     ttnn_tensor_out = ttnn.reduce_scatter(
         ttnn_tensor,
-        scatter_dim=dim,
+        dim=dim,
         cluster_axis=cluster_axis,
         mesh_device=mesh_device,
         math_op=math_op,
@@ -158,7 +158,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     for _ in range(num_iters):
         ttnn_tensor_out = ttnn.reduce_scatter(
             ttnn_tensor,
-            scatter_dim=dim,
+            dim=dim,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             math_op=math_op,

@@ -271,7 +271,7 @@ class TtLlamaCrossAttention(LightweightModule):
         if self.is_multichip:
             dense_out_reduced = ttnn.reduce_scatter(
                 output,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -358,7 +358,7 @@ class TtLlamaCrossAttention(LightweightModule):
         if self.is_multichip:  # TODO use_fused_all_gather_matmul
             dense_out_reduced = ttnn.reduce_scatter(
                 output,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

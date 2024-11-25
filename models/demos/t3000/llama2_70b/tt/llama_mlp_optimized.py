@@ -219,7 +219,7 @@ class TtLlamaMLP_optimized:
 
         hidden_states_reduced = ttnn.reduce_scatter(
             hidden_states_mm,
-            scatter_dim=3,
+            dim=3,
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -268,7 +268,7 @@ class TtLlamaMLP_optimized:
 
         hidden_states_reduced = ttnn.reduce_scatter(
             hidden_states,
-            scatter_dim=3,
+            dim=3,
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
             memory_config=self.model_config["RESIDUAL_16_CORES_OUTPUT_MEMCFG"],

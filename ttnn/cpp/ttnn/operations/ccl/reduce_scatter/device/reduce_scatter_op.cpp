@@ -107,7 +107,7 @@ namespace operations{
 namespace ccl{
 Tensor reduce_scatter(
     const Tensor& input_tensor,
-    const uint32_t scatter_dim,
+    const int32_t dim,
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config,
@@ -125,6 +125,12 @@ Tensor reduce_scatter(
     if (num_devices == 2){
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
+
+    int16_t rank = input_tensor.get_logical_shape().rank();
+
+    int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
+    TT_FATAL(scatter_dim >= -rank && scatter_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
@@ -158,7 +164,7 @@ Tensor reduce_scatter(
 
 Tensor reduce_scatter(
     const Tensor &input_tensor,
-    const uint32_t scatter_dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType reduce_op,
@@ -173,6 +179,12 @@ Tensor reduce_scatter(
     TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+
+    int16_t rank = input_tensor.get_logical_shape().rank();
+
+    int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
+    TT_FATAL(scatter_dim >= -rank && scatter_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 

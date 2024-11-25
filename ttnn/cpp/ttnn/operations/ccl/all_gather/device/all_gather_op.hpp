@@ -200,7 +200,7 @@ namespace ccl {
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const uint32_t dim,
+    const int32_t dim,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
@@ -209,7 +209,7 @@ Tensor all_gather(
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const uint32_t dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links = 1,
