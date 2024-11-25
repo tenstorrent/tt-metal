@@ -271,7 +271,11 @@ void bind_unary_operation_overload_complex(
 }
 
 template <typename unary_operation_t>
-void bind_unary_operation_overload_complex_return_complex(py::module& module, const unary_operation_t& operation, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "" ) {
+void bind_unary_operation_overload_complex_return_complex(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -280,10 +284,10 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
             \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
@@ -306,7 +310,7 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
             {3}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
