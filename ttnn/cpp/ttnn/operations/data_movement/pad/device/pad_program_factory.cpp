@@ -1308,7 +1308,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // figure out the stick id in a shard, and the core id for the stick.
         std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        auto first_core = device->translated_worker_core_from_logical_core(CoreCoord{0, 0});
         std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
@@ -1331,7 +1331,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
                 if (worker_x_logical < num_cores_x_unpadded and worker_y_logical < num_cores_y_unpadded) {
                     auto core_physical =
-                        device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+                        device->translated_worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
                     // save stick id in a shard, and core coord into a map
                     std::pair<uint32_t, uint32_t> xy_pair = row_major
                                                                 ? std::make_pair(core_physical.y, core_physical.x)

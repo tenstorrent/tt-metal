@@ -114,10 +114,10 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
     std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
     for (uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
-        in1_mcast_sender_noc_x[core_idx_x] = device->worker_core_from_logical_core({core_idx_x, 0}).x;
+        in1_mcast_sender_noc_x[core_idx_x] = device->translated_worker_core_from_logical_core({core_idx_x, 0}).x;
     }
     for (uint32_t core_idx_y = 0; core_idx_y < mcast_sender_grid.y; ++core_idx_y) {
-        in1_mcast_sender_noc_y[core_idx_y] = device->worker_core_from_logical_core({0, core_idx_y}).y;
+        in1_mcast_sender_noc_y[core_idx_y] = device->translated_worker_core_from_logical_core({0, core_idx_y}).y;
     }
 
     // Set up CBs
@@ -406,8 +406,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
         CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start_coord;
         CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end_coord;
-        CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-        CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+        CoreCoord top_left_core_physical = device->translated_worker_core_from_logical_core(top_left_core);
+        CoreCoord bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
 
         // Default reader runtime args
         std::vector<uint32_t> reader_runtime_args = {

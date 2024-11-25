@@ -345,8 +345,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         local_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_local_compile_time_args));
 
-    CoreCoord local_cores_physical_start = device->worker_core_from_logical_core({0, 0});
-    CoreCoord local_cores_physical_end = device->worker_core_from_logical_core({0, num_cores - 2u});
+    CoreCoord local_cores_physical_start = device->translated_worker_core_from_logical_core({0, 0});
+    CoreCoord local_cores_physical_end = device->translated_worker_core_from_logical_core({0, num_cores - 2u});
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)receiver_semaphore_id,
         (std::uint32_t)sender_semaphore_id,
@@ -365,7 +365,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         final_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    CoreCoord final_cores_physical = device->worker_core_from_logical_core({0, num_cores - 1u});
+    CoreCoord final_cores_physical = device->translated_worker_core_from_logical_core({0, num_cores - 1u});
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)receiver_semaphore_id,
         (std::uint32_t)sender_semaphore_id,

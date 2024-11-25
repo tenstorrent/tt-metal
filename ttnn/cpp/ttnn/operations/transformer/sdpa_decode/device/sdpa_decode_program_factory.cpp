@@ -498,7 +498,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             reduce_core_noc_y = core.y;
             // get physical core
             CoreCoord reduce_core = {(std::size_t)reduce_core_noc_x, (std::size_t)reduce_core_noc_y};
-            auto reduce_core_physical = device->worker_core_from_logical_core(reduce_core);
+            auto reduce_core_physical = device->translated_worker_core_from_logical_core(reduce_core);
             reduce_core_physical_xs.push_back((uint32_t)reduce_core_physical.x);
             reduce_core_physical_ys.push_back((uint32_t)reduce_core_physical.y);
         }
@@ -524,7 +524,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             output_core_noc_y = core.y;
             // get physical core
             CoreCoord output_core = {(std::size_t)output_core_noc_x, (std::size_t)output_core_noc_y};
-            auto output_core_physical = device->worker_core_from_logical_core(output_core);
+            auto output_core_physical = device->translated_worker_core_from_logical_core(output_core);
             output_core_physical_xs.push_back((uint32_t)output_core_physical.x);
             output_core_physical_ys.push_back((uint32_t)output_core_physical.y);
         }

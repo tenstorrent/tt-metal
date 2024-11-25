@@ -674,7 +674,7 @@ operation::ProgramWithCallbacks downsample_single_core(
 
             TT_ASSERT(
                 (halo_prev_start_addr + halo_prev_addr_offset) % 32 == 0);  // read address should be 32 byte aligned
-            auto halo_noc_coords = device->worker_core_from_logical_core(prev_core);
+            auto halo_noc_coords = device->translated_worker_core_from_logical_core(prev_core);
             halo_prev_noc_x = halo_noc_coords.x;
             halo_prev_noc_y = halo_noc_coords.y;
             TT_ASSERT(v.input_flat_h >= halo_prev_start_tile_id_h * TILE_HEIGHT);
@@ -753,7 +753,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             halo_next_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
             TT_ASSERT(
                 (halo_next_start_addr + halo_next_addr_offset) % 32 == 0);  // read address should be 32 byte aligned
-            auto halo_noc_coords = device->worker_core_from_logical_core(next_core);
+            auto halo_noc_coords = device->translated_worker_core_from_logical_core(next_core);
             halo_next_noc_x = halo_noc_coords.x;
             halo_next_noc_y = halo_noc_coords.y;
             TT_ASSERT(halo_prev_input_num_rows_of_tiles == 0);

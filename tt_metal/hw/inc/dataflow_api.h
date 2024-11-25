@@ -604,10 +604,10 @@ std::uint64_t get_noc_multicast_addr(
         read from/write to via the noc
     */
     return NOC_MULTICAST_ADDR(
-        DYNAMIC_NOC_X(noc, noc_x_start),
-        DYNAMIC_NOC_Y(noc, noc_y_start),
-        DYNAMIC_NOC_X(noc, noc_x_end),
-        DYNAMIC_NOC_Y(noc, noc_y_end),
+        TRANSLATED_DYNAMIC_NOC_X(noc, noc_x_start),
+        TRANSLATED_DYNAMIC_NOC_Y(noc, noc_y_start),
+        TRANSLATED_DYNAMIC_NOC_X(noc, noc_x_end),
+        TRANSLATED_DYNAMIC_NOC_Y(noc, noc_y_end),
         addr);
 }
 
@@ -618,7 +618,7 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
         write to via the noc multicast
     */
 
-    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
+    return NOC_XY_ADDR(TRANSLATED_DYNAMIC_NOC_X(noc, noc_x), TRANSLATED_DYNAMIC_NOC_Y(noc, noc_y), addr);
 }
 
 /*

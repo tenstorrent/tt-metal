@@ -15,6 +15,7 @@ set(TT_METAL_TESTS_SRCS
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
     test_dram_loopback_single_core.cpp
+    test_dram_to_l1_multicast.cpp
     test_datacopy_bfp8b.cpp
     test_datacopy.cpp
     test_datacopy_output_in_l1.cpp

@@ -1329,10 +1329,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     in0_mcast_noc_x.reserve(num_cores_x);
     in0_mcast_noc_y.reserve(num_cores_y);
     for (uint32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+        in0_mcast_noc_x.push_back(device->translated_worker_core_from_logical_core({core_idx_x, 0}).x);
     }
     for (uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+        in0_mcast_noc_y.push_back(device->translated_worker_core_from_logical_core({0, core_idx_y}).y);
     }
 
     uint32_t last_core_width_index = 0;
@@ -1412,23 +1412,23 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
                 CoreCoord bottom_right_core = {
                     (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-                auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-                auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+                auto top_left_core_physical = device->translated_worker_core_from_logical_core(top_left_core);
+                auto bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
                 mcast_start = top_left_core_physical;
                 mcast_end = bottom_right_core_physical;
             } else {
                 if (row_wise) {
                     CoreCoord left_core_plus_one = {(std::size_t)start_core.x + 1, (std::size_t)core.y};
                     CoreCoord right_core = {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)core.y};
-                    auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-                    auto right_core_physical = device->worker_core_from_logical_core(right_core);
+                    auto left_core_plus_one_physical = device->translated_worker_core_from_logical_core(left_core_plus_one);
+                    auto right_core_physical = device->translated_worker_core_from_logical_core(right_core);
                     mcast_start = left_core_plus_one_physical;
                     mcast_end = right_core_physical;
                 } else {
                     CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core.y + 1};
                     CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core.y + num_cores_y - 1};
-                    auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-                    auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                    auto top_core_plus_one_physical = device->translated_worker_core_from_logical_core(top_core_plus_one);
+                    auto bottom_core_physical = device->translated_worker_core_from_logical_core(bottom_core);
                     mcast_start = top_core_plus_one_physical;
                     mcast_end = bottom_core_physical;
                 }

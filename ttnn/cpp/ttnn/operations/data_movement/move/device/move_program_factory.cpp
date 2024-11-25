@@ -114,14 +114,14 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         DataMovementConfig{.compile_args = compile_time_args});
 
     const CoreCoord logical_controller = CoreCoord{0, 0};
-    CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
+    CoreCoord noc_controller = device->translated_worker_core_from_logical_core(logical_controller);
     std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(device, all_cores, logical_controller);
 
     std::vector<CoreRange> noc_multicast_regions;
     for (const auto& logical_cr : logical_multicast_regions) {
         CoreRange noc_cr(
-            device->worker_core_from_logical_core(logical_cr.start_coord),
-            device->worker_core_from_logical_core(logical_cr.end_coord));
+            device->translated_worker_core_from_logical_core(logical_cr.start_coord),
+            device->translated_worker_core_from_logical_core(logical_cr.end_coord));
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 

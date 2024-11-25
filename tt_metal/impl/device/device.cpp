@@ -3091,6 +3091,10 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
 
+CoreCoord Device::translated_worker_core_from_logical_core(const CoreCoord &logical_core) const {
+    return this->translated_coords_from_logical_coords(logical_core, CoreType::WORKER);
+}
+
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++)

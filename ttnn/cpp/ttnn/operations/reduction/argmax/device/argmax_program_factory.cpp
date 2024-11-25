@@ -176,7 +176,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     auto semaphore_addr = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
-    CoreCoord final_cores_physical = device->worker_core_from_logical_core({0, 0});
+    CoreCoord final_cores_physical = device->translated_worker_core_from_logical_core({0, 0});
     uint32_t final_cores_physical_x = final_cores_physical.x;
     uint32_t final_cores_physical_y = final_cores_physical.y;
 

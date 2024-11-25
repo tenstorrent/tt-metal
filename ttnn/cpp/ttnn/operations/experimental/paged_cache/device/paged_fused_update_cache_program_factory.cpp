@@ -101,7 +101,7 @@ UpdateCacheKernels setup_kernels_for_update_cache(
 
         if (share_cache && send_signal) {
             auto next_core = cores.at(i + 1);
-            auto next_core_physical = device->worker_core_from_logical_core(next_core);
+            auto next_core_physical = device->translated_worker_core_from_logical_core(next_core);
             send_core_x = next_core_physical.x;
             send_core_y = next_core_physical.y;
         }

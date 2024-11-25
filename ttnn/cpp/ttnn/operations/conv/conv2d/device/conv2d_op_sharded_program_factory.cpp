@@ -398,6 +398,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
+    std::cout << "Running conv2" << std::endl;
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     tt_metal::Device* device = a.device();
@@ -948,9 +949,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
     CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
     CoreCoord bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device->translated_worker_core_from_logical_core(top_left_core);
+    auto top_left_core_plus_one_physical = device->translated_worker_core_from_logical_core(top_left_core_plus_one);
+    auto bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
 
     CoreRange mcast_sender_cores(top_left_core, top_left_core);  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores;
@@ -1150,13 +1151,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             if (transpose_mcast) {
                 act_mcast_noc_y.reserve(num_cores_y);
                 for (uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                    act_mcast_noc_y.push_back(device->translated_worker_core_from_logical_core({0, core_idx_y}).y);
                 }
             } else {
                 // NOTE: using same var for x as well, this is intentional
                 act_mcast_noc_y.reserve(num_cores_x);
                 for (int32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({(uint32_t)core_idx_x, 0}).x);
+                    act_mcast_noc_y.push_back(device->translated_worker_core_from_logical_core({(uint32_t)core_idx_x, 0}).x);
                 }
             }
 
@@ -1454,7 +1455,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
             if (transpose_mcast) {
                 CoreCoord bottom_core = {(std::size_t)core_x_i, (std::size_t)num_cores_y - 1};
-                auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                auto bottom_core_physical = device->translated_worker_core_from_logical_core(bottom_core);
 
                 uint32_t act_mcast_dest_noc_start_x = bottom_core_physical.x;
                 uint32_t act_mcast_dest_noc_start_y =
@@ -1476,9 +1477,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                     reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());  // act_mcast_sender_noc_y
             } else {
                 CoreCoord core = {core_x_i, core_y_i};
-                auto core_physical = device->worker_core_from_logical_core(core);
+                auto core_physical = device->translated_worker_core_from_logical_core(core);
                 CoreCoord bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-                auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+                auto bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
 
                 uint32_t act_mcast_dest_noc_start_x =
                     reader_is_noc_0 ? top_left_core_physical.x : bottom_right_core_physical.x;
@@ -1554,7 +1555,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             // 2D mcast
             if (transpose_mcast) {
                 CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core_y_i};
-                auto right_core_physical = device->worker_core_from_logical_core(right_core);
+                auto right_core_physical = device->translated_worker_core_from_logical_core(right_core);
                 if (core_x_i == 0) {
                     // sender
                     if (writer_mcast_noc == NOC::NOC_0) {
@@ -1586,7 +1587,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 }
             } else {
                 CoreCoord top_core = {(std::size_t)core_x_i, 0};
-                auto top_core_physical = device->worker_core_from_logical_core(top_core);
+                auto top_core_physical = device->translated_worker_core_from_logical_core(top_core);
                 TT_FATAL(writer_mcast_noc == NOC::NOC_0, "Error");
                 if (core_y_i == 0) {
                     // sender

@@ -114,6 +114,8 @@ class Device {
     CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
 
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
+    CoreCoord translated_worker_core_from_logical_core(const CoreCoord &logical_core) const;
+
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
     CoreCoord translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const;
@@ -127,7 +129,6 @@ class Device {
     CoreCoord logical_core_from_ethernet_core(const CoreCoord &physical_core) const;
 
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
-    std::vector<uint32_t> get_noc_encoding_for_active_eth_cores(NOC noc_index);
 
     std::unordered_set<chip_id_t> get_ethernet_connected_device_ids() const {
         return tt::Cluster::instance().get_ethernet_connected_device_ids(this->id_);
