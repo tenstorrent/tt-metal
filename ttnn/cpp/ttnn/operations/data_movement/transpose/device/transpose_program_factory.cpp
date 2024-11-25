@@ -11,6 +11,8 @@
 #include "tt_log.h"
 #include "ttnn/operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::detail {
 
 using namespace tt::constants;

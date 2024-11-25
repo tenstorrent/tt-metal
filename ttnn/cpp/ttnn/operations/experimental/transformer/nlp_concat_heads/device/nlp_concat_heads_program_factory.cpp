@@ -8,6 +8,8 @@
 #include "nlp_concat_heads_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;

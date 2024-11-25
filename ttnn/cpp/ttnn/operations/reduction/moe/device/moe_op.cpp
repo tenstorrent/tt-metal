@@ -5,6 +5,8 @@
 #include "moe_op.hpp"
 #include "moe_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::reduction {
 
 void MoeDeviceOperation::validate_with_output_tensors(

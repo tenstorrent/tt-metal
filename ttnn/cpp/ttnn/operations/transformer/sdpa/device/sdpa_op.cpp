@@ -7,6 +7,8 @@
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::transformer {
 
 void ScaledDotProductAttention::validate(

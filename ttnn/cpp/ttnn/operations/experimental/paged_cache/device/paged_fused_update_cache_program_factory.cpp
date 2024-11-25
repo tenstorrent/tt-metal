@@ -10,6 +10,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/experimental/paged_cache/device/paged_fused_update_cache_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::paged_cache::detail {
 
 using namespace tt::constants;

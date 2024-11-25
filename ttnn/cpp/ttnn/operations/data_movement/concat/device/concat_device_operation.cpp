@@ -12,6 +12,8 @@
 #include "tt_metal/common/logger.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 

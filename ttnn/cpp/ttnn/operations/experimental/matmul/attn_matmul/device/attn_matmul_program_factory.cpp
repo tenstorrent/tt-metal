@@ -11,8 +11,9 @@
 
 namespace ttnn::operations::experimental::matmul {
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, ttnn::DeviceComputeKernelConfig compute_kernel_config) {
 

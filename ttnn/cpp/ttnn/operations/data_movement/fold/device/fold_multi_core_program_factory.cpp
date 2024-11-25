@@ -10,6 +10,8 @@
 #include "fold_device_op.hpp"
 #include "ttnn/operations/math.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 Fold::MultiCore::cached_program_t fold_multi_core(

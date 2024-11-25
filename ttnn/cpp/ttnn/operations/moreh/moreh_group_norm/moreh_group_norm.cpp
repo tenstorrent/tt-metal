@@ -6,6 +6,8 @@
 
 #include "device/moreh_group_norm_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_group_norm {
 std::vector<std::optional<Tensor>> MorehGroupNorm::invoke(
     const Tensor& input,

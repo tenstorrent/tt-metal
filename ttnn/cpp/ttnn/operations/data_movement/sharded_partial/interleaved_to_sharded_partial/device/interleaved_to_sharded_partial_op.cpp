@@ -8,6 +8,8 @@
 
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {

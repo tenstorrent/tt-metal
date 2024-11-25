@@ -14,8 +14,10 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operation.hpp"
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::transformer::detail {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
