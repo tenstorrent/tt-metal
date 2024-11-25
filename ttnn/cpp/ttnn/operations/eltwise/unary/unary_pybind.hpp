@@ -509,9 +509,9 @@ void bind_unary_operation_with_integer_parameter(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
+            {2} (int): {3}.
 
         Keyword Args:
-            {2} (int): {3}.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
