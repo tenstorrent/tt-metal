@@ -44,7 +44,7 @@ static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translatio
 
     std::unordered_map<LogicalCoordinate, PhysicalCoordinate> result;
     for (const auto& mapping : j[key]) {
-        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 4) {
+        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 5) {
             throw std::runtime_error("Invalid coordinate format in JSON file: " + filename);
         }
         result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{
