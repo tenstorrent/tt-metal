@@ -25,9 +25,55 @@ permissions:
   packages: write
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
+  diff:
+    runs-on: ubuntu-latest
+    outputs:
+      test_everything: ${{ steps.check_everything.outputs.changed }}
+      test_tt_metal: ${{ steps.check_tt_metal.outputs.changed }}
+      test_ttnn: ${{ steps.check_ttnn.outputs.changed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Ensure the full history is fetched
+          submodules: recursive
+      - name: Fetch main branch
+        run: git fetch origin main
+      - name: Check for changes in critical files
+        id: check_everything
+        run: |
+          # Check for top-level CMakeLists.txt changes
+          if git diff --name-only origin/main...HEAD | grep -q '^CMakeLists.txt'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Check for changes in dependencies directory
+          if git diff --name-only origin/main...HEAD | grep -q '^dependencies/'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Check for changes in .gitmodules (submodule configuration changes)
+          if git diff --name-only origin/main...HEAD | grep -q '^.gitmodules'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "changed=false" >> $GITHUB_OUTPUT
+      - name: Check for changes in tt_metal
+        id: check_tt_metal
+        run: |
+          if git diff --name-only origin/main...HEAD | grep -q '^tt_metal/'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Check for changes in ttnn
+        id: check_ttnn
+        run: |
+          if git diff --name-only origin/main...HEAD | grep -q '^ttnn/'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
   build-wheels:
     needs: build-artifact
     strategy:
@@ -75,6 +121,10 @@ jobs:
     secrets: inherit
   # UMD Unit Tests
   umd-unit-tests:
+    needs:
+      - build-artifact
+      - diff
+    if: needs.diff.outputs.test_everything == 'true'
     secrets: inherit
     strategy:
       fail-fast: false
@@ -90,7 +140,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact
+    needs:
+      - build-artifact
+      - diff
+    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true'
     secrets: inherit
     strategy:
       fail-fast: false
@@ -106,7 +159,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-wheels
+    needs:
+      - build-wheels
+      - diff
+    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true'
     secrets: inherit
     strategy:
       fail-fast: false
@@ -122,7 +178,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-wheels
+    needs:
+      - build-wheels
+      - diff
+    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true' || needs.diff.outputs.test_ttnn == 'true'
     secrets: inherit
     strategy:
       fail-fast: false
@@ -138,7 +197,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-wheels
+    needs:
+      - build-wheels
+      - diff
+    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true' || needs.diff.outputs.test_ttnn == 'true'
     secrets: inherit
     strategy:
       fail-fast: false
@@ -154,7 +216,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    needs: build-artifact
+    needs:
+      - build-artifact
+      - diff
+    if: needs.diff.outputs.test_everything || needs.diff.outputs.test_tt_metal == 'true'
     secrets: inherit
     strategy:
       fail-fast: false
