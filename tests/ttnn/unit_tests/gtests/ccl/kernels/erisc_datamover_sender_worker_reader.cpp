@@ -11,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t num_pages_to_read_total = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_edm_buffer = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
 

@@ -93,10 +93,10 @@ inline void reduce_h(uint32_t out_nelems,
 namespace NAMESPACE {
 
 void MAIN {
-    constexpr uint32_t in_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
-    constexpr uint32_t in_tiled_cb_id = tt::CB::c_intermed0;
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
+    constexpr uint32_t in_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     const uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
     const uint32_t in_ntiles_c = get_compile_time_arg_val(1);

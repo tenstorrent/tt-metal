@@ -6,6 +6,9 @@
 #include "tilize_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_metal/common/constants.hpp"
+
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);

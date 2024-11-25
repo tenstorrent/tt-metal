@@ -115,20 +115,20 @@ void MAIN {
     constexpr bool spill = in0_num_blocks_w > 1;
 
     // CB indices
-    constexpr uint32_t in0_cb_id                                = tt::CB::c_in0;
-    constexpr uint32_t in1_cb_id                                = tt::CB::c_in1;
-    constexpr uint32_t in0_pretilize_cb_id                      = tt::CB::c_in6;
-    constexpr uint32_t in0_cb_second_reader_id                  = tt::CB::c_in7;
-    constexpr uint32_t matmul_partials_cb                       = tt::CB::c_intermed0;
-    constexpr uint32_t tilized_in0_cb_id                        = tt::CB::c_intermed1;
-    //constexpr uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed2;
-    constexpr uint32_t out_cb_id                                = tt::CB::c_out0;
+    constexpr uint32_t in0_cb_id                                = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id                                = tt::CBIndex::c_1;
+    constexpr uint32_t in0_pretilize_cb_id                      = tt::CBIndex::c_6;
+    constexpr uint32_t in0_cb_second_reader_id                  = tt::CBIndex::c_7;
+    constexpr uint32_t matmul_partials_cb                       = tt::CBIndex::c_24;
+    constexpr uint32_t tilized_in0_cb_id                        = tt::CBIndex::c_25;
+    //constexpr uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_26;
+    constexpr uint32_t out_cb_id                                = tt::CBIndex::c_16;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
     #ifdef FUSE_BIAS
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
-    constexpr uint32_t bias_cb_id                           = tt::CB::c_in2;
+    constexpr uint32_t bias_cb_id                           = tt::CBIndex::c_2;
     uint32_t bias_block_offset = 0;
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
     #else

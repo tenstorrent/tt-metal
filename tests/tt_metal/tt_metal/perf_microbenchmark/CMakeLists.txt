@@ -60,7 +60,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     target_include_directories(
         ${TEST_TARGET}
         PRIVATE
-            ${UMD_HOME}
             ${PROJECT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/tt_metal
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn

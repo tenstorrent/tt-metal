@@ -58,8 +58,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape.padded_shape()));
     ASSERT_EQ(output_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(np_out.get_padded_shape()));
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, input_shape.padded_shape(), tensor_layout);
-    auto output_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, np_out.get_padded_shape(), tensor_layout);
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, TensorSpec(input_shape.padded_shape(), tensor_layout));
+    auto output_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, TensorSpec(np_out.get_padded_shape(), tensor_layout));
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
     auto output_storage = tt::tt_metal::DeviceStorage{output_buffer};
     Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
@@ -124,7 +124,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             auto workload_event = std::make_shared<Event>();
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
             ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
-            auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
+            auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, TensorSpec(shape, tensor_layout));
             auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
             Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
             ttnn::write_buffer(io_cq, input_tensor, {host_data}); // Write using cq 1
@@ -134,10 +134,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
 
             // Run operation on cq 0
             Tensor output_tensor = ttnn::sqrt(workload_dispatch_cq, input_tensor);
-            auto dummy_buffer_0 = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
+            auto dummy_buffer_0 = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, TensorSpec(shape, tensor_layout));
             output_tensor = ttnn::neg(workload_dispatch_cq, output_tensor);
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
-            auto dummy_buffer_1 = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
+            auto dummy_buffer_1 = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, TensorSpec(shape, tensor_layout));
             // Record cq 0 prog execution
             ttnn::record_event(device->command_queue(workload_dispatch_cq), workload_event);
             // Wait until cq 0 prog execution is done
@@ -169,9 +169,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the buffer), destroy the buffer (which will asynchronously
     // deallocate the buffer) in a loop
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+    TensorSpec tensor_spec(shape, tensor_layout);
     for (int loop = 0; loop < 100000; loop++) {
         {
-            auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
+            auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
             device->synchronize();
         }
     }

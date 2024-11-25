@@ -10,6 +10,8 @@
 #include "sharded_to_interleaved.hpp"
 #include "ttnn/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 namespace detail {

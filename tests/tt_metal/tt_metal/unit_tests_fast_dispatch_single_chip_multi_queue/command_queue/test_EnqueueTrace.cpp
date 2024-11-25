@@ -38,8 +38,8 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
             .compile_args = {1, 1},
             .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}});
 
-    CircularBufferConfig input_cb_config = CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}})
-            .set_page_size(0, 2048);
+    CircularBufferConfig input_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_0, 2048);
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
@@ -51,8 +51,8 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
     };
     SetRuntimeArgs(program, writer_kernel, worker, writer_rt_args);
 
-    CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{16, tt::DataFormat::Float16_b}})
-            .set_page_size(16, 2048);
+    CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_16, 2048);
 
     CreateCircularBuffer(program, core_range, output_cb_config);
     vector<uint32_t> reader_rt_args = {

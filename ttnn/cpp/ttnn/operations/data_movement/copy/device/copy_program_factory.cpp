@@ -15,6 +15,7 @@
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
@@ -38,7 +39,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = 2;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
@@ -47,7 +48,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
 
     uint32_t output_cb_index = src0_cb_index; // same as input cb
     if (convert_dtype) {
-        output_cb_index = 16; // output operands start at index 16
+        output_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_units = 2;
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
         tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(num_output_units * aligned_output_unit_size, {{output_cb_index, output_cb_data_format}})

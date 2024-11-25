@@ -10,6 +10,7 @@
 //
 
 #include <cstdint>
+#include <functional>
 #include <variant>
 #include <vector>
 #include <memory>
@@ -143,9 +144,11 @@ inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_id
 }
 
 class Hal {
+
+  public:
+    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+
   private:
-    std::mutex lock;
-    bool initialized_;
     tt::ARCH arch_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
@@ -156,10 +159,11 @@ class Hal {
     void initialize_wh();
     void initialize_bh();
 
+    // Functions where implementation varies by architecture
+    RelocateFunc relocate_func_;
+
   public:
     Hal();
-
-    void initialize(tt::ARCH arch);
 
     tt::ARCH get_arch() const {return arch_;}
 
@@ -199,6 +203,11 @@ class Hal {
     T get_base_firmware_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
     template <typename T = DeviceAddr>
     T get_binary_local_init_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
+        return relocate_func_(addr, local_init_addr);
+    }
+
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const {
@@ -300,7 +309,24 @@ inline T Hal::get_binary_local_init_addr(uint32_t programmable_core_type_index, 
     return this->core_info_[programmable_core_type_index].get_binary_local_init_addr(processor_class_idx, processor_type_idx);
 }
 
-extern Hal hal;
+class HalSingleton : public Hal {
+private:
+    HalSingleton() = default;
+    HalSingleton(const HalSingleton&) = delete;
+    HalSingleton(HalSingleton&&) = delete;
+    ~HalSingleton() = default;
+
+    HalSingleton& operator=(const HalSingleton&) = delete;
+    HalSingleton& operator=(HalSingleton&&) = delete;
+
+public:
+    static inline HalSingleton& getInstance() {
+        static HalSingleton instance;
+        return instance;
+    }
+};
+
+inline auto& hal = HalSingleton::getInstance(); // inline variable requires C++17
 
 }  // namespace tt_metal
 }  // namespace tt

@@ -8,6 +8,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace ccl {
 

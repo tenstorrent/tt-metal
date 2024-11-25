@@ -116,6 +116,10 @@
 #include "compute_kernel_api/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_PRELU_INCLUDE
+#include "compute_kernel_api/eltwise_unary/prelu.h"
+#endif
+
 #if SFPU_OP_DROPOUT_INCLUDE
 #include "compute_kernel_api/eltwise_unary/dropout.h"
 #endif

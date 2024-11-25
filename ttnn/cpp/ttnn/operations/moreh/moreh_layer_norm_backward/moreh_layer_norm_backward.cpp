@@ -7,6 +7,8 @@
 #include "device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/moreh_layer_norm_backward_input_grad_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_layer_norm_backward {
 std::vector<std::optional<Tensor>> moreh_layer_norm_backward_gamma_beta_grad(
     const Tensor& output_grad,

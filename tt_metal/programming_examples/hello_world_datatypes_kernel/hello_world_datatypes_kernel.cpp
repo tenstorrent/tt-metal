@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
 
     // Configure and Create Circular Buffer (to move data from DRAM to L1)
 
-    constexpr uint32_t src0_cb_index = CB::c_in0;
+    constexpr uint32_t src0_cb_index = CBIndex::c_0;
     CircularBufferConfig cb_src0_config = CircularBufferConfig(buffer_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, buffer_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 

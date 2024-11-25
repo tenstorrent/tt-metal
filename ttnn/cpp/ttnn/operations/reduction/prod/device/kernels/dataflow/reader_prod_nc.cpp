@@ -19,8 +19,8 @@ void kernel_main() {
     const auto dim = get_compile_time_arg_val(1);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
     union {
         float f;

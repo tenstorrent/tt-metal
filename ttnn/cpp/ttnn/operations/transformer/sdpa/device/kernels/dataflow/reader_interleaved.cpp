@@ -45,10 +45,10 @@ void kernel_main() {
 
     constexpr bool is_dram = true;
 
-    constexpr uint32_t cb_q_in = tt::CB::c_in0;
-    constexpr uint32_t cb_k_in = tt::CB::c_in1;
-    constexpr uint32_t cb_v_in = tt::CB::c_in2;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
 
 
     constexpr uint32_t onetile = 1;

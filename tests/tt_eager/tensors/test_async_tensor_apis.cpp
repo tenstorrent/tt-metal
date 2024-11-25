@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
 
@@ -37,12 +37,12 @@ uint32_t get_device_buffer_address(const Tensor& tensor) {
 }
 }
 
-TEST_F(CommonFixture, TestTensorOwnershipSanity) {
+TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
     Tensor host_tensor = ttnn::numpy::arange<float>(0, 32 * 32 * 4, 1);
-    Tensor readback_tensor({}, 1);
+    Tensor readback_tensor(1);
 
     auto func = [device, host_tensor, readback_tensor]() mutable {
         // Ensure that both the lambda and global scope have ownership to this tensor
@@ -67,9 +67,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
-        readback_tensor.set_shape(thread_local_tensor.get_shape());
-        readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-        readback_tensor.set_layout(thread_local_tensor.get_layout());
+        readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
         readback_tensor.tensor_attributes->metadata_populated = true;
         readback_tensor.tensor_attributes->num_workers_completed++;
         // Ensure that the readback buffer is owned inside and outside the lambda
@@ -114,7 +112,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 128})));
 }
 
-TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
+TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
     Device* device = this->devices_[0];
     device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
@@ -171,7 +169,7 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
 
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
-TEST_F(CommonFixture, TestAsyncRefCountManager) {
+TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     Device* device = this->devices_[0];
     device->enable_async(true);
 
@@ -228,7 +226,7 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
     device->enable_async(false);
 }
 
-TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
+TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
     // Test 2 data paths here (resembles async mode):
     // 1. Main -> Worker: Create a tensor in the main thread. Ensure that it is accessible in the worker thread even
     // after its destroyed
@@ -240,8 +238,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
-    Tensor readback_tensor({}, 1);
-    ;
+    Tensor readback_tensor(1);
     std::thread worker;
 
     {
@@ -278,9 +275,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
-            readback_tensor.set_shape(thread_local_tensor.get_shape());
-            readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-            readback_tensor.set_layout(thread_local_tensor.get_layout());
+            readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
             readback_tensor.tensor_attributes->metadata_populated = true;
             readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors

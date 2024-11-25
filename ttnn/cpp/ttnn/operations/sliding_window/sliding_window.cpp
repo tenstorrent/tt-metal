@@ -6,6 +6,8 @@
 #include <vector>
 #include "tt_metal/common/assert.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::sliding_window{
 std::size_t SlidingWindowConfig::get_hash() const {
     return std::hash<std::string>{}(to_string());

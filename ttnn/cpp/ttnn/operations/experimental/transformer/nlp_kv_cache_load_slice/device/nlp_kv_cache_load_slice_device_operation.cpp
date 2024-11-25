@@ -5,6 +5,8 @@
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 // NLP KV Cache Unpad To Sharded op

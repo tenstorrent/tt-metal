@@ -10,6 +10,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::distributed::api {
 
 std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, MeshType mesh_type, const std::pair<size_t, size_t>& offset, const std::vector<int>& physical_device_ids) {
@@ -25,7 +27,7 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
         std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-        const Tile tile = tensor.get_tile();
+        const Tile tile = tensor.get_tensor_spec().tile();
         for (int i = 0; i < host_storage.num_buffers(); ++i)
         {
             tensors.push_back(Tensor{OwnedStorage{host_storage.get_buffer(i)},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout(),tile});
@@ -58,16 +60,17 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
     // Based whether the first tensor shard has OwnedBuffer or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = tensor_shards.at(0).storage_type();
-    Tile tile = tensor_shards.at(0).get_tile();
+    Tile tile = tensor_shards.at(0).get_tensor_spec().tile();
     if (storage_type == StorageType::OWNED) {
         std::vector<ttnn::Shape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto &shard : tensor_shards) {
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
             shapes.push_back(shard.get_shape());
-            if (shard.get_tile() != tile) {
+            Tile shard_tile = shard.get_tensor_spec().tile();
+            if (shard_tile != tile) {
                 TT_THROW("Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}."
-                    ,tensor_shards.at(0).device()->id(), tile.get_height(), tile.get_width(), shard.device()->id(), shard.get_tile().get_height(), shard.get_tile().get_width());
+                    ,tensor_shards.at(0).device()->id(), tile.get_height(), tile.get_width(), shard.device()->id(), shard_tile.get_height(), shard_tile.get_width());
             }
         }
         auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
@@ -82,9 +85,10 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
             shapes.insert({device->id(), shard.get_shape()});
-            if (shard.get_tile() != tile) {
+            Tile shard_tile = shard.get_tensor_spec().tile();
+            if (shard_tile != tile) {
                 TT_THROW("Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}."
-                    ,tensor_shards.at(0).device()->id(), tile.get_height(), tile.get_width(), shard.device()->id(), shard.get_tile().get_height(), shard.get_tile().get_width());
+                    ,tensor_shards.at(0).device()->id(), tile.get_height(), tile.get_width(), shard.device()->id(), shard_tile.get_height(), shard_tile.get_width());
             }
         }
         auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};

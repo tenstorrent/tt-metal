@@ -7,6 +7,8 @@
 #include "tt_metal/common/assert.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::unary::utils {
 
 namespace {
@@ -62,6 +64,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::TAN: defines["SFPU_OP_TRIG_FAMILY_INCLUDE"] = "1"; break;
         case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
         case UnaryOpType::SOFTPLUS: defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1"; break;
+        case UnaryOpType::PRELU_SFPU: defines["SFPU_OP_PRELU_INCLUDE"] = "1"; break;
         case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_XOR: defines["SFPU_OP_BITWISE_XOR_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_NOT: defines["SFPU_OP_BITWISE_NOT_INCLUDE"] = "1"; break;
@@ -221,6 +224,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     Converter::to_hex(param0),
                     Converter::to_hex(1.0f / param0),  // Pass reciprocal to avoid doing it on device
                     Converter::to_hex(param1))};
+            break;
+        }
+        case UnaryOpType::PRELU_SFPU: {
+            op_init_and_name = {
+                "prelu_tile_init();",
+                fmt::format(
+                    "prelu_tile({}, {}u);",
+                    idst,
+                    Converter::to_hex(param0))};
             break;
         }
         case UnaryOpType::TYPECAST:

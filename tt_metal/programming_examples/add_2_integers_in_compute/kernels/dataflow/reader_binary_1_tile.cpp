@@ -16,8 +16,8 @@ void kernel_main() {
     uint64_t src0_noc_addr = get_noc_addr(src0_dram_noc_x, src0_dram_noc_y, src0_addr);
     uint64_t src1_noc_addr = get_noc_addr(src1_dram_noc_x, src1_dram_noc_y, src1_addr);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_id_in1 = tt::CB::c_in1;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
     // single-tile ublocks
     uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);

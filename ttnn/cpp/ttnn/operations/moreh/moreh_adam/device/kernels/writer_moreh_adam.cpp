@@ -12,9 +12,9 @@ void kernel_main() {
     const auto num_tiles_per_core = get_arg_val<uint32_t>(4);
     const auto start_id = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_id_param = tt::CB::c_out0;
-    constexpr uint32_t cb_id_exp_avg = tt::CB::c_out1;
-    constexpr uint32_t cb_id_exp_avg_sq = tt::CB::c_out2;
+    constexpr uint32_t cb_id_param = tt::CBIndex::c_16;
+    constexpr uint32_t cb_id_exp_avg = tt::CBIndex::c_17;
+    constexpr uint32_t cb_id_exp_avg_sq = tt::CBIndex::c_18;
 
     const uint32_t param_tile_bytes = get_tile_size(cb_id_param);
     const auto param_data_format = get_dataformat(cb_id_param);
@@ -42,7 +42,7 @@ void kernel_main() {
         .bank_base_address = exp_avg_sq_addr, .page_size = exp_avg_sq_tile_bytes, .data_format = exp_avg_sq_data_format};
 
 #ifdef AMSGRAD
-    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_out3;
+    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_19;
     const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(3);
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);

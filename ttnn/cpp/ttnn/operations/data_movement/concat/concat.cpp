@@ -109,8 +109,8 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, const MemoryC
                         TT_FATAL(input_tensor.get_layout() == ttnn::TILE_LAYOUT, "ttnn.concat: expected all input tensors to be in tile layout");
                         auto untilized_tensor = ttnn::untilize(input_tensor);
                         // untilized, so now we have a padded rm tensor
-                        untilized_tensor.set_shape(ttnn::Shape {input_tensor.get_logical_shape().view(),
-                                                                untilized_tensor.get_padded_shape().view()});
+                        untilized_tensor = ttnn::reshape(untilized_tensor,
+                            ttnn::Shape {input_tensor.get_logical_shape().view(), untilized_tensor.get_padded_shape().view()});
                         return untilized_tensor;
                     }
                 );
@@ -161,7 +161,7 @@ MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, const MemoryConf
                     tensors.end(),
                     std::back_inserter(itensors),
                     [dim1, dim2](const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
-                        return ttnn::transpose(input_tensor, dim1, dim2, std::nullopt);
+                        return ttnn::transpose(input_tensor, dim1, dim2);
                     }
                 );
                 auto norm_dim1 = tensors.front().get_shape().get_normalized_index(dim1);

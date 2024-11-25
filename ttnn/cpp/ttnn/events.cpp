@@ -8,6 +8,8 @@
 #include "tt_metal/impl/event/event.hpp"
 #include "ttnn/distributed/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::events {
 
 MultiDeviceEvent::MultiDeviceEvent(MeshDevice* mesh_device) {

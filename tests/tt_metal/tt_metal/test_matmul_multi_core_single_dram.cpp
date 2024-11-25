@@ -170,8 +170,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
     CoreRange all_cores(start_core, end_core);
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t interm0_cb_index = 24;
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t interm0_cb_index = tt::CBIndex::c_24;
     std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
         {ouput_cb_index, tt::DataFormat::Float16_b},
         {interm0_cb_index, tt::DataFormat::Float16_b}

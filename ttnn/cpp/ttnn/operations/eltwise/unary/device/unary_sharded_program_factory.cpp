@@ -65,7 +65,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
     }
 
-    uint32_t in_cb_id = tt::CB::c_in0;
+    uint32_t in_cb_id = tt::CBIndex::c_0;
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
@@ -79,7 +79,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // output sharded CB
-    uint32_t out_cb_id = tt::CB::c_out0;
+    uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig out_cb_config = tt::tt_metal::CircularBufferConfig(
                                             in_cb_pagesize * in_cb_npages,
                                             {{out_cb_id, out_df}})
@@ -124,7 +124,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,

@@ -8,6 +8,8 @@
 #include "device/sharded_to_interleaved_op.hpp"
 #include "sharded_to_interleaved.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement{
 
 ttnn::Tensor ShardedToInterleavedOperation::invoke(

@@ -11,7 +11,7 @@ void kernel_main() {
 
     uint64_t dst_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_addr);
 
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
     uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
