@@ -82,7 +82,7 @@ std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
 
 std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
     const Tensor& grad, const Tensor& input, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteUnaryBackwardClamp::invoke(grad, input, min, max, output_mem_config);
+    return ExecuteUnaryBackwardClamp::invoke(grad, input, std::move(min), std::move(max), output_mem_config);
 }
 
 // Hardtanh
@@ -135,7 +135,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftplus::invoke(
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<string> round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<string>& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_nan = std::nanf("");

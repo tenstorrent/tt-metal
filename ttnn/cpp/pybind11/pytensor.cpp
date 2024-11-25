@@ -85,8 +85,8 @@ Tensor create_tt_tensor_from_py_data(
     const DataType data_type,
     const std::optional<Tile> &optional_tile,
     bool enable_borrow,
-    std::function<void()> on_creation_callback = [] {},
-    std::function<void()> on_destruction_callback = [] {}) {
+    const std::function<void()>& on_creation_callback = [] {},
+    const std::function<void()>& on_destruction_callback = [] {}) {
     switch (data_type) {
         case DataType::UINT8: {
             auto data_ptr = reinterpret_cast<uint8_t *>(py_data_ptr);

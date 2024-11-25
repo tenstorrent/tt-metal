@@ -3504,11 +3504,11 @@ v1::CommandQueueHandle v1::GetCommandQueue(DeviceHandle device, std::uint8_t cq_
 
 v1::CommandQueueHandle v1::GetDefaultCommandQueue(DeviceHandle device) { return GetCommandQueue(device, 0); }
 
-void v1::EnqueueReadBuffer(CommandQueueHandle cq, BufferHandle buffer, std::byte *dst, bool blocking) {
+void v1::EnqueueReadBuffer(CommandQueueHandle cq, const BufferHandle& buffer, std::byte *dst, bool blocking) {
     v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
 }
 
-void v1::EnqueueWriteBuffer(CommandQueueHandle cq, BufferHandle buffer, const std::byte *src, bool blocking) {
+void v1::EnqueueWriteBuffer(CommandQueueHandle cq, const BufferHandle& buffer, const std::byte *src, bool blocking) {
     v0::EnqueueWriteBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, src, blocking);
 }
 

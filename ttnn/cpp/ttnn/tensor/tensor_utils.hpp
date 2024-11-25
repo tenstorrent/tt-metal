@@ -29,7 +29,7 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
@@ -111,7 +111,7 @@ bool is_device_tensor(const Tensor& tensor);
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
 
 // Given a multi-device tensor, and a callable, applies the function to all per-device tensors.
-void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable);
+void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
 // Given a multi-device tensor, returns all the devices it is mapped to.
 std::vector<Device*> get_devices(const Tensor& multi_device_tensor);

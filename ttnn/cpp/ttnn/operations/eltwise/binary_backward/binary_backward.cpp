@@ -604,7 +604,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardMin::invoke(const Tensor& grad, const T
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
-    uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     std::vector<std::optional<Tensor>> result;
@@ -629,8 +629,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    return ExecuteBackwardDiv::invoke(DefaultQueueId, grad, input, scalar, round_mode, output_mem_config, input_grad);
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteBackwardDiv::invoke(DefaultQueueId, grad, input, scalar, round_mode, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
@@ -638,7 +638,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<std::string> round_mode,
+    const std::optional<std::string>& round_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -716,7 +716,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<std::string> round_mode,
+    const std::optional<std::string>& round_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,

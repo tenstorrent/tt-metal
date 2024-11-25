@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 #include "common/bfloat16.hpp"
 #include "impl/buffers/buffer_constants.hpp"
@@ -263,7 +264,7 @@ Tensor::~Tensor() {
     tensor_attributes.reset();
 }
 
-Tensor::Tensor(const Storage& storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.view()), dtype, layout, tile) {}
+Tensor::Tensor(Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(std::move(storage), ttnn::Shape(shape.view()), dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");

@@ -342,7 +342,7 @@ allocated output tensor with shape [out_channels, in_channels, H, W] The extra c
 divided into num_groups for each groupped filter
 */
 Tensor convert_conv_weight_tensor_to_grouped_layout(
-    Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for adding the required padding");
