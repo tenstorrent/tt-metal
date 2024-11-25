@@ -11,6 +11,7 @@ import argparse
 import cv2
 import requests
 import torch
+import orjson
 import av
 import streamlit as st
 import numpy as np
@@ -195,80 +196,77 @@ class VideoProcessor(VideoProcessorBase):
 
     def recv(self, frame):
         t0 = time.time()
-        pil_image = frame.to_image()
-        # resize on the client side
-        new_size = (320, 320)
-        pil_image = pil_image.resize(new_size)
-        t1 = time.time()
-        buf = io.BytesIO()
-        # t10 = time.time()
-        # pil_image.save(buf, format="JPEG")
-        # pil_image.save(buf, format="JPEG", quality=85, optimize=True)
-        pil_image.save(buf, format="JPEG", quality=85, progressive=True, optimize=True, subsampling=0)
 
+        # Convert frame to PIL image and resize
+        pil_image = frame.to_image()
+        pil_image = pil_image.resize((320, 320))  # Resize to target dimensions
+        t1 = time.time()
+
+        # Save image as JPEG in-memory with optimized settings
+        buf = io.BytesIO()
+        pil_image.save(buf, format="JPEG", quality=85, optimize=True)
         byte_im = buf.getvalue()
         file = {"file": byte_im}
-        # Argument Parser to grab namespace_id of server pod from user
-        parser = argparse.ArgumentParser(description="YOLOv4 script")
-        parser.add_argument("--api-url", type=str, help="URL for the object detection API", required=True)
-        args = parser.parse_args()
-        apiurl = args.api_url
-        url = f"{apiurl}/objdetection_v2"
-        t10 = time.time()
-        r = requests.post(url, files=file, stream=True)
-        t11 = time.time()
-        print("\n\n\nrequest.post took: ", t11 - t10)
 
-        t100 = time.time()
-        import torch
-        import orjson
+        # Parse API URL once at the class level for efficiency
+        if not hasattr(self, "api_url"):
+            parser = argparse.ArgumentParser(description="YOLOv4 script")
+            parser.add_argument("--api-url", type=str, required=True, help="URL for the object detection API")
+            args = parser.parse_args()
+            self.api_url = args.api_url
 
-        #        if r.status_code == 200:
+        url = f"{self.api_url}/objdetection_v2"
+
+        #        # Make the POST request
+        #        t10 = time.time()
+        #        with requests.Session() as session:  # Reuse connection for efficiency
         #            try:
-        #                # Parse JSON response directly
-        #                response_dict = orjson.loads(r.content)  # Faster than r.json()
+        #                output = orjson.loads(session.post(url, files=file, stream=True).content)
+        #            except:
+        #                print("failed request ")
         #
-        #                # Preallocate tensors efficiently
-        #                output = response_dict['output']
-        #
-        #            except (ValueError, KeyError, TypeError) as e:
-        #                st.error(f"Failed to parse JSON or process data: {str(e)}")
-        #        else:
-        #            st.error(f"Request failed with status code {r.status_code}")
+        #        t3 = time.time()
+        #        print("request and parsing took: ", t3 - t10)
 
-        if r.status_code == 200:
-            # Use .get() for efficient access without exception handling
-            response_dict = orjson.loads(r.content)  # Fast JSON parsing
+        t10 = time.time()
+        try:
+            # Use a persistent session for multiple requests
+            with requests.Session() as session:
+                # Post request with a timeout
+                response = session.post(url, files=file, timeout=5)
 
-            # Extract 'output' and handle missing key scenario
-            # output = response_dict.get('output', None)  # Avoid KeyError
-            output = response_dict
-        else:
-            st.error(f"Request failed with status code {r.status_code}")
+                # Check if response is successful
+                if response.status_code == 200:
+                    # Parse JSON response
+                    output = orjson.loads(response.content)
+                else:
+                    print(f"Request failed with status code {response.status_code}")
+                    # return None
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {e}")
+            # return None
+        except orjson.JSONDecodeError as e:
+            print(f"Failed to parse response JSON: {e}")
+            # return None
 
         t3 = time.time()
-        print("\nExtracting output from the response took: ", t3 - t100)
+        print("Request and parsing took: ", t3 - t10)
+
+        # Convert frame to ndarray and perform post-processing
         bgr_image = frame.to_ndarray(format="bgr24")
         conf_thresh = 0.6
         nms_thresh = 0.5
-        print()
-        print("we do reach here!")
-        print()
-        boxes = self.post_processing(bgr_image, conf_thresh, nms_thresh, output)
+        #        boxes = self.post_processing(bgr_image, conf_thresh, nms_thresh, output)
+
+        # Load class names and plot bounding boxes
         namesfile = "coco.names"
         class_names = self.load_class_names(namesfile)
+        # image_final = self.plot_boxes_cv2(bgr_image, boxes[0], None, class_names)
+        image_final = self.plot_boxes_cv2(bgr_image, output, None, class_names)
 
-        # random_number = random.randint(1, 100)
-        # save_name = "ttnn_prediction_demo" + str(random_number) + ".jpg"
-        save_name = None
-        image_final = self.plot_boxes_cv2(bgr_image, boxes[0], save_name, class_names)
         t4 = time.time()
+        print(f" IMG-IN | WH | Post | Total time: {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} ")
 
-        print()
-        print(f" IMG-IN | WH | Post | Total time: ")
-        print(f" {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} ")
-
-        # return image_final
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
@@ -286,5 +284,4 @@ webrtc_streamer(
             "frameRate": {"min": 1, "ideal": 50, "max": 60},
         }
     },
-    # async_processing=True  # Use asynchronous processing for long tasks
 )
