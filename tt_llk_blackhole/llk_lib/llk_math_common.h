@@ -16,8 +16,8 @@ using namespace ckernel::math;
 
 template <bool untilize_en = false, bool skip_inputs = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format) {
-    // tt-metal #14609 workaround - wait until PACK and MATH are idle so
-    // that remap_addrs and swizzle_32b bits can be changed
+    // Need to wait for all DEST accesses to be finished before changing 
+    // remap_addrs and swizzle_32b bits
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0) {
     };  // Wait for previous packs to finish before claiming all dest
