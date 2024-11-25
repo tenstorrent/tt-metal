@@ -199,13 +199,14 @@ void tensor_mem_config_module(py::module& m_tensor) {
     pyMemoryConfig
         .def(
             py::init<>(
-                [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
+                [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec, bool keep_l1_aligned) {
                     return MemoryConfig{
-                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = shard_spec};
+                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = shard_spec, .keep_l1_aligned = keep_l1_aligned};
                 }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,
             py::arg("shard_spec") = std::nullopt,
+            py::arg("keep_l1_aligned") = false,
             R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
@@ -232,6 +233,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def_readwrite("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
+        .def_readwrite("keep_l1_aligned", &MemoryConfig::keep_l1_aligned, "Alignment of L1 memory")
         .def(py::self == py::self)
         .def(py::self != py::self);
 
