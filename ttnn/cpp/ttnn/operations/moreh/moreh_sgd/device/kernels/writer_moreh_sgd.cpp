@@ -12,8 +12,8 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(i); i++;
     uint32_t tile_offset = get_arg_val<uint32_t>(i); i++;
 
-    constexpr auto cb_param_out = tt::CB::c_out0;
-    constexpr auto cb_momentum_out = tt::CB::c_out1;
+    constexpr auto cb_param_out = tt::CBIndex::c_16;
+    constexpr auto cb_momentum_out = tt::CBIndex::c_17;
 
     constexpr uint32_t onetile = 1;
 

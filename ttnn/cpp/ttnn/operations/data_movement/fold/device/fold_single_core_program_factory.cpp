@@ -10,6 +10,8 @@
 #include "fold_device_op.hpp"
 #include "ttnn/operations/math.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 Fold::SingleCore::cached_program_t fold_single_core(
@@ -41,7 +43,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     bool dst_is_dram = (dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM);
 
     // Setup CB.
-    uint32_t cb_src0_index = tt::CB::c_in0;
+    uint32_t cb_src0_index = tt::CBIndex::c_0;
     uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config(
         2 * cb_pages_per_dst_row * aligned_pixel_size, {{cb_src0_index, cb_data_format}});

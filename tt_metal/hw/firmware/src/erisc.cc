@@ -38,10 +38,8 @@ void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
 
     // Not using do_crt1 since it is copying to registers???
+    // bss already cleared in entry code.
     // TODO: need to find free space that routing FW is not using
-    extern uint32_t __ldm_bss_start[];
-    extern uint32_t __ldm_bss_end[];
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 

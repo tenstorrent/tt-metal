@@ -271,7 +271,7 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         }
         else {
-            constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             cb_wait_front(cb_index_id, 1);
             uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
@@ -310,19 +310,19 @@ void kernel_main() {
     uint32_t num_tiles_to_wait = (out_chunk_tiles+2*PNHt)*num_cores_to_wait;
 
     constexpr bool is_dram = true;
-    constexpr uint32_t cb_out = tt::CB::c_out4;
-    constexpr uint32_t cb_intermed_out = tt::CB::c_out3;  // this cb holds the output intermediates from other worker cores
-    constexpr uint32_t cb_out_o = tt::CB::c_out0;
-    constexpr uint32_t cb_m_in = tt::CB::c_in6;
-    constexpr uint32_t cb_l_in = tt::CB::c_in7;
+    constexpr uint32_t cb_out = tt::CBIndex::c_20;
+    constexpr uint32_t cb_intermed_out = tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
+    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
+    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
+    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
 
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
-    constexpr uint32_t cb_scale_in = tt::CB::c_in4;
-    constexpr uint32_t cb_identity_scale_in = tt::CB::c_in5;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
-    constexpr uint32_t cb_out_worker = tt::CB::c_out0;
-    constexpr uint32_t cb_out_m = tt::CB::c_out1;
-    constexpr uint32_t cb_out_l = tt::CB::c_out2;
+    constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
     generate_bcast_unary_scalar(cb_scale_in, scale_val);

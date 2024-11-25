@@ -11,6 +11,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/util.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor & input_b, const Tensor &output) {

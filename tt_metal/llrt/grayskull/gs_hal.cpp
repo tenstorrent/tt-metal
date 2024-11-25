@@ -129,6 +129,20 @@ void Hal::initialize_gs() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
+
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+        if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+            // Move addresses in the local memory range to l1 (copied by kernel)
+            return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
+        }
+        else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+            // Move addresses in the NCRISC memory range to l1 (copied by kernel)
+            return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
+        }
+
+        // No relocation needed
+        return addr;
+    };
 }
 
 }  // namespace tt_metal

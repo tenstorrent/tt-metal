@@ -31,7 +31,7 @@ from models.utility_functions import skip_for_grayskull, divup
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 444416}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 32),),
+    ((1, 2, 32),),
 )
 def test_unet_trace(
     batch: int,
@@ -41,9 +41,9 @@ def test_unet_trace(
     use_program_cache,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
 
-    model = unet_shallow_torch.UNet.from_random_weights(groups=1)
+    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
@@ -117,7 +117,7 @@ def test_unet_trace(
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 32),),
+    ((1, 2, 32),),
 )
 def test_unet_trace_2cq(
     batch: int,
@@ -127,9 +127,9 @@ def test_unet_trace_2cq(
     use_program_cache,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
 
-    model = unet_shallow_torch.UNet.from_random_weights(groups=1)
+    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
@@ -235,7 +235,7 @@ def buffer_address(tensor):
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 32),),
+    ((1, 2, 32),),
 )
 def test_unet_trace_2cq_multi_device(
     batch: int, groups: int, iterations: int, mesh_device, use_program_cache, reset_seeds, enable_async_mode
@@ -247,7 +247,7 @@ def test_unet_trace_2cq_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(mesh_device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -258,7 +258,7 @@ def test_unet_trace_2cq_multi_device(
 
     total_batch = num_devices * batch
     torch_input, ttnn_input = create_unet_input_tensors(
-        mesh_device, total_batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
+        total_batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
@@ -358,7 +358,7 @@ def test_unet_trace_2cq_multi_device(
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 32),),
+    ((1, 2, 32),),
 )
 def test_unet_trace_2cq_same_io(
     batch: int,
@@ -368,9 +368,9 @@ def test_unet_trace_2cq_same_io(
     use_program_cache,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
 
-    model = unet_shallow_torch.UNet.from_random_weights(groups=1)
+    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)

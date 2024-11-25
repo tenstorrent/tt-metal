@@ -10,8 +10,9 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor &input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
 
@@ -39,7 +40,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
     auto in_cores = in_shard_spec.grid;
     auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
-    uint32_t q_output_cb_index = CB::c_out0;
+    uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
             q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})

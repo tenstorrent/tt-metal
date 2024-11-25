@@ -50,7 +50,7 @@ void kernel_main() {
     const uint32_t* matmul_cores_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, 2 * num_matmul_cores_to_signal)); // Matmul core NOC coordinates [x1, y1, x2, y2...]
 
     // Setup buffers
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     const DataFormat in0_df = get_dataformat(cb_id_in0);
 
     // DRAM reader in

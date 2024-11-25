@@ -11,6 +11,8 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::unary {
 
 namespace {

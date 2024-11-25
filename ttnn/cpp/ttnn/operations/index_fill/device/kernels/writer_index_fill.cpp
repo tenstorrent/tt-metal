@@ -10,8 +10,8 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
     uint32_t output_unit_size = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t dst_cb_id = tt::CB::c_out0;
-    constexpr uint32_t src_cb_id = tt::CB::c_in0;
+    constexpr uint32_t dst_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
     constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
 
     constexpr uint32_t onetile = 1;

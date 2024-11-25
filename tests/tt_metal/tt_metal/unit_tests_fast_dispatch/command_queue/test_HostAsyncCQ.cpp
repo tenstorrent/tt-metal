@@ -92,13 +92,13 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
                 .page_size = dram_buffer_size,
                 .buffer_type = BufferType::DRAM
                 };
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 8;
     CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t ouput_cb_index = 16;
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
     CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(ouput_cb_index, single_tile_size);

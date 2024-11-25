@@ -24,6 +24,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
@@ -903,8 +904,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                 circular_buffers_on_corerange.size());
             for (const shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
                 program_command_sequence.circular_buffers_on_core_ranges[i].emplace_back(cb);
-                const uint32_t cb_address = cb->address() >> 4;
-                const uint32_t cb_size = cb->size() >> 4;
+                const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                 for (const auto& buffer_index : cb->buffer_indices()) {
                     // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
@@ -913,7 +914,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                     cb_config_payload[base_index] = cb_address;
                     cb_config_payload[base_index + 1] = cb_size;
                     cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
+                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                     max_base_index = std::max(max_base_index, base_index);
                 }
             }
@@ -1359,8 +1360,8 @@ void EnqueueProgramCommand::update_device_commands(
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
-            const uint32_t cb_address = cb->address() >> 4;
-            const uint32_t cb_size = cb->size() >> 4;
+            const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+            const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             for (const auto& buffer_index : cb->buffer_indices()) {
                 // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
@@ -1369,7 +1370,7 @@ void EnqueueProgramCommand::update_device_commands(
                 cb_config_payload[base_index] = cb_address;
                 cb_config_payload[base_index + 1] = cb_size;
                 cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
+                cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             }
         }
         i++;
@@ -1544,19 +1545,32 @@ void EnqueueProgramCommand::write_program_command_sequence(
 }
 
 void EnqueueProgramCommand::process() {
-    const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
+    std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
         this->config_buffer_mgr.reserve(program.get_program_config_sizes());
     uint32_t sync_count = 0;
+    bool stall_first = reservation.first.need_sync;
+    bool stall_before_program = false;
     if (!program.kernel_binary_always_stored_in_ringbuffer()) {
         // Wait for all existing commands to run before writing out the kernel binary.
         sync_count = this->expected_num_workers_completed;
+        stall_before_program = !stall_first;
     } else if (reservation.first.need_sync) {
         // TODO: attempt to send RTA only without stalling.
         sync_count = reservation.first.sync_count;
+        // Check if the launch message is the only thing preventing us from
+        // sending the program. If so, we can at least send the RTAs. Ideally we
+        // would also send the kernel binaries in this case, but the rest of the
+        // code isn't set up for that.
+        auto config_sizes = program.get_program_config_sizes();
+        config_sizes[config_sizes.size() - 1] = 0;
+        const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> memory_reservation =
+            this->config_buffer_mgr.reserve(config_sizes);
+        if (!memory_reservation.first.need_sync) {
+            stall_first = false;
+            stall_before_program = true;
+        }
+        reservation = this->config_buffer_mgr.reserve(program.get_program_config_sizes());
     }
-    bool stall_first = reservation.first.need_sync;
-    // If the kernel binary isn't stored in the ringbuffer, we need to stall before writing to it.
-    bool stall_before_program = !program.kernel_binary_always_stored_in_ringbuffer() && !stall_first;
 
     // Cache is only usable if caching is enabled and program is finalized
     // If cache has a program entry but the program is not finalized, then the cache is stale

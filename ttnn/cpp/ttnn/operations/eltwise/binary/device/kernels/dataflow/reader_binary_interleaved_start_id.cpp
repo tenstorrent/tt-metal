@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
+// the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
+// When broadcating is properly supported we expect this code to be deleted or refactored substantially.
+
 #include <stdint.h>
 #include "dataflow_api.h"
 
@@ -15,8 +19,8 @@ void kernel_main() {
     uint32_t block_width = get_arg_val<uint32_t>(5);
     uint32_t num_cores_y = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr bool block_or_width_sharded = get_compile_time_arg_val(2) == 1;
     #ifdef IN0_SHARDED
         cb_reserve_back(cb_id_in0, num_tiles);

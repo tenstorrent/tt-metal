@@ -31,7 +31,7 @@ namespace NAMESPACE {
 void MAIN {
 #endif
     // Read out the tile we want to print using BRISC, put it in c_in0
-    constexpr uint32_t cb_id = tt::CB::c_in0;
+    constexpr uint32_t cb_id = tt::CBIndex::c_0;
 #if defined(COMPILE_FOR_BRISC)
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t src_noc_x = get_arg_val<uint32_t>(1);

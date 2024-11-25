@@ -38,14 +38,14 @@ void kernel_main() {
     tt_l1_ptr uint32_t * in0_remote_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
     tt_l1_ptr uint32_t * in0_remote_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
 
-    constexpr uint32_t cb_ex_partial = tt::CB::dataflow0;
-    constexpr uint32_t cb_ex = tt::CB::dataflow1;
-    constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
-    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3;
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4;
-    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
-    constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
+    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
+    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15; // E[x] global reduce
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
     const DataFormat data_format = get_dataformat(cb_ex_partial2);

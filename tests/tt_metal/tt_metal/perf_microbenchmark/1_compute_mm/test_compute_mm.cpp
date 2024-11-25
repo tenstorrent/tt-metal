@@ -22,10 +22,10 @@
 #include "tt_metal/common/constants.hpp"
 #include <optional>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include "tt_metal/common/work_split.hpp"
 
 using std::vector;
@@ -938,22 +938,22 @@ tt_metal::Program create_program_single_core (
         {(std::size_t)0, (std::size_t)0}, {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1});
 
     // Create circular buffers
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_cb_addr);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size)
             .set_globally_allocated_address(*in1_cb_addr);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t out_cb_index = 16;  // output operands start at index 16
-    uint32_t interm0_cb_index = 24;
+    uint32_t out_cb_index = tt::CBIndex::c_16;
+    uint32_t interm0_cb_index = tt::CBIndex::c_24;
 
     if (fp32_dest_acc_en) {
         if (interm_cb_dtype == 1) {
@@ -1123,13 +1123,13 @@ tt_metal::Program create_program(
         {(std::size_t)0, (std::size_t)0}, {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1});
 
     // Create circular buffers
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
@@ -1140,14 +1140,14 @@ tt_metal::Program create_program(
     // CB for padding; only need these in the senders
     // NOTE: For first core, initialize cb to the larger tile size to prevent
     // accidentally writing 0 to L1 space during cb init in the kernels
-    uint32_t src2_cb_index = 2;
+    uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt_metal::CircularBufferConfig cb_src2_config =
         tt_metal::CircularBufferConfig(in2_CB_tiles * single_tile_size, {{src2_cb_index, cb_data_format}})
             .set_page_size(src2_cb_index, single_tile_size);
     auto in0_in1_sender_cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
-    uint32_t out_cb_index = 16;  // output operands start at index 16
-    uint32_t interm0_cb_index = 24;
+    uint32_t out_cb_index = tt::CBIndex::c_16;
+    uint32_t interm0_cb_index = tt::CBIndex::c_24;
     std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
         {out_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
     tt_metal::CircularBufferConfig cb_out_config =

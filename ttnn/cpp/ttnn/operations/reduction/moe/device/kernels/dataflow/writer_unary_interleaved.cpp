@@ -21,7 +21,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(out_cb_index);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    constexpr uint32_t scale_cb_index = tt::CB::c_in3;
+    constexpr uint32_t scale_cb_index = tt::CBIndex::c_3;
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
     const InterleavedAddrGenFast<out_is_dram> interleaved_accessor0 = {

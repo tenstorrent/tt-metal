@@ -8,6 +8,8 @@
 #include "paged_fused_update_cache_program_factory.hpp"
 #include "paged_fill_cache_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::paged_cache {
 
 

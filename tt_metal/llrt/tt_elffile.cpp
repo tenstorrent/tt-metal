@@ -38,12 +38,6 @@ enum {
 };
 #endif
 
-// Sadly the toolchain's usurped some machine numbers.  With any luck
-// this will go away at some point.
-#define EM_RISCV_GRAYSKULL 242
-#define EM_RISCV_WORMHOLE 0x5151
-#define EM_RISCV_BLACKHOLE 0x6151
-
 // We have to translate these two instructions
 static constexpr uint32_t insn_opc_auipc = 0x00000017;
 static constexpr uint32_t insn_opc_lui = 0x00000037;
@@ -220,10 +214,7 @@ void ElfFile::Impl::LoadImage() {
     if (hdr.e_type != ET_EXEC)
         TT_THROW("{}: not an executable", path_);
 
-    if (hdr.e_machine != EM_RISCV
-        // Hopefully these can go way at some point.
-        && hdr.e_machine != EM_RISCV_GRAYSKULL && hdr.e_machine != EM_RISCV_WORMHOLE &&
-        hdr.e_machine != EM_RISCV_BLACKHOLE)
+    if (hdr.e_machine != EM_RISCV)
         TT_THROW("{}: incompatible architecture {}", path_, hdr.e_machine);
 
     if (!hdr.e_phoff || hdr.e_phoff & (sizeof(address_t) - 1) || hdr.e_phentsize != sizeof(Elf32_Phdr) ||

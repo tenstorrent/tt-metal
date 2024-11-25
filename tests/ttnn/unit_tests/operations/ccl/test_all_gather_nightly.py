@@ -22,15 +22,15 @@ from ttnn import ShardTensorToMesh
     [
         (4, 1, [4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
         (8, 1, [8, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
-        (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 1, 256, 32], -4, ttnn.TILE_LAYOUT),
         (8, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
         # (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
         (8, 1, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
-        (4, 1, [8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT),
-        (8, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (4, 1, [8, 5, 13, 384], -1, ttnn.ROW_MAJOR_LAYOUT),
+        (8, 1, [8, 5, 13, 512], -1, ttnn.ROW_MAJOR_LAYOUT),
         (4, 1, [8, 5, 32, 384], 3, ttnn.TILE_LAYOUT),
         (8, 1, [8, 5, 32, 512], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 16384], -1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
