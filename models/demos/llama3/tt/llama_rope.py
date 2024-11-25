@@ -32,6 +32,7 @@ class TtLlamaRotarySetup(LightweightModule):
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+        self.num_devices = device.get_num_devices()
 
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
@@ -98,12 +99,12 @@ class TtLlamaRotarySetup(LightweightModule):
         assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
-        if on_host:
+        if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
