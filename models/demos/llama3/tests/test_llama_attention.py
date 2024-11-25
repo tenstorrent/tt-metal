@@ -11,6 +11,7 @@ from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
+    PagedAttentionConfig,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
@@ -36,17 +37,37 @@ from models.utility_functions import skip_for_grayskull
     (True, False),
     ids=("paged_attention", "non_paged_attention"),
 )
-def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, paged_attention, ensure_gc):
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 64, "page_max_num_blocks": 2048}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (32,),  # TODO Miguel: should we include batch==1 in the unit tests as well?
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+def test_llama_attention_inference(
+    mesh_device,
+    batch_size,
+    max_seq_len,
+    paged_attention_params,
+    use_program_cache,
+    reset_seeds,
+    paged_attention,
+    ensure_gc,
+):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=32)
-    # Reduce max seq len and KV cache seq_len params to speed up the test
-    model_args.max_seq_len = 128
-    model_args.kv_seq_len = model_args.max_seq_len
-    model_args.n_layers = 1
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args.n_layers = 1  # For the unit test, just run a sigle layer
+
+    logger.info(f"Running 1-layer llama3_attention unit test with batch_size={batch_size}, max_seq_len={max_seq_len}")
 
     state_dict = model_args.load_state_dict()
 
@@ -59,7 +80,6 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    batch = model_args.max_batch_size
     seq_len = 1
 
     generation_start_pos = 0
@@ -69,7 +89,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
         mesh_device,
-        batch,
+        batch_size,
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
@@ -81,8 +101,12 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
 
     page_table_tt = None
     paged_attention_config = None
+
     if paged_attention:
-        paged_attention_config = model_args.paged_attention_config if paged_attention else None
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
 
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
@@ -116,7 +140,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = ttnn.from_torch(
         current_pos,
         device=mesh_device,
@@ -126,7 +150,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch, seq_len, model_args.dim) * 0.05
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim) * 0.05
 
         tt_attention_input = pt_attention_input.clone()
 
@@ -152,7 +176,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, :, :, : model_args.dim]
             .view(1, -1, model_args.dim)
             .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
-        )  # [ batch, seq, hidden_dim]
+        )  # [ batch_size, seq, hidden_dim]
 
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
@@ -170,7 +194,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
@@ -182,8 +206,8 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------
             pytorch_layer_present = [
-                reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
             ]
             # TT hardware execution -------------------------------------------------------------
             if paged_attention:
@@ -200,7 +224,9 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
                             model_args.head_dim,
                         )
                         .transpose(1, 2)
-                        .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[:batch, ...]
+                        .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                            :batch_size, ...
+                        ]
                     )
                     for cache in tt_model.layer_past
                 ]

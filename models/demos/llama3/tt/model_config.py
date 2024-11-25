@@ -47,7 +47,7 @@ class LlamaOptimizations:
         return cls(bfp4_mlp=True)
 
 
-# Miguel change these for VLLM
+# TODO: Miguel: Remove from here. I've added this to llama common instead, and each test should define their own values
 class PagedAttentionConfig:
     block_size = 64
     max_num_blocks = 2048
@@ -61,7 +61,7 @@ class TtModelArgs:
     sliding_window = 1024 * 128  # 128k # TODO Miguel: Remove this parameter (just use kv_seqlen)
     tile_size = 32
 
-    paged_attention_config = PagedAttentionConfig()
+    paged_attention_config = PagedAttentionConfig()  # Miguel: TODO Remove this for VLLM in test
 
     OP_KEYS = (
         # Embedding

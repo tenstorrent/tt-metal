@@ -16,6 +16,13 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+# Default configuration for Paged Attention
+class PagedAttentionConfig:
+    def __init__(self, block_size=64, max_num_blocks=2048):
+        self.block_size = block_size
+        self.max_num_blocks = max_num_blocks
+
+
 def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
