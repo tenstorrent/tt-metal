@@ -22,8 +22,8 @@ include(FetchContent)
 FetchContent_Declare(
     sfpi
     URL
-        https://github.com/tenstorrent/sfpi/releases/download/v5.0.0/sfpi-release.tgz
-    URL_HASH MD5=10cacabe92846076cb4d7596e46d06be
+        https://github.com/tenstorrent/sfpi/releases/download/v6.0.0/sfpi-release.tgz
+    URL_HASH MD5=d837d26a2312d27815179995fdea83bd
     SOURCE_DIR
     ${PROJECT_SOURCE_DIR}/runtime/sfpi
 )
@@ -79,24 +79,9 @@ set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
 # Define flags for each architecture
-set(GPP_FLAGS_grayskull
-    -mgrayskull
-    -march=rv32iy
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
-set(GPP_FLAGS_wormhole
-    -mwormhole
-    -march=rv32imw
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
-set(GPP_FLAGS_blackhole
-    -mblackhole
-    -march=rv32iml
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
+set(GPP_FLAGS_grayskull -mcpu=tt-gs)
+set(GPP_FLAGS_wormhole -mcpu=tt-wh)
+set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 
 # Define common flags for all architectures
 set(GPP_FLAGS_common

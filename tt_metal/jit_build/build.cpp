@@ -58,9 +58,9 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
     // Flags
     string common_flags;
     switch (arch) {
-        case ARCH::GRAYSKULL: common_flags = "-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 "; break;
-        case ARCH::WORMHOLE_B0: common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 "; break;
-        case ARCH::BLACKHOLE: common_flags = "-mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32 "; break;
+        case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
+        case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
+        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
