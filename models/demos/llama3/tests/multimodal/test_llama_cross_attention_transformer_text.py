@@ -249,7 +249,7 @@ def test_llama_cross_attention_transformer_text_inference(
         else:
             tt_h = model_args.prepare_inputs_ttnn_decode(
                 h,
-                ttnn.DRAM_MEMORY_CONFIG,
+                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
             position_ids = position_ids.reshape(1).expand(batch)
             tt_position_id = ttnn.from_torch(
