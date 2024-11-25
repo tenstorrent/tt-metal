@@ -34,13 +34,13 @@ constexpr uint32_t cb_id = get_compile_time_arg_val(3);
 
 #ifdef SHARDED_MEM_LAYOUT
 static constexpr bool is_sharded_mode = true;
-static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(5);
-static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(6);
-static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(7);
-static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(8);
-static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(9);
-static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(10);
-static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(11) != 0;
+static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(4);
+static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(5);
+static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(6);
+static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(7);
+static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(8);
+static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(9);
+static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(10) != 0;
 #else
 static constexpr bool is_sharded_mode = false;
 static constexpr uint32_t input_tensor_shard_grid_height = 0;
