@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#pragma once
 
 #include "impl/device/device.hpp"
 #include "impl/program/program.hpp"
@@ -19,6 +20,7 @@ class FDKernel {
     virtual void CreateKernel() = 0;
     virtual void GenerateStaticConfigs() = 0;
     virtual void GenerateDependentConfigs() = 0;
+    virtual void ConfigureCore() {}; // Overridden for specific kernels that need host-side configuration
     static FDKernel *Generate(int node_id, uint8_t cq_id, noc_selection_t noc_selection, DispatchWorkerType type);
 
     void AddUpstreamKernel(FDKernel *upstream) { this->upstream_kernels.push_back(upstream); }
@@ -303,6 +305,7 @@ class PrefetchKernel : public FDKernel {
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
+    void ConfigureCore() override;
     const prefetch_config_t &GetConfig() { return this->config; }
 
    private:
@@ -319,6 +322,7 @@ class DispatchKernel : public FDKernel {
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
+    void ConfigureCore() override;
     const dispatch_config_t &GetConfig() { return this->config; }
 
    private:
@@ -331,6 +335,7 @@ class DispatchSKernel : public FDKernel {
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
+    void ConfigureCore() override;
     const dispatch_s_config_t &GetConfig() { return this->config; }
 
    private:

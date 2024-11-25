@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_kernels.hpp"
+#include "impl/device/device_pool.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 #define DISPATCH_MAX_UPSTREAM 4
@@ -90,7 +91,8 @@ static const std::vector<dispatch_kernel_node_t> two_card_arch_2cq = {
 
 std::vector<FDKernel *> node_id_to_kernel;
 
-std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
+// Helper function to get the right struct for dispatch kernels. TODO: replace with reading yaml file later?
+inline std::vector<dispatch_kernel_node_t> get_nodes(Device *device) {
     std::vector<dispatch_kernel_node_t> nodes;
     uint32_t num_devices = tt::Cluster::instance().number_of_user_devices();
     if (num_devices == 1) { // E150, N150
@@ -116,6 +118,7 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
     } else { // TG, TGG
         TT_FATAL(false, "Not yet implemented!");
     }
+#if 0
     for (auto &node : nodes) {
         std::string upstream = "";
         for (int id : node.upstream_ids)
@@ -124,8 +127,14 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
         for (int id : node.downstream_ids)
             downstream += fmt::format("{}, ", id);
 
-        // tt::log_info("[{}, {}, {}, {}, [{}], [{}], {}, {}, {}]", node.id, node.device_id, node.cq_id, node.kernel_type, upstream, downstream, node.my_noc, node.upstream_noc, node.downstream_noc);
+        tt::log_info("[{}, {}, {}, {}, [{}], [{}], {}, {}, {}]", node.id, node.device_id, node.cq_id, node.kernel_type, upstream, downstream, node.my_noc, node.upstream_noc, node.downstream_noc);
     }
+#endif
+    return nodes;
+}
+
+std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
+    std::vector<dispatch_kernel_node_t> nodes = get_nodes(device);
     if (node_id_to_kernel.empty()) {
         // Do setup of kernel objects one time at the beginning, since they (1) don't need a valid Device until fields
         // are populated, and (2) need to be connected to kernel objects for devices that aren't being created yet.
@@ -175,4 +184,38 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program_ptr, /*fd_bootloader_mode=*/true);
     return cq_program_ptr;
+}
+
+void configure_dispatch_cores(Device *device) {
+    // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
+    // it here. TODO: should this be in the struct?
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    auto &my_dispatch_constants = dispatch_constants::get(dispatch_core_type);
+    uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    uint32_t cq_size = device->sysmem_manager().get_cq_size();
+    std::vector<uint32_t> zero = {0x0};
+    for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+        tt_cxy_pair completion_q_writer_location = dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, cq_id);
+        Device *mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
+        uint32_t completion_q_wr_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+        uint32_t completion_q_rd_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+        uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+        uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+        // Initialize completion queue write pointer and read pointer copy
+        uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
+        uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+        uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
+        std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
+        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
+        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
+        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
+    }
+    std::vector<dispatch_kernel_node_t> nodes = get_nodes(device);
+    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
+        if (nodes.at(idx).device_id == device->id()) {
+            node_id_to_kernel[idx]->ConfigureCore();
+        }
+    }
 }

@@ -2736,6 +2736,49 @@ void Device::compile_command_queue_programs() {
     }
 }
 
+void Device::configure_command_queue_programs_new() {
+    chip_id_t device_id = this->id();
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+    log_debug(tt::LogMetal, "Device {} - Channel {}", this->id_, channel);
+
+    std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
+    std::vector<uint32_t> pointers;
+    uint32_t cq_size = this->sysmem_manager().get_cq_size();
+    TT_ASSERT(this->command_queue_programs.size() == 1);
+
+    Program& command_queue_program = *this->command_queue_programs[0];
+    uint8_t num_hw_cqs = this->num_hw_cqs();
+
+    // Reset host-side command queue pointers
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+    uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+    uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+    uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+    uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+    uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    pointers.resize(cq_start/sizeof(uint32_t));
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+        // Reset the host manager's pointer for this command queue
+        this->sysmem_manager_->reset(cq_id);
+
+        pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+
+        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
+    }
+
+    // Write device-side cq pointers
+    configure_dispatch_cores(this);
+
+    // Run the cq program
+    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    tt::Cluster::instance().l1_barrier(this->id());
+}
+
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
@@ -2752,7 +2795,7 @@ void Device::configure_command_queue_programs() {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1 ? 2 : 1;
-        if (getenv("TT_METAL_NEW"))
+        if (llrt::OptionsG.get_use_new_fd_init())
             program_size = 1;
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
@@ -2851,7 +2894,7 @@ void Device::configure_command_queue_programs() {
     command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
-    if (device_id != mmio_device_id && !getenv("TT_METAL_NEW")) {
+    if (device_id != mmio_device_id && !llrt::OptionsG.get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
@@ -2889,7 +2932,7 @@ void Device::init_command_queue_device() {
 
     if (llrt::OptionsG.get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
-        if (getenv("TT_METAL_NEW")) {
+        if (llrt::OptionsG.get_use_new_fd_init()) {
             log_warning("Running new FD init");
             this->compile_command_queue_programs_new();
         } else {
@@ -2898,7 +2941,7 @@ void Device::init_command_queue_device() {
         }
         detail::DisablePersistentKernelCache();
     } else {
-        if (getenv("TT_METAL_NEW")) {
+        if (llrt::OptionsG.get_use_new_fd_init()) {
             log_warning("Running new FD init");
             this->compile_command_queue_programs_new();
         } else {
@@ -2911,11 +2954,15 @@ void Device::init_command_queue_device() {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1 ? 2 : 1;
-        if (getenv("TT_METAL_NEW"))
+        if (llrt::OptionsG.get_use_new_fd_init())
             program_size = 1;
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
-    this->configure_command_queue_programs();
+    if (llrt::OptionsG.get_use_new_fd_init()) {
+        this->configure_command_queue_programs_new();
+    } else {
+        this->configure_command_queue_programs();
+    }
     Program& command_queue_program = *this->command_queue_programs[0];
 
     // TODO: should get a const ref
@@ -2931,7 +2978,7 @@ void Device::init_command_queue_device() {
         }
     }
 
-    if (!this->is_mmio_capable() && !getenv("TT_METAL_NEW")) {
+    if (!this->is_mmio_capable() && !llrt::OptionsG.get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);

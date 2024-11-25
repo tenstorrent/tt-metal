@@ -270,6 +270,7 @@ class Device {
     void compile_command_queue_programs();
     void compile_command_queue_programs_new();
     void configure_command_queue_programs();
+    void configure_command_queue_programs_new();
     void clear_l1_state();
     void get_associated_dispatch_phys_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,

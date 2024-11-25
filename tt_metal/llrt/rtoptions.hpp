@@ -126,6 +126,8 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
+    bool use_new_fd_init = false;
+
    public:
     RunTimeOptions();
 
@@ -279,6 +281,9 @@ class RunTimeOptions {
 
     inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+
+    inline bool get_use_new_fd_init() { return use_new_fd_init; }
+    inline void set_use_new_fd_init(bool enable) { use_new_fd_init = enable; }
 
     inline tt_metal::DispatchCoreType get_dispatch_core_type() { return dispatch_core_type; }
 

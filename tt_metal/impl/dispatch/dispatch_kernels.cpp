@@ -4,6 +4,7 @@
 
 #include "dispatch_kernels.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(this->device->id(), 0, 0)
@@ -1484,4 +1485,67 @@ void EthRouterKernel::CreateKernel() {
         {"SKIP_NOC_LOGGING", "1"}
     };
     configure_kernel_variant(dispatch_kernel_file_names[PACKET_ROUTER_MUX], compile_args, defines, false, false, false);
+}
+
+void PrefetchKernel::ConfigureCore() {
+    // Only H-type prefetchers need L1 configuration
+    if (this->config.is_h_variant.value()) {
+        // Initialize the FetchQ
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
+        auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
+        uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+        uint32_t cq_size = device->sysmem_manager().get_cq_size();
+        std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
+        uint32_t prefetch_q_base =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
+            (uint32_t)(prefetch_q_base + my_dispatch_constants.prefetch_q_size())};
+        uint32_t prefetch_q_rd_ptr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+        uint32_t prefetch_q_pcie_rd_ptr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+        uint32_t completion_q_wr_ptr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+        uint32_t completion_q_rd_ptr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+        uint32_t dispatch_message_addr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+        uint32_t completion_q0_last_event_ptr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+        uint32_t completion_q1_last_event_ptr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+        std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {
+            get_absolute_cq_offset(channel, cq_id, cq_size) + cq_start};
+        detail::WriteToDeviceL1(
+            device, this->logical_core, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, GetCoreType());
+        detail::WriteToDeviceL1(
+            device, this->logical_core, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, GetCoreType());
+        detail::WriteToDeviceL1(device, this->logical_core, prefetch_q_base, prefetch_q, GetCoreType());
+    }
+}
+
+void DispatchKernel::ConfigureCore() {
+    // For all dispatchers, need to clear the dispatch message
+    std::vector<uint32_t> zero = {0x0};
+    auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    uint32_t dispatch_message_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    detail::WriteToDeviceL1(device, this->logical_core, dispatch_message_addr, zero, GetCoreType());
+
+    // For DISPATCH_D, need to clear completion q events
+    if (!this->config.is_h_variant.value() && this->config.is_d_variant.value()) {
+        uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+        uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+        detail::WriteToDeviceL1(device, logical_core, completion_q0_last_event_ptr, zero, GetCoreType());
+        detail::WriteToDeviceL1(device, logical_core, completion_q1_last_event_ptr, zero, GetCoreType());
+    }
+}
+
+void DispatchSKernel::ConfigureCore() {
+    // Just need to clear the dispatch message
+    std::vector<uint32_t> zero = {0x0};
+    auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    uint32_t dispatch_message_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    detail::WriteToDeviceL1(device, this->logical_core, dispatch_message_addr, zero, GetCoreType());
 }
