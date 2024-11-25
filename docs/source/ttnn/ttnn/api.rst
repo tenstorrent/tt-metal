@@ -197,6 +197,7 @@ Pointwise Unary
    ttnn.tril
    ttnn.triu
    ttnn.trunc
+   ttnn.unary_chain
    ttnn.clamp_bw
    ttnn.clip_bw
    ttnn.hardtanh_bw

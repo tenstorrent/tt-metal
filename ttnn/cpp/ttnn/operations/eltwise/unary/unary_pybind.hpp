@@ -872,10 +872,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.randn([32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> ops_chain = [
-                ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-                ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False),
-                ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
+            >>> ops_chain = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
             >>> output = {1}(tensor, ops_chain)
         )doc",
         ttnn::unary_chain.base_name(),
