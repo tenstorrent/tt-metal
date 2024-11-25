@@ -6,8 +6,8 @@
 
 #include "noc_nonblocking_api.h"
 
-void (*rtos_context_switch_ptr)();
-volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+inline void (*rtos_context_switch_ptr)();
+volatile inline uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 
 namespace internal_ {
 inline __attribute__((always_inline))
