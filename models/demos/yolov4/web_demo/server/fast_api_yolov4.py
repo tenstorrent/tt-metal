@@ -41,21 +41,37 @@ async def shutdown():
 
 
 def process_output(output):
-    output = output[0]
-    output = [element.item() for element in output]
-    return [output]
+    outs = []
+    output = output
+    cnt = 0
+    for item in output:
+        cnt = cnt + 1
+        print("cnt: ", cnt)
+        print("item is: ", item)
+        output_i = [element.item() for element in item]
+        # output_i = item[0]
+        print("output_i as passed into process_output: ", output_i)
+        # output_i = [element.item() for element in output_i]
+        outs.append(output_i)
+    print("\n\n\nouts before return is: ", outs)
+    return outs
+    # return [output]
 
 
 def post_processing(img, conf_thresh, nms_thresh, output):
+    print("output before post_processing: ", output)
+    print()
+    print("the length of output before post processing is: ", len(output))
     box_array = output[0]
     confs = output[1]
-
+    print("confs: ", confs)
     t1 = time.time()
 
     box_array = np.array(box_array.to(torch.float32))
     confs = np.array(confs.to(torch.float32))
 
     num_classes = confs.shape[2]
+    print("num_classes: ", num_classes)
 
     # [batch, num, 4]
     box_array = box_array[:, :, 0]
@@ -111,6 +127,7 @@ def post_processing(img, conf_thresh, nms_thresh, output):
     print("Post processing total : %f" % (t3 - t1))
     print("-----------------------------------")
 
+    print("bboxes_batch: ", bboxes_batch)
     return bboxes_batch
 
 
@@ -168,15 +185,31 @@ async def objdetection_v2(file: UploadFile = File(...)):
     response = model.run_traced_inference(image)
     t2 = time.time()
     print("the inference on the sever side took: ", t2 - t1)
-    conf_thresh = 0.6
+    # conf_thresh = 0.6
+    conf_thresh = 0.1
     nms_thresh = 0.5
 
     boxes = post_processing(image, conf_thresh, nms_thresh, response)
-    output = boxes[0]
+    print("\n\n\nboxes after post processing: ", boxes)
+    """
+bboxes_batch:  [[[0.01953125, 0.2890625, 1.015625, 0.984375, 0.97265625, 0.97265625, 0], [0.41210938, 0.66015625, 0.67578125, 0.99609375, 0.30273438, 0.30273438, 41]]]
 
+
+
+boxes after post processing:  [[[0.01953125, 0.2890625, 1.015625, 0.984375, 0.97265625, 0.97265625, 0], [0.41210938, 0.66015625, 0.67578125, 0.99609375, 0.30273438, 0.30273438, 41]]]
+cnt:  1
+output_i as passed into process_output:  [0.01953125, 0.2890625, 1.015625, 0.984375, 0.97265625, 0.97265625, 0]
+
+
+
+
+    """
+    output = boxes[0]
+    # output = boxes
     try:
         output = process_output(output)
-    except:
+    except Exception as E:
+        print("the Exception is: ", E)
         print("No objects detected!")
         return []
     t3 = time.time()
