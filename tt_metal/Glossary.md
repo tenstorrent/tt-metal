@@ -2,9 +2,9 @@
 ## **Tenstorrent Devices:** ##
 - **Blackhole -** Tenstorrent's next generation AI compute solution. 140 Tensix Cores.
 - **Galaxy -** Tenstorrent's high density rack-mounted AI compute solution, intended for corporations.
-- **Grayskull -** Tenstorrent's entry level DevKit. 120 Tensix Cores.
+- **Grayskull -** First generation Tenstorrent chip and entry level DevKit. 120 Tensix Cores.
 - **LoudBox -** Tenstorrent's desktop workstation equipped with Tenstorrent hardware and software.
-- **Wormhole -** Tenstorrent’s flexible and scalable processor . 80 Tensix Cores.
+- **Wormhole -** Second generation Tenstorrent chip. 80 Tensix Cores.
 ## **Tenstorrent Software:** ##
 - **Metal Trace -** Performance optimization feature that removes the overhead of building and dispatching model operations. Metal Trace records dispatch operations to the DRAM, and repeats these command while executing a trace.
 - **Runtime -** Bottom of the Metalium software stack. Controls kernel execution and collects results from kernel executions.
@@ -55,7 +55,7 @@
 - **NUMA -** Non-uniform Memory Access
 - **PCC -** Pearson Correlation Coefficient - A method of measuring a linear correlation between two variables.
 - **Q, K, V values -** Q, K, and V stand for different values. Q = query, K = key, V = value. In transformer architecture these values are used to help the model focus on relevant parts of the input sequence.
-- **SFPU -** Vetor unit.
+- **SFPU -** Tensix SIMD engine, used for various activation operations like exponents, square roots, softmax, topK, etc.
 - **SIMD -** Single Instruction Multiple Data - Allows processors to execute the same instruction on multiple data points simultaneously
 - **SoC -** System on Chip
 - **SRAM -** Static Random Access Memory. On-chip Memory. 1 MB SRAM memory (L1) on the Grayskull and 1.5 MB SRAM memory (L1) on the Wormhole. Can be used as a scratch pad accessible by all RISC-V processors and engines within the core.
