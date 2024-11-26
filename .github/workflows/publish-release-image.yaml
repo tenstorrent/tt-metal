@@ -74,6 +74,11 @@ jobs:
                 cmd: pytest tests/end_to_end_tests,
               }
           ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test_group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test_group.runs-on }}
     steps:
       - name: Checkout
