@@ -1682,9 +1682,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
-    bool in0_is_sharded,
-    bool in1_is_sharded,
-    bool output_is_sharded,
     bool untilize_out
 ) {
 
@@ -2137,9 +2134,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             in0_data_format,
             in1_data_format,
             output_data_format,
-            a.memory_config().is_sharded(),
-            b.memory_config().is_sharded(),
-            output.memory_config().is_sharded(),
             untilize_out);
     }
 
