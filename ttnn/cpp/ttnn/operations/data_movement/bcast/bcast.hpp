@@ -19,7 +19,7 @@ struct BcastOperation {
         ttnn::BcastOpMath bcast_op,
         ttnn::BcastOpDim bcast_dim,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<Tensor> optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 

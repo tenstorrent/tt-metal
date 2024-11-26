@@ -19,6 +19,7 @@ class FreeList : public Algorithm {
     };
 
     FreeList(DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment, SearchPolicy search_policy);
+    ~FreeList();
     void init();
 
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const;
@@ -52,9 +53,9 @@ class FreeList : public Algorithm {
         boost::local_shared_ptr<Block> next_free = nullptr;
     };
 
-    void dump_block(const boost::local_shared_ptr<Block> block, std::ofstream &out) const;
+    void dump_block(const boost::local_shared_ptr<Block>& block, std::ofstream &out) const;
 
-    bool is_allocated(const boost::local_shared_ptr<Block> block) const;
+    bool is_allocated(const boost::local_shared_ptr<Block>& block) const;
 
     boost::local_shared_ptr<Block> search_best(DeviceAddr size_bytes, bool bottom_up);
 
@@ -62,11 +63,11 @@ class FreeList : public Algorithm {
 
     boost::local_shared_ptr<Block> search(DeviceAddr size_bytes, bool bottom_up);
 
-    void allocate_entire_free_block(boost::local_shared_ptr<Block> free_block_to_allocate);
+    void allocate_entire_free_block(const boost::local_shared_ptr<Block>& free_block_to_allocate);
 
-    void update_left_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block);
+    void update_left_aligned_allocated_block_connections(const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block);
 
-    void update_right_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block);
+    void update_right_aligned_allocated_block_connections(const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block);
 
     boost::local_shared_ptr<Block> allocate_slice_of_free_block(boost::local_shared_ptr<Block> free_block, DeviceAddr offset, DeviceAddr size_bytes);
 

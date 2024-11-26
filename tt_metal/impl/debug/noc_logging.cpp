@@ -23,7 +23,7 @@ using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 namespace tt {
 
 static string logfile_path = "generated/noc_data/";
-void PrintNocData(noc_data_t noc_data, string file_name) {
+void PrintNocData(noc_data_t noc_data, const string& file_name) {
     std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     std::string filename = tt::llrt::OptionsG.get_root_dir() + logfile_path + file_name;
@@ -69,7 +69,7 @@ void DumpDeviceNocData(Device *device, noc_data_t &noc_data, noc_data_t &dispatc
     }
 }
 
-void DumpNocData(std::vector<Device *> devices) {
+void DumpNocData(const std::vector<Device *>& devices) {
     // Skip if feature is not enabled
     if (!tt::llrt::OptionsG.get_record_noc_transfers())
         return;

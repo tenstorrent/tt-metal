@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::downsample::detail {
 
 std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
-    CoreRangeSet all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
+    const CoreRangeSet& all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
     TT_ASSERT(
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {

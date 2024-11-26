@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 
 #include "device/tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
@@ -44,10 +45,16 @@ static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translatio
 
     std::unordered_map<LogicalCoordinate, PhysicalCoordinate> result;
     for (const auto& mapping : j[key]) {
-        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 4) {
+        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 5) {
             throw std::runtime_error("Invalid coordinate format in JSON file: " + filename);
         }
-        result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{mapping[1][1], mapping[1][0], mapping[1][2], mapping[1][3]});
+        result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{
+            mapping[1][0], // cluster_id
+            mapping[1][2], // x
+            mapping[1][1], // y
+            mapping[1][3], // rack
+            mapping[1][4] // shelf
+        });
     }
 
     return result;
@@ -152,7 +159,7 @@ void SystemMesh::register_mesh_device(const std::shared_ptr<MeshDevice> &mesh_de
 }
 
 std::vector<Device*> SystemMesh::map_mesh_device(
-    std::shared_ptr<MeshDevice> mesh_device,
+    const std::shared_ptr<MeshDevice>& mesh_device,
     size_t num_command_queues,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -215,7 +222,7 @@ static MeshDeviceID generate_unique_mesh_id() {
 }
 
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh)
-    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(parent_mesh) {}
+    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,

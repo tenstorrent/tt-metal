@@ -95,7 +95,7 @@ class SystemMesh {
 
     // Map MeshDevice to physical devices
     std::vector<Device *> map_mesh_device(
-        std::shared_ptr<MeshDevice> mesh_device,
+        const std::shared_ptr<MeshDevice>& mesh_device,
         size_t num_command_queues,
         size_t l1_small_size,
         size_t trace_region_size,

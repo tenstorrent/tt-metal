@@ -26,9 +26,9 @@ struct BinaryOperation {
         const Tensor &input_tensor_b_arg,
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         const Tensor &input_tensor_a_arg,
@@ -68,8 +68,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         const Tensor &input_tensor_a_arg,
@@ -86,8 +86,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         uint8_t queue_id,
@@ -96,8 +96,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     // scalar - tensor combination not available on Pytorch for this op
     static Tensor invoke(
