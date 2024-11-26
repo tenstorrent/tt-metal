@@ -1,4 +1,4 @@
-## Tutorial - Add Two Integers in a Compute Kernel ##
+## Tutorial - Add Two Integers in a Compute Kernel ## 🚧
 1. To build and execute use the following commands
 ```export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
