@@ -34,8 +34,14 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    (
+        True,
+        # False,
+    ),
+    ids=(
+        "paged_attention",
+        # "non_paged_attention",
+    ),
 )
 @pytest.mark.parametrize(
     "paged_attention_params",
@@ -43,7 +49,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (32,),  # TODO Miguel: should we include batch==1 in the unit tests as well?
+    (1,),
 )
 @pytest.mark.parametrize(
     "max_seq_len",

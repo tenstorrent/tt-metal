@@ -284,8 +284,7 @@ def run_llama3_demo(
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
 
-    # TODO Change this back to 100
-    max_generated_tokens = 20  # Maximum number of tokens to generate per user
+    max_generated_tokens = 100  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -429,7 +428,6 @@ def run_llama3_demo(
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos_padded)
         rot_mat_idxs = rope_setup.get_rot_idxs(current_pos_padded)
-
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))

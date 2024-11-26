@@ -49,8 +49,8 @@ class LlamaOptimizations:
 
 # TODO: Miguel: Remove from here. I've added this to llama common instead, and each test should define their own values
 class PagedAttentionConfig:
-    block_size = 64
-    max_num_blocks = 2048
+    block_size = 32
+    max_num_blocks = 1024
 
 
 class TtModelArgs:

@@ -37,15 +37,6 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
     ),
 )
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     "paged_attention",
     (
         True,
