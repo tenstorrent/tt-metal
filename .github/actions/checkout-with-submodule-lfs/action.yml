@@ -14,6 +14,14 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Clean repo (if it exists)
+      shell: bash
+      run: |
+        if [ -d ".git" ]; then
+          git clean -xffd
+          find .git -type f -iname '*.lock' -delete
+          git submodule deinit -f --all
+        fi
     - name: Checkout repo
       uses: actions/checkout@v4
       with:
@@ -22,9 +30,6 @@ runs:
         lfs: true
         submodules: recursive
         clean: true
-    - name: Clean repo
-      shell: bash
-      run: git clean -xffd
     - name: Clean each submodule
       shell: bash
       run: git submodule foreach 'git clean -xffd'
