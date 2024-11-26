@@ -168,6 +168,8 @@ class Program {
 
     void set_pre_exec_callback(std::function<void(Program*)> callback);
     void call_pre_exec_callback();
+    uint32_t get_max_cb_memory_usage(const Device *device);
+
 
    private:
 
