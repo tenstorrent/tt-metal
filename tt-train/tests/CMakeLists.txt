@@ -39,7 +39,7 @@ add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # variable to enable CI only tests
 # 0 = off, 1 = on
-add_definitions(-DCI_ONLY_TT_TRAIN_TESTS=0)
+add_definitions(-DENABLE_CI_ONLY_TT_TRAIN_TESTS=0)
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")

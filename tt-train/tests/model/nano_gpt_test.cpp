@@ -223,13 +223,13 @@ void train_test(bool use_moreh_adamw = false) {
 }
 
 TEST(NanoGPTTest, AdamW) {
-    if (CI_ONLY_TT_TRAIN_TESTS) {
+    if (ENABLE_CI_ONLY_TT_TRAIN_TESTS) {
         train_test(/* use_moreh_adamw */ false);
     }
 }
 
 TEST(NanoGPTTest, MorehAdamW) {
-    if (CI_ONLY_TT_TRAIN_TESTS) {
+    if (ENABLE_CI_ONLY_TT_TRAIN_TESTS) {
         train_test(/* use_moreh_adamw */ true);
     }
 }
