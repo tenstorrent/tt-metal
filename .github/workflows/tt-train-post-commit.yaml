@@ -48,6 +48,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       TEST_DATA_DIR: ${{ github.workspace }}/data
+      ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
