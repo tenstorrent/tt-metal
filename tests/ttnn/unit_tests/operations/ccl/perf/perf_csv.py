@@ -180,10 +180,12 @@ def perf_report(file_path):
         group_df.rename(columns={"INPUT_0_LAYOUT": "Layout", "INPUT_0_DATATYPE": "Data Type"}, inplace=True)
 
         group_df["Input Shape"] = group_df.apply(
-            lambda row: f"[{row['INPUT_0_W']}, {row['INPUT_0_Z']}, {row['INPUT_0_Y']}, {row['INPUT_0_X']}]", axis=1
+            lambda row: f"[{int(row['INPUT_0_W'])}, {int(row['INPUT_0_Z'])}, {int(row['INPUT_0_Y'])}, {int(row['INPUT_0_X'])}]",
+            axis=1,
         )
         group_df["Output Shape"] = group_df.apply(
-            lambda row: f"[{row['OUTPUT_0_W']}, {row['OUTPUT_0_Z']}, {row['OUTPUT_0_Y']}, {row['OUTPUT_0_X']}]", axis=1
+            lambda row: f"[{int(row['OUTPUT_0_W'])}, {int(row['OUTPUT_0_Z'])}, {int(row['OUTPUT_0_Y'])}, {int(row['OUTPUT_0_X'])}]",
+            axis=1,
         )
         group_df["Cycles Count"] = group_df["DEVICE FW END CYCLE"] - group_df["DEVICE FW START CYCLE"]
         group_df[["Op BW [GB/s]", "Link BW [GB/s]"]] = group_df.apply(calculate_bandwidth, axis=1, result_type="expand")

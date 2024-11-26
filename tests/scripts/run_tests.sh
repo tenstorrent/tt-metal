@@ -321,6 +321,8 @@ run_pipeline_tests() {
         demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
         model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "ccl_all_gather_perf_tg_device" ]]; then
+        ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
     # TGG pipelines
     elif [[ $pipeline_type == "unit_tgg_device" ]]; then
         unit_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
