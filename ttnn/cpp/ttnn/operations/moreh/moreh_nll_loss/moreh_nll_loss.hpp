@@ -14,7 +14,7 @@ struct MorehNllLoss {
     static Tensor invoke(
         const Tensor &input_tensor,
         const Tensor &target_tensor,
-        const std::string reduction,
+        const std::string& reduction,
         const std::optional<Tensor> &weight_tensor,
         const std::optional<Tensor> &divisor_tensor,
         const std::optional<Tensor> &output_tensor,

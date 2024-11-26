@@ -41,7 +41,7 @@ CommandQueueHandle GetDefaultCommandQueue(DeviceHandle device);
  */
 void EnqueueReadBuffer(
     CommandQueueHandle cq,
-    BufferHandle buffer,
+    const BufferHandle& buffer,
     std::byte *dst,
     bool blocking);
 
@@ -55,7 +55,7 @@ void EnqueueReadBuffer(
  */
 void EnqueueWriteBuffer(
     CommandQueueHandle cq,
-    BufferHandle buffer,
+    const BufferHandle& buffer,
     const std::byte *src,
     bool blocking);
 

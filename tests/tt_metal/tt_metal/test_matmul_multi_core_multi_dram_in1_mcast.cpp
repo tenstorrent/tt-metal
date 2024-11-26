@@ -46,7 +46,7 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     return result;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
     for(int i = 0 ; i < rows ; i++) {

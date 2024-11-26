@@ -91,8 +91,8 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
     uint32_t num_receivers,
     uint32_t num_mixed_df_layers,
     uint32_t cb_padding,
-    std::shared_ptr<tt::tt_metal::Buffer> input_buffer,
-    std::shared_ptr<tt::tt_metal::Buffer> output_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& input_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& output_buffer,
     bool use_sub_devices
     ) {
 
@@ -371,13 +371,13 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 }
 
 bool validation_bfp8_b(
-    tt::deprecated::Tensor<float> input_tensor,
+    const tt::deprecated::Tensor<float>& input_tensor,
     const tt::DataFormat &data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
 ) {
     bool pass = true;
     std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0); // Initialize with zeros
@@ -415,13 +415,13 @@ bool validation_bfp8_b(
 
 
 bool validation_fp16(
-    tt::deprecated::Tensor<bfloat16> input_tensor,
+    const tt::deprecated::Tensor<bfloat16>& input_tensor,
     const tt::DataFormat &data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
 ) {
     bool pass = true;
     std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0); // Initialize with zeros
@@ -458,14 +458,14 @@ bool validation_fp16(
 }
 
 bool validation_mixed_df(
-    tt::deprecated::Tensor<bfloat16> input_tensor_fp16,
-    tt::deprecated::Tensor<float> input_tensor_fp8,
+    const tt::deprecated::Tensor<bfloat16>& input_tensor_fp16,
+    const tt::deprecated::Tensor<float>& input_tensor_fp8,
     const tt::DataFormat &data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
     uint32_t num_mixed_df_layers,
     uint32_t num_receivers
 ) {
@@ -579,7 +579,7 @@ bool validation_mixed_df(
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt_metal::Device* device,
-    vector<uint32_t> input_vec,
+    const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
     BufferType buffer_type,

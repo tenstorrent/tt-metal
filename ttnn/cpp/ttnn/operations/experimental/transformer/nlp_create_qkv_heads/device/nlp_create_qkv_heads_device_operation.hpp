@@ -121,7 +121,7 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t head_dim,
         const bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors);
+        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
 };
 
 } // namespace ttnn::operations::experimental::transformer

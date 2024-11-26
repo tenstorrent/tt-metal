@@ -157,7 +157,6 @@ Checks: >
   -performance-noexcept-move-constructor,
   -performance-noexcept-swap,
   -performance-unnecessary-copy-initialization,
-  -performance-unnecessary-value-param,
   -readability-avoid-const-params-in-decls,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,

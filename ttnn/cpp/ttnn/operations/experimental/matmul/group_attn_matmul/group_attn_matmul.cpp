@@ -7,6 +7,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "group_attn_matmul.hpp"
 
+#include <utility>
+
 namespace ttnn::operations::experimental::matmul {
 
     ttnn::Tensor GroupAttnMatmulOperation::invoke(
@@ -50,7 +52,7 @@ namespace ttnn::operations::experimental::matmul {
             }
         }, kernel_config_val);
 
-        return operation::run(GroupAttnMatmulDeviceOperation{std::nullopt, std::nullopt, out_subblock_w, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), row_major, kernel_config_val}, {input_tensor_a, input_tensor_b}, {}, {optional_output_tensor}, queue_id).at(0);
+        return operation::run(GroupAttnMatmulDeviceOperation{std::nullopt, std::nullopt, out_subblock_w, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), row_major, kernel_config_val}, {input_tensor_a, input_tensor_b}, {}, {std::move(optional_output_tensor)}, queue_id).at(0);
     }
 
     ttnn::Tensor GroupAttnMatmulOperation::invoke(
@@ -62,7 +64,7 @@ namespace ttnn::operations::experimental::matmul {
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<Tensor> optional_output_tensor) {
         return invoke(
-            ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, compute_with_storage_grid_size, memory_config, output_dtype, compute_kernel_config, optional_output_tensor);
+            ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, compute_with_storage_grid_size, memory_config, output_dtype, compute_kernel_config, std::move(optional_output_tensor));
     }
 
 };  // namespace ttnn::operations::experimental::matmul

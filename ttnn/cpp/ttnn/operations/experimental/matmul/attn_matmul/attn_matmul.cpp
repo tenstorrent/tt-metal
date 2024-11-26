@@ -7,6 +7,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "attn_matmul.hpp"
 
+#include <utility>
+
 namespace ttnn::operations::experimental::matmul {
 
     ttnn::Tensor AttnMatmulOperation::invoke(
@@ -23,7 +25,7 @@ namespace ttnn::operations::experimental::matmul {
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
         return operation::run(AttnMatmulDeviceOperation{std::nullopt, std::nullopt, compute_with_storage_grid_size,
             memory_config.value_or(input_tensor_a.memory_config()), dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val},
-            {input_tensor_a, input_tensor_b}, {}, {optional_output_tensor}, queue_id).at(0);
+            {input_tensor_a, input_tensor_b}, {}, {std::move(optional_output_tensor)}, queue_id).at(0);
     }
 
     ttnn::Tensor AttnMatmulOperation::invoke(
@@ -35,7 +37,7 @@ namespace ttnn::operations::experimental::matmul {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor) {
         return invoke(
-            ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, compute_with_storage_grid_size, dtype, compute_kernel_config, memory_config, optional_output_tensor);
+            ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, compute_with_storage_grid_size, dtype, compute_kernel_config, memory_config, std::move(optional_output_tensor));
     }
 
     // TODO: Should we support option to read directly from cache (with optional transpose_hw)?
@@ -58,7 +60,7 @@ namespace ttnn::operations::experimental::matmul {
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
         return operation::run(AttnMatmulDeviceOperation{num_tokens_rounded_up_to_32,
             transpose_hw, compute_with_storage_grid_size, memory_config.value_or(input_tensor_a.memory_config()),
-            dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val}, {input_tensor_a, input_tensor_b}, {}, {optional_output_tensor}, queue_id).at(0);
+            dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val}, {input_tensor_a, input_tensor_b}, {}, {std::move(optional_output_tensor)}, queue_id).at(0);
     }
 
     ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
@@ -72,7 +74,7 @@ namespace ttnn::operations::experimental::matmul {
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<Tensor> optional_output_tensor) {
         return invoke(
-            ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, num_tokens, transpose_hw, compute_with_storage_grid_size, memory_config, dtype, compute_kernel_config, optional_output_tensor);
+            ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, num_tokens, transpose_hw, compute_with_storage_grid_size, memory_config, dtype, compute_kernel_config, std::move(optional_output_tensor));
         }
 
 };  // namespace ttnn::operations::experimental::matmul

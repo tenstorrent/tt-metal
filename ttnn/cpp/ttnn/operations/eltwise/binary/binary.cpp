@@ -151,9 +151,9 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const Tensor &input_tensor_b_arg,
     const std::optional<const DataType> &output_dtype,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     auto [input_tensor_a, input_tensor_b] =
         detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
 
@@ -241,8 +241,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const std::optional<const DataType> &output_dtype,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().get_dtype(),
@@ -297,8 +297,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const std::optional<const DataType> &dtype,
     const std::optional<ttnn::MemoryConfig> &memory_config,
     const std::optional<Tensor> &optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return detail::binary_impl(
         DefaultQueueId, binary_op_type, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor);
 }
@@ -311,8 +311,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const std::optional<const DataType> &dtype,
     const std::optional<ttnn::MemoryConfig> &memory_config,
     const std::optional<Tensor> &optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return detail::binary_impl(
         DefaultQueueId, binary_op_type, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor);
 }

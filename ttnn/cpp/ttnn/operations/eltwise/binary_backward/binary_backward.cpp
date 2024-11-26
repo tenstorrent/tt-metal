@@ -27,6 +27,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include <magic_enum.hpp>
+#include <utility>
 
 namespace ttnn::operations::binary_backward {
 
@@ -101,7 +102,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-       return ExecuteAddalphaBW::invoke(ttnn::DefaultQueueId, grad, input, other, alpha, are_required_outputs, output_mem_config, input_grad, other_grad);
+       return ExecuteAddalphaBW::invoke(ttnn::DefaultQueueId, grad, input, other, alpha, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
@@ -140,7 +141,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
 
-    return ExecuteBackwardSubAlpha::invoke(DefaultQueueId, grad, input, other, alpha, are_required_outputs, output_mem_config, input_grad, other_grad);
+    return ExecuteBackwardSubAlpha::invoke(DefaultQueueId, grad, input, other, alpha, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 
 }
 
@@ -155,7 +156,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
 
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    return ExecuteBackwardAdd::invoke(DefaultQueueId, grad, input, alpha, output_mem_config, input_grad);
+    return ExecuteBackwardAdd::invoke(DefaultQueueId, grad, input, alpha, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
@@ -182,7 +183,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(const Tensor& grad, const Tensor& input, const Tensor& other, const std::vector<bool>& are_required_outputs, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
-    return ExecuteBackwardAdd::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+    return ExecuteBackwardAdd::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 
 std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
@@ -208,7 +209,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
 
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    return ExecuteBackwardSub::invoke(DefaultQueueId, grad, input, alpha, output_mem_config, input_grad);
+    return ExecuteBackwardSub::invoke(DefaultQueueId, grad, input, alpha, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
@@ -231,7 +232,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-        return ExecuteBackwardSub::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+        return ExecuteBackwardSub::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
@@ -430,12 +431,12 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::vector<bool>& are_required_outputs, const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
-    return ExecuteBackwardAssign::invoke(ttnn::DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+    return ExecuteBackwardAssign::invoke(ttnn::DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    return ExecuteBackwardAssign::invoke(ttnn::DefaultQueueId, grad, input, output_mem_config, input_grad);
+    return ExecuteBackwardAssign::invoke(ttnn::DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
@@ -490,7 +491,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     const std::optional<MemoryConfig> &memory_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    return ExecuteBackwardConcat::invoke(ttnn::DefaultQueueId, grad, input, other, dim, are_required_outputs, memory_config, input_grad, other_grad);
+    return ExecuteBackwardConcat::invoke(ttnn::DefaultQueueId, grad, input, other, dim, are_required_outputs, memory_config, std::move(input_grad), std::move(other_grad));
 }
 
 
@@ -525,7 +526,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    return ExecuteBackwardRsub::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+    return ExecuteBackwardRsub::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 
 std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
@@ -603,7 +604,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardMin::invoke(const Tensor& grad, const T
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
-    uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     std::vector<std::optional<Tensor>> result;
@@ -628,8 +629,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    return ExecuteBackwardDiv::invoke(DefaultQueueId, grad, input, scalar, round_mode, output_mem_config, input_grad);
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteBackwardDiv::invoke(DefaultQueueId, grad, input, scalar, round_mode, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
@@ -637,7 +638,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<std::string> round_mode,
+    const std::optional<std::string>& round_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -715,12 +716,12 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<std::string> round_mode,
+    const std::optional<std::string>& round_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    return ExecuteBackwardDiv::invoke(DefaultQueueId, grad, input, other, round_mode, are_required_outputs, output_mem_config, input_grad, other_grad);
+    return ExecuteBackwardDiv::invoke(DefaultQueueId, grad, input, other, std::move(round_mode), are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 
 std::vector<ComplexTensor> ExecuteBackwardDiv::invoke(
@@ -759,7 +760,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    return ExecuteBackwardMul::invoke(DefaultQueueId, grad, input, scalar, output_mem_config, input_grad);
+    return ExecuteBackwardMul::invoke(DefaultQueueId, grad, input, scalar, output_mem_config, std::move(input_grad));
 }
 
 std::vector<ComplexTensor> ExecuteBackwardMul::invoke(
@@ -803,6 +804,6 @@ std::vector<std::optional<Tensor>> ExecuteBackwardMul::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-        return  ExecuteBackwardMul::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+        return  ExecuteBackwardMul::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, std::move(input_grad), std::move(other_grad));
 }
 }  // namespace ttnn::operations::binary_backward

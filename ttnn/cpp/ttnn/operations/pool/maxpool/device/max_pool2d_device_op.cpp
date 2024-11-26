@@ -4,6 +4,8 @@
 
 #include "max_pool2d_device_op.hpp"
 
+#include <utility>
+
 /**
  * New maxpool2d implementation that uses the new sliding window infrastructure.
  */
@@ -147,7 +149,7 @@ std::tuple<MaxPool2D::operation_attributes_t, MaxPool2D::tensor_args_t> MaxPool2
     DataType output_dtype,
     MemoryConfig memory_config) {
     return {
-        operation_attributes_t{sliding_window_config, output_dtype, memory_config},
+        operation_attributes_t{sliding_window_config, output_dtype, std::move(memory_config)},
         tensor_args_t{input_tensor}
     };
 }

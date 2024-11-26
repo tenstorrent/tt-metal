@@ -17,11 +17,11 @@ namespace ttnn {
 
     void queue_synchronize(CommandQueue& cq);
 
-    void event_synchronize(std::shared_ptr<Event> event);
+    void event_synchronize(const std::shared_ptr<Event>& event);
 
-    bool event_query(std::shared_ptr<Event> event);
+    bool event_query(const std::shared_ptr<Event>& event);
 
-    void wait_for_event(CommandQueue& cq, std::shared_ptr<Event> event);
+    void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event);
 
-    void record_event(CommandQueue& cq, std::shared_ptr<Event> event);
+    void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event);
 }

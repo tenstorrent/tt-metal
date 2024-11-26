@@ -27,9 +27,9 @@ void override_runtime_args_mc_cn(
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
+    const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2
 ){
     auto input_buffer = input_tensor.buffer();
@@ -230,9 +230,9 @@ void override_runtime_args_mc_hc(
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
+    const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2
 ){
     auto input_buffer = input_tensor.buffer();
@@ -343,9 +343,9 @@ void override_runtime_args_mc_hc_rm(
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
+    const CoreRangeSet& core_group_1,
     uint32_t num_w_sticks_per_core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_2,
     uint32_t num_w_sticks_per_core_group_2
 ){
     auto input_buffer = input_tensor.buffer();
@@ -1341,9 +1341,9 @@ void override_runtime_args_wh(
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
+    const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2
 ){
     auto input_shape = input_tensor.get_legacy_shape();
@@ -1480,9 +1480,9 @@ void override_runtime_args_wh_rm(
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
+    const CoreRangeSet& core_group_1,
     uint32_t num_hw_blocks_per_core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_2,
     uint32_t num_hw_blocks_per_core_group_2
 ){
     auto input_shape = input_tensor.shape();

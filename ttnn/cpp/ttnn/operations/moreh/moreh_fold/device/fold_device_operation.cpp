@@ -102,11 +102,11 @@ MorehFoldOperation::tensor_return_value_t MorehFoldOperation::create_output_tens
 std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t> MorehFoldOperation::invoke(
     const Tensor& input,
     const std::optional<Tensor>& output,
-    const std::vector<uint32_t> output_size,
-    const std::vector<uint32_t> kernel_size,
-    const std::vector<uint32_t> dilation,
-    const std::vector<uint32_t> padding,
-    const std::vector<uint32_t> stride,
+    const std::vector<uint32_t>& output_size,
+    const std::vector<uint32_t>& kernel_size,
+    const std::vector<uint32_t>& dilation,
+    const std::vector<uint32_t>& padding,
+    const std::vector<uint32_t>& stride,
     const std::optional<MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{

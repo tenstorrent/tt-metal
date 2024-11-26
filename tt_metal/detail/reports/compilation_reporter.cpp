@@ -46,7 +46,7 @@ CompilationReporter::~CompilationReporter() {
     }
 }
 
-std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
+std::string kernel_attributes_str(const std::shared_ptr<Kernel>& kernel) {
     std::string attr_str = "{";
     if (not kernel->compile_time_args().empty()) {
         attr_str += "Compile args: [";
@@ -79,7 +79,7 @@ std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
     return attr_str;
 }
 
-void CompilationReporter::add_kernel_compile_stats(uint64_t program_id, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
+void CompilationReporter::add_kernel_compile_stats(uint64_t program_id, const std::shared_ptr<Kernel>& kernel, bool cache_hit, size_t kernel_hash) {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (cache_hit) {

@@ -106,7 +106,7 @@ std::vector<Tensor> fold_with_transpose_(
     return output_tensors;
 }
 
-ttnn::MemoryConfig create_sharded_memory_config(ttnn::Shape tensor_shape, CoreCoord grid_size, ShardOrientation orientation, const std::optional<MemoryConfig> override_memory_config=std::nullopt) {
+ttnn::MemoryConfig create_sharded_memory_config(ttnn::Shape tensor_shape, CoreCoord grid_size, ShardOrientation orientation, const std::optional<MemoryConfig>& override_memory_config=std::nullopt) {
 
     if (override_memory_config.has_value()) {
         return override_memory_config.value();
@@ -132,7 +132,7 @@ ttnn::MemoryConfig create_sharded_memory_config(ttnn::Shape tensor_shape, CoreCo
 }
 
 std::vector<Tensor> fold_with_transpose_sharded_(
-    uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::LegacyShape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w, CoreCoord grid_size, const std::optional<MemoryConfig> override_memory_config) {
+    uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::LegacyShape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w, CoreCoord grid_size, const std::optional<MemoryConfig>& override_memory_config) {
 
     using namespace tt::constants;
     Device * device;
@@ -292,7 +292,7 @@ Tensor FoldOperation::invoke(uint8_t queue_id,
                                  uint32_t pad_h,
                                  uint32_t pad_w,
                                  const std::optional<CoreCoord> grid_size,
-                                 const std::optional<MemoryConfig> override_memory_config) {
+                                 const std::optional<MemoryConfig>& override_memory_config) {
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
             if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -316,7 +316,7 @@ Tensor FoldOperation::invoke(const ttnn::Tensor &input_tensor,
                                  uint32_t pad_h,
                                  uint32_t pad_w,
                                  const std::optional<CoreCoord> grid_size,
-                                 const std::optional<MemoryConfig> override_memory_config) {
+                                 const std::optional<MemoryConfig>& override_memory_config) {
     uint8_t queue_id = 0;
     return invoke(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w, grid_size);
 }

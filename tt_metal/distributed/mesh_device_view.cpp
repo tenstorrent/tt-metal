@@ -46,7 +46,7 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coor
     validate_coordinates();
 }
 
-MeshDeviceView::MeshDeviceView(std::vector<device_pointer> devices, CoordinateMapper mapper)
+MeshDeviceView::MeshDeviceView(std::vector<device_pointer> devices, const CoordinateMapper& mapper)
     : devices_(std::move(devices)) {
     initialize_from_devices(devices_, std::move(mapper));
 }
@@ -173,7 +173,7 @@ chip_id_t MeshDeviceView::find_device_id(const Coordinate& coord) const {
     return this->devices_.at(coord.row * num_cols() + coord.col)->id();
 }
 
-void MeshDeviceView::initialize_from_devices(const std::vector<device_pointer>& devices, CoordinateMapper mapper) {
+void MeshDeviceView::initialize_from_devices(const std::vector<device_pointer>& devices, const CoordinateMapper& mapper) {
     size_t min_row = std::numeric_limits<size_t>::max(), min_col = std::numeric_limits<size_t>::max();
     size_t max_row = std::numeric_limits<size_t>::min(), max_col = std::numeric_limits<size_t>::min();
 

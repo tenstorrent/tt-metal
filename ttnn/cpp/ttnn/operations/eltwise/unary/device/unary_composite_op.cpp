@@ -9,6 +9,7 @@
 #include <optional>
 
 #include <magic_enum.hpp>
+#include <utility>
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -376,7 +377,7 @@ Tensor ExecuteTrunc::invoke(uint8_t queue_id, const Tensor& input, const std::op
 }
 
 Tensor ExecuteTrunc::invoke(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
-    return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config, output_tensor);
+    return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config, std::move(output_tensor));
 }
 
 // Function variance of whole tensor.
@@ -467,7 +468,7 @@ Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<float> m
 }
 
 Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config);
+    return ExecuteUnaryCompositeClamp::invoke(a, std::move(min), std::move(max), output_mem_config);
 }
 
 // clamp
@@ -697,7 +698,7 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 }
 
 //rdiv
-Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<std::string> round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<std::string>& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
     TT_FATAL((round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
@@ -792,7 +793,7 @@ Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output
 }
 
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
-Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _make_global_from_hw_impl(const HWFunctionT& fn, const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW

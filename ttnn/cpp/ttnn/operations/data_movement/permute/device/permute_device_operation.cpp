@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <utility>
 
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
@@ -60,7 +61,7 @@ PermuteDeviceOperation::invoke(const Tensor& input_tensor, const SmallVector<uin
     return {
         operation_attributes_t{.dims=dims,
         .output_mem_config=memory_config.value_or(input_tensor.memory_config())},
-        tensor_args_t{.input_tensor=input_tensor, .optional_output_tensor=optional_output_tensor}
+        tensor_args_t{.input_tensor=input_tensor, .optional_output_tensor=std::move(optional_output_tensor)}
     };
 }
 

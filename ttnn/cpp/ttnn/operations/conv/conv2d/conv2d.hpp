@@ -177,7 +177,7 @@ void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::op
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -185,13 +185,13 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
@@ -212,8 +212,8 @@ Result conv2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-    std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-    const std::optional<const MemoryConfig> memory_config = std::nullopt);
+    const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
 
 struct Conv2dOperation{
@@ -233,8 +233,8 @@ struct Conv2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt);
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
         uint8_t queue_id,
@@ -252,8 +252,8 @@ struct Conv2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt);
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace conv2d
 }  // namespace operations::conv

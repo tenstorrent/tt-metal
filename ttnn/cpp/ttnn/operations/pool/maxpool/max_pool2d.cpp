@@ -22,7 +22,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                            std::array<uint32_t, 2> stride,
                            std::array<uint32_t, 2> padding,
                            std::array<uint32_t, 2> dilation,
-                           const std::optional<const MemoryConfig> memory_config,
+                           const std::optional<const MemoryConfig>& memory_config,
                            const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,

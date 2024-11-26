@@ -295,7 +295,7 @@ void matmul_tile(DispatchFixture *fixture, tt_metal::Device *device, const Matmu
     std::vector<uint32_t> result_vec;
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
 
-    std::vector<bfloat16> golden = tensor_vals;
+    std::vector<bfloat16> golden = std::move(tensor_vals);
     std::vector<bfloat16> golden_tilized = test_utils::tilize(golden, M*32, N*32);
     std::vector<bfloat16> golden_tilized_single = convert_to_tile_layout(golden_tilized);
 

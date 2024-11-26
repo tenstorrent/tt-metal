@@ -57,7 +57,7 @@ Tensor halo_op(const Tensor& input_tensor,
                 bool remote_read = false,
                 bool transpose_mcast = true,
                 uint32_t reshard_num_cores_nhw = 0,
-                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                const MemoryConfig& output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                 bool is_out_tiled = true);
 
 } // namespace halo

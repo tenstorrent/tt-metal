@@ -21,7 +21,7 @@ struct InterleavedToShardedOperation {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const std::variant<CoreCoord, CoreRangeSet> grid,
+        const std::variant<CoreCoord, CoreRangeSet>& grid,
         const std::array<uint32_t, 2> shard_shape,
         const TensorMemoryLayout shard_scheme,
         const ShardOrientation shard_orientation,

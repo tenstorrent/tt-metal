@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
 #include "conv2d_op.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -24,7 +25,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
 
-std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles) {
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config, uint32_t act_block_h_ntiles) {
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
@@ -48,13 +49,13 @@ namespace ttnn::operations::conv {
 namespace conv2d {
 
 Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    MemoryConfig memory_config,
+    const MemoryConfig& memory_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
@@ -91,7 +92,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                     ),
                     input_tensors,
                     optional_input_tensors);
-            }, {a, b}, output_tensors, {bias});
+            }, {a, b}, output_tensors, {std::move(bias)});
     return output_tensors.at(0);
 
 }

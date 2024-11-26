@@ -89,7 +89,7 @@ void set_math_fid_masks_binary(uint16_t &srca_fid_mask, uint16_t &srcb_fid_mask,
     }
 }
 
-void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logical_core, const ReduceConfig &test_config, std::shared_ptr<tt_metal::Buffer> src_dram_buffer, std::shared_ptr<tt_metal::Buffer> dst_dram_buffer) {
+void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logical_core, const ReduceConfig &test_config, const std::shared_ptr<tt_metal::Buffer>& src_dram_buffer, const std::shared_ptr<tt_metal::Buffer>& dst_dram_buffer) {
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1]*test_config.shape[0];
     uint32_t HW = H*W;
     uint32_t N = test_config.shape[0]*test_config.shape[1];

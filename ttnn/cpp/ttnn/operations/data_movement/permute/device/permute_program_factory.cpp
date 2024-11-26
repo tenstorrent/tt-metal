@@ -8,17 +8,17 @@
 namespace ttnn::operations::data_movement {
 
 namespace detail {
-    uint32_t num_pages(const ttnn::Tensor input_tensor) {
+    uint32_t num_pages(const ttnn::Tensor& input_tensor) {
         const auto& padded_shape = input_tensor.get_logical_shape();
         return padded_shape.volume()/padded_shape[-1];
     }
 
-    uint32_t page_size(const ttnn::Tensor input_tensor) {
+    uint32_t page_size(const ttnn::Tensor& input_tensor) {
         const auto& padded_shape = input_tensor.get_logical_shape(); // in anticipation of RM padding
         return padded_shape[-1] * input_tensor.element_size();
     }
 
-    std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape shape) {
+    std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape& shape) {
         std::vector<uint32_t> strides(shape.rank());
         strides[shape.rank() - 1] = 1;
         strides[shape.rank() - 2] = 1;

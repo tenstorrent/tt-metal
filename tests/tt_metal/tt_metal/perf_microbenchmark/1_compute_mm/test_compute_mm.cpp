@@ -139,9 +139,9 @@ tt_metal::Program create_program_single_core (
     uint32_t Kt,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    std::shared_ptr<tt::tt_metal::Buffer> in0_cb_addr,
-    std::shared_ptr<tt::tt_metal::Buffer> in1_cb_addr,
-    std::shared_ptr<tt::tt_metal::Buffer> out_cb_addr,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in0_cb_addr,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in1_cb_addr,
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_cb_addr,
     bool matmul_block,
     bool packer_l1,
     uint32_t num_blocks,
@@ -174,13 +174,13 @@ tt_metal::Program create_program(
     bool packer_l1_acc);
 
 bool validation_single_core(
-    tt::deprecated::Tensor<bfloat16> tensor_in0,
-    tt::deprecated::Tensor<bfloat16> tensor_in1,
+    const tt::deprecated::Tensor<bfloat16>& tensor_in0,
+    const tt::deprecated::Tensor<bfloat16>& tensor_in1,
     uint32_t num_blocks,
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
 );
 
 bool validation(
@@ -199,25 +199,25 @@ bool validation(
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
 bool validation_single_core_fp8(
-    tt::deprecated::Tensor<float> tensor_in0,
-    tt::deprecated::Tensor<float> tensor_in1,
+    const tt::deprecated::Tensor<float>& tensor_in0,
+    const tt::deprecated::Tensor<float>& tensor_in1,
     uint32_t num_blocks,
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
 );
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt_metal::Device* device,
-    vector<uint32_t> activations,
+    const vector<uint32_t>& activations,
     uint32_t Mt,
     uint32_t Nt
 );
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
     tt_metal::Device* device,
-    vector<uint32_t> activations,
+    const vector<uint32_t>& activations,
     uint32_t Mt,
     uint32_t Nt
 );
@@ -853,9 +853,9 @@ tt_metal::Program create_program_single_core (
     uint32_t Kt,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    std::shared_ptr<tt::tt_metal::Buffer> in0_cb_addr,
-    std::shared_ptr<tt::tt_metal::Buffer> in1_cb_addr,
-    std::shared_ptr<tt::tt_metal::Buffer> out_cb_addr,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in0_cb_addr,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in1_cb_addr,
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_cb_addr,
     bool matmul_block,
     bool packer_l1,
     uint32_t num_blocks,
@@ -1410,7 +1410,7 @@ std::vector<T> get_col_slice(std::vector<T> data, int start_col_index, int num_c
     return result;
 }
 
-void print_vec(std::vector<float> data, int rows, int cols, string name) {
+void print_vec(const std::vector<float>& data, int rows, int cols, const string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -1494,13 +1494,13 @@ float to_float(bfloat16 bfloat16_num) {
 }
 
 bool validation_single_core(
-    tt::deprecated::Tensor<bfloat16> tensor_in0,
-    tt::deprecated::Tensor<bfloat16> tensor_in1,
+    const tt::deprecated::Tensor<bfloat16>& tensor_in0,
+    const tt::deprecated::Tensor<bfloat16>& tensor_in1,
     uint32_t num_blocks,
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
 ) {
     bool pass = true;
 
@@ -1542,13 +1542,13 @@ bool validation_single_core(
 }
 
 bool validation_single_core_fp8(
-    tt::deprecated::Tensor<float> tensor_in0,
-    tt::deprecated::Tensor<float> tensor_in1,
+    const tt::deprecated::Tensor<float>& tensor_in0,
+    const tt::deprecated::Tensor<float>& tensor_in1,
     uint32_t num_blocks,
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
 ) {
     bool pass = true;
 
@@ -1656,7 +1656,7 @@ bool validation(
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt_metal::Device* device,
-    vector<uint32_t> activations,
+    const vector<uint32_t>& activations,
     uint32_t Mt,
     uint32_t Nt
 ) {
@@ -1688,7 +1688,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
     tt_metal::Device* device,
-    vector<uint32_t> activations,
+    const vector<uint32_t>& activations,
     uint32_t Mt,
     uint32_t Nt
 ) {

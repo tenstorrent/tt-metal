@@ -97,7 +97,7 @@ struct EthLinkBuilder {
 Correctness run_output_check(
     std::vector<uint32_t> const& all_zeros,
     std::vector<uint32_t> const& inputs,
-    std::shared_ptr<Buffer> output_buffer) {
+    const std::shared_ptr<Buffer>& output_buffer) {
     constexpr bool debug_mode = true;
     std::vector<uint32_t> readback_data_vec(all_zeros.size(), 0);  // init to 0 data for easier debug
 

@@ -616,7 +616,7 @@ bool RunWriteBWTest(
     // tt::tt_metal::detail::DumpDeviceProfileResults(sender_device);
     log_info(tt::LogTest, "Reading back outputs");
 
-    auto is_output_correct = [&all_zeros, &inputs](std::shared_ptr<Buffer> output_buffer) {
+    auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<Buffer>& output_buffer) {
         constexpr bool debug_mode = false;
         std::vector<uint32_t> readback_data_vec;  // init to 0 data for easier debug
         readback_data_vec.reserve(all_zeros.size());

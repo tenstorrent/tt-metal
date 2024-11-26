@@ -164,7 +164,7 @@ Tensor softmax_in_place(Tensor& input_tensor, const SoftmaxProgramConfig& progra
     return scale_mask_softmax_in_place(input_tensor, std::nullopt, std::nullopt, program_config, false, compute_kernel_config, numeric_stable);
 }
 
-Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const bool numeric_stable) {
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, const std::optional<const Tensor>& mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const bool numeric_stable) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -176,7 +176,7 @@ Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> sc
     return input_tensor;
 }
 
-Tensor scale_causal_mask_hw_dims_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const bool numeric_stable) {
+Tensor scale_causal_mask_hw_dims_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, const std::optional<const Tensor>& mask, const SoftmaxProgramConfig& program_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const bool numeric_stable) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [scale, mask, program_config, compute_kernel_config, numeric_stable](const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -192,7 +192,7 @@ Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config
     return scale_mask_softmax(input_tensor, std::nullopt, std::nullopt, output_mem_config, false, compute_kernel_config, numeric_stable);
 }
 
-Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const bool numeric_stable) {
+Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, const std::optional<const Tensor>& mask, const MemoryConfig& output_mem_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const bool numeric_stable) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_with_autoformat(
         [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config, numeric_stable] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {

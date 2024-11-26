@@ -43,7 +43,7 @@ void FreeList::init() {
     this->free_block_tail_ = block;
 }
 
-bool FreeList::is_allocated(const boost::local_shared_ptr<Block> block) const {
+bool FreeList::is_allocated(const boost::local_shared_ptr<Block>& block) const {
     return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and block != this->free_block_tail_;
 }
 
@@ -108,7 +108,7 @@ boost::local_shared_ptr<FreeList::Block> FreeList::search(DeviceAddr size_bytes,
     return nullptr;
 }
 
-void FreeList::allocate_entire_free_block(boost::local_shared_ptr<Block> free_block_to_allocate) {
+void FreeList::allocate_entire_free_block(const boost::local_shared_ptr<Block>& free_block_to_allocate) {
     TT_ASSERT(not is_allocated(free_block_to_allocate));
     if (free_block_to_allocate->prev_free != nullptr) {
         free_block_to_allocate->prev_free->next_free = free_block_to_allocate->next_free;
@@ -136,7 +136,7 @@ void FreeList::allocate_entire_free_block(boost::local_shared_ptr<Block> free_bl
 
 // free_block range: [a, b)
 // allocated_block range: [a, c), where c < b
-void FreeList::update_left_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block) {
+void FreeList::update_left_aligned_allocated_block_connections(const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block) {
     allocated_block->prev_block = free_block->prev_block;
     allocated_block->next_block = free_block;
     if (free_block->prev_block != nullptr) {
@@ -153,7 +153,7 @@ void FreeList::update_left_aligned_allocated_block_connections(boost::local_shar
 
 // free_block range: [a, b)
 // allocated_block range: [c, b), where c > a
-void FreeList::update_right_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block) {
+void FreeList::update_right_aligned_allocated_block_connections(const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block) {
     allocated_block->prev_block = free_block;
     allocated_block->next_block = free_block->next_block;
     if (free_block->next_block != nullptr) {
@@ -422,7 +422,7 @@ Statistics FreeList::get_statistics() const {
     return stats;
 }
 
-void FreeList::dump_block(const boost::local_shared_ptr<Block> block, std::ofstream &out) const {
+void FreeList::dump_block(const boost::local_shared_ptr<Block>& block, std::ofstream &out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
     out << ",,," << (block->address + this->offset_bytes_)
         << "," << (block->size)

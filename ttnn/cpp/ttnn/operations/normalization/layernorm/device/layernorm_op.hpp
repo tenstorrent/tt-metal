@@ -17,9 +17,9 @@ namespace ttnn::operations::normalization {
 
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor &a,
-    const std::optional<const Tensor> b,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor>& b,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     Tensor& output,
     LayerNormType norm_type,
     float eps,
@@ -28,10 +28,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const Tensor &a,
-    const std::optional<const Tensor> b,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    const std::optional<const Tensor> stats,
+    const std::optional<const Tensor>& b,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     Tensor& output,
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,

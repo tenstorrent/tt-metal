@@ -8,5 +8,5 @@
 
 namespace tt {
 void ClearNocData(tt_metal::Device *device);
-void DumpNocData(std::vector<tt_metal::Device *> devices);
+void DumpNocData(const std::vector<tt_metal::Device *>& devices);
 }

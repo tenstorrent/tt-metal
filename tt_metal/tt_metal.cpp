@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include "dev_msgs.h"
 #include "llrt/hal.hpp"
@@ -269,9 +270,9 @@ inline void SetRuntimeArgsImpl(
 
 inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args,
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args,
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
     for (size_t i = 0; i < core_spec.size(); i++) {
@@ -358,7 +359,7 @@ std::map<chip_id_t, Device *> CreateDevices(
     return ret_devices;
 }
 
-void CloseDevices(std::map<chip_id_t, Device *> devices) {
+void CloseDevices(const std::map<chip_id_t, Device *>& devices) {
     std::vector<Device *> devices_to_close;
     for (auto& [id, device] : devices) {
         devices_to_close.push_back(device);
@@ -388,7 +389,7 @@ void print_page(
     CoreCoord noc_coordinates,
     uint32_t l1_address,
     uint32_t bank_id,
-    std::vector<uint32_t> page) {
+    const std::vector<uint32_t>& page) {
     std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
     std::cout << "host_page_index " << host_page_id << std::endl;
     std::cout << "noc coordinates " << noc_coordinates.str() << std::endl;
@@ -578,7 +579,7 @@ void ReadFromDevice(Buffer &buffer, uint8_t* host_buffer, bool shard_order) {
     }
 }
 
-void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
@@ -624,7 +625,7 @@ void ReadShard(Buffer &buffer, uint8_t* host_buffer, const uint32_t &core_id) {
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done) {
+void LaunchProgram(Device *device, const std::shared_ptr<Program>& program, bool wait_until_cores_done) {
     LaunchProgram(device, *program, wait_until_cores_done);
 }
 
@@ -1238,18 +1239,18 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args) {
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, std::move(runtime_args), false);
 }
 
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args) {
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args) {
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mismatch between number of cores {} and number of runtime args {} getting updated",

@@ -57,7 +57,7 @@ inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
 }
 
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
-    CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
+    const CoreRangeSet& all_cores, const CoreRangeSet& core_group_1, const CoreRangeSet& core_group_2, uint32_t offset_x, uint32_t offset_y);
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_wt_core_range(
     CoreRange core_range, uint32_t units_to_divide);
@@ -93,12 +93,12 @@ struct ComputeKernelConfig {
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
-    std::vector<ComputeKernelArg> args,
-    std::map<std::string, std::string> defines = {},
+    const std::vector<ComputeKernelArg>& args,
+    const std::map<std::string, std::string>& defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode = {});
+    const std::vector<UnpackToDestMode>& unpack_to_dest_mode = {});
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
@@ -111,10 +111,10 @@ struct ComputeKernelConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config);
+    Program &program, const std::string &file_name, const std::vector<ComputeKernelArg>& args, const ComputeKernelConfig& config);
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config);
+    Program &program, const std::string &file_name, ComputeKernelArg arg, const ComputeKernelConfig& config);
 
 struct CircularBufferArg {
     uint32_t buffer_index;
@@ -133,13 +133,13 @@ struct CircularBufferArg {
     Program &program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
-    std::vector<CircularBufferArg> args);
+    const std::vector<CircularBufferArg>& args);
 
 [[maybe_unused]] CBHandle CreateCircularBuffer(
     Program &program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
-    CircularBufferArg arg);
+    const CircularBufferArg& arg);
 
 void check_tensor(
     const Tensor &tensor,

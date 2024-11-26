@@ -7,6 +7,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "nlp_kv_cache_load_slice.hpp"
 
+#include <utility>
+
 namespace ttnn::operations::experimental::transformer {
 
     ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
@@ -41,7 +43,7 @@ namespace ttnn::operations::experimental::transformer {
                 output_tensor_end[2] - output_tensor_start[2] + 1,
                 output_tensor_end[3] - output_tensor_start[3] + 1,
             };
-            return operation::run(NlpKVCacheLoadSliceDeviceOperation{output_tensor_start, output_tensor_end, output_tensor_shape, input_tensor_shape}, {input_tensor}, {}, {optional_output_tensor}).at(0);
+            return operation::run(NlpKVCacheLoadSliceDeviceOperation{output_tensor_start, output_tensor_end, output_tensor_shape, input_tensor_shape}, {input_tensor}, {}, {std::move(optional_output_tensor)}).at(0);
     }
 
     ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
@@ -51,6 +53,6 @@ namespace ttnn::operations::experimental::transformer {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor) {
         return invoke(
-            ttnn::DefaultQueueId, input_tensor, seq_len_start, seq_len_end, memory_config, optional_output_tensor);
+            ttnn::DefaultQueueId, input_tensor, seq_len_start, seq_len_end, memory_config, std::move(optional_output_tensor));
     }
 };  // namespace ttnn::operations::experimental::transformer

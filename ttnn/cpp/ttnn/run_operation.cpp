@@ -458,10 +458,10 @@ Tensors run_with_autoformat(
 
 void launch_with_autoformat(
     std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors input_tensors,
+    const Tensors& input_tensors,
     Tensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors) {
+    const OptionalConstTensors& optional_input_tensors,
+    const OptionalTensors& optional_output_tensors) {
     // Mark each output tensor as having dynamic storage (can be on host or device, depending
     // on autoformat behaviour). Multi device tensors do not support dynamic storage.
     for (auto& output_tensor : output_tensors) {

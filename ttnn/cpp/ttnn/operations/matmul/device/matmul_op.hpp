@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor &output_tensor,
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
@@ -46,13 +46,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    std::optional<UnaryWithParam> fused_activation,
+    const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
     bool untilize_out);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor &output_tensor,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor &output_tensor,
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
@@ -194,29 +194,29 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     tt::tt_metal::Program& program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor &output_tensor,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig program_config,
+    const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor &output_tensor,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig program_config,
+    const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info);
 
 Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias = std::nullopt,
+    const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul &parameters = Matmul{},
     const uint8_t queue_id = 0);
 

@@ -17,15 +17,15 @@ struct FastReduceNCOperation {
         uint8_t queue_id,
         const ttnn::Tensor& input,
         tt::stl::Span<const int32_t> dims,
-        const std::optional<const Tensor> output,
-        const ttnn::MemoryConfig memory_config,
+        const std::optional<const Tensor>& output,
+        const ttnn::MemoryConfig& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input,
         tt::stl::Span<const int32_t> dims,
-        const std::optional<const Tensor> output,
-        const ttnn::MemoryConfig memory_config,
+        const std::optional<const Tensor>& output,
+        const ttnn::MemoryConfig& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 

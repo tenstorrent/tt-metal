@@ -40,7 +40,7 @@ namespace utils
         return (ret == 0);
     }
 
-    void create_file(string file_path_str) {
+    void create_file(const string& file_path_str) {
         fs::path file_path(file_path_str);
         fs::create_directories(file_path.parent_path());
 
