@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <cstdint>
 #include <vector>
 
 #include "buffers/buffer_constants.hpp"
@@ -27,14 +28,21 @@ Tensor create_config_tensor(
     const uint32_t in_w,
     const uint32_t scale_factor_h,
     const uint32_t scale_factor_w,
-    const uint32_t ncores) {
+    TensorMemoryLayout shard_scheme,
+    uint32_t ncores_nhw,
+    uint32_t ncores_x) {
     std::vector<uint16_t> config_vector;
     uint32_t input_nsticks_per_core = input_shard_spec.shape[0];
-    uint32_t ncores_x = device->compute_with_storage_grid_size().x;
     uint32_t in_core = 0;
     uint32_t w = 0;
     uint32_t curr_stick = 0;
-    auto core_coords = device->worker_core_from_logical_core(CoreCoord(in_core % ncores_x, in_core / ncores_x));
+    if(shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+        ncores_x = 1;
+        ncores_nhw = 1;
+    }
+    uint32_t physical_core_x = device->compute_with_storage_grid_size().x;
+
+    auto core_coords = device->worker_core_from_logical_core(CoreCoord(in_core % physical_core_x, in_core / physical_core_x));
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t h = 0; h < in_h; h++) {
             for (uint32_t w = 0; w < in_w; w++) {
@@ -42,7 +50,7 @@ Tensor create_config_tensor(
                     curr_stick = 0;
                     in_core++;
                     core_coords =
-                        device->worker_core_from_logical_core(CoreCoord(in_core % ncores_x, in_core / ncores_x));
+                        device->worker_core_from_logical_core(CoreCoord(0, in_core));
                 }
                 config_vector.insert(config_vector.end(), {core_coords.x, core_coords.y, curr_stick, 0});
                 curr_stick++;
@@ -51,10 +59,31 @@ Tensor create_config_tensor(
                 config_vector.insert(config_vector.end(), config_vector.end() - (4 * in_w), config_vector.end());
         }
     }
+    // Copy for y direction
+    std::vector<uint16_t> temp_config_vector;
+    /*auto prev_idx = 0;*/
+    /*auto idx = 0;*/
+    /*for(uint32_t i = 0; i < ncores_nhw; i++) {*/
+    /*    idx = 4 * (i+1) * input_nsticks_per_core * scale_factor_h;*/
+    /*    for(uint32_t j = 0; j < ncores_x; j++) {*/
+    /*        temp_config_vector.insert(temp_config_vector.end(), config_vector.begin() + prev_idx, config_vector.begin() + idx);*/
+    /*    }*/
+    /*    prev_idx = idx;*/
+    /*}*/
+    for(uint32_t i = 0; i < ncores_x; i++) {
+        /*TODO: Change take core x into considereation.*/
+        temp_config_vector.insert(temp_config_vector.end(), config_vector.begin(), config_vector.end());
+    }
 
+
+    using namespace std;
+    uint32_t core = 0;
+    for(auto i = 0; i < temp_config_vector.size(); i+=4) {
+        cout << temp_config_vector[i] << " " << temp_config_vector[i+1] << " " << temp_config_vector[i+2] << " " << temp_config_vector[i+3] << endl;
+    }
     uint32_t elems_per_core = 4 * scale_factor_h * input_nsticks_per_core;
-    Shape config_shape = Shape({config_vector.size() / elems_per_core, elems_per_core});
-    auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
+    Shape config_shape = Shape({temp_config_vector.size() / elems_per_core, elems_per_core});
+    auto config_buffer = owned_buffer::create<uint16_t>(std::move(temp_config_vector));
     Tensor config_tensor = Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     return config_tensor;
 }
@@ -151,17 +180,23 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         in_w,
         scale_factor_h,
         scale_factor_w,
-        ncores);
+        input.memory_config().memory_layout,
+        ncores_nhw,
+        ncores_x);
+    config_tensor.print();
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_shape()[-1]});
-    ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, ShardOrientation::ROW_MAJOR, false);
-    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+    auto config_tensor_shard_orientation = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? (shard_spec.orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR) : ShardOrientation::ROW_MAJOR;
+    ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation, false);
+    MemoryConfig memory_config{input.memory_config().memory_layout, BufferType::L1_SMALL, config_shard_spec};
     auto config_tensor_device = config_tensor.to(device, memory_config);
+    config_tensor_device.print();
     tt::tt_metal::detail::AddConfigBuffer(program, config_tensor_device.device_buffer());
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     Buffer *config_buffer = config_tensor_device.buffer();
+    auto config_buffer_page_size = config_buffer->page_size();
     uint32_t config_cb_id = tt::CB::c_in2;
-    auto config_cb_config = CircularBufferConfig(config_buffer->size(), {{config_cb_id, config_df}})
+    auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
                                 .set_page_size(config_cb_id, config_buffer->page_size())
                                 .set_globally_allocated_address(*config_buffer);
     CBHandle config_cb = CreateCircularBuffer(program, all_cores, config_cb_config);
