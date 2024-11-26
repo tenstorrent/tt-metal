@@ -8,12 +8,12 @@
 #include <fmt/color.h>
 
 #include <algorithm>
+#include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <stdexcept>
-#include <core/ttnn_all_includes.hpp>
 
 namespace {
 
@@ -197,15 +197,6 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
 
-    auto to_device_odd_slow = [&]() {
-        if (layout == Layout::TILE) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
-        }
-
-        output = ttnn::to_device(output, device, output_mem_config);
-        return output;
-    };
-
     auto to_device_even_fast = [&]() {
         output = ttnn::to_device(output, device, output_mem_config);
         if (layout == Layout::TILE) {
@@ -215,11 +206,7 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
         return output;
     };
 
-    if (shape[-1] % 2 == 1) {
-        output = to_device_odd_slow();
-    } else {
-        output = to_device_even_fast();
-    }
+    output = to_device_even_fast();
 
     return output;
 }
