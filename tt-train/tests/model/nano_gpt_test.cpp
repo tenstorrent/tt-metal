@@ -222,6 +222,11 @@ void train_test(bool use_moreh_adamw = false) {
     }
 }
 
+bool should_run_tests() {
+    const char *env_var = std::getenv("ENABLE_CI_ONLY_TT_TRAIN_TESTS");
+    return env_var ? true : ENABLE_CI_ONLY_TT_TRAIN_TESTS;
+}
+
 /*
 This tests are supposed to run only in CI.
 Change the value of ENABLE_CI_ONLY_TT_TRAIN_TESTS to true to run them.
@@ -232,13 +237,13 @@ If one of these tests fails, it means one (or more) of the following:
 */
 
 TEST(NanoGPTTest, AdamW) {
-    if (ENABLE_CI_ONLY_TT_TRAIN_TESTS) {
+    if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ false);
     }
 }
 
 TEST(NanoGPTTest, MorehAdamW) {
-    if (ENABLE_CI_ONLY_TT_TRAIN_TESTS) {
+    if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ true);
     }
 }
