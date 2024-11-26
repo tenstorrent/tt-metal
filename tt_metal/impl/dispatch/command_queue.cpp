@@ -3269,6 +3269,7 @@ void EnqueueProgramImpl(
     detail::CompileProgram(device, program);
     program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);
+    program.call_pre_exec_callback();
     cq.hw_command_queue().enqueue_program(program, blocking);
     // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
     // leaks on device.
