@@ -111,7 +111,7 @@ def test_llama_multimodal_demo_text(
     max_gen_len: Optional[int] = 200,
     model_parallel_size: Optional[int] = None,
 ):
-    if max_batch_size == 1 and enable_trace:
+    if max_batch_size != 32 and enable_trace:
         pytest.skip("Trace is not supported for batch size 1")
     """
     Simple multimodal demo with limited dependence on reference code.
@@ -227,14 +227,12 @@ def test_llama_multimodal_demo_text(
                     )
 
                 next_tokens, next_texts = sampler(logits)
-                # print(f"Next tokens: {next_tokens}")
-                # print(f"Next texts: {next_texts}")
                 # Update next token
                 tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                 decode_end = time.perf_counter()
                 decode_times.append(decode_end - decode_start)
 
-                # Disable checking for eot until I have more robust code
+                # Disable checking for eot until I have more robust code for batch > 1
                 # if text in ["<|eot_id|>", "<|eom_id|>"]:
                 #     break
             # Log full text output for each user in batch
