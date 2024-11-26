@@ -72,6 +72,9 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_subblock_padding,
     bool use_non_tile_height
 ) {
+    tt::tt_metal::Device* device = a.device();
+    auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
+    tt::log_info(tt::LogOp, "Allocation Stats before Op: {}", stats);
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
         [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height]
@@ -214,7 +217,10 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return multi_core_optimized_conv_sharded_v2_new(
+    tt::tt_metal::Device* device = input_tensor_a.device();
+    auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
+    tt::log_info(tt::LogOp, "Allocation Stats with Input/Tensors: {}", stats);
+    auto program_with_cbs =  multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a, input_tensor_b, input_tensor_bias,
         sliding_window_config,
         output_channels,
@@ -232,6 +238,12 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         enable_split_reader,
         enable_subblock_padding,
         use_non_tile_height);
+
+    program_with_cbs.program.set_pre_exec_callback([device](Program *program) {
+        auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
+        tt::log_info(tt::LogOp, "Allocation Stats after CB Allocation: {}", stats);
+    });
+    return program_with_cbs;
 }
 
 operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
