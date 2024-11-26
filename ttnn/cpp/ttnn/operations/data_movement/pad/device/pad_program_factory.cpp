@@ -1544,7 +1544,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         all_cores_padded,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    auto [reader_runtime_args, writer_runtime_args] = get_pad_runtime_args_rm_sharded(
+    auto all_runtime_args = get_pad_runtime_args_rm_sharded(
         a,
         output,
         input_tensor_start,
@@ -1556,11 +1556,25 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         shard_height_unpadded,
         num_cores_x_unpadded,
         num_cores_y_unpadded
-        )[0];
+    );
+
+    std::vector<std::vector<uint32_t>> reader_runtime_args;
+    std::vector<std::vector<uint32_t>> writer_runtime_args;
+    std::transform(all_runtime_args.begin(), all_runtime_args.end(), std::back_inserter(reader_runtime_args),
+                  [](const auto& p) { return p.first; });
+    std::transform(all_runtime_args.begin(), all_runtime_args.end(), std::back_inserter(writer_runtime_args),
+                  [](const auto& p) { return p.second; });
 
     std::cout << "Reader runtime args: ";
     for (size_t i = 0; i < reader_runtime_args.size(); i++) {
-        std::cout << reader_runtime_args[i] << " ";
+        std::cout << "{";
+        for (auto it = reader_runtime_args[i].begin(); it != reader_runtime_args[i].end(); ++it) {
+            std::cout << *it;
+            if (std::next(it) != reader_runtime_args[i].end()) {
+                std::cout << ", ";
+            }
+        }
+        std::cout << "} ";
     }
     std::cout << std::endl;
 
@@ -1571,8 +1585,8 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         } else {
             core = {i / num_cores_y_padded, i % num_cores_y_padded};
         }
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args[i]);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args[i]);
     }
 
     auto override_runtime_args_callback = [cb_src0, cb_output](
