@@ -87,7 +87,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.test_group.arch }}
+          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.test_group.arch }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
             ${{ matrix.test_group.cmd }}
@@ -104,7 +104,7 @@ jobs:
       - name: Tag latest if this is a major version release
         if: ${{ inputs.is_major_version }}
         run: |
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-dev/${{ matrix.arch }}
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           docker tag $TAG_NAME $REPO_IMAGE_NAME:latest
