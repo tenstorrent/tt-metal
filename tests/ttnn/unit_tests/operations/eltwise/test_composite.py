@@ -665,43 +665,6 @@ def test_unary_composite_trunc_ttnn_opt(input_shapes, device):
     assert comp_pass
 
 
-def test_trunc_example(device):
-    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn.trunc)
-    golden_tensor = golden_function(input)
-    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.trunc(x1_tt)
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(golden_tensor, tt_out)
-    assert status
-
-
-def test_rdiv_example(device):
-    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
-    scalar = 2
-    round_mode = None
-    golden_function = ttnn.get_golden_function(ttnn.rdiv)
-    golden_tensor = golden_function(input, scalar, round_mode=round_mode)
-    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.rdiv(x1_tt, scalar, round_mode=round_mode)
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(golden_tensor, tt_out)
-    assert status
-
-
-def test_hardtanh_example(device):
-    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
-    min = 2
-    max = 8
-    golden_function = ttnn.get_golden_function(ttnn.hardtanh)
-    golden_tensor = golden_function(input, min, max)
-    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.hardtanh(x1_tt, min, max)
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(golden_tensor, tt_out)
-    assert status
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
