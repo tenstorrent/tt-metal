@@ -57,7 +57,6 @@ class TtModelArgs:
     max_batch_size = 32
     # Context length for Llama models (if single device, reduce to 32k in init)
     max_seq_len = 1024 * 128  # 128k
-    kv_seq_len = max_seq_len  # 128k
     tile_size = 32
 
     paged_attention_config = PagedAttentionConfig()  # Miguel: TODO Remove this for VLLM in test
@@ -109,7 +108,6 @@ class TtModelArgs:
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
-        self.kv_seq_len = max_seq_len
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -183,13 +181,11 @@ class TtModelArgs:
             self.num_devices <= 2
         ):  # for 1-chip or 2-chip devices limit the seqlen to 4K (to avoid OoO on N150/N300 CI tests)
             self.max_seq_len = 1024 * 4
-            self.kv_seq_len = 1024 * 4
 
         if (
             self.n_layers == 1
         ):  # When running a single layer just reduce the seq len to 128, since we won't be decoding that many iterations
             self.max_seq_len = 128
-            self.kv_seq_len = 128
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)

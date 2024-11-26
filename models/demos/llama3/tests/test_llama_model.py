@@ -66,7 +66,10 @@ def test_llama_model_inference(
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
-    model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights, optimizations=optimizations)
+    model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights, optimizations=optimizations, max_batch_size=max_batch_size)
+
+    # Reduce max seq len and KV cache seq_len params to speed up the test
+    model_args.max_seq_len = 128
 
     model_name = {
         (16, False): "llama32_1b",
@@ -364,7 +367,9 @@ def test_llama_model_inference(
                             )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                        cache_length_to_check = min(model_args.kv_seq_len, generation_start_pos + generation_length + 1)
+                        cache_length_to_check = min(
+                            model_args.max_seq_len, generation_start_pos + generation_length + 1
+                        )
                         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                         if (

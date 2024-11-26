@@ -44,7 +44,6 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
     model_args = TtModelArgs(mesh_device, max_batch_size=32)
     # Reduce max seq len and KV cache seq_len params to speed up the test
     model_args.max_seq_len = 128
-    model_args.kv_seq_len = model_args.max_seq_len
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
