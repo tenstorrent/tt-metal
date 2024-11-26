@@ -244,6 +244,7 @@ def test_tt_model_accuracy(
     generation_length = decode_len
 
     # Initial positions
+    decoding_pos = [generation_start_pos] * model_args.max_batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(model_args.max_batch_size)])
     current_pos_tensor = ttnn.from_torch(
         current_pos,
