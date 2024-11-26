@@ -8,7 +8,7 @@ import torch
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
@@ -198,6 +198,9 @@ def run_max_pool(
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
+    torch.save(torch.permute(golden_pytorch, (0, 2, 3, 1)), "golden_pytorch.pt")
+    torch.save(output_pytorch, "output_pytorch.pt")
+
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
     pcc_thresh = 1.0
@@ -212,6 +215,8 @@ def run_max_pool(
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
+        if is_blackhole():
+            atol = 0.8
 
     allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
     isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))

@@ -211,7 +211,7 @@ def create_sharded_memory_config(
 # The existing function should be deprecated with this one. Not replacing right now to avoid a big change.
 def create_sharded_memory_config_(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
-    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
+    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange, ttnn.CoreRangeSet],
     strategy: Union[ShardStrategy, TensorMemoryLayout],
     orientation,
     halo: bool = False,

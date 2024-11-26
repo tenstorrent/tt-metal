@@ -463,6 +463,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_cores_y = p_config.grid_size.y;
     uint32_t total_num_cores = num_cores_x * num_cores_y;
 
+    log_debug(tt::LogOp, "pconfig num_cores_x: {}, num_cores_y: {}, total_num_cores: {}", num_cores_x, num_cores_y, total_num_cores);
+
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
     uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
 
@@ -773,6 +775,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "math_approx_mode: {}", math_approx_mode);
         log_debug(LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
         log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
+        log_debug(LogOp, "use_non_tile_height: {}", use_non_tile_height);
     }
 
     uint32_t window_outer;
