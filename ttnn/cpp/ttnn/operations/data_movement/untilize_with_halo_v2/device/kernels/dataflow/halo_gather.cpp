@@ -6,11 +6,11 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-
+#include "debug/dprint.h"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "debug/dprint.h"
+
 
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
@@ -103,8 +103,8 @@ void kernel_main() {
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
 
-    const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
-    const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
+    const uint16_t my_noc_x = my_x[noc_index];
+    const uint16_t my_noc_y = my_y[noc_index];
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 

@@ -3111,6 +3111,10 @@ CoreCoord Device::translated_coords_from_physical_coords(const CoreCoord &physic
     return tt::Cluster::instance().get_translated_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
 }
 
+CoreCoord Device::translated_worker_core_from_logical_core(const CoreCoord &logical_core) const {
+    return this->translated_coords_from_logical_coords(logical_core, CoreType::WORKER);
+}
+
 CoreCoord Device::dram_core_from_logical_core(const CoreCoord &logical_core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_dram_core_from_logical(logical_core);

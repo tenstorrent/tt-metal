@@ -121,6 +121,7 @@ class Device {
     CoreCoord translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const;
     CoreCoord translated_coords_from_physical_coords(const CoreCoord &physical_coord, const CoreType& core_type) const;
 
+    CoreCoord translated_worker_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord dram_core_from_logical_core(const CoreCoord &logical_core) const;
     std::vector<CoreCoord> dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
