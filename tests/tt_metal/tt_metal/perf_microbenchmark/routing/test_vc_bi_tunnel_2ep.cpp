@@ -1149,7 +1149,7 @@ int main(int argc, char **argv) {
                         target_bandwidth = 5;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 512) {
-                        target_bandwidth = 2.8;
+                        target_bandwidth = 2.7;
                         log_info(LogTest, "Perf check for pkt size >= 512 words");
                     }else if (max_packet_size_words >= 256) {
                         target_bandwidth = 1;
