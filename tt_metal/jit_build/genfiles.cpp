@@ -457,7 +457,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
+    uint32_t allocator_alignment,
+    const std::vector<CoreCoord>& eth_chan_map) {
     stringstream ss;
 
     ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
@@ -482,6 +483,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
 
     ss << "#ifdef KERNEL_BUILD" << endl;
     ss << endl;
+    ss << "extern uint16_t eth_chan_to_noc_xy[NUM_NOCS][NUM_ETH_CHANS];" << endl;
     ss << "extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];" << endl;
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
@@ -489,6 +491,21 @@ std::string generate_bank_to_noc_coord_descriptor_string(
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
+    ss << endl;
+
+    ss << "uint16_t eth_chan_to_noc_xy[NUM_NOCS][NUM_ETH_CHANS] __attribute__((used)) = {" << endl;
+    for (unsigned int noc = 0; noc < 2; noc++) {
+        ss << "    {"
+           << "\t// noc=" << noc << endl;
+        for (unsigned int chan_id = 0; chan_id < eth_chan_map.size(); chan_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, grid_size.x, eth_chan_map[chan_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, grid_size.y, eth_chan_map[chan_id].y);
+            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
+               << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
+        }
+        ss << "    }," << endl;
+    }
+    ss << "};" << endl;
     ss << endl;
 
     ss << "uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
@@ -544,14 +561,16 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
+    uint32_t allocator_alignment,
+    const std::vector<CoreCoord>& eth_chan_map) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(
         grid_size,
         dram_bank_map,
         dram_bank_offset_map,
         l1_bank_map,
         l1_bank_offset_map,
-        allocator_alignment);
+        allocator_alignment,
+        eth_chan_map);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");

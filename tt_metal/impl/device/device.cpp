@@ -325,6 +325,8 @@ void Device::initialize_device_kernel_defines()
     this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
     this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
     this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+
+    this->device_kernel_defines_.emplace("NUM_ETH_CHANS", std::to_string(soc_d.physical_ethernet_cores.size()));
 }
 
 void Device::initialize_build() {
@@ -3572,15 +3574,15 @@ void Device::generate_device_headers(const std::string &path) const
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
     // Generate header file in proper location
-    jit_build_genfiles_bank_to_noc_coord_descriptor (
+    jit_build_genfiles_bank_to_noc_coord_descriptor(
         path,
         soc_d.grid_size,
         dram_noc_coord_per_bank,
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
         l1_offset_per_bank,
-        this->get_allocator_alignment()
-    );
+        this->get_allocator_alignment(),
+        soc_d.physical_ethernet_cores);
 }
 
 size_t Device::get_device_kernel_defines_hash() {
