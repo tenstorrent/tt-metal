@@ -1429,10 +1429,9 @@ operation::ProgramWithCallbacks pad_rm_sharded(
     tt::log_debug("zero_pad_stick_size: {}", zero_pad_stick_size);
     tt::log_debug("num_zero_pad_sticks_read: {}", num_zero_pad_sticks_read);
 
-    // TODO: add a general case, where we can pad on any dim.
-    TT_FATAL(
-        stick_size_unpadded == stick_size_padded,
-        "sharded pad does not support pad on last dim currently as that will cause perf degradation");
+    if (stick_size_unpadded != stick_size_padded) {
+        tt::log_info("sharded pad support for pad on last dim is expected to be slow.");
+    }
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -1506,22 +1505,32 @@ operation::ProgramWithCallbacks pad_rm_sharded(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
+    uint32_t W_padding_front_bytes = front_pad[-4] * a.element_size();
+    uint32_t W_padding_back_bytes = (W_padded - W - front_pad[-4]) * a.element_size();
 
-    std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)N + front_pad[-4],
-        (std::uint32_t)H + front_pad[-2],
-        (std::uint32_t)C + front_pad[-3],
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)N_padded,
-        (std::uint32_t)H_padded,
-        (std::uint32_t)C_padded,
-        (std::uint32_t)num_zero_pad_sticks_read,
-        (std::uint32_t)zero_pad_stick_size,
-        (std::uint32_t)not_pad_by_zero,
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)row_major_min_bytes,
-        (std::uint32_t)(stick_size_padded / row_major_min_bytes)};
+    std::vector<uint32_t> reader_ct_args = {(std::uint32_t) stick_size_unpadded, // for reads, we use the unpadded
+                                                                                 // stick size to read the source tensor
+                                                                                 // into the result buffer
+                                            (std::uint32_t) shard_height_padded};
+
+    std::cout << "reader stick size: " << reader_ct_args[0] << " reader padded shard height: " << reader_ct_args[1] << std::endl;
+
+    std::vector<uint32_t> writer_ct_args = {(std::uint32_t) N + front_pad[-4],
+                                            (std::uint32_t) H + front_pad[-2],
+                                            (std::uint32_t) C + front_pad[-3],
+                                            (std::uint32_t) stick_size_padded,
+                                            (std::uint32_t) N_padded,
+                                            (std::uint32_t) H_padded,
+                                            (std::uint32_t) C_padded,
+                                            (std::uint32_t) W_padded,
+                                            (std::uint32_t) W_padding_front_bytes,
+                                            (std::uint32_t) W_padding_back_bytes,
+                                            (std::uint32_t) num_zero_pad_sticks_read,
+                                            (std::uint32_t) zero_pad_stick_size,
+                                            (std::uint32_t) not_pad_by_zero,
+                                            (std::uint32_t) packed_pad_value,
+                                            (std::uint32_t) row_major_min_bytes,
+                                            (std::uint32_t) (stick_size_padded / row_major_min_bytes)};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -1535,7 +1544,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         all_cores_padded,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    auto all_runtime_args = get_pad_runtime_args_rm_sharded(
+    auto [reader_runtime_args, writer_runtime_args] = get_pad_runtime_args_rm_sharded(
         a,
         output,
         input_tensor_start,
@@ -1546,7 +1555,14 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         shard_height_padded,
         shard_height_unpadded,
         num_cores_x_unpadded,
-        num_cores_y_unpadded);
+        num_cores_y_unpadded
+        )[0];
+
+    std::cout << "Reader runtime args: ";
+    for (size_t i = 0; i < reader_runtime_args.size(); i++) {
+        std::cout << reader_runtime_args[i] << " ";
+    }
+    std::cout << std::endl;
 
     for (uint32_t i = 0; i < num_cores_padded; i++) {
         CoreCoord core;
@@ -1555,8 +1571,8 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         } else {
             core = {i / num_cores_y_padded, i % num_cores_y_padded};
         }
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
 
     auto override_runtime_args_callback = [cb_src0, cb_output](
