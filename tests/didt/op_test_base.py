@@ -29,6 +29,7 @@ class OpTestBase:
         loop_count=1000,
         determinism_check_enabled=False,
         determinism_check_iterations=False,
+        unary_op=False,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -62,6 +63,9 @@ class OpTestBase:
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
         self.weights = None
+
+        # In case we are using unary op there is no in1/weights
+        self.unary_op = unary_op
 
     def get_device(self, device_idx):
         if isinstance(self.mesh_device, ttnn.MeshDevice):
@@ -126,7 +130,6 @@ class OpTestBase:
         logger.info(f"Running on {num_devices} devices")
 
         a_shape = self.in0_shape
-        b_shape = self.in1_shape
 
         num_activation_tensors = 1
         if self.determinism_check_enabled:
@@ -138,17 +141,23 @@ class OpTestBase:
         A = []
         for act in range(num_activation_tensors):
             A.append(self.generate_torch_activations(a_shape))
-        B = self.generate_torch_weights(b_shape)
 
         logger.info("Pushing activations to devices...")
         a_t = []
         for act in range(num_activation_tensors):
             a_t.append(self.generate_tt_activations_from_torch(A[act]))
 
-        logger.info("Pushing weights to devices...")
-        self.weights = self.generate_tt_weights_from_torch(B)
+        if self.unary_op == False:
+            b_shape = self.in1_shape
+            B = self.generate_torch_weights(b_shape)
 
-        logger.info("Activations and weights pushed to devices!")
+            logger.info("Pushing weights to devices...")
+            self.weights = self.generate_tt_weights_from_torch(B)
+
+        if self.unary_op == False:
+            logger.info("Activations and weights pushed to devices!")
+        else:
+            logger.info("Activations pushed to devices!")
 
         if self.determinism_check_enabled:
             # Run op once to populate reference output to use for determinism checks
