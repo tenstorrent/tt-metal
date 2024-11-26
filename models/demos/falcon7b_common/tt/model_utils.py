@@ -70,6 +70,22 @@ def get_falcon_default_core_grid(device):
     return ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
 
 
+def get_default_hifi2_kernel_config():
+    if is_wormhole_b0():
+        hifi2_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+    else:
+        hifi2_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+        )
+    return hifi2_kernel_config
+
+
 def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, model_config):
     h_dim = ln_input.shape.with_tile_padding()[-2]  # corresponds to batch size (decode) or seq_len (prefill)
     if h_dim in [32, 128, 256, 1024, 2048]:
