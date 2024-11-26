@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 
 namespace ttnn::operations::data_movement {

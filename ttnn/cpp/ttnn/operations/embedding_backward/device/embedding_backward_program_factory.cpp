@@ -12,6 +12,7 @@
 
 using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::embedding_backward::detail {
 
@@ -80,23 +81,23 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     ////////////////////////////////////////////////////////////////////////////
 
     // To read from grad tensor
-    create_cb(CB::c_in0, program, all_cores, grad_single_tile_size, max_tiles_per_core, grad_cb_data_format);
+    create_cb(CBIndex::c_0, program, all_cores, grad_single_tile_size, max_tiles_per_core, grad_cb_data_format);
 
     // To store index values for a single tile
-    create_cb(CB::c_in1, program, all_cores, index_single_page_size, 1, index_cb_data_format);
+    create_cb(CBIndex::c_1, program, all_cores, index_single_page_size, 1, index_cb_data_format);
 
     // To read from output tensor
-    create_cb(CB::c_in2, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
+    create_cb(CBIndex::c_2, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
 
     // To store mask values for a single tile
-    create_cb(CB::c_intermed0, program, all_cores, mask_single_page_size, 1, mask_cb_data_format);
+    create_cb(CBIndex::c_24, program, all_cores, mask_single_page_size, 1, mask_cb_data_format);
 
     // L1 scratch space to pass chunk_count from reader to UNPACK
     create_cb(
-        CB::c_intermed1, program, all_cores, 16, 1, grad_cb_data_format);  // grad_cb_data_format doesn't matter here
+        CBIndex::c_25, program, all_cores, 16, 1, grad_cb_data_format);  // grad_cb_data_format doesn't matter here
 
     // For tiles to be written to the output
-    create_cb(CB::c_out0, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
+    create_cb(CBIndex::c_16, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Kernels

@@ -9,6 +9,8 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor CopyOperation::invoke(uint8_t queue_id, const Tensor& src_tensor, const Tensor& dst_tensor) {

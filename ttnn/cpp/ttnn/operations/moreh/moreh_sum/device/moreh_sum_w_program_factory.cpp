@@ -90,26 +90,26 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
 
     tt::tt_metal::CircularBufferConfig cb_scaler_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * scaler_single_tile_size, {{tt::CB::c_in2, scaler_cb_data_format}})
-            .set_page_size(tt::CB::c_in2, scaler_single_tile_size);
+            num_input_tiles * scaler_single_tile_size, {{tt::CBIndex::c_2, scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, scaler_single_tile_size);
     auto cb_scaler = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     tt::tt_metal::CircularBufferConfig cb_mask_w_config =
-        tt::tt_metal::CircularBufferConfig(mask_w_single_tile_size, {{tt::CB::c_in3, mask_w_cb_data_format}})
-            .set_page_size(tt::CB::c_in3, mask_w_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(mask_w_single_tile_size, {{tt::CBIndex::c_3, mask_w_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_3, mask_w_single_tile_size);
     auto cb_mask_w = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_w_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CB::c_intermed0, intermed_cb_data_format}})
-            .set_page_size(tt::CB::c_intermed0, intermed_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_24, intermed_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_24, intermed_single_tile_size);
     auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
-        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CB::c_intermed1, intermed1_cb_data_format}})
-            .set_page_size(tt::CB::c_intermed1, intermed_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_25, intermed_single_tile_size);
     auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
@@ -155,7 +155,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
     auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,

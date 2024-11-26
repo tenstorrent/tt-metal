@@ -134,9 +134,9 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, 2},   // input
-            {tt::CB::c_in1, 1},   // zero
-            {tt::CB::c_out0, 2},  // output
+            {tt::CBIndex::c_0, 2},   // input
+            {tt::CBIndex::c_1, 1},   // zero
+            {tt::CBIndex::c_16, 2},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////

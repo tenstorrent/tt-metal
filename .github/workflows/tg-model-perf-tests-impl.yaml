@@ -23,6 +23,13 @@ jobs:
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },
+          { name: "t3k CCL all_gather perf tests",
+            arch: wormhole_b0,
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type ccl_all_gather_perf_tg_device --dispatch-mode ""',
+            timeout: 75,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            owner_id: ULMEPM2MA}, # Sean Nijjar
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -41,9 +48,10 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: Download profiler build artifact
+        uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
@@ -58,16 +66,48 @@ jobs:
         id: check-perf-report
         if: ${{ !cancelled() }}
         run: |
-          ls -hal
-          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
-          ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      - name: Upload perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
+          if [ "${{ matrix.test-group.tracy }}" == "true" ]; then
+            found_reports=false
+            if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
+              echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"
+              echo "perf_report_filename_all_gather=$PERF_REPORT_FILENAME_CCL_ALL_GATHER" >> "$GITHUB_OUTPUT"
+              found_reports=true
+            fi
+            if [ -f "$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" ]; then
+              echo "Found CCL ReduceScatter Perf report: $PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER"
+              echo "perf_report_filename_reduce_scatter=$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" >> "$GITHUB_OUTPUT"
+              found_reports=true
+            fi
+            if [ "$found_reports" = false ]; then
+              echo "No CCL perf report found for today."
+              exit 1
+            fi
+          else
+            if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+              echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+              echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
+            else
+              echo "No Models perf report found for today."
+              exit 1
+            fi
+          fi
+      - name: Upload Models perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - name: Upload CCL perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
+          path:
+            ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
       - name: Disable performance mode
         if: always()
         run: |

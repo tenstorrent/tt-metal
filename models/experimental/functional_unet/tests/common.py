@@ -7,7 +7,7 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-UNET_FULL_MODEL_PCC = 0.9916
+UNET_FULL_MODEL_PCC = 0.99995
 
 
 def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:
@@ -33,6 +33,7 @@ def verify_with_pcc(torch_tensor, ttnn_tensor, pcc):
         )
 
 
+# TODO: This is the same as the function below, we should consolidate them
 def check_pcc_conv(torch_tensor, ttnn_tensor, pcc=0.999, mesh_composer=None):
     B, C, H, W = torch_tensor.shape
     ttnn_tensor = (

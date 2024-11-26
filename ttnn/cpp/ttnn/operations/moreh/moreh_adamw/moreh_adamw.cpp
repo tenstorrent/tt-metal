@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/moreh/moreh_adamw/device/moreh_adamw_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_adamw {
 
 std::vector<std::optional<Tensor>> MorehAdamw::invoke(

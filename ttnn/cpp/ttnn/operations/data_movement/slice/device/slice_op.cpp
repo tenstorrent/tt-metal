@@ -6,6 +6,8 @@
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const tt::tt_metal::LegacyShape& shape) {

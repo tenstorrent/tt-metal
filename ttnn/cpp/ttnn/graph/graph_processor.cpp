@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include "ttnn/core.hpp"
 
+using namespace tt::tt_metal;
+
 namespace {
 std::string demangle(const char* name) {
 

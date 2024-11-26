@@ -10,6 +10,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::paged_cache::detail {
 
 using namespace tt::constants;
@@ -63,8 +65,8 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size,  num_blocks_of_work, row_major);
     uint32_t num_input_tiles = Wt * 2; // double buffered
 
-    tt::CB src0_cb_index = tt::CB::c_in0;
-    tt::CB page_table_cb_index = tt::CB::c_in1;
+    tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
+    tt::CBIndex page_table_cb_index = tt::CBIndex::c_1;
     create_cb(src0_cb_index, program, all_cores, single_tile_size, num_input_tiles, cb_data_format);
     create_cb(page_table_cb_index, program, all_cores, page_table_stick_size_B, 1, page_table_data_format);
 

@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(4);
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id = tt::CB::c_in0;
+    constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
     const InterleavedAddrGen<dst_is_dram> s0 = {
         .bank_base_address = dst_addr,

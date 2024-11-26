@@ -9,8 +9,10 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
@@ -81,7 +83,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t out_cb_index = src0_cb_index;
     uint32_t num_input_units = num_units_per_shard;
     uint32_t input_page_size = align(input_unit_size, input.buffer()->alignment());
@@ -91,7 +93,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
     if (convert_df) {
-        out_cb_index = CB::c_out0;
+        out_cb_index = CBIndex::c_16;
         uint32_t output_page_size = align(output_unit_size, output.buffer()->alignment());
         tt_metal::CircularBufferConfig output_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})

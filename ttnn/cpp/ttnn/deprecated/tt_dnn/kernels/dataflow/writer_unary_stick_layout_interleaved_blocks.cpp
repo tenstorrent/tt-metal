@@ -54,7 +54,7 @@ void kernel_main() {
 
     // NOTE: Row major layout only supports bfp16
     // TT_ASSERT(out_df != DataFormat::Bfp8_b);
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
     constexpr uint32_t TILE_HEIGHT = 32;                    // TODO: use common source of truth

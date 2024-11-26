@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/moreh/moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_dot_backward {
 std::vector<std::optional<Tensor>> MorehDotBackward::invoke(
     const Tensor &output_grad,

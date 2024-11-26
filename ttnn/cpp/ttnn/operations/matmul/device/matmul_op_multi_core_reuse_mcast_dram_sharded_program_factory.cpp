@@ -572,7 +572,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     uint32_t num_worker_cores = num_dram_banks;
-    uint32_t num_mcast_cores = num_worker_cores;
 
     // move conflict coord from mcast receiver to mcast sender
     std::vector<CoreCoord> all_storage_cores_vec = corerange_to_cores(all_storage_cores);
@@ -634,6 +633,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+
+    uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
@@ -853,7 +854,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in2_CB_size / in0_single_tile_size,
         in2_CB_size);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});

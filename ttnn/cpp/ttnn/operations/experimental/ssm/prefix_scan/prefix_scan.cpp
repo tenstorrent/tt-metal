@@ -7,6 +7,8 @@
 #include "device/prefix_scan_op.hpp"
 #include "ttnn/common/constants.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm {
 
 ttnn::Tensor ExecutePrefixScan::invoke(

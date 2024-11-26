@@ -152,24 +152,24 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},        // input
-            {CB::c_in1, in1_t},        // scaler
-            {CB::c_in2, in2_t},        // eps
-            {CB::c_in3, in3_t},        // gamma
-            {CB::c_in4, in4_t},        // beta
-            {CB::c_in5, in5_t},        // mask_h
-            {CB::c_in6, in6_t},        // mask_w
-            {CB::c_out0, out0_t},      // output
-            {CB::c_out1, out1_t},      // mean
-            {CB::c_out2, out2_t},      // rstd
-            {CB::c_intermed0, im0_t},  // E[x]
-            {CB::c_intermed1, im1_t},  // x - E[x]
-            {CB::c_intermed2, im2_t},  // (x - E[x])^2
-            {CB::c_intermed3, im3_t},  // Sum[(x - E[x])^2]
-            {CB::c_intermed4, im4_t},  // E[(x - E[x])^2] = Var[x]
-            {CB::c_intermed5, im5_t},  // 1.0/(sqrt(Var[x] + eps))
-            {CB::c_intermed6, im6_t},  // y * gamm + beta
-            {CB::c_intermed7, im7_t},  // Sum[x]
+            {CBIndex::c_0, in0_t},        // input
+            {CBIndex::c_1, in1_t},        // scaler
+            {CBIndex::c_2, in2_t},        // eps
+            {CBIndex::c_3, in3_t},        // gamma
+            {CBIndex::c_4, in4_t},        // beta
+            {CBIndex::c_5, in5_t},        // mask_h
+            {CBIndex::c_6, in6_t},        // mask_w
+            {CBIndex::c_16, out0_t},      // output
+            {CBIndex::c_17, out1_t},      // mean
+            {CBIndex::c_18, out2_t},      // rstd
+            {CBIndex::c_24, im0_t},  // E[x]
+            {CBIndex::c_25, im1_t},  // x - E[x]
+            {CBIndex::c_26, im2_t},  // (x - E[x])^2
+            {CBIndex::c_27, im3_t},  // Sum[(x - E[x])^2]
+            {CBIndex::c_28, im4_t},  // E[(x - E[x])^2] = Var[x]
+            {CBIndex::c_29, im5_t},  // 1.0/(sqrt(Var[x] + eps))
+            {CBIndex::c_30, im6_t},  // y * gamm + beta
+            {CBIndex::c_31, im7_t},  // Sum[x]
         });
 
     ////////////////////////////////////////////////////////////////////////////
