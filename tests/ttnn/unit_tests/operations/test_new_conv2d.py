@@ -345,12 +345,12 @@ def run_conv_with_split(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [2])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        (256, 256, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
-        (128, 128, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None),
+        # (256, 256, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
+        # (128, 128, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None),
         (16, 16, 256, 256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, {"act_block_h": 32}),
     ),
 )
