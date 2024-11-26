@@ -222,6 +222,15 @@ void train_test(bool use_moreh_adamw = false) {
     }
 }
 
+/*
+This tests are supposed to run only in CI.
+Change the value of ENABLE_CI_ONLY_TT_TRAIN_TESTS to true to run them.
+If one of these tests fails, it means one (or more) of the following:
+- program cache size changed (new ops added/removed silently)
+- time per step changed (performance regression)
+- loss values changed (regression in ops accuracy)
+*/
+
 TEST(NanoGPTTest, AdamW) {
     if (ENABLE_CI_ONLY_TT_TRAIN_TESTS) {
         train_test(/* use_moreh_adamw */ false);
