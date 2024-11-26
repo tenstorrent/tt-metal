@@ -148,7 +148,9 @@ def test_llama_multimodal_demo_text(
         [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
         [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
         [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
-    ] * 8
+    ]
+    if len(dialogs) < max_batch_size:
+        dialogs *= max_batch_size // len(dialogs)
 
     assert len(dialogs) % max_batch_size == 0
     num_batches = len(dialogs) // max_batch_size

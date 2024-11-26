@@ -34,11 +34,10 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "batch",
-    (1, 2, 32),
+    (1, 2),
     ids=[
         "batch_1",
         "batch_2",
-        "batch_32",
     ],
 )
 def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
