@@ -66,14 +66,14 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 > [!NOTE]
 >
-> You may choose to install from either source or a Python wheel.
+> You may choose to install from either source, a Python wheel, or Docker release image.
 >
 > However, no matter your method, in order to use our pre-built models or to
 > follow along with the documentation and tutorials to get started, you will
 > still need the source code.
 >
 > If you do not want to use the models or follow the tutorials and want to
-> immediately start using the API, you may install just the wheel.
+> immediately start using the API, you may install just the wheel or get the release Docker container.
 
 1. Install git and git-lfs.
 
@@ -155,6 +155,25 @@ export PYTHONPATH=$(pwd)
 pip install -r tt_metal/python_env/requirements-dev.txt
 sudo apt-get install cpufrequtils
 sudo cpupower frequency-set -g performance
+```
+
+### Option 3: From Docker Release Image
+
+Download the latest Docker release from our
+[releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
+the particular Tenstorrent card architecture that you have installed on your
+system. (ie. Grayskull, Wormhole, etc)
+
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest
+docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest bash
+```
+where `arch_name` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
+depending on your Tenstorrent card type.
+
+When inside of the container,
+```sh
+python3 -c "import ttnn"
 ```
 
 5. Start coding
