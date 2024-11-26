@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 
 struct unicast_mode {
     uint8_t distance;
@@ -77,7 +78,8 @@ void kernel_main() {
         config.unicast.distance = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
     }
 
-    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {.bank_base_address = dest_addr, .page_size = page_size};
+    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
+        .bank_base_address = dest_addr, .page_size = page_size};
 
     ASSERT(num_buffers_per_channel > 0);
     auto sender = tt::fabric::WorkerToFabricEdmSender(
@@ -107,6 +109,7 @@ void kernel_main() {
     uint32_t buffer_index = 0;
     cb_wait_front(cb_id_in0, 1);
     auto a_packet_header_addr = get_read_ptr(cb_id_in0);
+    DPRINT << "total_pages_to_send: " << (uint32_t)total_pages_to_send << "\n";
     for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
         uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - p);
         sender.wait_for_empty_write_slot();
@@ -167,40 +170,9 @@ void kernel_main() {
         noc_semaphore_wait(last_message_semaphore_address, 1);
     }
 
-    bool closed = false;
-    size_t num_endpoints_to_terminate = get_arg_val<uint32_t>(arg_idx++);
-    for (size_t i = 0; i < num_endpoints_to_terminate; i++) {
-        size_t edm_noc_x = get_arg_val<uint32_t>(arg_idx++);
-        size_t edm_noc_y = get_arg_val<uint32_t>(arg_idx++);
-        size_t distance = get_arg_val<uint32_t>(arg_idx++);
-        size_t termination_addr = get_arg_val<uint32_t>(arg_idx++);
+    bool closed_fabric_connection = terminate_fabric_endpoints_farthest_to_nearest(sender, a_packet_header_addr, arg_idx);
 
-        if (!closed && distance == 0) {
-            closed = true;
-            sender.close();
-        }
-        if (distance == 0) {
-            noc_inline_dw_write(
-                get_noc_addr(edm_noc_x, edm_noc_y, termination_addr),
-                tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
-        } else {
-            auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
-            reinterpret_cast<volatile uint32_t*>(a_packet_header_addr)[sizeof(tt::fabric::PacketHeader) >> 2] =
-                tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
-            sender.wait_for_empty_write_slot();
-            packet_header.to_write()
-                .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{static_cast<uint8_t>(distance/* - 1*/)})
-                .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-                    termination_addr,
-                    sizeof(tt::fabric::PacketHeader) + sizeof(uint32_t),
-                    static_cast<uint8_t>(edm_noc_x),
-                    static_cast<uint8_t>(edm_noc_y)});
-            sender.send_payload_blocking_from_address(
-                a_packet_header_addr, packet_header.get_payload_size_including_header());
-            noc_async_writes_flushed();
-        }
-    }
-    if (!closed) {
+    if (!closed_fabric_connection) {
         sender.close();
     }
 }

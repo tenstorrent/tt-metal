@@ -27,7 +27,6 @@ class WorkerEdmInterfaceArgs;
 
 namespace reduce_scatter_detail {
 
-void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slices, std::vector<uint32_t>& args_out);
 
 struct ReduceScatterWorkerArgBuilder {
     ReduceScatterWorkerArgBuilder (

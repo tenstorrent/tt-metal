@@ -6,26 +6,111 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <variant>
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
+// For command dest type
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+
 namespace ttnn {
 namespace ccl {
+namespace v2 {
+    struct TensorSlice {
+        using ords_t = Shape4D<uint32_t>;
+        ords_t tensor_shape;
+        ords_t tensor_slice_shape;
+        ords_t tensor_slice_offset;
+        ords_t worker_slice_shape;
+        ords_t worker_slice_offset;
+
+        TensorSlice(TensorSlice const& rhs) = default;
+        TensorSlice(TensorSlice&& rhs) = default;
+        TensorSlice& operator=(TensorSlice const& rhs) = default;
+        TensorSlice& operator=(TensorSlice&& rhs) = default;
+
+        TensorSlice()=default;
+        TensorSlice(ords_t tensor_shape, ords_t tensor_slice_shape, ords_t tensor_slice_offset, ords_t worker_slice_shape, ords_t worker_slice_offset)
+            : tensor_shape(tensor_shape), tensor_slice_shape(tensor_slice_shape), tensor_slice_offset(tensor_slice_offset), worker_slice_shape(worker_slice_shape), worker_slice_offset(worker_slice_offset) {}
+    };
+}
+
 namespace cmd {
+
+
 
 constexpr std::size_t round_up(std::size_t a, std::size_t multiple) {
     return ((a + multiple - 1) / multiple) * multiple;
 }
 
+// for CclCommandStreamTensorToCB and CclCommandStreamCBToTensor
+using CclCommandStreamTensorSlice = v2::TensorSlice;
+struct CclCommandWaitValue {
+    uint32_t target_value = 0;
+};
+struct CclCommandAtomicInc {
+    uint32_t value = 1;
+    uint32_t wrap_value = std::numeric_limits<uint32_t>::max();
+};
+struct CclCommandInlineReadWrite {
+    uint32_t value = 0;
+};
+struct CclCommandReadWrite {
+    uint32_t size_bytes = 0;
+};
+using CclCommandArgs = std::variant<CclCommandStreamTensorSlice, CclCommandWaitValue, CclCommandAtomicInc, CclCommandInlineReadWrite, CclCommandReadWrite>;
+
+enum SRC_DEST_TYPE : uint8_t {
+    SRC = 0,
+    DEST = 1
+};
+
+// Explicitly assigned integer values for easier debug
 enum class CclCommandArgCode : uint8_t {
     // If operating on a per page granularity
     SET_TENSOR_SHAPE_IN_PAGES = 0,
-    SET_TENSOR_SLICE_SHAPE_IN_PAGES,
-    SET_TENSOR_SLICE_OFFSET_IN_PAGES,
-    SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES,
-    SET_WORKER_PAGES_PER_SLICE,
-    SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES
+    SET_TENSOR_SLICE_SHAPE_IN_PAGES = 1,
+    SET_TENSOR_SLICE_OFFSET_IN_PAGES = 2,
+    SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES = 3,
+    SET_WORKER_PAGES_PER_SLICE = 4,
+    SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES = 5,
+
+    // wait_value, inline read/write
+    SET_TARGET_VALUE = 6,
+    SET_ATOMIC_INC_VALUE = 7,
+
+    // addr type commands
+    SET_ADDRESS_INFO = 8,
+
+    // core descriptor commands
+    SET_CORE_DESCRIPTOR_INFO = 9,
 };
+
+struct CclCommandArgHeader {
+    CclCommandArgCode code;
+    uint8_t inline_value0;
+    uint8_t inline_value1;
+    uint8_t inline_value2;
+
+    static CclCommandArgHeader from_uint32(uint32_t val) {
+        CclCommandArgHeader header;
+        header.code = static_cast<CclCommandArgCode>(val & 0xFF);
+        header.inline_value0 = (val >> 8) & 0xFF;
+        header.inline_value1 = (val >> 16) & 0xFF;
+        header.inline_value2 = (val >> 24) & 0xFF;
+        return header;
+    }
+    uint32_t to_uint32() const {
+        uint32_t val = 0;
+        val |= static_cast<uint32_t>(this->code);
+        val |= static_cast<uint32_t>(this->inline_value0) << 8;
+        val |= static_cast<uint32_t>(this->inline_value1) << 16;
+        val |= static_cast<uint32_t>(this->inline_value2) << 24;
+        return val;
+    }
+};
+static_assert(sizeof(CclCommandArgHeader) == sizeof(uint32_t));
+
 
 struct CclCommandTensor {
     Shape4D<uint32_t> tensor_shape;
@@ -33,6 +118,8 @@ struct CclCommandTensor {
     Shape4D<uint32_t> tensor_slice_offset;
     Shape4D<uint32_t> worker_start_offset_in_slice;
     uint32_t worker_pages_per_slice;
+
+    // CclCommandTensor(CclCommandTensor const& rhs) = default;
 };
 
 template <CclCommandArgCode code>  struct command_arg_field                                         {  using type = std::nullptr_t; };
@@ -41,7 +128,10 @@ template <> struct command_arg_field<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_I
 template <> struct command_arg_field<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>           {  using type = Shape4D<uint32_t>; };
 template <> struct command_arg_field<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>  {  using type = Shape4D<uint32_t>; };
 template <> struct command_arg_field<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>                 {  using type = uint32_t; };
+template <> struct command_arg_field<CclCommandArgCode::SET_TARGET_VALUE>                           {  using type = uint32_t; };
+template <> struct command_arg_field<CclCommandArgCode::SET_ATOMIC_INC_VALUE>                       {  using type = CclCommandAtomicInc; };
 template <> struct command_arg_field<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>        {  using type = CclCommandTensor; };
+template <> struct command_arg_field<CclCommandArgCode::SET_ADDRESS_INFO>                           {  using type = uint32_t; };
 
 
 template <CclCommandArgCode T>
@@ -215,6 +305,54 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
     }
 };
 
+template <>
+struct CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE>, CclCommandArgCode::SET_TARGET_VALUE> {
+
+    static void pack_to(args_elem_t* args, uint32_t value) {
+        args[0] = value;
+    }
+    void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
+
+    static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
+        unpack_field_without_header(&args[0], out.tensor_shape);
+    }
+    static void unpack(volatile args_elem_t const* args, field_type& out) { out = args[0]; }
+    void unpack(volatile args_elem_t const* args) { this->value = args[0]; }
+};
+
+template <>
+struct CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE>, CclCommandArgCode::SET_ATOMIC_INC_VALUE> {
+
+    static void pack_to(args_elem_t* args, CclCommandAtomicInc const& atomic_inc_args) {
+        args[0] = atomic_inc_args.value;
+        args[1] = atomic_inc_args.wrap_value;
+    }
+    void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
+
+    static void unpack(volatile args_elem_t const* args, CclCommandAtomicInc& out) {
+        out.value = args[0];
+        out.wrap_value = args[1];
+    }
+    void unpack(volatile args_elem_t const* args) {
+        this->value.value = args[0];
+        this->value.wrap_value = args[1];
+    }
+};
+
+template <>
+struct CclCommandArg<CclCommandArgCode::SET_ADDRESS_INFO> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_ADDRESS_INFO>, CclCommandArgCode::SET_ADDRESS_INFO> {
+
+    static void pack_to(args_elem_t* args, uint32_t value) {
+        args[0] = value;
+    }
+    void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
+
+    static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
+        unpack_field_without_header(&args[0], out.tensor_shape);
+    }
+    static void unpack(volatile args_elem_t const* args, field_type& out) { out = args[0]; }
+    void unpack(volatile args_elem_t const* args) { this->value = args[0]; }
+};
 
 // Convenience type aliases
 using tensor_shape_command_arg_t = CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>;
@@ -224,41 +362,222 @@ using worker_start_offset_command_arg_t = CclCommandArg<CclCommandArgCode::SET_W
 using worker_pages_command_arg_t = CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>;
 using full_tensor_command_arg_t = CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>;
 
+enum class CclCommandAddrType : uint8_t {
+    SEMAPHORE_ID,
+    CIRCULAR_BUFFER_ID,
+    ABSOLUTE_ADDRESS,
+    RELATIVE_ADDRESS,
+
+    // Useful for inline commands (read/write, atomic inc)
+    NONE
+};
+struct CclCommandAddrSemaphoreId {
+    uint32_t semaphore_id;
+    // bool operator==(CclCommandAddrSemaphoreId const& other) const = default;
+    // bool operator!=(CclCommandAddrSemaphoreId const& other) const = default
+};
+struct CclCommandAddrCircularBufferId {
+    uint32_t circular_buffer_id;
+    // bool operator==(CclCommandAddrCircularBufferId const& other) const = default;
+    // bool operator!=(CclCommandAddrCircularBufferId const& other) const = default;
+};
+struct CclCommandAddrAbsoluteAddress {
+    uint32_t absolute_address;
+    // bool operator==(CclCommandAddrAbsoluteAddress const& other) const = default;
+    // bool operator!=(CclCommandAddrAbsoluteAddress const& other) const = default;
+};
+struct CclCommandAddrRelativeAddress {
+    uint32_t relative_address;
+    // bool operator==(CclCommandAddrRelativeAddress const& other) const = default;
+    // bool operator!=(CclCommandAddrRelativeAddress const& other) const = default;
+};
+struct CclCommandAddrNone {
+    // bool operator==(CclCommandAddrNone const& other) const = default;
+    // bool operator!=(CclCommandAddrNone const& other) const = default;
+};
+
+using CclCommandAddrArgs = std::variant<
+    CclCommandAddrSemaphoreId,
+    CclCommandAddrCircularBufferId,
+    CclCommandAddrAbsoluteAddress,
+    CclCommandAddrRelativeAddress,
+    CclCommandAddrNone>;
+
+enum class CclCommandCoreDescriptorType : uint8_t {
+    // Temporary since at the moment, tensor commands have their source/dest type implied
+    // by the command stream index - the info is all off the addrgen
+    ADDRGEN = 0,
+    LOCAL = 1,
+    NOC_XY = 2,
+    RECTANGLE = 3
+    // Future types may include: list, rectangle_list, etc.
+};
+struct CclCommandCoreDescriptorTypeAddrgen {
+};
+struct CclCommandCoreDescriptorTypeLocal {
+};
+struct CclCommandCoreDescriptorTypeNocXY {
+    uint8_t x;
+    uint8_t y;
+};
+// unused atm
+struct CclCommandCoreDescriptorTypeMcast {
+    uint32_t to_uint32() const {
+        uint32_t value = 0;
+        value |= (noc0_start_x << 0);
+        value |= (noc0_start_y << 8);
+        value |= (noc0_end_x << 16);
+        value |= (noc0_end_y << 24);
+        return value;
+    }
+    uint8_t noc0_start_x;
+    uint8_t noc0_start_y;
+    uint8_t noc0_end_x;
+    uint8_t noc0_end_y;
+};
+using CclCommandCoreDescriptorArgs = std::variant<CclCommandCoreDescriptorTypeAddrgen, CclCommandCoreDescriptorTypeLocal, CclCommandCoreDescriptorTypeNocXY, CclCommandCoreDescriptorTypeMcast>;
+
 // A command is composed of one or more arguments
 // This enum specifies the high level command
 // Future commands are to be added and will enable
 // functionalilty such as synchronizing
 enum class CclCommandCode : uint8_t {
-    STREAM_TENSOR_TO_EDM = 0,
-    STREAM_EDM_TO_TENSOR
+    STREAM_TENSOR_TO_EDM = 0, // TODO: rename uses of to the below
+    STREAM_TENSOR_TO_CB = 0,
+    STREAM_CB_TO_TENSOR = 1,
+    STREAM_EDM_TO_TENSOR = 2, // TODO: rename uses of to the above
+
+    WAIT_VALUE = 3,
+
+    // value, wrap, dest_type, dest_addr_info
+    ATOMIC_INC = 4,
+
+    RAW_INLINE_WRITE_BYTES = 5,
+
+    // Behaviour reading/writing to CBs still a little unclear
+    // This mode isn't actually supported yet
+    RAW_READ_BYTES = 6,
+    RAW_WRITE_BYTES = 7,
+
+    INVALID = 8
+};
+
+
+enum CclCommandDestType : uint8_t {
+    CHIP_UNICAST = tt::fabric::CHIP_UNICAST,
+    CHIP_MULTICAST = tt::fabric::CHIP_MULTICAST,
+    CHIP_LOCAL_ONLY = 2
+};
+static_assert(tt::fabric::CHIP_UNICAST < 2);
+static_assert(tt::fabric::CHIP_MULTICAST < 2);
+struct DestTypeArgsNull {
+};
+static_assert(sizeof(DestTypeArgsNull) <= 2);
+struct UnicastCommandDestArgs {
+    uint8_t distance_in_hops;
+    bool is_forward_direction;
+};
+struct MulticastCommandDestArgs {
+    uint8_t num_targets_forward_direction;
+    uint8_t num_targets_backward_direction;
+};
+using LocalOnlyCommandDestArgs = DestTypeArgsNull;
+
+// Used only for host code paths
+using CclCommandDestArgs = std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs, LocalOnlyCommandDestArgs>;
+
+namespace v2 {
+
 };
 
 struct CclCommandHeader {
-    CclCommandCode code;
+    CclCommandCode code : 6;
+    CclCommandDestType dest_type : 2;
 
     // For the time being we have a dedicated arg_count because we assume
     // we may save args/tensor info from previous command. Up to command sequence
     // generator to make sure any fields/args not explicitly listed are correct from prior command
     uint8_t arg_count : 4;
-    uint8_t reserved1;
-    uint8_t reserved2;
+    union {
+        DestTypeArgsNull null;
+        UnicastCommandDestArgs unicast;
+        MulticastCommandDestArgs multicast;
+        LocalOnlyCommandDestArgs local_only;
+    } command_dest_args;
 
-    static CclCommandHeader from_uint32(uint32_t const& cmd_header) {
+    CclCommandHeader() : code(CclCommandCode::INVALID), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(0) {}
+    CclCommandHeader(CclCommandCode code, CclCommandDestArgs const &args, uint8_t arg_count) : code(code), arg_count(arg_count) {
+        if (std::holds_alternative<UnicastCommandDestArgs>(args)) {
+            command_dest_args.unicast = std::get<UnicastCommandDestArgs>(args);
+            this->dest_type = CclCommandDestType::CHIP_UNICAST;
+        } else if (std::holds_alternative<MulticastCommandDestArgs>(args)) {
+            command_dest_args.multicast = std::get<MulticastCommandDestArgs>(args);
+            this->dest_type = CclCommandDestType::CHIP_MULTICAST;
+        } else if (std::holds_alternative<LocalOnlyCommandDestArgs>(args)) {
+            command_dest_args.local_only = std::get<LocalOnlyCommandDestArgs>(args);
+            this->dest_type = CclCommandDestType::CHIP_LOCAL_ONLY;
+        }
+    }
+    CclCommandHeader(CclCommandCode code, MulticastCommandDestArgs const &multicast_args, uint8_t arg_count) : code(code), dest_type(CclCommandDestType::CHIP_MULTICAST), arg_count(arg_count) {
+        this->command_dest_args.multicast = multicast_args;
+    }
+    CclCommandHeader(CclCommandCode code, LocalOnlyCommandDestArgs const &local_only_args, uint8_t arg_count) : code(code), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(arg_count) {
+        this->command_dest_args.local_only = local_only_args;
+    }
+
+    static CclCommandHeader from_uint32(uint32_t cmd_header) {
         CclCommandHeader decoded;
-        decoded.code = static_cast<CclCommandCode>(cmd_header & 0xFF);
-        decoded.arg_count = (cmd_header >> 8) & 0xF;
+        reinterpret_cast<uint32_t*>(&decoded)[0] = cmd_header;
         return decoded;
+        // decoded.code = static_cast<CclCommandCode>(cmd_header & 0xFF);
+        // decoded.dest_type = static_cast<CclCommandDestType>((cmd_header >> 6) & 0x3);
+        // switch (decoded.dest_type) {
+        //     case CclCommandDestType::CHIP_UNICAST:
+        //         decoded.command_dest_args.unicast = UnicastCommandDestArgs{static_cast<uint8_t>((cmd_header >> 16) & 0xFF), static_cast<bool>((cmd_header >> 24) & 0x1)};
+        //         break;
+        //     case CclCommandDestType::CHIP_MULTICAST:
+        //         decoded.command_dest_args.multicast = MulticastCommandDestArgs{static_cast<uint8_t>((cmd_header >> 16) & 0xFF), static_cast<uint8_t>((cmd_header >> 24) & 0xFF)};
+        //         break;
+        //     default:
+        //         break;
+        // }
+        // decoded.arg_count = (cmd_header >> 8) & 0xF;
+        // return decoded;
     }
 
     static uint32_t to_uint32(CclCommandHeader const& cmd_header) {
         uint32_t encoded = 0;
         encoded = (uint8_t)(cmd_header.code);
-        encoded = encoded | (cmd_header.arg_count << 8);
+        encoded |= (cmd_header.dest_type << 6);
+        encoded |= (cmd_header.arg_count << 8);
+        switch (cmd_header.dest_type) {
+            case CclCommandDestType::CHIP_UNICAST:
+                encoded |= (cmd_header.command_dest_args.unicast.distance_in_hops << 16);
+                encoded |= (cmd_header.command_dest_args.unicast.is_forward_direction << 24);
+                break;
+            case CclCommandDestType::CHIP_MULTICAST:
+                encoded |= (cmd_header.command_dest_args.multicast.num_targets_forward_direction << 16);
+                encoded |= (cmd_header.command_dest_args.multicast.num_targets_backward_direction << 24);
+                break;
+            default:
+                break;
+        };
         return encoded;
     }
     uint32_t to_uint32() const {
-        return *reinterpret_cast<uint32_t const*>(this);
+        return to_uint32(*this);
     }
+
+    UnicastCommandDestArgs const& get_unicast_dest_args() const {
+        return command_dest_args.unicast;
+    }
+    MulticastCommandDestArgs const& get_multicast_dest_args() const {
+        return command_dest_args.multicast;
+    }
+    LocalOnlyCommandDestArgs const& get_local_only_dest_args() const {
+        return command_dest_args.local_only;
+    }
+
 };
 static_assert(sizeof(CclCommandHeader) == sizeof(uint32_t));
 

@@ -61,13 +61,13 @@ void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTens
  * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
  * into a 4D coordinate value
  */
-inline shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+FORCE_INLINE  shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
     static_assert(sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
     auto const y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
 
-std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shape, const Shape4D<uint32_t> &index) {
+FORCE_INLINE std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shape, const Shape4D<uint32_t> &index) {
     std::size_t offset = index.x;
     std::size_t inner_volume = shape.x;
     offset += index.y * inner_volume;
@@ -76,6 +76,20 @@ std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shape, const Shap
     inner_volume *= shape.z;
     offset += index.w * inner_volume;
     return offset;
+}
+
+namespace v2 {
+    /*
+    * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
+    * into a 4D coordinate value
+    */
+    FORCE_INLINE  shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+        static_assert(sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+        auto const y = worker_slice_offset.x / slice_shape.x;
+        return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
+    }
+
+
 }
 
 
@@ -122,6 +136,6 @@ constexpr bool is_sharded_tensor_layout(tt::tt_metal::TensorMemoryLayout tensor_
 
 // reader code
 template <typename T>
-constexpr Shape4D<T> build_wrapped_row_tensor_slice(T n_pages) {
+FORCE_INLINE constexpr Shape4D<T> build_wrapped_row_tensor_slice(T n_pages) {
     return Shape4D<T>{1, 1, 1, n_pages};
 }

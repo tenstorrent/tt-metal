@@ -85,6 +85,7 @@ std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor>
     const auto& input_tensor = input_tensors[0];
     auto output_tensors = std::vector<Tensor>();
     output_tensors.reserve(1);
+    auto tile = input_tensor.get_tensor_spec().tile();
     if(this->output_mem_config.is_sharded()) {
         output_tensors.push_back(create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
@@ -92,10 +93,10 @@ std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor>
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config,
-            input_tensor.get_tile()
+            tile
             ));
     } else {
-        output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
+        output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
     }
     log_info(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
     return output_tensors;
@@ -227,8 +228,6 @@ Tensor all_gather_v2(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-
-
 
             const auto& input_device_tensor = input_tensors.at(0);
 

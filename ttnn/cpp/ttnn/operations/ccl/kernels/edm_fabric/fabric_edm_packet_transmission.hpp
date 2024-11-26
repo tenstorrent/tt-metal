@@ -13,6 +13,9 @@
 // If the hop/distance counter equals to the below value, it indicates that it has
 // arrived at (atleast one of) the intended destination(s)
 static constexpr size_t DESTINATION_HOP_COUNT = 1;
+// TODO: make 0 and the associated field to num mcast destinations
+static constexpr size_t LAST_MCAST_DESTINATION = 1;
+
 
 void write_unicast_blocking(uint32_t local_address, uint64_t dest_address, uint32_t size_bytes) {
     noc_async_write(local_address, dest_address, size_bytes);
@@ -111,6 +114,7 @@ void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const
             break;
         }
         case tt::fabric::CommandType::ATOMIC_INC: {
+            DPRINT << "C_AT_INC\n";
             switch (noc_send_type) {
                 case tt::fabric::NocSendType::NOC_UNICAST: {
                     auto const dest_address = get_noc_addr(
@@ -118,6 +122,10 @@ void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const
                         header.command_fields.unicast_seminc.noc_y,
                         header.command_fields.unicast_seminc.address);
                     auto const increment = header.command_fields.unicast_seminc.val;
+                    DPRINT << "\tx=" << (uint32_t)header.command_fields.unicast_seminc.noc_x <<
+                        ", y=" << (uint32_t)header.command_fields.unicast_seminc.noc_y <<
+                        ", addr=" << (uint32_t)header.command_fields.unicast_seminc.address <<
+                        ", inc=" << (uint32_t)increment << "\n";
                     noc_semaphore_inc(dest_address, increment);
 
                 }break;
@@ -145,12 +153,15 @@ void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const
 void update_packet_header_for_next_hop(volatile tt::fabric::PacketHeader * packet_header) {
     switch (packet_header->chip_send_type) {
         case tt::fabric::CHIP_UNICAST: {
+            ASSERT(packet_header->routing_fields.chip_unicast.distance_in_hops > 0);
             packet_header->routing_fields.chip_unicast.distance_in_hops--;
         } break;
         case tt::fabric::CHIP_MULTICAST: {
             if (packet_header->routing_fields.chip_mcast.start_distance_in_hops == DESTINATION_HOP_COUNT) {
+            ASSERT(packet_header->routing_fields.chip_mcast.range_hops > 0);
                 packet_header->routing_fields.chip_mcast.range_hops--;
             } else {
+                ASSERT(packet_header->routing_fields.chip_mcast.start_distance_in_hops > 0);
                 packet_header->routing_fields.chip_mcast.start_distance_in_hops--;
             }
         } break;
@@ -169,6 +180,7 @@ tt::fabric::SendStatus forward_payload_to_downstream_edm(
     volatile tt::fabric::PacketHeader *packet_header,
     tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface
     ) {
+    DPRINT << "Fwding pkt to downstream\n";
     // SHOULD BE ABLE TO ASSERT ON THIS SINCE WE CHECK FOR THIS IN THE CALLER
     // TODO: PERF
     bool safe_to_send = downstream_edm_interface.consumer_has_space();
@@ -212,7 +224,7 @@ bool packet_must_be_forwarded_to_next_chip(volatile tt::fabric::PacketHeader con
             return packet_header.routing_fields.chip_unicast.distance_in_hops != DESTINATION_HOP_COUNT;
 
         case tt::fabric::ChipSendType::CHIP_MULTICAST:
-            return packet_header.routing_fields.chip_mcast.range_hops != 1;
+            return packet_header.routing_fields.chip_mcast.range_hops != LAST_MCAST_DESTINATION;
 
         default:
             ASSERT(false);

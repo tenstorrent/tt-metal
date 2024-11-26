@@ -253,6 +253,8 @@ struct LegacyCclTensorSlicer {
 };
 
 
+
+inline namespace v1 {
 struct TensorSlice {
     using ords_t = tt_xy_pair;
     ords_t tensor_shape;
@@ -261,6 +263,7 @@ struct TensorSlice {
     ords_t worker_slice_shape;
     ords_t worker_slice_offset;
     std::size_t dim;
+};
 };
 
 // Workers iterate over tensor slices in a sequence along a

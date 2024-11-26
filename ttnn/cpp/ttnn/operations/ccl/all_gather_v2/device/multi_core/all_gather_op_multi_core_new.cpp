@@ -31,40 +31,6 @@ using namespace tt::constants;
 namespace ttnn {
 
 
-void build_sync_kernels(
-    Device *device,
-    tt::tt_metal::Program& program,
-    ccl::SyncModeSpec const& sync_details,
-    bool terminate_fabric,
-    ccl::EdmLineFabricOpInterface& fabric_interface) {
-    auto const sync_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_wait_completion.cpp",
-        sync_details.core,
-        tt::tt_metal::ReaderDataMovementConfig({sync_details.num_signals, terminate_fabric}));
-
-    std::vector<uint32_t> rt_args;
-    rt_args.reserve(sync_details.num_signals * 2);
-    for (size_t i = 0; i < sync_details.num_signals; ++i) {
-        rt_args.push_back(sync_details.sem_ids[i]);
-        rt_args.push_back(sync_details.wait_counts[i]);
-    }
-
-    if (terminate_fabric) {
-        auto termination_infos = fabric_interface.generate_local_chip_fabric_termination_infos(device);
-        rt_args.push_back(termination_infos.size());
-        for (auto& info : termination_infos) {
-            if (info.distance != 0) {
-                continue;
-            }
-            rt_args.push_back(info.termination_addr);
-            rt_args.push_back(info.edm_noc_x);
-            rt_args.push_back(info.edm_noc_y);
-        }
-    }
-
-    tt::tt_metal::SetRuntimeArgs(program, sync_kernel_id, sync_details.core, rt_args);
-}
 
 using namespace ccl;
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
@@ -251,7 +217,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     }
 
     if (sync_details.has_value()) {
-        build_sync_kernels(device, program, sync_details.value(), true, local_device_fabric_interface);
+        ttnn:L:ccl::worker_detail::build_sync_kernels(device, program, sync_details.value(), true, local_device_fabric_interface);
     }
 
     local_device_fabric_interface.build_kernels();

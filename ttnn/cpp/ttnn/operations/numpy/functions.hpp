@@ -182,7 +182,7 @@ static Tensor arange(
     const int64_t start,
     const int64_t stop,
     const int64_t step,
-    const Layout layout = Layout::ROW_MAJOR,
+    const Layout layout = Layout::ROW_MAJOR, // TODO: DELETE THIS - THIS WILL NEVER WORK FOR TILE LAYOUT - USER MUST RESHAPE FIRST!!!. Can only support layout if shape provided (or we need to update .to to support padding)
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {

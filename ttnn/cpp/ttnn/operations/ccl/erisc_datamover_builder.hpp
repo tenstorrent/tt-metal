@@ -90,6 +90,15 @@ struct SenderWorkerAdapterSpec {
     size_t buffer_index_semaphore_id = 0; // the semaphore ID on the EDM, not the worker
 };
 
+
+struct edm_termination_info_t {
+    uint32_t distance = 0;
+    uint32_t edm_noc_x = 0;
+    uint32_t edm_noc_y = 0;
+    uint32_t termination_addr = 0;
+};
+
+void get_runtime_args_for_edm_termination_infos(std::vector<edm_termination_info_t> const& edm_termination_infos, std::vector<uint32_t>& args_out);
 void append_worker_to_fabric_edm_sender_rt_args(SenderWorkerAdapterSpec const& connection, size_t sender_worker_flow_control_semaphore_id, size_t sender_worker_buffer_index_semaphore_id, std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(std::vector<uint32_t> const& args, size_t starting_arg_idx = 0);
 
@@ -179,12 +188,6 @@ class FabricEriscDatamoverBuilder {
 };
 
 
-struct edm_termination_info_t {
-    uint32_t distance = 0;
-    uint32_t edm_noc_x = 0;
-    uint32_t edm_noc_y = 0;
-    uint32_t termination_addr = 0;
-};
 
 class EdmLineFabricOpInterface {
    public:

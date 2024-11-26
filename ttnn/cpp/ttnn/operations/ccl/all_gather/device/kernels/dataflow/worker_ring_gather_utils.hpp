@@ -538,14 +538,16 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
 
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
-std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
+FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
     uint32_t curr_page_idx,
     const uint32_t offset_into_worker_slice,
     const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
     const AddrGen& address_generator,
-    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape) {
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape,
+    uint8_t noc_id = noc_index) {
     if constexpr (TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-        uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, address_generator);
+        static constexpr uint32_t offset = 0;
+        uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, address_generator, offset, noc_id);
         return {dst_noc_addr, 1};
     } else {
         static_assert(
@@ -554,7 +556,7 @@ std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
             TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED);
         if constexpr (MEM_LAYOUT == tt::tt_metal::Layout::ROW_MAJOR) {
             ASSERT(false);  // unimplemented
-            return {0, 0};
+            return {0, 1};
         } else {
             static_assert(MEM_LAYOUT == tt::tt_metal::Layout::TILE);
             // TODO: Make d.get_noc_addr work on host + device
@@ -567,10 +569,89 @@ std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
             uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
 
             size_t contig_pages = std::min<int32_t>(contig_pages_, contig_until_edge_of_tensor_slice);
-            uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, address_generator.bank_base_address + (page_offset * address_generator.page_size) + 0);
+            uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, address_generator.bank_base_address + (page_offset * address_generator.page_size) + 0, noc_id);
             return {dst_noc_addr, contig_pages};
         }
     }
+}
+
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, uint16_t> get_noc_addr_and_contiguous_pages_for_fabric_write(
+    uint32_t curr_page_idx,
+    const uint32_t offset_into_worker_slice,
+    const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const AddrGen& address_generator,
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape) {
+    return get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT, AddrGen>(
+        curr_page_idx, offset_into_worker_slice, offset_worker_slice, address_generator, tensor_slice_shape, 0);
+}
+
+namespace v2 {
+    template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+FORCE_INLINE void write_wrapped_chunk(
+    uint32_t& curr_page_idx,
+    uint32_t& offset_into_worker_slice,
+    const  ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const  ttnn::ccl::Shape4D<uint32_t>& worker_slice_shape,
+
+    // In tiles for tile layout
+    const  ttnn::ccl::Shape4D<uint32_t>& tensor_shape,
+    const  ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape,
+    uint32_t cb_id,
+    const AddrGen& d,
+    const uint32_t num_pages,
+    const uint32_t page_size,
+    bool& last_page_of_worker) {
+
+    // cb_wait_front(cb_id, num_pages);
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
+
+    int32_t contig_pages = 1;
+    for (uint32_t i = 0; i < num_pages; i+= contig_pages) {
+        contig_pages = 1;
+        if constexpr (MEM_LAYOUT == tt::tt_metal::Layout::ROW_MAJOR) {
+            if constexpr (TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+                uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, d);
+                DPRINT << "\tnoc_async_write_row_major_interleaved @ page " << curr_page_idx << " noc_addr: " << dst_noc_addr << "\n";
+                noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+                ASSERT(false);  // unimplemented
+            } else {
+                ASSERT(false);  // unimplemented
+            }
+        } else if constexpr (MEM_LAYOUT == tt::tt_metal::Layout::TILE) {
+            if constexpr (TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+                noc_async_write_tile(curr_page_idx, d, l1_read_addr);
+            } else {
+                // TODO: Make d.get_noc_addr work on host + device
+                auto const&[noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
+                /*
+                * Shared with `read_wrapped_chunk_from_output_tensor`
+                */
+                uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
+                uint32_t contig_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
+
+                contig_pages = std::min<int32_t>(num_pages - i, std::min<int32_t>(contig_pages_, contig_edge_of_tensor_slice));
+                uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
+                DPRINT << "\tnoc_async_write @ src_addr " << (uint32_t)l1_read_addr << " noc_addr: " << (uint64_t)dst_noc_addr << "\n";
+                noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
+            }
+        }
+        // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
+        bool end_of_worker_slice_row = ttnn::ccl::v2::advance_worker_global_page(
+            curr_page_idx, // Updated internally
+            offset_into_worker_slice,
+            offset_worker_slice,
+            worker_slice_shape,
+            tensor_slice_shape,
+            tensor_shape,
+            contig_pages
+        );
+
+        l1_read_addr += page_size * contig_pages;
+    }
+    // noc_async_write_barrier();
+    // cb_pop_front(cb_id, num_pages);
+}
 }
 
 template <typename AddrGen>
