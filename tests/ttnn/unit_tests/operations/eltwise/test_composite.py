@@ -665,6 +665,90 @@ def test_unary_composite_trunc_ttnn_opt(input_shapes, device):
     assert comp_pass
 
 
+def test_elu_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    alpha = 3
+    golden_function = ttnn.get_golden_function(ttnn.elu)
+    golden_tensor = golden_function(input, alpha)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.elu(x1_tt, alpha)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_rsub_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    value = 3
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    golden_tensor = golden_function(input, value)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.rsub(x1_tt, value)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_heaviside_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    value = 3
+    golden_function = ttnn.get_golden_function(ttnn.heaviside)
+    golden_tensor = golden_function(input, value)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.heaviside(x1_tt, value)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_leaky_relu_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    negative_slope = 3
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
+    golden_tensor = golden_function(input, negative_slope)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.leaky_relu(x1_tt, negative_slope)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_fill_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    fill_value = 3
+    golden_function = ttnn.get_golden_function(ttnn.fill)
+    golden_tensor = golden_function(input, fill_value)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.fill(x1_tt, fill_value)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_relu_max_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    upper_limit = 3
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    golden_tensor = golden_function(input, upper_limit)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.relu_max(x1_tt, upper_limit)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
+def test_relu_min_example(device):
+    input = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    lower_limit = 3
+    golden_function = ttnn.get_golden_function(ttnn.relu_min)
+    golden_tensor = golden_function(input, lower_limit)
+    x1_tt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.relu_min(x1_tt, lower_limit)
+    tt_out = ttnn.to_torch(y_tt)
+    status = torch.allclose(golden_tensor, tt_out)
+    assert status
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
