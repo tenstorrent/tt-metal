@@ -153,7 +153,7 @@ pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
-def GetComputeKernelConfig(
+def CreateComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=True,
     fp32_dest_acc_en=False,

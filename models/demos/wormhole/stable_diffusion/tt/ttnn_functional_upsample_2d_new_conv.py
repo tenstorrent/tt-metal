@@ -97,7 +97,7 @@ class upsample2d:
             transpose_shards=False,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
         )
-        compute_config = ttnn.GetComputeKernelConfig(
+        compute_config = ttnn.CreateComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=True,

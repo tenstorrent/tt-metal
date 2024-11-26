@@ -247,7 +247,7 @@ class transformer_2d_model:
             input_channels_alignment=32,
             transpose_shards=False,
         )
-        compute_config = ttnn.GetComputeKernelConfig(
+        compute_config = ttnn.CreateComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
         )

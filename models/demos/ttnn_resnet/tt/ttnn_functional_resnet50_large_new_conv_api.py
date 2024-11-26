@@ -188,7 +188,7 @@ class resnet50Bottleneck:
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
                 ),
-                compute_config=ttnn.GetComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
+                compute_config=ttnn.CreateComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
                 conv_op_cache=conv_op_cache,
             )
             ttnn.deallocate(x)
@@ -236,7 +236,7 @@ class resnet50Bottleneck:
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
-            compute_config=ttnn.GetComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
+            compute_config=ttnn.CreateComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
             conv_op_cache=conv_op_cache,
         )
 
@@ -302,7 +302,7 @@ class resnet50Bottleneck:
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
-            compute_config=ttnn.GetComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
+            compute_config=ttnn.CreateComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
             conv_op_cache=conv_op_cache,
         )
 
@@ -329,7 +329,7 @@ class resnet50Bottleneck:
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
-            compute_config=ttnn.GetComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
+            compute_config=ttnn.CreateComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
             conv_op_cache=conv_op_cache,
         )
 
@@ -567,7 +567,7 @@ class resnet50:
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
-            compute_config=ttnn.GetComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
+            compute_config=ttnn.CreateComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
             conv_op_cache=conv_op_cache,
         )
         # Relu is fused with conv1
@@ -878,7 +878,7 @@ class resnet50:
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
-            compute_config=ttnn.GetComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
+            compute_config=ttnn.CreateComputeKernelConfig(math_fidelity=self.model_config["MATH_FIDELITY"]),
             conv_op_cache=conv_op_cache,
         )
         # Relu is fused with conv1

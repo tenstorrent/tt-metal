@@ -50,7 +50,7 @@ class Conv:
             enable_act_double_buffer=True,
             enable_split_reader=False,
         )
-        compute_config = ttnn.GetComputeKernelConfig(
+        compute_config = ttnn.CreateComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,

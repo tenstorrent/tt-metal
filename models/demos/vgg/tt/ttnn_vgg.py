@@ -103,7 +103,7 @@ def ttnn_vgg16(
             )
             if h_override[iter_conv_id] is not None:
                 conv_config.act_block_h_override = h_override[iter_conv_id]
-            compute_config = ttnn.GetComputeKernelConfig(
+            compute_config = ttnn.CreateComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
@@ -230,7 +230,8 @@ def ttnn_vgg11(
             if height_override_11[iter_conv_id] is not None:
                 conv_config.act_block_h_override = height_override_11[iter_conv_id]
 
-            compute_config = ttnn.GetComputeKernelConfig(
+
+            compute_config = ttnn.CreateComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,

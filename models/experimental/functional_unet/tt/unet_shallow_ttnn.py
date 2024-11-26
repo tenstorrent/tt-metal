@@ -126,7 +126,7 @@ class UNetConv2D:
             input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
         )
-        self.compute_config = ttnn.GetComputeKernelConfig(
+        self.compute_config = ttnn.CreateComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,

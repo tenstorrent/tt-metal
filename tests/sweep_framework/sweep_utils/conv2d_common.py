@@ -125,7 +125,7 @@ def run_full(
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=enable_subblock_padding,
     )
-    compute_config = ttnn.GetComputeKernelConfig(
+    compute_config = ttnn.CreateComputeKernelConfig(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
