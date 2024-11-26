@@ -4,9 +4,12 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
-inline __attribute__((always_inline)) void fill_pad_cb_with_val(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+
+inline __attribute__((always_inline))
+void fill_pad_cb_with_val(const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
@@ -52,15 +55,19 @@ void kernel_main() {
     constexpr uint32_t N_padded = get_compile_time_arg_val(4);
     constexpr uint32_t H_padded = get_compile_time_arg_val(5);
     constexpr uint32_t C_padded = get_compile_time_arg_val(6);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(7);
-    constexpr uint32_t zero_pad_stick_size = get_compile_time_arg_val(8);
+    constexpr uint32_t W_padded = get_compile_time_arg_val(7);
+    constexpr uint32_t W_padding_front_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t W_padding_back_bytes = get_compile_time_arg_val(9);
+    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(10);
+    constexpr uint32_t zero_pad_stick_size = get_compile_time_arg_val(11);
 
-#define not_pad_by_zero get_compile_time_arg_val(9) == 1
-#if (not_pad_by_zero)
-    constexpr uint32_t packed_pad_value = get_compile_time_arg_val(10);
-    constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(12);
-#endif
+    #define not_pad_by_zero get_compile_time_arg_val(12) == 1
+    #if (not_pad_by_zero)
+    constexpr uint32_t packed_pad_value = get_compile_time_arg_val(13);
+    constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(15);
+    #endif
+
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
@@ -78,14 +85,27 @@ void kernel_main() {
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
+    DPRINT << "W_padded: " << W_padded << ENDL();
+    DPRINT << "W_padding_front_bytes: " << W_padding_front_bytes << " W_padding_back_bytes: " << W_padding_back_bytes << ENDL();
+
+
     for (uint32_t iter = 0; iter < num_sticks_per_core; ++iter) {
         bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                           (curr_n >= front_pad_n and curr_n < N);
 
         if (read_stick) {
-            l1_write_addr += stick_size_bytes;
+            uint32_t old_l1_write_addr = l1_write_addr;
+            if constexpr (W_padding_front_bytes > 0) {
+                noc_async_read(pad_val_noc_addr, l1_write_addr, W_padding_front_bytes);
+                l1_write_addr += W_padding_front_bytes;
+            }
+            if constexpr (W_padding_back_bytes > 0) {
+                l1_write_addr += stick_size_bytes - W_padding_back_bytes;
+                noc_async_read(pad_val_noc_addr, l1_write_addr, W_padding_back_bytes);
+                l1_write_addr += W_padding_back_bytes;
+            }
+            l1_write_addr = old_l1_write_addr + stick_size_bytes;
             i_stick++;
-
         } else {
             noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_bytes);
             l1_write_addr += stick_size_bytes;
