@@ -70,8 +70,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
-        //Adjust accordingly to l1 alignment, including blackhole, wormhole and other cases.
-        if(keep_l1_aligned){
+        //Adjust accordingly to l1 alignment, but don't touch blackhole case for now
+        if(!is_blackhole && keep_l1_aligned){
             padded_offset_bytes = align(input_unit_size, hal.get_alignment(HalMemType::L1));
         }
         else {
