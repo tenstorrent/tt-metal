@@ -268,7 +268,7 @@ def test_llama_model_inference(
                             )
 
                     for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                        cache_length_to_check = model_args.sliding_window
+                        cache_length_to_check = model_args.kv_seq_len
                         cache_pt = cache_pt[:, :, 0:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, 0:cache_length_to_check, :]
                         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt)

@@ -243,7 +243,7 @@ def test_llama_attention_inference(
                 ]
 
             for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                cache_length_to_check = min(model_args.sliding_window, generation_start_pos + generation_length + 1)
+                cache_length_to_check = min(model_args.kv_seq_len, generation_start_pos + generation_length + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
