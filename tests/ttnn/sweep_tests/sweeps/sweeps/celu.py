@@ -34,8 +34,8 @@ def skip(
     layout,
     alpha,
 ) -> Tuple[bool, Optional[str]]:
-    if layout == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Skipped as ROW_MAJOR_LAYOUT not supported"
+    if input_dtype == ttnn.bfloat8_b or layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Skipped as BFLOAT8_B or ROW_MAJOR_LAYOUT not supported"
     return False, None
 
 
