@@ -60,10 +60,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Input to eltwise binary must be tilized"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row Major layout and bfloat8_b are not supported"
 
     if not tensor_hw_as_shard_shape:
         if sharding_strategy == ttnn.ShardStrategy.BLOCK:
@@ -99,27 +97,30 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                     return True, "Shard width must be a atleast 32"
 
         if sharding_strategy == ttnn.ShardStrategy.WIDTH:
-            if pre_sharded_width % (y * x) != 0:
+            if pre_sharded_width % (Y * X) != 0:
                 return True, "Last dimension must be divisible by a total number of cores when using width sharding"
-            if pre_sharded_height // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if (pre_sharded_width // (x * y)) // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
+            if pre_sharded_height % 32 != 0:
+                return True, "Shard height must be a multiple of input tile size"
+            if (pre_sharded_width // (X * Y)) % 32 != 0:
+                return True, "Shard width must be a multiple of input tile size"
 
-        if sharding_strategy == ttnn.ShardStrategy.HEIGHT:
-            if pre_sharded_height % (y * x) != 0:
+        else:
+            if pre_sharded_height % (Y * X) != 0:
                 return (
                     True,
                     "Prod of all dimensions except the innermost must be divisible by a total number of cores when using width sharding",
                 )
-            if (pre_sharded_height // (x * y)) // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if pre_sharded_width // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
+            if (pre_sharded_height // (X * Y)) % 32 != 0:
+                return True, "Shard height must be a multiple of input tile size"
+            if pre_sharded_width % 32 != 0:
+                return True, "Shard width must be a multiple of input tile size"
 
     else:
         if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
-            True, "Shard dimensions must be divisible by 32"
+            return (
+                True,
+                "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
+            )
 
     return False, None
 
@@ -159,11 +160,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    low = -(input_shape[-2] - 2)
-    high = input_shape[-1]
-    diagonal = torch.randint(low, high, (1,)).item()
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100)
 
-    torch_output_tensor = torch.triu(torch_input_tensor_a, diagonal)
+    golden_function = ttnn.get_golden_function(ttnn.heaviside)
+    torch_output_tensor = golden_function(torch_input_tensor_a, value=scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -174,7 +174,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.triu(input_tensor_a, diagonal=diagonal, memory_config=sharded_config)
+    output_tensor = ttnn.heaviside(input_tensor_a, value=scalar, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
