@@ -463,7 +463,7 @@ class resnetBlock2D:
                 transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
-            compute_config = ttnn.GetComputeKernelConfig(
+            compute_config = ttnn.CreateComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
@@ -536,7 +536,7 @@ class resnetBlock2D:
                     transpose_shards=False,
                     reshard_if_not_optimal=False,
                 )
-                compute_config = ttnn.GetComputeKernelConfig(
+                compute_config = ttnn.CreateComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                     math_approx_mode=True,
                     fp32_dest_acc_en=True,
@@ -667,7 +667,7 @@ class resnetBlock2D:
             transpose_shards=False,
             reshard_if_not_optimal=False,
         )
-        compute_config = ttnn.GetComputeKernelConfig(
+        compute_config = ttnn.CreateComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
@@ -714,7 +714,7 @@ class resnetBlock2D:
                 transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
-            compute_config = ttnn.GetComputeKernelConfig(
+            compute_config = ttnn.CreateComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,

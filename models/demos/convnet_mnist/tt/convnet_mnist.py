@@ -27,7 +27,7 @@ def convnet_mnist(
         deallocate_activation=True,
         reallocate_halo_output=True,
     )
-    compute_config = ttnn.GetComputeKernelConfig(
+    compute_config = ttnn.CreateComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,

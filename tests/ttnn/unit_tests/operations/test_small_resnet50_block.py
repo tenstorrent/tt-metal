@@ -119,7 +119,7 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             ),
-            compute_config=ttnn.GetComputeKernelConfig(
+            compute_config=ttnn.CreateComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -143,7 +143,7 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
             ),
-            compute_config=ttnn.GetComputeKernelConfig(
+            compute_config=ttnn.CreateComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -167,7 +167,7 @@ class resnet50Bottleneck:
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 ),
-                compute_config=ttnn.GetComputeKernelConfig(
+                compute_config=ttnn.CreateComputeKernelConfig(
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                 ),
                 conv_op_cache=conv_op_cache,
@@ -195,7 +195,7 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
             ),
-            compute_config=ttnn.GetComputeKernelConfig(
+            compute_config=ttnn.CreateComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -220,7 +220,7 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             ),
-            compute_config=ttnn.GetComputeKernelConfig(
+            compute_config=ttnn.CreateComputeKernelConfig(
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,

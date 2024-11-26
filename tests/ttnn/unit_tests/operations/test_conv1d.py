@@ -92,7 +92,7 @@ def run_conv(
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
     )
-    compute_config = ttnn.GetComputeKernelConfig(
+    compute_config = ttnn.CreateComputeKernelConfig(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
