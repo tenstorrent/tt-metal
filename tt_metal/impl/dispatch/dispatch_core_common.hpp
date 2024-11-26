@@ -43,14 +43,20 @@ private:
     DispatchCoreType type_;
     DispatchCoreAxis axis_;
 
+    static DispatchCoreAxis get_default_axis() {
+        return (tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE)
+            ? DispatchCoreAxis::COL
+            : DispatchCoreAxis::ROW;
+    }
+
 public:
     DispatchCoreConfig()
     : type_(DispatchCoreType::WORKER),
-      axis_(tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW) {}
+      axis_(get_default_axis()) {}
 
     DispatchCoreConfig(DispatchCoreType type)
         : type_(type),
-          axis_(tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW) {}
+          axis_(get_default_axis()) {}
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
