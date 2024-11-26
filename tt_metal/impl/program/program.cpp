@@ -9,7 +9,6 @@
 
 #include "buffers/circular_buffer_types.hpp"
 #include "common/executor.hpp"
-#include "common/logger.hpp"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
@@ -129,6 +128,7 @@ class Program_ {
 
     void invalidate_circular_buffer_allocation();
 
+    uint32_t get_max_cb_memory_usage(const Device *device);
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const;
@@ -754,6 +754,19 @@ void detail::Program_::invalidate_circular_buffer_allocation() {
 }
 
 void Program::invalidate_circular_buffer_allocation() { pimpl_->invalidate_circular_buffer_allocation(); }
+uint32_t Program::get_max_cb_memory_usage(const Device *device) { return pimpl_->get_max_cb_memory_usage(device); }
+
+
+uint32_t detail::Program_::get_max_cb_memory_usage(const Device *device){
+    uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
+    uint64_t end_cb_address = base_cb_address;
+
+    for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+            end_cb_address = std::max(end_cb_address, cb_allocator.get_cb_region_end());
+    }
+    log_info("Base CB address: {}, End CB Address: {}", base_cb_address,end_cb_address);
+    return end_cb_address - base_cb_address;
+}
 
 void detail::Program_::allocate_circular_buffers(const Device *device) {
     //ZoneScoped;
