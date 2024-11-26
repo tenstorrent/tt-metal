@@ -170,6 +170,9 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return *tensor_args.preallocated_output;
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
