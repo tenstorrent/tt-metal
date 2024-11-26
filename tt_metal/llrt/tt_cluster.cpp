@@ -122,10 +122,6 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
 }
 
 void Cluster::generate_cluster_descriptor() {
-    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon)
-                                   ? tt_ClusterDescriptor::get_cluster_descriptor_file_path()
-                                   : "";
-
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Cannot use tt::umd::Cluster::detect_available_device_ids because that returns physical device IDs
@@ -139,7 +135,7 @@ void Cluster::generate_cluster_descriptor() {
         this->cluster_desc_ =
             tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids, physical_mmio_device_ids);
     } else {
-        this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
+        this->cluster_desc_ = tt_ClusterDescriptor::create();
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
                 this->is_tg_cluster_ = true;
@@ -225,27 +221,18 @@ void Cluster::get_metal_desc_from_tt_desc(
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
-    const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
-        std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
-        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)all_chips_set.size());
+        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)this->cluster_desc_->get_number_of_chips());
         // This will remove harvested rows from the soc descriptor
-        const bool perform_harvesting = true;
         const bool clean_system_resources = true;
         device_driver = std::make_unique<tt::umd::Cluster>(
-            sdesc_path,
-            this->cluster_desc_path_,
-            all_chips_set,
             num_host_mem_ch_per_mmio_device,
             skip_driver_allocs,
-            clean_system_resources,
-            perform_harvesting);
+            clean_system_resources);
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
             // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
             for (const auto &[mmio_device_id, _]: this->cluster_desc_->get_chips_with_mmio()) {
@@ -257,6 +244,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // that is later expected to be populated by unrelated APIs
         // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
     } else if (this->target_type_ == TargetDevice::Simulator) {
+        // Get soc descriptor for simulator.
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }
     std::uint32_t dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
