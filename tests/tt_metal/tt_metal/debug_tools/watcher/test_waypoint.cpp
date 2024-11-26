@@ -145,9 +145,10 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* k_id:{}",
+                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   {},   X,   X,   X  rmsg:* k_id:{}",
                     device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
                     waypoint,
+                    (device->arch() == ARCH::BLACKHOLE) ? "W" : "X", // TODO (#15448): Uplift this when watcher device reader accounts for variable num eth riscs
                     k_id_s
                 );
             } else {
