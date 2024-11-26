@@ -70,8 +70,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
-        //If the flag to force l1 alignment is on, keep l1 aligned, but for now don't touch blackhole case.
-        if(!is_blackhole && keep_l1_aligned){
+        //Adjust accordingly to l1 alignment, including blackhole, wormhole and other cases.
+        if(keep_l1_aligned){
             padded_offset_bytes = align(input_unit_size, hal.get_alignment(HalMemType::L1));
         }
         else {
@@ -250,8 +250,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
             uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-            bool aligned = (src_is_dram ? (!keep_l1_aligned) and curr_idx_w % dram_alignment == 0 : true);
-            aligned = aligned and !(is_blackhole);
+            bool aligned = (src_is_dram ? curr_idx_w % dram_alignment == 0 : true);
+            //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
+            aligned = aligned and !(is_blackhole) and !(keep_l1_aligned);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 //TODO: is this right, leaving non BH case the same for now, should investigate
