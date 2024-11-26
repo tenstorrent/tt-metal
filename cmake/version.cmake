@@ -89,4 +89,5 @@ function(ParseGitDescribe)
     # Output variables
     set(VERSION_FULL "${VERSION_FULL}" PARENT_SCOPE)
     set(VERSION_NUMERIC "${VERSION_NUMERIC}" PARENT_SCOPE)
+    set(VERSION_HASH "${VERSION_HASH}" PARENT_SCOPE)
 endfunction()
