@@ -23,8 +23,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {

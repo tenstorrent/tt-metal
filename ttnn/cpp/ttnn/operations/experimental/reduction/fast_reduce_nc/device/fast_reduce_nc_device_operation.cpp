@@ -98,7 +98,7 @@ Tensor fast_reduce_nc(
     uint8_t queue_id,
     const ttnn::Tensor& input,
     tt::stl::Span<const int32_t> dims,
-    const std::optional<const ttnn::Tensor> output,
+    const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 

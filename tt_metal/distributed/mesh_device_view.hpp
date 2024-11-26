@@ -70,7 +70,7 @@ public:
 
     MeshDeviceView(const MeshDevice& mesh);
     MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coordinate bottom_right);
-    MeshDeviceView(std::vector<device_pointer> devices, CoordinateMapper mapper);
+    MeshDeviceView(std::vector<device_pointer> devices, const CoordinateMapper& mapper);
 
     [[nodiscard]] device_pointer get_device(size_t row, size_t col);
     [[nodiscard]] const_device_pointer get_device(size_t row, size_t col) const;
@@ -119,7 +119,7 @@ private:
     Coordinate top_left_;
     Coordinate bottom_right_;
 
-    void initialize_from_devices(const std::vector<device_pointer>& devices, CoordinateMapper mapper);
+    void initialize_from_devices(const std::vector<device_pointer>& devices, const CoordinateMapper& mapper);
     void validate_coordinates() const;
 };
 

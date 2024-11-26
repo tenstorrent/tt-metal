@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "halo.hpp"
+
+#include <utility>
 #include "device/halo_device_operation.hpp"
 namespace ttnn::operations::sliding_window::halo
 {
@@ -14,7 +16,7 @@ namespace ttnn::operations::sliding_window::halo
                 bool remote_read,
                 bool transpose_mcast,
                 uint32_t reshard_num_cores_nhw,
-                MemoryConfig output_memory_config,
+                const MemoryConfig& output_memory_config,
                 bool is_out_tiled)
     {
         return halo_op(
@@ -24,7 +26,7 @@ namespace ttnn::operations::sliding_window::halo
             remote_read,
             transpose_mcast,
             reshard_num_cores_nhw,
-            output_memory_config,
+            std::move(output_memory_config),
             is_out_tiled);
 
     }

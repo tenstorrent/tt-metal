@@ -6,6 +6,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
 
+#include <utility>
+
 #include "tensor.hpp"
 #include "ttnn/cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
@@ -171,11 +173,11 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def("__eq__", [](const LegacyShape& self, const LegacyShape& other) { return self == other; })
         .def("__eq__", [](const LegacyShape& self, const std::vector<uint32_t>& other) { return self == LegacyShape{other}; })
         .def("__eq__", [](const LegacyShape& self, const std::array<uint32_t, 4>& other) { return self == LegacyShape{other}; })
-        .def("__eq__", [](const LegacyShape& self, const py::none) { return false; })
+        .def("__eq__", [](const LegacyShape& self, const py::none&) { return false; })
         .def("__getitem__", [](const LegacyShape& self, const std::int64_t index) { return self[index]; })
         .def(
             "__getitem__",
-            [](const LegacyShape& self, const py::slice slice) {
+            [](const LegacyShape& self, const py::slice& slice) {
                 size_t start = 0, stop = 0, step = 0, slicelength = 0;
                 if (!slice.compute(self.rank(), &start, &stop, &step, &slicelength)) {
                     throw std::runtime_error("Invalid slice");
@@ -202,7 +204,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
             py::init<>(
                 [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
                     return MemoryConfig{
-                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = shard_spec};
+                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = std::move(shard_spec)};
                 }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,

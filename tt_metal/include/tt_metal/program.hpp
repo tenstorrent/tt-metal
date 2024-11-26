@@ -152,7 +152,7 @@ void UpdateCircularBufferTotalSize(ProgramHandle &program, CircularBufferHandle 
  * @param cb_handle Handle of the circular buffer.
  * @param buffer Dynamically allocated L1 buffer that shares address space with the circular buffer.
  */
-void UpdateDynamicCircularBufferAddress(ProgramHandle &program, CircularBufferHandle cb_handle, BufferHandle buffer);
+void UpdateDynamicCircularBufferAddress(ProgramHandle &program, CircularBufferHandle cb_handle, const BufferHandle& buffer);
 
 
 } // namespace v1

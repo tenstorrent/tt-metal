@@ -21,7 +21,7 @@ namespace ttnn::operations::normalization {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
@@ -49,9 +49,9 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 // if b is nullptr it's treated as zero (no addition)
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor &a,
-    const std::optional<const Tensor> b,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor>& b,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     Tensor& output,
     LayerNormType norm_type,
     float eps,
@@ -398,10 +398,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const Tensor &a,
-    const std::optional<const Tensor> b,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    const std::optional<const Tensor> stats,
+    const std::optional<const Tensor>& b,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     Tensor& output,
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,

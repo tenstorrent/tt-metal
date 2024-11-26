@@ -18,8 +18,8 @@ std::map<std::string, std::string> get_defines(
     BinaryOpType op_type,
     const std::optional<tt::tt_metal::DataType> input_dtype,
     const std::optional<tt::tt_metal::DataType> output_dtype,
-    const std::optional<std::vector<UnaryWithParam>> fused_activations,
-    const std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<std::vector<UnaryWithParam>>& fused_activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
 
     std::map<std::string, std::string> defines;
     std::string op_name = "sub_tiles";

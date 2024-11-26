@@ -43,7 +43,7 @@ ttnn::Tensor allocate_tensor_on_device(
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config);
 
-void copy_host_to_device_tensor(ttnn::Tensor host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
 

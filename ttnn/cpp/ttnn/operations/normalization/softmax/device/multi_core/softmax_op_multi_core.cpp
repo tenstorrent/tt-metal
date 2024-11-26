@@ -23,7 +23,7 @@ namespace ttnn::operations::normalization {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
@@ -34,7 +34,7 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const Tensor &input_tensor,
     const Tensor &output_tensor,
-    const std::optional<const Tensor> mask,
+    const std::optional<const Tensor>& mask,
     std::optional<float> scale,
     bool causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -456,7 +456,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     const Tensor &input_tensor,
     const Tensor &output_tensor,
-    const std::optional<const Tensor> mask,
+    const std::optional<const Tensor>& mask,
     std::optional<float> scale,
     bool causal_mask,
     bool hw_dims_only_causal_mask,

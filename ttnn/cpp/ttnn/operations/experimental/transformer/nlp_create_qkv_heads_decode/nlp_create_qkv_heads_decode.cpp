@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode.hpp"
+
+#include <utility>
 #include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -40,7 +42,7 @@ namespace ttnn:: operations::experimental::transformer {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::array<Tensor, 3>> optional_output_tensors) {
         return invoke(
-            ttnn::DefaultQueueId, input_tensor, num_heads, num_kv_heads, memory_config, optional_output_tensors);
+            ttnn::DefaultQueueId, input_tensor, num_heads, num_kv_heads, memory_config, std::move(optional_output_tensors));
     }
 
 }  // namespace ttnn::operations::experimental::transformer

@@ -19,8 +19,8 @@ namespace ttnn::operations::normalization {
 operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     const Tensor &a,
     const Tensor &stats,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     Tensor& output,
     LayerNormDistributedType norm_type,
     float eps,
