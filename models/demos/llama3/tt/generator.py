@@ -348,10 +348,12 @@ class LlamaGenerator:
         B = tokens.shape[0]
         # Do on-device transformations of inputs before forward
         (
+            tt_h_transform,
             tt_rot_mats,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
         ) = self.model.transform_decode_inputs_device(
+            tt_h,
             tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
@@ -359,7 +361,7 @@ class LlamaGenerator:
         )
 
         tt_logits_rm = self.model.ttnn_decode_forward(
-            tt_h,
+            tt_h_transform,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
             xattn_caches,
