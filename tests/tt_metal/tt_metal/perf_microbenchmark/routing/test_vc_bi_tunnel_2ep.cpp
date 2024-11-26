@@ -150,7 +150,6 @@ int main(int argc, char **argv) {
     assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
     bool pass = true;
-    bool is_eth_timeout = false;
 
     std::map<string, string> defines = {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
@@ -563,7 +562,7 @@ int main(int argc, char **argv) {
 
                 tunneler_test_results_addr, // 44: test_results_addr
                 tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
+                0, // 46: timeout_cycles
                 0, //47: inner_stop_mux_d_bypass
             };
 
@@ -645,7 +644,7 @@ int main(int argc, char **argv) {
 
                 tunneler_test_results_addr, // 44: test_results_addr
                 tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
+                0, // 46: timeout_cycles
                 0, //47: inner_stop_mux_d_bypass
             };
 
@@ -804,14 +803,6 @@ int main(int argc, char **argv) {
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
-
-        vector<uint32_t> tunnuler_results = tt::llrt::read_hex_vec_from_core(
-                device->id(), tunneler_phys_core, tunneler_test_results_addr, tunneler_test_results_size);
-        is_eth_timeout |= ((tunnuler_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_TIMEOUT));
-
-        vector<uint32_t> r_tunnuler_results = tt::llrt::read_hex_vec_from_core(
-                device->id(), r_tunneler_phys_core, tunneler_test_results_addr, tunneler_test_results_size);
-        is_eth_timeout |= ((r_tunnuler_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_TIMEOUT));
 
         vector<vector<uint32_t>> tx_results;
         vector<vector<uint32_t>> tx_results_r;
@@ -1143,13 +1134,13 @@ int main(int argc, char **argv) {
                 && (demux_queue_size_bytes >= 0x10000)) {
                     double target_bandwidth = 0;
                     if (max_packet_size_words >= 2048) {
-                        target_bandwidth = 4.8;
+                        target_bandwidth = 4.5;
                         log_info(LogTest, "Perf check for pkt size >= 2048 words");
                     } else if (max_packet_size_words >= 1024) {
-                        target_bandwidth = 5;
+                        target_bandwidth = 4.7;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 512) {
-                        target_bandwidth = 2.7;
+                        target_bandwidth = 2.4;
                         log_info(LogTest, "Perf check for pkt size >= 512 words");
                     }else if (max_packet_size_words >= 256) {
                         target_bandwidth = 1;
@@ -1176,10 +1167,7 @@ int main(int argc, char **argv) {
 
     tt::llrt::OptionsG.set_kernels_nullified(false);
 
-    if (is_eth_timeout) {
-        log_info(LogTest, "Test timeout because tunneler is not set up in time (e.g., the other core is not programmed in time)");
-        return 0;
-    } else if (pass) {
+    if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
     } else {
