@@ -6,7 +6,7 @@
 - **LoudBox -** Tenstorrent's desktop workstation equipped with Tenstorrent hardware and software.
 - **Wormhole -** Tenstorrent’s flexible and scalable processor . 80 Tensix Cores.
 ## **Tenstorrent Software:** ##
-- **Metal Trace -** Performance optimization feature.
+- **Metal Trace -** Performance optimization feature that removes the overhead of building and dispatching model operations. Metal Trace records dispatch operations to the DRAM, and repeats these command while executing a trace.
 - **Runtime -** Bottom of the Metalium software stack. Controls kernel execution and collects results from kernel executions.
 - **Tracy -** Tenstorrent's profiling tool.
 - **TT-Buda -** A compute framework used to develop, run, and analyze ML workloads on Tenstorrent hardware.
@@ -33,13 +33,13 @@
 - **FDE -** Fetch-decode-execute cycle.
 - **FPF -** Floating Point Format
 - **FVC -** Fabric Virtual Channel
-- **GBD -** GNU Debugger tool.
+- **GDB -** GNU Debugger tool.
 - **GDDR -** Graphics Double Data Rate - Memory type used for GPUs.
 - **GH -** GitHub
 - **ISA -** Instruction-Set Architecture - An abstract computer model that determines how the CPU is controlled by the software.
 - **ISS -** Instruction Set Simulator
 - **KWARG -** Keyword Argument.
-- **LLK -** Low Level Kernels - Bottom layer of software stack, responsible for basic system operations.
+- **LLK -** Low Level Kernels - Performs math operations on Tensix cores using Tenstorrent hardware efficiently.
 - **LLM -** Large Language Model
 - **LPDDR4 -** DRAM - Off-chip Memory. Provides larger, off-chip storage for the system.
 - **LUT -** Look Up Table - Mapping table of input and output values used for addressing.
@@ -58,7 +58,7 @@
 - **SFPU -** Vetor unit.
 - **SIMD -** Single Instruction Multiple Data - Allows processors to execute the same instruction on multiple data points simultaneously
 - **SoC -** System on Chip
-- **SRAM -** Static Random Access Memory. On-chip Memory. 1 MB SRAM memory (L1), a scratch pad accessible by all RISC-V processors and engines within the core.
+- **SRAM -** Static Random Access Memory. On-chip Memory. 1 MB SRAM memory (L1) on the Grayskull and 1.5 MB SRAM memory (L1) on the Wormhole. Can be used as a scratch pad accessible by all RISC-V processors and engines within the core.
 - **TM -** Tensor Manipulation
 - **TP -** Tensor Parallel
 - **ViT -** Vision Transformer - A transformer model used for vision processing tasks.
@@ -69,17 +69,17 @@
 - **Huge Page -** Memory management technique used to request larger memory blocks.
 - **Kernel Types -** Kernels send and receive data from tensors.
   - **Bare Metal C/C++ Kernels -** Kernels written in C or C++ for execution. Generally used to accelerate computation and processing performance.
-  - **Reader Kernel -** Kernel receiving data from a DRAM or SRAM buffer.
-  - **Writer Kernel -** Kernel sending data to a DRAM or SRAM buffer.
   - **User Kernel Types -** Kernels are in user mode when operating in applications.
     - **Compute Kernels -** Kernels used for processing tasks or operations. Compute kernels will automatically generate the following types of kernels:
       - **Unpack Kernels -** Unpack kernels prepare data for operations to be performed by the math kernel.
       - **Math Kernels -** Kernels used for matrix multiplication and other mathematical tasks or operations.
       - **Pack Kernels -** Pack kernels wait for the end of the math kernel and prepare data to be moved to the next part of the system.
     - **Data Movement Kernels _** The first and fifth RISC-Vs on a Tensix Core responsible for moving data between NoCs, memory buffers, and the compute kernel.
+      - **Reader Kernel -** Kernel receiving data from a DRAM or SRAM buffer.
+      - **Writer Kernel -** Kernel sending data to a DRAM or SRAM buffer.
     - **Ethernet Data Movement Kernels -** Kernels responsible for moving data between cores.
   - **Dispatch Kernels -** Kernels that determine where data is dispatched depending on the data’s priority and dispatch key.
-  - **Low-Level Kernels -** Kernels at the bottom of the software stack, these are for the system’s basic functions.
+  - **Low-Level Kernels -** Performs math operations on Tensix cores using Tenstorrent hardware efficiently.
 - **Mantissa -** Floating point number that represents significant digits of the number.
 - **Memory Types -** Memory can be Interleaved or Sharded and can be further categorized into height, width, and block sharding.
   - **Interleaved Memory -** L1 interleaved distributes across all L1 memory banks sequentially.
@@ -90,7 +90,7 @@
 - **Memory Barrier -** Parallelization technique where operations are required to complete before moving on to other operations.
 - **Mesh -** 2D chip architecture.
 - **Mixed Precision -** Optimization technique using floating-point types in a model to enhance performance and reduce memory usage. Optimization technique using floating-point types in a model to enhance performance and reduce memory usage. TT-Metalium supports BFLOAT8/4/2_B data formats.
-- **Multicast -** Allows multiple processors to function simultaneously and asynchronously.
+- **Multicast -** Write to multiple cores in the same operation. Tenstorrent hardware natively supports NoC multicasts.
 - **PyTorch -** Optimized tensor library.
 - **RISC-V -** Processors (Baby RISCVs) that run C/C++ kernels and dispatch instructions to compute and data movement engines.
 - **Semaphore -** A variable or abstract data type used for access control. All semaphores use atomic operations.
