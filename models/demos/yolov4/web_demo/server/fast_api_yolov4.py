@@ -174,7 +174,11 @@ async def objdetection_v2(file: UploadFile = File(...)):
     boxes = post_processing(image, conf_thresh, nms_thresh, response)
     output = boxes[0]
 
-    output = process_output(output)
+    try:
+        output = process_output(output)
+    except:
+        print("No objects detected!")
+        return []
     t3 = time.time()
     print("the post processing to get the boexes took: ", t3 - t2)
     return output
