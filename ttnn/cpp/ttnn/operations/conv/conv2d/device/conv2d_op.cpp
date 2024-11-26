@@ -225,7 +225,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
 
     program_with_cbs.program.set_pre_exec_callback([device](Program *program) {
         auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
-        tt::log_info(tt::LogOp, "Allocation Stats after CB Allocation: {}", stats);
+        auto cb_l1_size = program->get_max_cb_memory_usage(device);
+        tt::log_info(tt::LogOp, "Allocation Stats after CB Allocation: CB Size = {} L1 Allocation =  {}", cb_l1_size, stats);
     });
     return program_with_cbs;
 }
