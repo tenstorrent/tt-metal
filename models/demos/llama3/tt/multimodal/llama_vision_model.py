@@ -386,7 +386,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_rope_id,
         ) = self.copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id))
 
-        tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
+        tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
+            tt_h,
             tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
@@ -401,29 +402,29 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_rot_mats,
         )
 
-    def prepare_decode_inputs_host(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_ids):
+    def prepare_decode_inputs_host(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id):
         B = tokens.shape[0]
         assert (
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         # position_ids = torch.tensor([position_id], dtype=torch.long)
-        h = self.prepare_inputs_common(position_ids, tokens)
+        h = self.prepare_inputs_common(position_id, tokens)
         tt_h = self.configuration.prepare_inputs_ttnn_decode(
             h,
-            None,  # on_host tensors have no memory_config
+            None,
             on_host=True,
         )
 
         tt_position_id = ttnn.from_torch(
-            position_ids,
+            position_id,
             device=None,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        tt_rope_id = self.text_model.rope_setup.get_rot_idxs(position_ids, on_host=True)
-        xattn_mask = torch.cat([cross_attention_masks[i][:, :, position_ids[i]] for i in range(B)], dim=1).unsqueeze(0)
+        tt_rope_id = self.text_model.rope_setup.get_rot_idxs(position_id, on_host=True)
+        xattn_mask = torch.cat([cross_attention_masks[i][:, :, position_id[i]] for i in range(B)], dim=1).unsqueeze(0)
         xattn_mask_expand = xattn_mask.expand(-1, self.configuration.n_heads // self.configuration.num_devices, -1, -1)
         xattn_mask_expand = xattn_mask_expand.transpose(1, 2).contiguous()
 
@@ -436,7 +437,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
 
         full_text_mask = torch.cat(
-            [full_text_row_masked_out_mask[i][:, :, position_ids[i]] for i in range(B)], dim=1
+            [full_text_row_masked_out_mask[i][:, :, position_id[i]] for i in range(B)], dim=1
         ).unsqueeze(0)
         full_text_mask_expand_1NSH = full_text_mask.expand(
             -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
@@ -486,7 +487,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
             return device_tensors
 
-    def transform_decode_inputs_device(self, tt_rope_id, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
+    def transform_decode_inputs_device(self, tt_h, tt_rope_id, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
         """
         Does any transformations on device tensors which are necessary before ttnn_decode_forward
         """
@@ -494,6 +495,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         S = 1
+
+        tt_h = ttnn.to_memory_config(tt_h, self.configuration.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         tt_rot_mats = self.text_model.rope_setup.get_rot_mats(tt_rope_id)
 
@@ -529,7 +532,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             ),
         )
 
-        return (tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
+        return (tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
 
     def process_output_prefill(self, tt_out, B, S):
         padded_seq_len = _get_padded_prefill_seqlen(S)
