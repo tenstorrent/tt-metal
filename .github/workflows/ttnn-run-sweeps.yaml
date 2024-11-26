@@ -99,6 +99,7 @@ on:
           - eltwise.unary.normalize_hw.normalize_hw
           - eltwise.unary.normalize_global.normalize_global
           - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.heaviside.heaviside_sharded
           - eltwise.unary.hardtanh.hardtanh
           - eltwise.unary.hardtanh.hardtanh_sharded
           - eltwise.unary.hardswish.hardswish
