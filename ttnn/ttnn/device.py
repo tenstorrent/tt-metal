@@ -6,6 +6,7 @@ import contextlib
 from typing import Optional, List
 
 import ttnn
+import os
 
 
 def get_device_core_grid(device):
@@ -132,16 +133,25 @@ def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 
 
-def is_wormhole_b0(device):
-    return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+def is_wormhole_b0(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "wormhole_b0" in ARCH_NAME
 
 
-def is_grayskull(device):
-    return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+def is_grayskull(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "grayskull" in ARCH_NAME
 
 
-def is_blackhole(device):
-    return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+def is_blackhole(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "blackhole" in ARCH_NAME
 
 
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
