@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(0);
@@ -15,6 +16,15 @@ void kernel_main() {
     tt_l1_ptr uint32_t* num_stick_chunks = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 2));
     tt_l1_ptr uint32_t* chunk_start_id = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 3));
     tt_l1_ptr uint32_t* chunk_num_sticks = (tt_l1_ptr uint32_t*)(chunk_start_id + 1);
+
+    DPRINT << "num_cores_read: " << num_cores_read << ENDL();
+    DPRINT << "num_sticks_padded: " << num_sticks_padded << ENDL();
+    DPRINT << "stick_size_bytes: " << stick_size_bytes << ENDL();
+    DPRINT << "read_noc_x[0]: " << read_noc_x[0] << ENDL();
+    DPRINT << "read_noc_y[0]: " << read_noc_y[0] << ENDL();
+    DPRINT << "num_stick_chunks[0]: " << num_stick_chunks[0] << ENDL();
+    DPRINT << "chunk_start_id[0]: " << chunk_start_id[0] << ENDL();
+    DPRINT << "chunk_num_sticks[0]: " << chunk_num_sticks[0] << ENDL();
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
@@ -40,6 +50,7 @@ void kernel_main() {
             uint32_t read_data_size_bytes = curr_num_sticks * stick_size_bytes;
 
             if ((curr_start_id != (uint32_t)-1) and (curr_start_id != (uint32_t)-2)) {
+                DPRINT << "l1_read_offset: " << l1_read_offset << " read_data_size_bytes: " << read_data_size_bytes << ENDL();
                 noc_async_read(src_noc_addr + l1_read_offset, l1_write_addr, read_data_size_bytes);
             }
 
