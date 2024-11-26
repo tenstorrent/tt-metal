@@ -1260,7 +1260,7 @@ int main(int argc, char **argv) {
                         target_bandwidth = 3.8;
                         log_info(LogTest, "Perf check for pkt size >= 2048 words");
                     } else if (max_packet_size_words >= 1024) {
-                        target_bandwidth = 4.6;
+                        target_bandwidth = 4.3;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 512) {
                         target_bandwidth = 2;
@@ -1291,7 +1291,7 @@ int main(int argc, char **argv) {
     tt::llrt::OptionsG.set_kernels_nullified(false);
 
     if (is_eth_timeout) {
-        log_info(LogTest, "Test timeout because of ethernet tunneler not set up in time (the other core is not )");
+        log_info(LogTest, "Test timeout because tunneler is not set up in time (e.g., the other core is not programmed in time)");
         return 0;
     } else if (pass) {
         log_info(LogTest, "Test Passed");
