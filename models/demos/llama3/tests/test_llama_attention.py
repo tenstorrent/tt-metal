@@ -40,12 +40,12 @@ from models.utility_functions import skip_for_grayskull
     ),
     ids=(
         "paged_attention",
-        # "non_paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
     "paged_attention_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 2048}],
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -56,13 +56,13 @@ from models.utility_functions import skip_for_grayskull
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_llama_attention_inference(
-    mesh_device,
-    batch_size,
     max_seq_len,
+    batch_size,
+    paged_attention,
     paged_attention_params,
+    mesh_device,
     use_program_cache,
     reset_seeds,
-    paged_attention,
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
@@ -72,8 +72,6 @@ def test_llama_attention_inference(
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1  # For the unit test, just run a sigle layer
-
-    logger.info(f"Running 1-layer llama3_attention unit test with batch_size={batch_size}, max_seq_len={max_seq_len}")
 
     state_dict = model_args.load_state_dict()
 

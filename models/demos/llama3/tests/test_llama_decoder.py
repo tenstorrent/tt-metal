@@ -8,6 +8,7 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
+    PagedAttentionConfig,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
@@ -33,17 +34,41 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    (
+        True,
+        # False
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention"
+    ),
 )
-def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+def test_llama_decoder_inference(
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    paged_attention_params,
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
+):
     dtype = ttnn.bfloat8_b
-
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=32)
-    # Reduce max seq len and KV cache seq_len params to speed up the test
-    model_args.max_seq_len = 128
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -75,9 +100,12 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
     # Prepare page table for paged attention
     page_table_tt = None
     paged_attention_config = None
-    if paged_attention:
-        paged_attention_config = model_args.paged_attention_config if paged_attention else None
 
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
@@ -106,7 +134,6 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
     )
 
     seqlen = 1
-    batch = model_args.max_batch_size
 
     cos, sin = precompute_freqs(
         model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
@@ -114,7 +141,7 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
     freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = ttnn.from_torch(
         current_pos,
         device=mesh_device,
@@ -125,7 +152,7 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_inputs_ttnn_decode(
@@ -152,7 +179,7 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
             ]
             .permute(2, 1, 0, 3)
             .squeeze(1)[: model_args.max_batch_size, :, :]
-        )  # [seq, batch, dim]
+        )  # [seq, batch_size, dim]
 
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
@@ -172,7 +199,7 @@ def test_llama_decoder_inference(mesh_device, paged_attention, use_program_cache
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

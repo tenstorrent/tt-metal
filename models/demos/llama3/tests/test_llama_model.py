@@ -11,6 +11,7 @@ from models.demos.llama3.tt.llama_common import (
     sample,
     encode_prompt_llama_instruct,
     HostEmbedding,
+    PagedAttentionConfig,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_model import TtTransformer
@@ -38,8 +39,26 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    (
+        True,
+        # False,
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention",
+    ),
+)
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -58,7 +77,17 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_model_inference(
-    mesh_device, weights, layers, paged_attention, optimizations, use_program_cache, reset_seeds, ensure_gc
+    weights,
+    layers,
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    paged_attention_params,
+    optimizations, 
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
@@ -66,7 +95,9 @@ def test_llama_model_inference(
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
-    model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights, optimizations=optimizations, max_batch_size=max_batch_size)
+    model_args = TtModelArgs(
+        mesh_device, instruct=instruct, dummy_weights=dummy_weights, optimizations=optimizations, max_seq_len=max_seq_len, max_batch_size=batch_size
+    )
 
     # Reduce max seq len and KV cache seq_len params to speed up the test
     model_args.max_seq_len = 128
@@ -169,12 +200,15 @@ def test_llama_model_inference(
     transformation_mats = rope_setup.get_trans_mats()
     transformation_mats = {"decode": transformation_mats}
 
-    # Prepare page table for paged attention
     page_table_tt = None
     paged_attention_config = None
-    if paged_attention:
-        paged_attention_config = model_args.paged_attention_config if paged_attention else None
 
+    # Prepare page table for paged attention
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical

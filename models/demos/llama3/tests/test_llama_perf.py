@@ -17,7 +17,7 @@ from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-
+from models.demos.llama3.tt.llama_common import PagedAttentionConfig
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
@@ -29,7 +29,7 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "kv_cache_len, expected_compile_time",
+    "seq_len, expected_compile_time",
     (
         (32, 30),
         (128, 30),
@@ -44,8 +44,16 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
     ),
     ids=(
         "paged_attention",
-        # "non_paged_attention"
+        # "default_attention"
     ),
+)
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -57,13 +65,21 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
     indirect=True,
 )
 def test_llama_model_perf(
-    mesh_device, kv_cache_len, expected_compile_time, paged_attention, use_program_cache, reset_seeds, ensure_gc
+    batch_size,
+    seq_len,
+    expected_compile_time,
+    paged_attention,
+    paged_attention_params,
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, optimizations=LlamaOptimizations.performance, max_batch_size=1, max_seq_len=2048)
+    model_args = TtModelArgs(mesh_device, optimizations=LlamaOptimizations.performance, max_batch_size=batch_size, max_seq_len=seq_len)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if "3.2-1B" in model_args.DEFAULT_CACHE_PATH:
@@ -96,7 +112,7 @@ def test_llama_model_perf(
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
-    generation_start_pos = kv_cache_len
+    generation_start_pos = seq_len
     generation_length = 1
 
     # Setup RoPE transformation matrices
@@ -112,9 +128,13 @@ def test_llama_model_perf(
     transformation_mats = {"decode": transformation_mats_decode}
 
     page_table_tt = None
-    paged_attention_config = model_args.paged_attention_config if paged_attention else None
+    paged_attention_config = None
 
     if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
@@ -174,7 +194,7 @@ def test_llama_model_perf(
     profiler.print()
     iter_time = profiler.get("end_to_end_inference")
 
-    comment = f"kv_cache_len={kv_cache_len}_num_layers={model_args.n_layers}"
+    comment = f"kv_cache_len={seq_len}_num_layers={model_args.n_layers}"
 
     # Extract the version, number of weights and device name from the cache folder
     if "3.1" in model_args.DEFAULT_CACHE_PATH:

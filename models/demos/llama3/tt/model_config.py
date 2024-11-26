@@ -47,20 +47,7 @@ class LlamaOptimizations:
         return cls(bfp4_mlp=True)
 
 
-# TODO: Miguel: Remove from here. I've added this to llama common instead, and each test should define their own values
-class PagedAttentionConfig:
-    block_size = 32
-    max_num_blocks = 1024
-
-
 class TtModelArgs:
-    max_batch_size = 32
-    # Context length for Llama models (if single device, reduce to 32k in init)
-    max_seq_len = 1024 * 128  # 128k
-    tile_size = 32
-
-    paged_attention_config = PagedAttentionConfig()  # Miguel: TODO Remove this for VLLM in test
-
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -108,6 +95,8 @@ class TtModelArgs:
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
+        self.tile_size = 32
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -200,7 +189,6 @@ class TtModelArgs:
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
         self.dummy_weights = dummy_weights
-        self.max_batch_size = max_batch_size
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed

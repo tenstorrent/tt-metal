@@ -13,6 +13,7 @@ from models.demos.llama3.tt.llama_common import (
     sample,
     HostEmbedding,
     encode_prompt_llama_instruct,
+    PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
@@ -30,10 +31,6 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "seq_len",
-    (2048,),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -45,7 +42,19 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    ids=("paged_attention", "default_attention"),
+)
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "seq_len",
+    (2048,),
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -55,7 +64,9 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 def test_llama_model_inference(
-    mesh_device, seq_len, optimizations, paged_attention, use_program_cache, reset_seeds, ensure_gc, is_ci_env
+    
+    seq_len, batch_size, paged_attention, optimizations, paged_attention_params, mesh_device, use_program_cache, reset_seeds, ensure_gc, is_ci_env
+
 ):
     if is_ci_env and optimizations == LlamaOptimizations.accuracy:
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
@@ -76,7 +87,8 @@ def test_llama_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=1, optimizations=optimizations, max_seq_len=seq_len)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -131,9 +143,13 @@ def test_llama_model_inference(
 
     # Setup page table
     page_table_tt = None
-    paged_attention_config = model_args.paged_attention_config if paged_attention else None
+    paged_attention_config = None
 
     if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical

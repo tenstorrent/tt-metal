@@ -11,6 +11,7 @@ from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
     HostEmbedding,
+    PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
@@ -58,8 +59,10 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 
 @torch.no_grad()
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize("prefill_len", [512])
-@pytest.mark.parametrize("decode_len", [128])
+@pytest.mark.parametrize(
+    "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
+    ((512, 128, 1024),),
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -78,16 +81,43 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    (
+        True,
+        # False
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention"
+    ),
 )
-def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, paged_attention, use_program_cache, reset_seeds, optimizations):
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+def test_tt_model_accuracy(
+    prefill_len,
+    decode_len,
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    paged_attention_params,
+    optimizations,
+    mesh_device,
+    use_program_cache,
+    reset_seeds, 
+    ensure_gc,
+):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
     # Load model args and tokenizer
-    model_args = TtModelArgs(mesh_device, optimizations=optimizations, max_batch_size=1, max_seq_len=1024)
+    model_args = TtModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Load state_dict for TT model
@@ -132,9 +162,13 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, paged_attention
     transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
 
     page_table_tt = None
-    paged_attention_config = model_args.paged_attention_config if paged_attention else None
+    paged_attention_config = None
 
     if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical

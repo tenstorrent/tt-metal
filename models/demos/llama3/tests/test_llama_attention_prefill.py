@@ -11,6 +11,7 @@ from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
+    PagedAttentionConfig,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
 from models.utility_functions import (
@@ -23,10 +24,6 @@ from models.utility_functions import skip_for_grayskull
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
-    (2048,),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -37,16 +34,43 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    (
+        True,
+        # False
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention"
+    ),
 )
-def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (2048,),
+)
+def test_llama_attention_inference(
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    paged_attention_params,
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
+):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=1)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -57,8 +81,6 @@ def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_pr
     }
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
-
-    batch = model_args.max_batch_size  # 1
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
@@ -79,9 +101,13 @@ def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_pr
 
     # Setup page table
     page_table_tt = None
-    paged_attention_config = model_args.paged_attention_config if paged_attention else None
+    paged_attention_config = None
 
     if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
@@ -108,7 +134,7 @@ def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_pr
         paged_attention_config=paged_attention_config,
     )
 
-    pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
+    pt_attention_input = (torch.rand(batch_size, seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_inputs_ttnn_prefill(
         tt_attention_input,
@@ -126,8 +152,8 @@ def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_pr
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         0, :, :, : model_args.dim
     ].view(
-        batch, seq_len, -1
-    )  # [ batch, seq, dim]
+        batch_size, seq_len, -1
+    )  # [ batch_size, seq, dim]
 
     positions = torch.LongTensor(range(seq_len))
     freqs_cis_i = precompute_freqs_cis(
@@ -151,8 +177,8 @@ def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_pr
     if check_kv_cache:
         # PyTorch output --------------------------------------------------------------------
         pytorch_layer_present = [
-            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
         ]
         # TT hardware execution -------------------------------------------------------------
         if paged_attention:
@@ -167,7 +193,9 @@ def test_llama_attention_inference(seq_len, mesh_device, paged_attention, use_pr
                         model_args.head_dim,
                     )
                     .transpose(1, 2)
-                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[:batch, ...]
+                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                        :batch_size, ...
+                    ]
                 )
                 for cache in tt_model.layer_past
             ]

@@ -21,11 +21,13 @@ from models.demos.llama3.tt.llama_common import (
     get_rot_transformation_mat,
     HostEmbedding,
     encode_prompt_llama_instruct,
+    PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.llama3.tt.model_config import TtModelArgs
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
@@ -67,6 +69,7 @@ def load_inputs(user_input, batch):
     cache_dir = Path("models/demos/llama3/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # TODO Miguel: Clip the long prompt to actually fit within token limit
     for i in range(batch):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -155,14 +158,18 @@ def preprocess_inputs_prefill(
 
 def run_llama3_demo(
     user_input,
-    batch_size,
-    single_layer,
     mesh_device,
+    max_seq_len,
+    batch_size,
+    num_batches,
+    paged_attention,
+    paged_attention_config,
+    max_generated_tokens,
+    optimizations,
+    single_layer,
     instruct_mode,
     is_ci_env,
-    num_batches,
     print_to_file,
-    optimizations,
 ):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -171,14 +178,9 @@ def run_llama3_demo(
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    # This module requires the env paths above for CI runs
-    from models.demos.llama3.tt.model_config import TtModelArgs
-
     dtype = ttnn.bfloat8_b
-    # Miguel - parametrize this
-    paged_attention = True
-    batch_size = 32
-    assert batch_size <= 32, "Batch size cannot be greater than 32"  # FIXME
+    assert batch_size <= 32, "Max batch size currently supported is 32"
+    assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
     N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
@@ -202,12 +204,11 @@ def run_llama3_demo(
     for i in range(num_batches):
         batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_batch_size=batch_size, optimizations=optimizations)
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    # TODO Miguel Add configuration for  the combinations of Llama3 models and TT architectures and max supported sizes
 
-    # Reduce max seq len and KV cache seq_len params to speed up the test
-    model_args.max_seq_len = 1024  # TODO REVERT: Miguel: Setup max sequence length depending on the model being used to actually fit on device
+    # Load model args, weights, and tokenizer
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=max_seq_len)
+    tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if single_layer:
         model_args.n_layers = 1
@@ -240,7 +241,6 @@ def run_llama3_demo(
     transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
 
     page_table_tt = None
-    paged_attention_config = model_args.paged_attention_config if paged_attention else None
 
     if paged_attention:
         # Implied shuffling of blocks
@@ -283,7 +283,6 @@ def run_llama3_demo(
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
 
-    max_generated_tokens = 100  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -303,6 +302,12 @@ def run_llama3_demo(
             instruct_mode,
             max_generated_tokens,
         )
+
+        max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
+        assert (
+            max_generated_tokens + max_encoded_prompt_len <= max_seq_len
+        ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
+
         # Prefill embeddings are on host since we need to mask out the tokens after the prefill length after embeddings are computed
         pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(batch_size)]
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
@@ -355,18 +360,17 @@ def run_llama3_demo(
                 profiler.end(f"compile_prefill", iteration=batch_idx)
 
             # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
-            # Miguel: Uncomment
-            # if batch_size == 1:
-            #     ttnn.deallocate(tt_out)
-            #     tt_out = tt_model(
-            #         prefill_input,
-            #         current_pos=None,
-            #         rot_mats=rot_mats_prefill,
-            #         user_id=batch_id,
-            #         mode="prefill",
-            #         page_table=page_table_tt,
-            #         get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
-            #     )
+            if batch_size == 1:
+                ttnn.deallocate(tt_out)
+                tt_out = tt_model(
+                    prefill_input,
+                    current_pos=None,
+                    rot_mats=rot_mats_prefill,
+                    user_id=batch_id,
+                    mode="prefill",
+                    page_table=page_table_tt,
+                    get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+                )
 
             pt_out.append(
                 ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
@@ -763,13 +767,19 @@ def run_llama3_demo(
         )
 
 
+# input_prompts: Input file size with prompts to process
+# max_seq_len: Maximum sequence length supported by the model (max size = 128 * 1024)
+# instruct_weights: Whether to use instruct weights or general weights
+# Num_batches: How many consecutive batches of users are run
+# single_layer: Whether to run the model with a single layer (for debug)
 @pytest.mark.parametrize(
-    "input_prompts, instruct_weights, num_batches, single_layer, optimizations",
+    "input_prompts, max_seq_len, instruct_weights, num_batches, single_layer, optimizations",
     [
-        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 1, False, LlamaOptimizations.performance),
-        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 2, False, LlamaOptimizations.performance),
+        ("models/demos/llama3/demo/input_data_prefill_128.json", 1024, False, 1, False, LlamaOptimizations.performance),
+        ("models/demos/llama3/demo/input_data_prefill_128.json", 1024, False, 2, False, LlamaOptimizations.performance),
         (
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",
+            1024, 
             True,
             1,
             False,
@@ -777,31 +787,33 @@ def run_llama3_demo(
         ),
         (
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",
+            1024, 
             True,
             2,
             False,
             LlamaOptimizations.performance,
         ),
-        ("models/demos/llama3/demo/input_data_long.json", True, 1, False, LlamaOptimizations.performance),
-        ("models/demos/llama3/demo/input_data_long.json", True, 1, False, LlamaOptimizations.accuracy),
+        ("models/demos/llama3/demo/input_data_long.json", 128 * 1024, True, 1, False, LlamaOptimizations.performance),
+        ("models/demos/llama3/demo/input_data_long.json", 128 * 1024, True, 1, False, LlamaOptimizations.accuracy),
         (
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",
+            1024,
             True,
             1,
             True,
             LlamaOptimizations.performance,
         ),
-        ("models/demos/llama3/demo/mayo.json", True, 1, False),
+        ("models/demos/llama3/demo/mayo.json", 1024, True, 1, False),
     ],
     ids=[
-        "general_weights-1_batch",
-        "general_weights-2_batch",
-        "instruct_weights-1_batch",
-        "instruct_weights-2_batch",
-        "instruct_weights-long-performance",
-        "instruct_weights-long-accuracy",
+        "general-1_batch",
+        "general-2_batch",
+        "instructs-1_batch",
+        "instruct-2_batch",
+        "instruct-long-performance",
+        "instruct-long-accuracy",
         "single_layer",
-        "mayo",
+        "mayo",  # TODO Miguel: Remove this debug test
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
@@ -814,29 +826,75 @@ def run_llama3_demo(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    (
+        1,
+        32,
+    ),
+)
+@pytest.mark.parametrize(
+    "paged_attention",
+    (
+        True,
+        # False
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention"
+    ),
+)
+@pytest.mark.parametrize(  # TODO Substitute these values for a proper vLLM integration
+    "paged_attention_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "max_generated_tokens",  # Maximum number of tokens to decode, per user
+    (100,),
+)
 def test_llama_demo(
+    input_prompts,
+    max_seq_len,
+    instruct_weights,
+    batch_size,
+    num_batches,
+    paged_attention,
+    paged_attention_params,
+    max_generated_tokens,
+    optimizations,
+    single_layer,
     mesh_device,
     use_program_cache,
-    input_prompts,
-    instruct_weights,
     is_ci_env,
-    num_batches,
-    single_layer,
-    optimizations,
     reset_seeds,
 ):
-    if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
-        pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
+    if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True or batch_size > 1):
+        pytest.skip(
+            "CI demo test only runs instruct weights with batch_size=1 to reduce CI pipeline load (all modes are supported)"
+        )
 
     mesh_device.enable_async(True)
 
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=paged_attention_params["page_block_size"],
+            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+        )
+    else:
+        paged_attention_config = None
+
     return run_llama3_demo(
         user_input=input_prompts,
-        single_layer=single_layer,
         mesh_device=mesh_device,
+        max_seq_len=max_seq_len,
+        batch_size=batch_size,
+        num_batches=num_batches,
+        paged_attention=paged_attention,
+        paged_attention_config=paged_attention_config,
+        max_generated_tokens=max_generated_tokens,
+        single_layer=single_layer,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
-        num_batches=num_batches,
         print_to_file=False,
         optimizations=optimizations,
     )
