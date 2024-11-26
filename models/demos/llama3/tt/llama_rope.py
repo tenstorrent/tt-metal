@@ -7,6 +7,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
+from models.utility_functions import nearest_32
 from loguru import logger
 
 
@@ -32,7 +33,7 @@ class TtLlamaRotarySetup(LightweightModule):
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
-        self.num_devices = device.get_num_devices()
+        self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
 
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
@@ -99,6 +100,10 @@ class TtLlamaRotarySetup(LightweightModule):
         assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
+        # Add padding if needed
+        pad_size = nearest_32(batch) - batch
+        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
+
         if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
                 position_idxs,
@@ -126,10 +131,7 @@ class TtLlamaRotarySetup(LightweightModule):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
-            assert len(rot_idxs.shape) == 2 and rot_idxs.shape == [
-                1,
-                rot_idxs.shape[1],
-            ], "rot_idxs must be a [1, batch] tensor"
+            assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
 
         # Send the idxs to device
         if rot_idxs.device != device:

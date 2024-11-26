@@ -156,16 +156,6 @@ def run_test_rotary_embedding_llama(
 
     position_ids = torch.arange(batch) if mode == "decode" else slice(start_pos, start_pos + seq_len)
 
-    if mode == "decode":  # Pad position_ids to batch size for decode mode
-        if fuse_qk:
-            # For fused_qk, repeat the position_ids for q and k
-            position_ids_padded = torch.cat([position_ids, position_ids])
-            pad_size = nearest_32(batch * 2) - batch * 2
-            position_ids_padded = torch.nn.functional.pad(position_ids_padded, (0, pad_size), "constant", 0)
-        else:
-            pad_size = nearest_32(batch) - batch
-            position_ids_padded = torch.nn.functional.pad(position_ids, (0, pad_size), "constant", 0)
-
     freqs_cis = freqs_cis[position_ids]
 
     # PyTorch Ground Truth output --------------------------------------------------------------------
@@ -191,7 +181,7 @@ def run_test_rotary_embedding_llama(
             # Set up rope with 2 * batch size (for fused qk)
             rope_setup_decode = TtLlamaRotarySetup(device, batch * 2, head_dim, max_seq_len)
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids_padded)
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
 
             assert (
                 batch % 8 == 0 or batch == 1
@@ -230,7 +220,7 @@ def run_test_rotary_embedding_llama(
             # Set up rope with batch size
             rope_setup_decode = TtLlamaRotarySetup(device, batch, head_dim, max_seq_len)
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids_padded)
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
 
             grid = ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True)
             input_mem_configs = [

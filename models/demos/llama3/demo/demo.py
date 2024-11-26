@@ -418,9 +418,6 @@ def run_llama3_demo(
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
-        pad_size = nearest_32(batch_size) - batch_size
-        current_pos_padded = torch.nn.functional.pad(current_pos, (0, pad_size), "constant", 0)
-
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
@@ -429,8 +426,7 @@ def run_llama3_demo(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos_padded)
-        rot_mat_idxs = rope_setup.get_rot_idxs(current_pos_padded)
+        rot_mats, rot_mat_idxs = rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
@@ -505,7 +501,7 @@ def run_llama3_demo(
         # Reset the current position and output token tensors for the real decode run
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-        rot_mat_idxs_reset = rope_setup.get_rot_idxs(current_pos_padded, on_host=True)
+        rot_mat_idxs_reset = rope_setup.get_rot_idxs(current_pos, on_host=True)
         ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
         profiler.end(f"capture_trace_{batch_idx}")
@@ -534,8 +530,7 @@ def run_llama3_demo(
             # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
             # If this tensor is int32, it won't be supported by ttnn.embedding
             current_pos += 1
-            current_pos_padded += 1
-            rot_mat_idxs_updated = rope_setup.get_rot_idxs(current_pos_padded, on_host=True)
+            rot_mat_idxs_updated = rope_setup.get_rot_idxs(current_pos, on_host=True)
             ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
 
             # Write to host
