@@ -93,7 +93,6 @@ Pointwise Unary
 
    ttnn.abs
    ttnn.acos
-   ttnn.logical_not_
    ttnn.acosh
    ttnn.asin
    ttnn.asinh
@@ -152,6 +151,7 @@ Pointwise Unary
    ttnn.log2
    ttnn.log_sigmoid
    ttnn.logical_not
+   ttnn.logical_not_
    ttnn.logit
    ttnn.ltz
    ttnn.mish
