@@ -436,7 +436,7 @@ class TtLlamaAttention(LightweightModule):
         # sharding k_fill to deal with update_cache memory limitation
         if (
             seq_len >= self.min_kv_prefill_shard_seqlen and not page_table
-        ):  # ttnn.experimental.aged_fill_cache only supports interleaved inputs
+        ):  # ttnn.experimental.paged_fill_cache only supports interleaved inputs
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -444,7 +444,7 @@ class TtLlamaAttention(LightweightModule):
         # sharding v_fill to deal with update_cache memory limitation
         if (
             seq_len >= self.min_kv_prefill_shard_seqlen and not page_table
-        ):  # ttnn.experimental.aged_fill_cache only supports interleaved inputs
+        ):  # ttnn.experimental.paged_fill_cache only supports interleaved inputs
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
