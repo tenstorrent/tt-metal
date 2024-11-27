@@ -225,7 +225,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     const std::optional<const Tensor> bias,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out
 
 ) {

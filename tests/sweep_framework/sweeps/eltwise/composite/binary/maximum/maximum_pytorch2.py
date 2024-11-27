@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -14,10 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
+# Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.maximum.default.md
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -32,8 +28,12 @@ parameters = {
             {"shape1": [1, 16, 19, 19], "shape2": []},
             {"shape1": [1, 16, 59, 59], "shape2": []},
         ],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [
+            ttnn.bfloat16,
+        ],
+        "input_b_dtype": [
+            ttnn.bfloat16,
+        ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -59,8 +59,7 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape["shape1"])

@@ -62,7 +62,7 @@ std::vector<WorkerAttributes> build_worker_attributes(
 
     std::size_t num_links,
     std::size_t num_channels_per_link,
-    std::function<bool(std::size_t)> is_buffer_in_clockwise_direction_fn) {
+    const std::function<bool(std::size_t)>& is_buffer_in_clockwise_direction_fn) {
 
     std::vector<WorkerAttributes> worker_attributes;
 

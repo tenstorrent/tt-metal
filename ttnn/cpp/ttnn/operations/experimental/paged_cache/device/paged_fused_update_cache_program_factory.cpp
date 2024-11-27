@@ -142,7 +142,7 @@ UpdateCacheKernels setup_kernels_for_update_cache(
     return {unary_reader_kernel_id, unary_writer_kernel_id, compute_kernel_id, cores};
 }
 
-operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor& cache_tensor1, const Tensor &input_tensor1, const Tensor& cache_tensor2, const Tensor &input_tensor2, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config, const bool share_cache) {
+operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(const Tensor& cache_tensor1, const Tensor &input_tensor1, const Tensor& cache_tensor2, const Tensor &input_tensor2, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t>& update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config, const bool share_cache) {
     Program program{};
 
     uint32_t num_caches = 2;

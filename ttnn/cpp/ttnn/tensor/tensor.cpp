@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 #include "common/bfloat16.hpp"
 #include "impl/buffers/buffer_constants.hpp"
@@ -263,7 +264,7 @@ Tensor::~Tensor() {
     tensor_attributes.reset();
 }
 
-Tensor::Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.view()), dtype, layout, tile) {}
+Tensor::Tensor(Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(std::move(storage), ttnn::Shape(shape.view()), dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
@@ -889,7 +890,7 @@ Tensor allocate_tensor_on_device(
     return device_tensor;
 }
 
-void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
+void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id) {
     // Top level wrapper to copy a host tensor to a preallocated device tensor
     TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
     Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(device_tensor.workers.at(0), host_tensor);

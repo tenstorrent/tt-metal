@@ -41,7 +41,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
 ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<float> scale,
-    const std::optional<const Tensor> mask,
+    const std::optional<const Tensor>& mask,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const bool is_causal_mask,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
@@ -72,7 +72,7 @@ ttnn::Tensor ExecuteSoftmaxInPlace::invoke(
 ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<float> scale,
-    const std::optional<const Tensor> mask,
+    const std::optional<const Tensor>& mask,
     const SoftmaxProgramConfig& program_config,
     const bool is_causal_mask,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
@@ -89,7 +89,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
 ttnn::Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<float> scale,
-    const std::optional<const Tensor> mask,
+    const std::optional<const Tensor>& mask,
     const SoftmaxProgramConfig& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {

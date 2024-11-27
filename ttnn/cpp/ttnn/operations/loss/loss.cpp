@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <utility>
 #include <vector>
 
 #include "loss.hpp"
@@ -66,7 +67,7 @@ Tensor MseLossOperation::invoke (
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
 
-    return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, optional_output_tensor);
+    return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, std::move(optional_output_tensor));
 }
 
 Tensor MaeLossOperation::invoke (
@@ -77,7 +78,7 @@ Tensor MaeLossOperation::invoke (
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
 
-    return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MAE, mode, memory_config, optional_output_tensor);
+    return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MAE, mode, memory_config, std::move(optional_output_tensor));
 }
 
 }  // namespace operations::loss

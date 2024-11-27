@@ -90,7 +90,7 @@ std::vector<std::uint32_t> transpose_tiles(std::vector<std::uint32_t> data, int 
     return result;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
     for(int i = 0 ; i < rows ; i++) {
@@ -103,7 +103,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout<<std::endl;
 }
 
-void print_faces(std::vector<bfloat16> data, string name) {
+void print_faces(std::vector<bfloat16> data, const string& name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
 

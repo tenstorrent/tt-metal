@@ -18,7 +18,7 @@ Tensor BcastOperation::invoke(
     BcastOpMath bcast_op,
     BcastOpDim bcast_dim,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> output_tensor) {
+    const std::optional<Tensor>& output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
 

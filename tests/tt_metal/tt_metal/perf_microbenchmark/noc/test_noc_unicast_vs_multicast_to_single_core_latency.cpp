@@ -12,7 +12,7 @@
 
 using namespace tt;
 //
-void measure_latency(string kernel_name) {
+void measure_latency(const string& kernel_name) {
     const int device_id = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 

@@ -11,7 +11,7 @@ show_help() {
     echo
     echo "Options:"
     echo "  -d, --debug        Enable debug mode to show real-time output."
-    echo "  -t, --target       Specify the target configuration (t3000 or n300). Default is n300."
+    echo "  -t, --target       Specify the target configuration (t3000 or n300 or tg). Default is n300."
     echo "  -h, --help         Display this help message."
     echo
     echo "Example:"
@@ -42,8 +42,8 @@ while [ $# -gt 0 ]; do
             shift 2
 
             # Validate the target value
-            if [ "$TARGET" != "t3000" ] && [ "$TARGET" != "n300" ]; then
-                echo "Error: Invalid target configuration: $TARGET. Must be either 't3000' or 'n300'."
+            if [ "$TARGET" != "t3000" ] && [ "$TARGET" != "tg" ] && [ "$TARGET" != "n300" ]; then
+                echo "Error: Invalid target configuration: $TARGET. Must be 't3000' or 'n300' or 'tg'."
                 exit 1
             fi
             ;;

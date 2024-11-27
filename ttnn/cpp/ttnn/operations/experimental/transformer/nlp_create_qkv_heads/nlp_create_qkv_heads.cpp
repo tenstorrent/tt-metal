@@ -4,6 +4,8 @@
 
 #include "nlp_create_qkv_heads.hpp"
 
+#include <utility>
+
 namespace ttnn::operations::experimental::transformer {
 
     std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::invoke (
@@ -38,7 +40,7 @@ namespace ttnn::operations::experimental::transformer {
         const bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors) {
-        return invoke(ttnn::DefaultQueueId, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, transpose_k_heads, memory_config, optional_output_tensors);
+        return invoke(ttnn::DefaultQueueId, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, transpose_k_heads, memory_config, std::move(optional_output_tensors));
     };
 
 }  // namespace ttnn::operations::experimental::transformer

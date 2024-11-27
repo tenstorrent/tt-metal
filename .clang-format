@@ -95,7 +95,6 @@ PenaltyBreakTemplateDeclaration: 10
 PenaltyExcessCharacter: 1000000
 PenaltyReturnTypeOnItsOwnLine: 200
 PointerAlignment: Left
-ReferenceAlignment: Left
 RawStringFormats:
   - Language:        Cpp
     Delimiters:
