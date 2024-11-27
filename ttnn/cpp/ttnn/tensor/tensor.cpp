@@ -840,15 +840,15 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> tra
     }
 }
 
-Tensor allocate_tensor_on_workers(
+Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    const std::vector<Device*>& workers,
+    const std::vector<Device*>& devices,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
-    Tensor device_tensor = Tensor(workers);
+    Tensor device_tensor = Tensor(devices);
     TensorSpec tensor_spec(
         shape.logical_shape(),
         TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape));
@@ -861,7 +861,7 @@ Tensor allocate_tensor_on_workers(
     uint32_t num_workers = workers_in_use.size();
 
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
-        auto& worker = workers[worker_index];
+        auto& worker = devices[worker_index];
         worker->push_work([worker, device_tensor, tensor_spec, worker_index]() mutable {
             auto local_tensor = create_device_tensor(tensor_spec, worker);
             insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);

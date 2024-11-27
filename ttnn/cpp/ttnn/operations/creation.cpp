@@ -6,28 +6,26 @@
 
 #include <optional>
 
-#include "ttnn/simple_device.hpp"
+#include "ttnn/any_device.hpp"
 
 namespace ttnn::operations::creation::detail {
 
-OptionalSimpleDevice::OptionalSimpleDevice(std::nullopt_t) {}
-OptionalSimpleDevice::OptionalSimpleDevice(ttnn::SimpleDevice device) :
-    device_(std::make_optional<ttnn::SimpleDevice>(device)) {}
+OptionalAnyDevice::OptionalAnyDevice(std::nullopt_t) {}
+OptionalAnyDevice::OptionalAnyDevice(ttnn::AnyDevice device) : device_(std::make_optional<ttnn::AnyDevice>(device)) {}
 
 // TODO: some of these won't be needed, as we unify the APIs.
-OptionalSimpleDevice::OptionalSimpleDevice(const std::optional<std::reference_wrapper<tt::tt_metal::Device>>& device) :
-    device_(device.has_value() ? std::make_optional<SimpleDevice>(&device->get()) : std::nullopt) {}
-OptionalSimpleDevice::OptionalSimpleDevice(
+OptionalAnyDevice::OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::Device>>& device) :
+    device_(device.has_value() ? std::make_optional<AnyDevice>(&device->get()) : std::nullopt) {}
+OptionalAnyDevice::OptionalAnyDevice(
     const std::optional<std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>>& mesh_device) :
-    device_(mesh_device.has_value() ? std::make_optional<SimpleDevice>(&mesh_device->get()) : std::nullopt) {}
-OptionalSimpleDevice::OptionalSimpleDevice(std::reference_wrapper<tt::tt_metal::Device> device) :
-    device_(std::make_optional<SimpleDevice>(&device.get())) {}
-OptionalSimpleDevice::OptionalSimpleDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device) :
-    device_(std::make_optional<SimpleDevice>(&mesh_device.get())) {}
+    device_(mesh_device.has_value() ? std::make_optional<AnyDevice>(&mesh_device->get()) : std::nullopt) {}
+OptionalAnyDevice::OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::Device> device) :
+    device_(std::make_optional<AnyDevice>(&device.get())) {}
+OptionalAnyDevice::OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device) :
+    device_(std::make_optional<AnyDevice>(&mesh_device.get())) {}
 
-OptionalSimpleDevice::OptionalSimpleDevice(tt::tt_metal::Device& device) :
-    device_(std::make_optional<SimpleDevice>(&device)) {}
-OptionalSimpleDevice::OptionalSimpleDevice(tt::tt_metal::distributed::MeshDevice& mesh_device) :
-    device_(std::make_optional<SimpleDevice>(&mesh_device)) {}
+OptionalAnyDevice::OptionalAnyDevice(tt::tt_metal::Device& device) : device_(std::make_optional<AnyDevice>(&device)) {}
+OptionalAnyDevice::OptionalAnyDevice(tt::tt_metal::distributed::MeshDevice& mesh_device) :
+    device_(std::make_optional<AnyDevice>(&mesh_device)) {}
 
 }  // namespace ttnn::operations::creation::detail

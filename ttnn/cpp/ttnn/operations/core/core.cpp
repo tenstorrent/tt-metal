@@ -15,6 +15,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::core {
 
@@ -85,7 +86,7 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     Device* device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_workers(
+    return tt::tt_metal::allocate_tensor_on_devices(
         shape, data_type, layout, {device}, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
@@ -95,7 +96,7 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_workers(
+    return tt::tt_metal::allocate_tensor_on_devices(
         shape, data_type, layout, mesh_device->get_devices(), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
