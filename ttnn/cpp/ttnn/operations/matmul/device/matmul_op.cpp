@@ -1042,7 +1042,7 @@ Tensor matmul(
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
     const uint8_t queue_id,
-    std::optional<Tensor> optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     const bool opt_output_empty = !optional_output_tensor.has_value();
