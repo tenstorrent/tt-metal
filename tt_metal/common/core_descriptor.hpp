@@ -19,7 +19,8 @@ struct core_descriptor_t {
     std::vector<RelativeCoreCoord> relative_dispatch_cores;
 };
 
-inline std::string get_core_descriptor_file(const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig &dispatch_core_config) {
+inline std::string get_core_descriptor_file(
+    const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     string core_desc_dir;
     if (getenv("TT_METAL_HOME")) {
@@ -50,11 +51,13 @@ inline std::string get_core_descriptor_file(const tt::ARCH& arch, const tt::tt_m
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE_B0:
-                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH ? "wormhole_b0_80_arch_eth_dispatch.yaml"
-                                                                            : "wormhole_b0_80_arch.yaml");
+                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
+                                            ? "wormhole_b0_80_arch_eth_dispatch.yaml"
+                                            : "wormhole_b0_80_arch.yaml");
             case tt::ARCH::BLACKHOLE:
-                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH ? "blackhole_140_arch_eth_dispatch.yaml"
-                                                                            : "blackhole_140_arch.yaml");
+                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
+                                            ? "blackhole_140_arch_eth_dispatch.yaml"
+                                            : "blackhole_140_arch.yaml");
             default: throw std::runtime_error("Unsupported device arch");
         };
     }
@@ -72,13 +75,13 @@ inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_
 }
 
 const core_descriptor_t& get_core_descriptor_config(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config);
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
-    chip_id_t chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config);
+    chip_id_t chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 inline std::optional<uint32_t> get_storage_core_bank_size(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
@@ -91,7 +94,7 @@ inline std::optional<uint32_t> get_storage_core_bank_size(
 }
 
 inline const std::vector<CoreCoord>& get_logical_storage_cores(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     static std::unordered_map<chip_id_t, std::unordered_map<uint8_t, std::vector<CoreCoord>>>
         logical_storage_cores_by_device;
     static CoreType previous_dispatch_core_type;
@@ -114,13 +117,14 @@ inline const std::vector<CoreCoord>& get_logical_storage_cores(
     return logical_storage_cores;
 }
 
-inline CoreCoord get_compute_grid_size(chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+inline CoreCoord get_compute_grid_size(
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.compute_grid_size;
 }
 
 inline const std::vector<CoreCoord>& get_logical_compute_cores(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     static std::unordered_map<chip_id_t, std::unordered_map<uint8_t, std::vector<CoreCoord>>>
         logical_compute_cores_by_device;
     static CoreType previous_dispatch_core_type;
@@ -144,7 +148,7 @@ inline const std::vector<CoreCoord>& get_logical_compute_cores(
 }
 
 inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     static std::unordered_map<chip_id_t, std::unordered_map<uint8_t, std::vector<CoreCoord>>>
         logical_dispatch_cores_by_device;
     static CoreType previous_dispatch_core_type;
