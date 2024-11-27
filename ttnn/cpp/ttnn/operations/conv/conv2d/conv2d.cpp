@@ -333,6 +333,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
                                ? round_up(padded_in_channels * window_w, 32)
                                : padded_in_channels;
     if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+        TT_ASSERT(padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0);
         act_block_w = (padded_in_channels * window_h * window_w)/(parallel_config.grid.num_cores() * act_block_w_div);
     }
     TT_ASSERT(act_block_w % 32 == 0);
@@ -876,6 +877,25 @@ static void adjust_conv_op_config_for_auto_shard(
         // Set act_block_h_override to min value to
         // be conservative with L1 memory usage.
         conv_config.act_block_h_override = constants::TILE_HEIGHT;
+    }
+
+    if (conv_config.act_block_w_div == 1 && conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        uint32_t width_sharded_num_cores = determine_parallel_config(
+                                               TensorMemoryLayout::WIDTH_SHARDED,
+                                               batch_size,
+                                               in_channels,
+                                               output_height,
+                                               output_width,
+                                               out_channels,
+                                               compute_grid_size,
+                                               shard_orientation,
+                                               !is_mm_conv)
+                                               .grid.num_cores();
+        // Set act_block_w_div to max value to
+        // be conservative with L1 memory usage.
+        // act_block_w_div == 1 is currently the default value.
+        conv_config.act_block_w_div =
+            tt::div_up(in_channels, width_sharded_num_cores * constants::TILE_WIDTH);
     }
 }
 
