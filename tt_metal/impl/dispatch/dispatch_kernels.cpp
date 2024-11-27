@@ -125,7 +125,6 @@ void FDKernel::configure_kernel_variant(
 }
 
 void PrefetchKernel::GenerateStaticConfigs() {
-    tt::log_warning("GenerateStaticConfigs: Prefetch");
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     uint8_t cq_id = this->cq_id;
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
@@ -222,6 +221,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
             this->logical_core,
             my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs()),
             GetCoreType());  // TODO: Changes for Galaxy
+        tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType()); // TODO: what is this third semaphore for?
         this->config.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         this->config.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
@@ -290,7 +290,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
 }
 
 void DispatchKernel::GenerateStaticConfigs() {
-    tt::log_warning("GenerateStaticConfigs: Dispatch");
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     uint8_t cq_id = this->cq_id;
     auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
@@ -434,7 +433,6 @@ void DispatchKernel::GenerateStaticConfigs() {
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    tt::log_warning("GenerateStaticConfigs: Dispatch S");
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     uint8_t cq_id = this->cq_id;
     auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
@@ -470,7 +468,6 @@ void DispatchSKernel::GenerateStaticConfigs() {
 }
 
 void MuxKernel::GenerateStaticConfigs() {
-    tt::log_warning("GenerateStaticConfigs: Mux (MUX_D)");
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     this->logical_core = dispatch_core_manager::instance().mux_d_core(this->device->id(), channel, this->cq_id);
     this->config.vc_count = upstream_kernels.size() + 1; // TODO: update for deeper tunnels?
@@ -500,7 +497,6 @@ void MuxKernel::GenerateStaticConfigs() {
 }
 
 void DemuxKernel::GenerateStaticConfigs() {
-    tt::log_warning("GenerateStaticConfigs: Demux");
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id() + tt::Cluster::instance().number_of_pci_devices()); // TODO: this is the downstream
     this->logical_core = dispatch_core_manager::instance().demux_core(this->device->id() + tt::Cluster::instance().number_of_pci_devices(), channel, this->cq_id);
     this->config.vc_count = downstream_kernels.size() + 1; // TODO: update for deeper tunnels?
@@ -528,7 +524,6 @@ void DemuxKernel::GenerateStaticConfigs() {
 }
 
 void EthTunnelerKernel::GenerateStaticConfigs() {
-    tt::log_warning("GenerateStaticConfigs: Tunneler");
     this->downstream_device_id = device->id() + tt::Cluster::instance().number_of_pci_devices(); // TODO: update for galaxy...
     if (this->IsRemote()) {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id.value());
@@ -548,7 +543,6 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
 void EthRouterKernel::GenerateStaticConfigs() {
     auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
     if (this->as_mux) {
-        tt::log_warning("GenerateStaticConfigs: Router (MUX)");
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id() + tt::Cluster::instance().number_of_pci_devices()); // TODO: this is the downstream
         this->logical_core = dispatch_core_manager::instance().mux_core(device->id() + tt::Cluster::instance().number_of_pci_devices(), channel, cq_id);
         this->config.vc_count = upstream_kernels.size() + 1;
@@ -573,7 +567,6 @@ void EthRouterKernel::GenerateStaticConfigs() {
             this->config.remote_rx_queue_id[idx] = 1;
         }
     } else {
-        tt::log_warning("GenerateStaticConfigs: Router (DEMUX_D)");
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         this->logical_core = dispatch_core_manager::instance().demux_d_core(device->id(), channel, cq_id);
         this->config.vc_count = downstream_kernels.size() + 1;
@@ -1490,6 +1483,7 @@ void EthRouterKernel::CreateKernel() {
 void PrefetchKernel::ConfigureCore() {
     // Only H-type prefetchers need L1 configuration
     if (this->config.is_h_variant.value()) {
+        tt::log_warning("Configure Prefetch H (device {} core {})", device->id(), logical_core.str());
         // Initialize the FetchQ
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
         auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
@@ -1527,13 +1521,22 @@ void PrefetchKernel::ConfigureCore() {
 void DispatchKernel::ConfigureCore() {
     // For all dispatchers, need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
-    uint32_t dispatch_message_addr =
+    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    uint32_t dispatch_s_sync_sem_base_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
+    uint32_t dispatch_message_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    detail::WriteToDeviceL1(device, this->logical_core, dispatch_message_addr, zero, GetCoreType());
+    tt::log_warning("Configure Dispatch (device {} core {})", device->id(), logical_core.str());
+    for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
+        uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
+        uint32_t dispatch_message_addr = dispatch_message_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
+        detail::WriteToDeviceL1(device, this->logical_core, dispatch_s_sync_sem_addr, zero, GetCoreType());
+        detail::WriteToDeviceL1(device, this->logical_core, dispatch_message_addr, zero, GetCoreType());
+    }
 
     // For DISPATCH_D, need to clear completion q events
     if (!this->config.is_h_variant.value() && this->config.is_d_variant.value()) {
+        tt::log_warning("Configure Dispatch D Counters (device {} core {})", device->id(), logical_core.str());
         uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
         uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
         detail::WriteToDeviceL1(device, logical_core, completion_q0_last_event_ptr, zero, GetCoreType());
@@ -1542,10 +1545,20 @@ void DispatchKernel::ConfigureCore() {
 }
 
 void DispatchSKernel::ConfigureCore() {
+    if (!this->device->distributed_dispatcher())
+        return;
     // Just need to clear the dispatch message
+    tt::log_warning("Configure Dispatch S (device {} core {})", device->id(), logical_core.str());
     std::vector<uint32_t> zero = {0x0};
-    auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
-    uint32_t dispatch_message_addr =
+    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    uint32_t dispatch_s_sync_sem_base_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
+    uint32_t dispatch_message_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    detail::WriteToDeviceL1(device, this->logical_core, dispatch_message_addr, zero, GetCoreType());
+    for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
+        uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
+        uint32_t dispatch_message_addr = dispatch_message_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
+        detail::WriteToDeviceL1(device, this->logical_core, dispatch_s_sync_sem_addr, zero, GetCoreType());
+        detail::WriteToDeviceL1(device, this->logical_core, dispatch_message_addr, zero, GetCoreType());
+    }
 }

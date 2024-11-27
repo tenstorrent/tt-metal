@@ -2740,8 +2740,6 @@ void Device::configure_command_queue_programs_new() {
     chip_id_t device_id = this->id();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
     Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-    log_debug(tt::LogMetal, "Device {} - Channel {}", this->id_, channel);
 
     std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -2751,30 +2749,43 @@ void Device::configure_command_queue_programs_new() {
     Program& command_queue_program = *this->command_queue_programs[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
-    // Reset host-side command queue pointers
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-    uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-    uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-    uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-    uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-    uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-    pointers.resize(cq_start/sizeof(uint32_t));
-    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        // Reset the host manager's pointer for this command queue
-        this->sysmem_manager_->reset(cq_id);
+    // Reset host-side command queue pointers for all channels controlled by this mmio device
+    if (this->is_mmio_capable()) {
+        for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+            uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            pointers.resize(cq_start/sizeof(uint32_t));
+            for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                // Reset the host manager's pointer for this command queue
+                this->sysmem_manager_->reset(cq_id);
 
-        pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
-        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
+                log_warning(
+                    "Sysmem: Addr={:#08x} - {:#08x} {:#08x} {:#08x} {:#08x}",
+                    get_absolute_cq_offset(channel, cq_id, cq_size),
+                    pointers[host_issue_q_rd_ptr / sizeof(uint32_t)],
+                    pointers[host_issue_q_wr_ptr / sizeof(uint32_t)],
+                    pointers[host_completion_q_wr_ptr / sizeof(uint32_t)],
+                    pointers[host_completion_q_rd_ptr / sizeof(uint32_t)]);
+                tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
+            }
+        }
     }
 
     // Write device-side cq pointers
     configure_dispatch_cores(this);
 
     // Run the cq program
+    command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
 }
@@ -2820,6 +2831,13 @@ void Device::configure_command_queue_programs() {
         pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
         pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
+        log_warning(
+            "Sysmem: Addr={:#08x} - {:#08x} {:#08x} {:#08x} {:#08x}",
+            get_absolute_cq_offset(channel, cq_id, cq_size),
+            pointers[host_issue_q_rd_ptr / sizeof(uint32_t)],
+            pointers[host_issue_q_wr_ptr / sizeof(uint32_t)],
+            pointers[host_completion_q_wr_ptr / sizeof(uint32_t)],
+            pointers[host_completion_q_rd_ptr / sizeof(uint32_t)]);
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
     }
 
@@ -2851,11 +2869,13 @@ void Device::configure_command_queue_programs() {
         uint32_t completion_q0_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
         uint32_t completion_q1_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
         std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {get_absolute_cq_offset(channel, cq_id, cq_size) + cq_start};
+        log_warning("Configure Prefetch H (device {} core {})", mmio_device->id(), prefetch_location.str());
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_base, prefetch_q, dispatch_core_type);
         if (not this->is_mmio_capable()) {
             // Initialize event counters to 0 on dispatch_d on r-chip
+            log_warning("Configure Dispatch D Counters (device {} core {})", this->id(), remote_dispatcher_location.str());
             detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
             detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
         }
@@ -2864,6 +2884,7 @@ void Device::configure_command_queue_programs() {
         uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
         uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
         std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+        log_warning("Configure CQ Writer (device {} core {})", mmio_device->id(), completion_q_writer_location.str());
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
@@ -2871,6 +2892,15 @@ void Device::configure_command_queue_programs() {
 
         // Initialize address where workers signal completion to dispatch core(s).
         // TODO: Should only initialize dispatch_s_sync_sem if this->dispatch_s_enabled()?
+        if (this->distributed_dispatcher()) {
+            tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
+            log_warning("Configure Dispatch S (device {} core {})", this->id(), dispatch_s_location.str());
+        }
+        log_warning("Configure Dispatch (device {} core {})", mmio_device->id(), dispatch_location.str());
+        if (device_id != mmio_device_id) {
+            tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+            log_warning("Configure Dispatch (device {} core {})", this->id(), dispatch_d_location.str());
+        }
         for (uint32_t i = 0; i < dispatch_message_entries; i++) {
             uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);

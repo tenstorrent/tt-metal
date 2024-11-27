@@ -8,24 +8,63 @@ if [[ -z "$TT_METAL_HOME" ]]; then
 fi
 
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
+    check_list="Semaphore Allocated Configure Sysmem"
     # Temporary dispatch compile args testing
     echo "FD Compile Args Test - 1CQ"
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
-    find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
-    TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
+
+    TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
+    for i in $check_list; do
+        grep $i log.new > $i.new; sort -n -o $i.new{,}
+    done
     find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
+    rm -rf built
+
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
+    for i in $check_list; do
+        grep $i log.old > $i.old; sort -n -o $i.old{,}
+    done
+    find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
+    rm -rf built
+
+    for i in $check_list; do
+        if diff $i.old $i.new; then
+            echo "$i matches."
+        else
+            echo "FD Compile Args Test - 1CQ FAIL $i mismatch"
+            exit 1
+        fi
+    done
     if diff kernel_args_old.csv kernel_args_new.csv; then
-        echo "FD Compile Args Test - 1CQ PASS"
+        echo "Kernel Args match."
     else
         echo "FD Compile Args Test - 1CQ FAIL"
         exit 1
     fi
+    echo "FD Compile Args Test - 1CQ PASS"
+
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         echo "FD Compile Args Test - 2CQ"
-        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
-        find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
-        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
+
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
+        for i in $check_list; do
+            grep $i log.new > $i.new; sort -n -o $i.new{,}
+        done
         find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
+
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
+        for i in $check_list; do
+            grep $i log.old > $i.old; sort -n -o $i.old{,}
+        done
+        find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
+
+        for i in $check_list; do
+            if diff $i.old $i.new; then
+                echo "$i matches."
+            else
+                echo "FD Compile Args Test - 2CQ FAIL $i mismatch"
+                exit 1
+            fi
+        done
         if diff kernel_args_old.csv kernel_args_new.csv; then
             echo "FD Compile Args Test - 2CQ PASS"
         else

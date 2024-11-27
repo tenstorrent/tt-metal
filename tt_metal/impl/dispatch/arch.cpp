@@ -190,27 +190,35 @@ void configure_dispatch_cores(Device *device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     auto &my_dispatch_constants = dispatch_constants::get(dispatch_core_type);
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
-    for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
-        tt_cxy_pair completion_q_writer_location = dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, cq_id);
-        Device *mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
-        uint32_t completion_q_wr_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-        uint32_t completion_q_rd_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-        uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
-        // Initialize completion queue write pointer and read pointer copy
-        uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
-        uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
-        uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
-        std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
+
+    // Need to set up for all devices serviced by an mmio chip
+    if (device->is_mmio_capable()) {
+        for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device->id())) {
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+                tt_cxy_pair completion_q_writer_location = dispatch_core_manager::instance().completion_queue_writer_core(serviced_device_id, channel, cq_id);
+                Device *mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
+                uint32_t completion_q_wr_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+                uint32_t completion_q_rd_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+                uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+                uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+                // Initialize completion queue write pointer and read pointer copy
+                uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
+                uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
+                std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+                tt::log_warning(
+                    "Configure CQ Writer (device {} core {})", mmio_device->id(), completion_q_writer_location.str());
+                detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
+                detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
+            }
+        }
     }
     std::vector<dispatch_kernel_node_t> nodes = get_nodes(device);
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {

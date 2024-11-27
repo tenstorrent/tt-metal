@@ -1409,6 +1409,15 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
         this->get_id());
+    for (const auto & sem : this->semaphores_) {
+        log_warning(
+            "Semaphore: Device {}, Cores {} ({}), ID {}, Initial Value {}",
+            device->id(),
+            sem.core_range_set().str(),
+            sem.core_type(),
+            sem.id(),
+            sem.initial_value());
+    }
 
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
