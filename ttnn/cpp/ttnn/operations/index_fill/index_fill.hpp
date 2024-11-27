@@ -9,11 +9,11 @@ namespace ttnn::operations::index_fill {
 
 struct IndexFill {
     static Tensor invoke(
-        const Tensor &input,
+        const Tensor& input,
         const uint32_t dim,
-        const Tensor &index,
+        const Tensor& index,
         const std::variant<float, int> value,
-        const std::optional<MemoryConfig> &memory_config);
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::index_fill
 

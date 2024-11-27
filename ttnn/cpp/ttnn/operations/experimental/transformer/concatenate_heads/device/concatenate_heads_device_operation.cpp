@@ -18,11 +18,13 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
 
     TT_FATAL(
-        (input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 16, 384, 64})), "Unsupported input shape");
+        (input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 16, 384, 64})),
+        "Unsupported input shape");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
@@ -32,7 +34,8 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
             "Output dtype must be same as input dtype!");
 
         TT_FATAL(
-            optional_output_tensor.value().get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 1024}), "Output shape must be (batch_size, 1, 384, 1024)!");
+            optional_output_tensor.value().get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 1024}),
+            "Output shape must be (batch_size, 1, 384, 1024)!");
     }
 }
 

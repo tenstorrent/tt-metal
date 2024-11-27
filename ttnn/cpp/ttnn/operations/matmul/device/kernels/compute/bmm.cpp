@@ -27,8 +27,8 @@ void MAIN {
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
-    for (uint32_t nb = 0; nb < batch; nb++)
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C)      // output tile of C
+    for (uint32_t nb = 0; nb < batch; nb++) {
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
                 acquire_dst();
@@ -48,5 +48,7 @@ void MAIN {
 
                 release_dst();
             }
+        }
+    }
 }
 }  // namespace NAMESPACE

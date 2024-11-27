@@ -25,7 +25,7 @@ void write_mean_rstd(
     cb_wait_front(cb_id, onetile);
 
     uint32_t output_l1_write_addr = get_read_ptr(cb_id);
-    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(output_l1_write_addr);
+    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
 
     uint32_t output_tile_offset = tile_offset / num_inner;
 

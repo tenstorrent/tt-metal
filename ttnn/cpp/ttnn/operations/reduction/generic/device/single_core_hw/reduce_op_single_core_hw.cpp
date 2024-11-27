@@ -14,10 +14,10 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks reduce_single_core_hw(
-    const Tensor &a,
-    Tensor &output,
+    const Tensor& a,
+    Tensor& output,
     ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -47,12 +47,12 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    tt_metal::Buffer *src0_buffer = a.buffer();
+    tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    tt_metal::Device* device = a.device();
 
-    tt_metal::Buffer *dst_buffer = output.buffer();
+    tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
@@ -63,7 +63,8 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+        tt_metal::CircularBufferConfig(
+            num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
 
@@ -120,9 +121,9 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto src_dram_buffer = input_buffers.at(0);
 
         auto dst_dram_buffer = output_buffers.at(0);
@@ -130,12 +131,12 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
         }
     };

@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -104,7 +103,6 @@ void kernel_main() {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);

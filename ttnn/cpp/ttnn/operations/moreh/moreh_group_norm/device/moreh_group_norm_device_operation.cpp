@@ -85,11 +85,7 @@ MorehGroupNormOperation::shape_return_value_t MorehGroupNormOperation::compute_o
     const auto output_shape = tensor_args.input.get_logical_shape();
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    SmallVector<uint32_t> mean_rstd_origin_shape{
-        1,
-        1,
-        N,
-        num_groups};
+    SmallVector<uint32_t> mean_rstd_origin_shape{1, 1, N, num_groups};
 
     SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
     return {output_shape, mean_rstd_shape, mean_rstd_shape};

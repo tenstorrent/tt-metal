@@ -11,8 +11,6 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/device_operation.hpp"
 
-
-
 namespace ttnn::operations::binary {
 
 namespace {
@@ -25,8 +23,8 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 BinaryDeviceOperation::BroadcastHeightMultiCore::cached_program_t
 BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
@@ -123,13 +121,15 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_interleaved_input_rows_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+        "reader_bcast_h_interleaved_input_rows_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+        "writer_unary_interleaved_input_cols_batched.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -208,9 +208,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     return {
         std::move(program),
-        {
-            binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}
-    };
+        {binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}};
 }
 
 void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_arguments(

@@ -15,14 +15,13 @@ namespace ttnn::operations::experimental::detail {
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-operation::ProgramWithCallbacks plusone_single_core(
-    const Tensor &input) {
+operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_unit_size =  input.element_size();
+    uint32_t input_unit_size = input.element_size();
 
-    tt::tt_metal::Device *device = input.device();
+    tt::tt_metal::Device* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -31,7 +30,7 @@ operation::ProgramWithCallbacks plusone_single_core(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    const auto &input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_legacy_shape();
     const uint32_t W = input_shape[0];
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -64,24 +63,23 @@ operation::ProgramWithCallbacks plusone_single_core(
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord &core = cores.at(i);
+        const CoreCoord& core = cores.at(i);
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address()});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &) {
-        auto src_buffer = input_buffers.at(0);
+    auto override_runtime_args_callback =
+        [reader_kernel_id, cores](
+            const Program& program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>&) {
+            auto src_buffer = input_buffers.at(0);
 
-        for (const auto &core : cores) {
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+            for (const auto& core : cores) {
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    runtime_args[0] = src_buffer->address();
+                }
             }
-        }
-    };
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }

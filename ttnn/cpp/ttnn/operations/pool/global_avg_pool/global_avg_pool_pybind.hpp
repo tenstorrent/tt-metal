@@ -62,9 +62,7 @@ void bind_global_avg_pool2d(py::module& module) {
 
 }  // namespace detail
 
-void py_module(py::module& module) {
-    detail::bind_global_avg_pool2d(module);
-}
+void py_module(py::module& module) { detail::bind_global_avg_pool2d(module); }
 
 }  // namespace avgpool
 }  // namespace operations

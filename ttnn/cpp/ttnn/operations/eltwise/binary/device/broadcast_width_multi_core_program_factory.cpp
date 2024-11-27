@@ -11,8 +11,6 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/device_operation.hpp"
 
-
-
 namespace ttnn::operations::binary {
 
 namespace {
@@ -25,8 +23,8 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOperation::BroadcastWidthMultiCore::create(
     const operation_attributes_t& operation_attributes,
@@ -122,13 +120,15 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_bcast_w_interleaved_input_cols_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+        "reader_bcast_w_interleaved_input_cols_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+        "writer_unary_interleaved_input_cols_batched.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -164,7 +164,7 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
                 0,                          // 1
                 0,                          // 2
                 num_tensor_tiles_per_core,  // 3
-                b->buffer()->address(),      // 4
+                b->buffer()->address(),     // 4
                 0,                          // 5
                 0,                          // 6
                 num_btensor_tiles,          // 7

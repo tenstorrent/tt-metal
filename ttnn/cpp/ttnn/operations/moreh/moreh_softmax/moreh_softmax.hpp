@@ -12,13 +12,13 @@ namespace ttnn::operations::moreh::moreh_softmax {
 #define DEFINE_MOREH_SOFT_OP(name)                                                  \
     struct name {                                                                   \
         static Tensor invoke(                                                       \
-            const Tensor &input_tensor,                                             \
+            const Tensor& input_tensor,                                             \
             uint32_t dim,                                                           \
-            const std::optional<Tensor> &output_tensor,                             \
+            const std::optional<Tensor>& output_tensor,                             \
             const MorehSoftmaxOp op,                                                \
             const MorehSoftmaxOpParallelizationStrategy strategy,                   \
-            const std::optional<MemoryConfig> &memory_config,                       \
-            const std::optional<DeviceComputeKernelConfig> &compute_kernel_config); \
+            const std::optional<MemoryConfig>& memory_config,                       \
+            const std::optional<DeviceComputeKernelConfig>& compute_kernel_config); \
     }
 
 DEFINE_MOREH_SOFT_OP(MorehSoftmax);

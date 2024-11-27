@@ -16,7 +16,7 @@ void MAIN {
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-        for(uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
 
             // Pop tile after tile, copy to DST and pack
@@ -24,9 +24,9 @@ void MAIN {
 
             copy_tile(tt::CBIndex::c_0, 0, 0);
 
-            #ifdef SFPU_OP_CHAIN_0
+#ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
-            #endif
+#endif
 
             tile_regs_commit();
 
@@ -40,6 +40,5 @@ void MAIN {
         }
         cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
     }
-
 }
-}
+}  // namespace NAMESPACE

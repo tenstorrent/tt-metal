@@ -84,8 +84,7 @@ std::tuple<MorehDotOperation::operation_attributes_t, MorehDotOperation::tensor_
         operation_attributes_t{
             dtype.value_or(input_a.dtype()),
             memory_config.value_or(input_a.memory_config()),
-            init_device_compute_kernel_config(
-                input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{input_a, input_b, output}};
 }
 

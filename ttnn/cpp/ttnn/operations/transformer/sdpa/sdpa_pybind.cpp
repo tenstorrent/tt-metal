@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::transformer {
 
-void py_bind_sdpa(py::module &module) {
+void py_bind_sdpa(py::module& module) {
     auto doc =
         R"doc(
         Causal scaled dot product attention. This API mimicks the PyTorch API of the same name.
@@ -46,14 +46,14 @@ void py_bind_sdpa(py::module &module) {
         ttnn::transformer::scaled_dot_product_attention,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor_q,
-               const ttnn::Tensor &input_tensor_k,
-               const ttnn::Tensor &input_tensor_v,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
                std::optional<ttnn::Tensor> attn_mask,
                bool is_causal,
                std::optional<float> scale,
-               const std::optional<MemoryConfig> &memory_config,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                uint8_t queue_id) {

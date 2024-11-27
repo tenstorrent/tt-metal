@@ -19,11 +19,12 @@ namespace complex_binary {
 
 namespace detail {
 
-//OpHandler_complex_binary_type1 = get_function_complex_binary
+// OpHandler_complex_binary_type1 = get_function_complex_binary
 template <typename complex_unary_operation_t>
-void bind_complex_binary_type1(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
+void bind_complex_binary_type1(
+    py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(input_tensor_a: ComplexTensor, input_tensor_b: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> ComplexTensor
+        R"doc({0}(input_tensor_a: ComplexTensor, input_tensor_b: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> ComplexTensor
 
 {2}
 

@@ -125,21 +125,24 @@ MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_o
     std::vector<std::optional<Tensor>> result;
     result.reserve(3);
 
-    if (tensor_args.output.has_value())
+    if (tensor_args.output.has_value()) {
         result.push_back(tensor_args.output.value());
-    else
+    } else {
         result.push_back(
             create_device_tensor(output_shapes.at(0).value, dtype, layout, device, operation_attributes.memory_config));
+    }
 
-    if (tensor_args.mean.has_value())
+    if (tensor_args.mean.has_value()) {
         result.push_back(tensor_args.mean.value());
-    else
+    } else {
         result.push_back(std::nullopt);
+    }
 
-    if (tensor_args.rstd.has_value())
+    if (tensor_args.rstd.has_value()) {
         result.push_back(tensor_args.rstd.value());
-    else
+    } else {
         result.push_back(std::nullopt);
+    }
 
     return std::move(result);
 }

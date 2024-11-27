@@ -14,7 +14,7 @@
 
 using namespace tt::tt_metal;
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -29,7 +29,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const tt::tt_metal::Legacy
 }
 
 tt::tt_metal::LegacyShape get_output_grad_shape(
-    const Tensor &output_grad, const Tensor &input_grad, const ttnn::SmallVector<int64_t> &dims, const bool &keepdim) {
+    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
         return output_grad.get_shape().value;
     }
@@ -55,11 +55,11 @@ namespace ttnn::operations::moreh::moreh_mean_backward {
 
 MorehMeanBackwardOperation::MorehMeanBackwardFactory::cached_program_t
 MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output) {
-    const auto &output_grad = tensor_args.output_grad;
-    const auto &input_grad = output;
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& output_grad = tensor_args.output_grad;
+    const auto& input_grad = output;
     auto keepdim = operation_attributes.keepdim;
     auto dims = operation_attributes.dims;
     auto compute_kernel_config =
@@ -67,7 +67,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto *device = output_grad.device();
+    auto* device = output_grad.device();
     auto program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -76,14 +76,14 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto &input_grad_shape = input_grad.get_legacy_shape();
-    const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto& input_grad_shape = input_grad.get_legacy_shape();
+    const auto& input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
     ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
-    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
+    const auto& output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
+    const auto& output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
     ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
@@ -136,18 +136,14 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/reader_moreh_mean_backward.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/writer_moreh_mean_backward.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -216,13 +212,13 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
 }
 
 void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output) {
-    auto &program = cached_program.program;
-    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
@@ -231,12 +227,12 @@ void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_argu
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = output_grad_address;
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = input_grad_address;
         }
     }

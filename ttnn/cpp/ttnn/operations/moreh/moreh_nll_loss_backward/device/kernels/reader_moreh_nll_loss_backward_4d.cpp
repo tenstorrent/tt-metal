@@ -4,7 +4,6 @@
 
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
-
 void kernel_main() {
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);

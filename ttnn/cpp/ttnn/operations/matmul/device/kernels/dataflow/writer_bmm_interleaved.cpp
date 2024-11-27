@@ -25,8 +25,8 @@ void kernel_main() {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
     // C is MN so we iterate in tile RM order
-    for (uint32_t nb = 0; nb < batch; nb++)
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C)        // output tile of C
+    for (uint32_t nb = 0; nb < batch; nb++) {
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {      // output tile of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) {  // output tile index of C
                 // bmm will generate C's tiles C=A*B, MN=MK*KN, in row major order, we just read them from CB and write
                 // out to DRAM
@@ -39,4 +39,6 @@ void kernel_main() {
                 // DPRINT << itileC << ' ' << uint32_t(dst_noc_addr) << ENDL();
                 itileC++;
             }
+        }
+    }
 }

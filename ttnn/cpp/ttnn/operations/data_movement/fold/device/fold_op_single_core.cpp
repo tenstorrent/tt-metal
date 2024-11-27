@@ -12,8 +12,7 @@
 
 namespace ttnn::operations::data_movement {
 
-cached_program_t fold_single_core(
-    const Tensor &input, const Tensor &output, uint32_t stride_h, uint32_t stride_w) {
+cached_program_t fold_single_core(const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -33,10 +32,10 @@ cached_program_t fold_single_core(
     uint32_t cb_pages_per_dst_row = stride_h * width;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = output.device();
+    tt_metal::Device* device = output.device();
 
-    Buffer *src_buffer = input.buffer();
-    Buffer *dst_buffer = output.buffer();
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
     bool src_is_dram = (src_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     bool dst_is_dram = (dst_buffer->buffer_type() == tt_metal::BufferType::DRAM);
 
@@ -89,8 +88,8 @@ cached_program_t fold_single_core(
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp"
-        core,
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/"
+        "writer_unary_stick_layout_concatenate_rows_interleaved.cpp" core,
         WriterDataMovementConfig(writer_compile_time_args));
 
     SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), pixel_size, num_pixels, 0});
@@ -113,22 +112,24 @@ cached_program_t fold_single_core(
 
     SetRuntimeArgs(program, writer_kernel_id, core, writer_kernel_args);
 
-    return { std::move(program), {reader_kernel_id, writer_kernel_id} };
+    return {std::move(program), {reader_kernel_id, writer_kernel_id}};
 }
 
-cached_program_t Fold::SingleCore::create(const operation_attributes_t& operation_attributes,
-                                const tensor_args_t& tensor_args,
-                                tensor_return_value_t& output_tensor) {
-    return fold_single_core(tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+cached_program_t Fold::SingleCore::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    return fold_single_core(
+        tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }
 
-void Fold::SingleCore::override_runtime_arguments(cached_program_t& cached_program,
-                                        const operation_attributes_t& operation_attributes,
-                                        const tensor_args_t& tensor_args,
-                                        tensor_return_value_t& output_tensor) {
-
-    Buffer *src_buffer = tensor_args.input_tensor.buffer();
-    Buffer *dst_buffer = output_tensor.buffer();
+void Fold::SingleCore::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    Buffer* src_buffer = tensor_args.input_tensor.buffer();
+    Buffer* dst_buffer = output_tensor.buffer();
     auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto program = cached_program.program;
@@ -138,4 +139,4 @@ void Fold::SingleCore::override_runtime_arguments(cached_program_t& cached_progr
     GetRuntimeArgs(program, writer_kernel_id, core)[0] = dst_buffer->address();
 }
 
-} // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement

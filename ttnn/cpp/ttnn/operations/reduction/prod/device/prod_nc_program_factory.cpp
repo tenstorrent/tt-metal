@@ -17,13 +17,13 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor &output, int64_t dim) {
+operation::ProgramWithCallbacks prod_nc_format(const Tensor& input, const Tensor& output, int64_t dim) {
     TT_ASSERT(dim == 0 || dim == 1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto *device = input.device();
+    auto* device = input.device();
     auto program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -80,29 +80,33 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, in0_t},              // input
-            {CBIndex::c_1, in1_t},              // zero
+            {CBIndex::c_0, in0_t},         // input
+            {CBIndex::c_1, in1_t},         // zero
             {CBIndex::c_24, intermed0_t},  // accumulated sum
-            {CBIndex::c_16, out0_t},            // output
+            {CBIndex::c_16, out0_t},       // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer *input_buffer_type = input.buffer();
+    tt_metal::Buffer* input_buffer_type = input.buffer();
     bool input_is_dram = input_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) input_is_dram, static_cast<uint32_t>(dim)};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
 
-    tt_metal::Buffer *output_buffer_type = output.buffer();
+    tt_metal::Buffer* output_buffer_type = output.buffer();
     constexpr uint32_t cb_id_out = CBIndex::c_16;
     bool output_is_dram = output_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) cb_id_out, (std::uint32_t) output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out, (std::uint32_t)output_is_dram};
 
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    const auto reader_kernel_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
+    const auto writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    const auto reader_kernel_id =
+        ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id =
+        ttnn::operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -151,14 +155,16 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
              static_cast<uint32_t>(ttnn::operations::is_dram(input)),
              HtWt,
              CHtWt,
-             static_cast<uint32_t>(dim)
-             });
+             static_cast<uint32_t>(dim)});
 
         SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(), num_tiles_per_core, tile_offset, static_cast<uint32_t>(ttnn::operations::is_dram(output))});
+            {output.buffer()->address(),
+             num_tiles_per_core,
+             tile_offset,
+             static_cast<uint32_t>(ttnn::operations::is_dram(output))});
 
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
@@ -172,22 +178,22 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     }
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
-                                                   const void *operation,
-                                                   const Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
-        const auto *input_buffer = input_tensors.at(0).buffer();
-        const auto *output_buffer = input_tensors.at(1).buffer();
+                                                   const void* operation,
+                                                   const Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        const auto* input_buffer = input_tensors.at(0).buffer();
+        const auto* output_buffer = input_tensors.at(1).buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = input_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = output_buffer->address();
             }
         }

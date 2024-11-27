@@ -15,9 +15,7 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-
 struct ExecuteRepeatInterleave {
-
     // # This operation does not support the following cases:
     // #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
     // #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
@@ -32,7 +30,8 @@ struct ExecuteRepeatInterleave {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto repeat_interleave =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::repeat_interleave", ttnn::operations::data_movement::ExecuteRepeatInterleave>();
+constexpr auto repeat_interleave = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::repeat_interleave",
+    ttnn::operations::data_movement::ExecuteRepeatInterleave>();
 
 }  // namespace ttnn

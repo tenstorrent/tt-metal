@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 
-
 namespace ttnn {
 namespace operations::data_movement {
 
@@ -26,7 +25,6 @@ struct SplitOperation {
 
     static std::vector<ttnn::Tensor> invoke(const ttnn::Tensor& input_tensor, int64_t& num_splits, int64_t& dim);
 };
-
 
 }  // namespace operations::data_movement
 

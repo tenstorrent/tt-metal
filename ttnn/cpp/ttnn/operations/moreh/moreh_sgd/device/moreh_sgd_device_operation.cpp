@@ -18,18 +18,15 @@ void MorehSgdOperation::validate_inputs(
     check_tensor(grad, "moreh_sgd", "grad", {DataType::BFLOAT16});
 
     if (tensor_args.momentum_buffer_in) {
-        check_tensor(
-            *tensor_args.momentum_buffer_in, "moreh_sgd", "momentum_buffer_in", {DataType::BFLOAT16});
+        check_tensor(*tensor_args.momentum_buffer_in, "moreh_sgd", "momentum_buffer_in", {DataType::BFLOAT16});
     }
 
     if (tensor_args.param_out.has_value()) {
-        check_tensor(
-            tensor_args.param_out.value(), "moreh_sgd", "param_out", {DataType::BFLOAT16});
+        check_tensor(tensor_args.param_out.value(), "moreh_sgd", "param_out", {DataType::BFLOAT16});
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        check_tensor(
-            tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out", {DataType::BFLOAT16});
+        check_tensor(tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out", {DataType::BFLOAT16});
     }
 }
 

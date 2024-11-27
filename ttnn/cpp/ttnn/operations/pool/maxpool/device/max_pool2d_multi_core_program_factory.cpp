@@ -32,7 +32,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
-
     // This should allocate a DRAM buffer on the device
     Device* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -47,18 +46,18 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
 
-    uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;                                      // row of input (channels)
-    uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;                                // row of output (channels)
+    uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
+    uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
 
-    tt::DataFormat indices_df = tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
+    tt::DataFormat indices_df =
+        tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
     uint32_t indices_nbytes = datum_size(indices_df);
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t) std::ceil((float) kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t) std::ceil((float) input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t) std::ceil((float) output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-
+    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
     uint32_t max_rows_for_reduction = 16;
     // TODO #14588: temporarily disabling 32 row reductions due to issues in large kernels
@@ -149,16 +148,20 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
     if (is_large_kernel) {
-        in_cb_sz = (input_shape[3] / num_shards_c * kernel_size_hw_padded) > (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
-            ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
-            : input_shape[3] / num_shards_c * kernel_size_hw_padded;
+        in_cb_sz =
+            (input_shape[3] / num_shards_c * kernel_size_hw_padded) > (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
+                ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
+                : input_shape[3] / num_shards_c * kernel_size_hw_padded;
         if (is_wide_reduction) {
             in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
         }
     } else {
         if (is_wide_reduction) {
             in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * kernel_size_hw_padded;
-            TT_FATAL(in_ntiles_c % MAX_TILES_PER_REDUCTION == 0, "input channels should be multiple of {} tiles. General case TODO.", MAX_TILES_PER_REDUCTION);
+            TT_FATAL(
+                in_ntiles_c % MAX_TILES_PER_REDUCTION == 0,
+                "input channels should be multiple of {} tiles. General case TODO.",
+                MAX_TILES_PER_REDUCTION);
             in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
         } else {
             in_cb_sz = input_shape[3] / num_shards_c * kernel_size_hw_padded;
@@ -195,11 +198,12 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto in_tiled_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
-
     // output of reduce == writer to write
     uint32_t out_cb_id = tt::CBIndex::c_16;  // output rows in RM
     // after reduction
-    uint32_t out_cb_pagesize = output.shard_spec().value().shape[1] * out_nbytes / in_nblocks_c;  // there is just one row of channels after each reduction (or 1 block of c if its greater than 8 tiles)
+    uint32_t out_cb_pagesize = output.shard_spec().value().shape[1] * out_nbytes /
+                               in_nblocks_c;  // there is just one row of channels after each reduction (or 1 block of c
+                                              // if its greater than 8 tiles)
     uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_nblocks_c;
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                                              .set_page_size(out_cb_id, out_cb_pagesize)
@@ -226,7 +230,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
-    #if 1
+#if 1
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
         log_debug(tt::LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
@@ -272,7 +276,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         log_debug(tt::LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
         log_debug(tt::LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
     }
-    #endif
+#endif
 
     /**
      * Reader Kernel: input rows -> input cb
@@ -316,13 +320,16 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     std::string reader_kernel_fname;
     if (is_large_kernel) {
         reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
+            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/"
+            "reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
     } else if (is_wide_reduction) {
         reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_wide.cpp";
+            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/"
+            "reader_max_pool_2d_multi_core_sharded_with_halo_wide.cpp";
     } else {
         reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp";
+            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/"
+            "reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp";
     }
 
     auto reader0_config = DataMovementConfig{
@@ -366,7 +373,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname;
     if (is_large_kernel) {
-        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
+        compute_kernel_fname =
+            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
     } else {
         // both regular and wide reductions
         compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp";
@@ -374,17 +382,18 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
-    return { std::move(program), {
-        .reader0_kernel = reader0_kernel,
-        .reader1_kernel = reader1_kernel,
-        .raw_in_cb = raw_in_cb,
-        .cb_out = cb_out,
-        .ncores = ncores,
-        .ncores_w = ncores_w
-    }};
+    return {
+        std::move(program),
+        {.reader0_kernel = reader0_kernel,
+         .reader1_kernel = reader1_kernel,
+         .raw_in_cb = raw_in_cb,
+         .cb_out = cb_out,
+         .ncores = ncores,
+         .ncores_w = ncores_w}};
 }
 
-MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(
+    const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
@@ -452,11 +461,11 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
         1);
 }
 
-void MaxPool2D::MultiCore::override_runtime_arguments(cached_program_t& cached_program,
-                                                       const operation_attributes_t& operation_attributes,
-                                                       const tensor_args_t& tensor_args,
-                                                       tensor_return_value_t& output_tensor) {
-
+void MaxPool2D::MultiCore::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
     auto& reader0_kernel = cached_program.shared_variables.reader0_kernel;
     auto& reader1_kernel = cached_program.shared_variables.reader1_kernel;
@@ -481,4 +490,4 @@ void MaxPool2D::MultiCore::override_runtime_arguments(cached_program_t& cached_p
     }
 }
 
-} // namespace ttnn::operations::pool
+}  // namespace ttnn::operations::pool

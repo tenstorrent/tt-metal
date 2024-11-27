@@ -17,16 +17,16 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::embedding_backward::detail {
 
 operation::ProgramWithCallbacks embedding_backward_multi_core(
-    const Tensor &index_tensor, const Tensor &grad_tensor, Tensor &output, const uint32_t num_embeddings) {
+    const Tensor& index_tensor, const Tensor& grad_tensor, Tensor& output, const uint32_t num_embeddings) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer *index_tensor_buffer = index_tensor.buffer();
-    tt_metal::Buffer *grad_tensor_buffer = grad_tensor.buffer();
-    tt_metal::Buffer *out_buffer = output.buffer();
+    tt_metal::Buffer* index_tensor_buffer = index_tensor.buffer();
+    tt_metal::Buffer* grad_tensor_buffer = grad_tensor.buffer();
+    tt_metal::Buffer* out_buffer = output.buffer();
 
-    Device *device = grad_tensor.device();
+    Device* device = grad_tensor.device();
     auto dst_addr = out_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -163,18 +163,17 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores, device](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto index_dram_buffer = input_buffers.at(0);
         auto grad_dram_buffer = input_buffers.at(1);
         auto output_dram_buffer = output_buffers.at(0);
 
-        auto &runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        for (const auto &core : cores) {
+        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = runtime_args_by_core[core.x][core.y];
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = grad_dram_buffer->address();
                 runtime_args[1] = index_dram_buffer->address();
                 runtime_args[2] = output_dram_buffer->address();

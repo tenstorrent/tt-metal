@@ -15,10 +15,10 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks reduce_multi_core_h(
-    const Tensor &a,
-    Tensor &output,
+    const Tensor& a,
+    Tensor& output,
     ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    tt_metal::Device *device = a.device();
+    tt_metal::Device* device = a.device();
 
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 .set_page_size(output_cb_index, dst_single_tile_size);
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     }
-    tt_metal::Buffer *src0_buffer = a.buffer();
+    tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     }
 
-    tt_metal::Buffer *dst_buffer = output.buffer();
+    tt_metal::Buffer* dst_buffer = output.buffer();
     tt_metal::KernelHandle writer_kernel_id;
 
     if (out_sharded) {
@@ -202,7 +202,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 .defines = reduce_defines});
     }
 
-    const auto &cores =
+    const auto& cores =
         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     if (in_sharded && out_sharded) {
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);
     } else {
         for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
-            const CoreCoord &core = cores[i];
+            const CoreCoord& core = cores[i];
             uint32_t num_cols_per_core = 0;
             if (core_group_1.contains(core)) {
                 num_cols_per_core = num_cols_per_core_group_1;
@@ -252,11 +252,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                                                 cb_src1 = cb_src1,
                                                 cb_output = cb_output,
                                                 cores = cores](
-                                                   const void *operation,
-                                                   Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
@@ -267,16 +267,16 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
-            auto &reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto &writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const auto &core : cores) {
+            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+            for (const auto& core : cores) {
                 {
-                    auto &runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
                     runtime_args[0] = src_buffer->address();
                 }
 
                 {
-                    auto &runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
                     runtime_args[0] = dst_buffer->address();
                 }
             }

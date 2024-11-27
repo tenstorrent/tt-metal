@@ -74,9 +74,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
             {tt::CBIndex::c_16, 2},  // param_out
             {tt::CBIndex::c_17, 2},  // momentum_out
 
-            {tt::CBIndex::c_24,
-             5,
-             intermed_cb_format},  // cb_scalar_args (lr, momentum, dampening, weight_decay, one)
+            {tt::CBIndex::c_24, 5, intermed_cb_format},  // cb_scalar_args (lr, momentum, dampening, weight_decay, one)
             {tt::CBIndex::c_25, 1, intermed_cb_format},  //
             {tt::CBIndex::c_26, 1, intermed_cb_format},  //
             {tt::CBIndex::c_27, 1, intermed_cb_format},  //
@@ -123,13 +121,12 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(is_dram(param_in)),
         static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(
-            momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
 
     std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
-    if (has_momentum_buffer_out)
-        writer_compile_time_args.push_back(
-            static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+    if (has_momentum_buffer_out) {
+        writer_compile_time_args.push_back(static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+    }
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
@@ -138,10 +135,10 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "writer_moreh_sgd.cpp";
 
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

@@ -15,9 +15,7 @@ FORCE_INLINE void validate(PacketHeader const& packet_header) {
     ASSERT(packet_header.noc_send_type < 2);
 }
 FORCE_INLINE bool is_valid(PacketHeader const& packet_header) {
-    return (packet_header.command_type < 2) &&
-        (packet_header.chip_send_type < 2) &&
-        (packet_header.noc_send_type < 2);
+    return (packet_header.command_type < 2) && (packet_header.chip_send_type < 2) && (packet_header.noc_send_type < 2);
 }
 
-} // namespace tt::fabric
+}  // namespace tt::fabric

@@ -123,10 +123,11 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     if constexpr (initialize_args) {
         binary_reader_args = {cores.size(), std::vector<uint32_t>(7)};
         eltwise_binary_args = {cores.size(), std::vector<uint32_t>(2)};
-        if (block_or_width_sharded and not out_sharded)
+        if (block_or_width_sharded and not out_sharded) {
             unary_writer_args = {cores.size(), std::vector<uint32_t>(7)};
-        else
+        } else {
             unary_writer_args = {cores.size(), std::vector<uint32_t>(3)};
+        }
     }
 
     auto& cached_reader_args = GetRuntimeArgs(program, binary_reader_kernel_id);
@@ -148,7 +149,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             } else if (sharded_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
                 num_shardes_per_width = num_cores;
                 num_shardes_per_height = 1;
-            } else { // block sharded
+            } else {  // block sharded
                 auto bbox = core_group_1.bounding_box();
                 if (shard_spec.value().orientation == ShardOrientation::ROW_MAJOR) {
                     num_shardes_per_height = bbox.end_coord.y - bbox.start_coord.y + 1;
@@ -159,7 +160,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                 }
             }
             start_id = (i / num_shardes_per_width) * (block_height * block_width * num_shardes_per_width) +
-                                (i % num_shardes_per_width) * block_width;
+                       (i % num_shardes_per_width) * block_width;
         } else {
             start_id = num_tiles_read;
         }
@@ -187,7 +188,14 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         }
         if constexpr (initialize_args) {
             binary_reader_args[i] = {
-                src_buffer_a->address(), src_buffer_b->address(), num_tiles_per_core, start_id, block_height, block_width, num_shardes_per_width, num_shardes_per_width};
+                src_buffer_a->address(),
+                src_buffer_b->address(),
+                num_tiles_per_core,
+                start_id,
+                block_height,
+                block_width,
+                num_shardes_per_width,
+                num_shardes_per_width};
             eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core};
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
@@ -229,7 +237,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                     unpadded_block_width,
                     output_width,
                     block_size,
-                    (i / num_shardes_per_width) * (block_height * block_width * num_shardes_per_width) + (i % num_shardes_per_width) * block_width,
+                    (i / num_shardes_per_width) * (block_height * block_width * num_shardes_per_width) +
+                        (i % num_shardes_per_width) * block_width,
                     0};
             } else {
                 auto& writer_args = cached_writer_args.at(core.x).at(core.y);
@@ -240,7 +249,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                 writer_args[4] = unpadded_block_width;
                 writer_args[5] = output_width;
                 writer_args[6] = block_size;
-                writer_args[7] = (i / num_shardes_per_width) * (block_height * block_width * num_shardes_per_width) + (i % num_shardes_per_width) * block_width;
+                writer_args[7] = (i / num_shardes_per_width) * (block_height * block_width * num_shardes_per_width) +
+                                 (i % num_shardes_per_width) * block_width;
                 writer_args[8] = 0;
             }
         } else {
@@ -362,28 +372,30 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines =
-        utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
+    std::map<string, string> eltwise_defines = utils::get_defines(
+        op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
-         op_type == BinaryOpType::LOGADDEXP2){
+            op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb0_format = tt::DataFormat::Float16_b;
         }
         uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
+            tt_metal::CircularBufferConfig(
+                max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
                 .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
         auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
-         op_type == BinaryOpType::LOGADDEXP2){
+            op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb1_format = tt::DataFormat::Float16_b;
         }
         uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
-            tt_metal::CircularBufferConfig(max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
+            tt_metal::CircularBufferConfig(
+                max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
                 .set_page_size(tt::CBIndex::c_4, interim1_single_tile_size);
         auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
@@ -412,7 +424,8 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, (std::uint32_t)block_or_width_sharded};
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, (std::uint32_t)block_or_width_sharded};
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
@@ -425,9 +438,10 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        (block_or_width_sharded and not out_sharded) ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                              "writer_unary_sharded_blocks_interleaved_start_id.cpp"
-                                            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        (block_or_width_sharded and not out_sharded)
+            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+              "writer_unary_sharded_blocks_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 

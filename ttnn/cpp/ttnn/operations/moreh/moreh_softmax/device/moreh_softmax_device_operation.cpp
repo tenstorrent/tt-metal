@@ -114,8 +114,9 @@ MorehSoftmaxOperation::shape_return_value_t MorehSoftmaxOperation::compute_outpu
 MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output;
-    if (output.has_value())
+    if (output.has_value()) {
         return output.value();
+    }
 
     const auto& input = tensor_args.input;
     const auto& output_shape = input.get_shape();

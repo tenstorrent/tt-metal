@@ -11,12 +11,12 @@ namespace tt::tt_metal {
 template <size_t N>
 std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
     const uint32_t (&cbs)[N],
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     uint32_t page_size,
     uint32_t num_pages,
     const tt::DataFormat data_format,
-    Buffer *buffer = nullptr) {
+    Buffer* buffer = nullptr) {
     std::map<uint8_t, tt::DataFormat> data_format_spec = {};
     for (auto cb : cbs) {
         data_format_spec[cb] = data_format;
@@ -38,12 +38,12 @@ std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
 
 inline std::tuple<uint32_t, CBHandle> create_cb(
     uint32_t cb,
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     uint32_t page_size,
     uint32_t num_pages,
     const tt::DataFormat data_format,
-    Buffer *buffer = nullptr) {
+    Buffer* buffer = nullptr) {
     uint32_t cbs[] = {cb};
     auto [_, handle] = create_cb(cbs, program, core_spec, page_size, num_pages, data_format, buffer);
     return std::make_tuple(cb, handle);

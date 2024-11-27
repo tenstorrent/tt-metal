@@ -54,8 +54,11 @@ OptionalTensors MorehGroupNorm::create_async_optional_output_tensors(
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
-        are_required_outputs.at(0) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt,
-        are_required_outputs.at(1) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt,
-        are_required_outputs.at(2) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt};
+        are_required_outputs.at(0) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                                   : std::nullopt,
+        are_required_outputs.at(1) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                                   : std::nullopt,
+        are_required_outputs.at(2) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                                   : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm

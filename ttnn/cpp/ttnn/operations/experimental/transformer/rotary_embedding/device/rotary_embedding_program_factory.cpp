@@ -18,13 +18,12 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks rotary_embedding_multi_core(
-    const Tensor &input,
-    const Tensor &cos,
-    const Tensor &sin,
-    Tensor &output,
+    const Tensor& input,
+    const Tensor& cos,
+    const Tensor& sin,
+    Tensor& output,
     std::optional<uint32_t> token_idx,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config
-) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using namespace tt::constants;
 
     Program program{};
@@ -52,7 +51,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
-    tt_metal::Device *device = input.device();
+    tt_metal::Device* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -80,10 +79,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         core_group_2 = CoreRangeSet();
         num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_rows_per_core_group_2 = 0;
-        num_input_tiles =
-            in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        num_output_tiles =
-            out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end_coord.x + 1;
         num_cores_y = bbox.end_coord.y + 1;
@@ -282,7 +279,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+        "writer_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
 
@@ -312,7 +310,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
+        "rotary_embedding.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_kernel_defines});
     if (!core_group_2.ranges().empty()) {
@@ -320,9 +319,14 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
         auto rotary_embedding_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
+            "rotary_embedding.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_kernel_defines});
+            tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = compute_kernel_args,
+                .defines = compute_kernel_defines});
     }
     uint32_t cos_sin_offset = 0;
     uint32_t cos_sin_start_id = 0;
@@ -334,10 +338,10 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
-    const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
-        const CoreCoord &core = cores.at(i);
+        const CoreCoord& core = cores.at(i);
         uint32_t num_rows_per_core = 0;
         if (i < g1_numcores) {
             num_rows_per_core = num_rows_per_core_group_1;
@@ -388,12 +392,12 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
                                                 Wbytes,
                                                 Wt,
                                                 HtWt](
-                                                   const void *operation,
-                                                   Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
-        const auto token_idx = static_cast<const RotaryEmbedding *>(operation)->token_idx;
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        const auto token_idx = static_cast<const RotaryEmbedding*>(operation)->token_idx;
 
         auto src_buffer = input_tensors.at(0).buffer();
         auto cos_buffer = input_tensors.at(1).buffer();
@@ -420,7 +424,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         }
 
         for (uint32_t i = 0, num_tiles_written = 0; i < cores.size(); ++i) {
-            const CoreCoord &core = cores.at(i);
+            const CoreCoord& core = cores.at(i);
             uint32_t num_rows_per_core = 0;
             if (i < g1_numcores) {
                 num_rows_per_core = num_rows_per_core_group_1;
@@ -432,7 +436,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 if (in_sharded) {
                     runtime_args[0] = cos_buffer->address();
                     runtime_args[1] = sin_buffer->address();
@@ -446,7 +450,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
                 runtime_args[3] = cos_sin_offset;
             }

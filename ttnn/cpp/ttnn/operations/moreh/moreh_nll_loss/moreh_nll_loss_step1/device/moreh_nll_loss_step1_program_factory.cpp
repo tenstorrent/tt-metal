@@ -80,10 +80,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             all_cores,
             data_format,
             {
-                {CBIndex::c_0, 1, tt::DataFormat::Int32},       // target
-                {CBIndex::c_1, 1},                              // weight
+                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
+                {CBIndex::c_1, 1},                         // weight
                 {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
-                {CBIndex::c_16, 1},                             // output
+                {CBIndex::c_16, 1},                        // output
             });
     } else {
         CreateCircularBuffer(
@@ -91,10 +91,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             all_cores,
             data_format,
             {
-                {CBIndex::c_0, 1, tt::DataFormat::Int32},       // target
-                {CBIndex::c_1, weight_num_tile},                // weight
+                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
+                {CBIndex::c_1, weight_num_tile},           // weight
                 {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
-                {CBIndex::c_16, 1},                             // output
+                {CBIndex::c_16, 1},                        // output
             });
     }
 
@@ -104,8 +104,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
         static_cast<uint32_t>(weight_has_value)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(output))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -126,10 +125,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 
-    auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;

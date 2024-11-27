@@ -8,7 +8,7 @@
 #include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
-void bind_moreh_abs_pow_operation(py::module &module) {
+void bind_moreh_abs_pow_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_abs_pow,
@@ -22,4 +22,4 @@ void bind_moreh_abs_pow_operation(py::module &module) {
             py::arg("compute_kernel_config") = std::nullopt,
         });
 }
-}  // namespace ttnn::operations::moreh::moreh_pow
+}  // namespace ttnn::operations::moreh::moreh_abs_pow

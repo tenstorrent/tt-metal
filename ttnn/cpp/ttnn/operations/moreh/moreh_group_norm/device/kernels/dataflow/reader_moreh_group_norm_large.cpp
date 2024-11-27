@@ -170,7 +170,7 @@ void kernel_main() {
                     tilized_gamma_idx_in_tile =
                         get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
                     if (tilized_gamma_idx_in_tile != 0) {
-                        auto gamma_ptr = reinterpret_cast<uint16_t *>(gamma_l1_write_ptr + q * gamma_tile_bytes);
+                        auto gamma_ptr = reinterpret_cast<uint16_t*>(gamma_l1_write_ptr + q * gamma_tile_bytes);
                         gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                     }
                 }
@@ -199,7 +199,7 @@ void kernel_main() {
                     tilized_beta_idx_in_tile =
                         get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
                     if (tilized_beta_idx_in_tile != 0) {
-                        auto beta_ptr = reinterpret_cast<uint16_t *>(beta_l1_write_ptr + q * beta_tile_bytes);
+                        auto beta_ptr = reinterpret_cast<uint16_t*>(beta_l1_write_ptr + q * beta_tile_bytes);
                         beta_ptr[0] = beta_ptr[tilized_beta_idx_in_tile];
                     }
                 }

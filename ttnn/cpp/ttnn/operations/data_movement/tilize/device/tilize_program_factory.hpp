@@ -11,5 +11,4 @@ namespace ttnn::operations::data_movement::detail {
 tt::tt_metal::operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output);
 tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core(const Tensor& a, Tensor& output);
 
-
 }  // namespace ttnn::operations::data_movement::detail

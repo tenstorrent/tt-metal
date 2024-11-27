@@ -11,7 +11,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 
-namespace ttnn::operations::embedding{
+namespace ttnn::operations::embedding {
 
 ttnn::Tensor EmbeddingOperation::invoke(
     uint8_t queue_id,
@@ -34,7 +34,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
     TT_FATAL(input_tensor_arg.get_layout() == ttnn::ROW_MAJOR_LAYOUT, "Indices tensor must be in row major layout.");
 
     if (mutable_weight.get_layout() == ttnn::TILE_LAYOUT) {
-        mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_weight.device());
+        mutable_weight = ttnn::to_layout(
+            mutable_weight, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_weight.device());
     }
     auto hidden_embedding_dim = mutable_weight.get_shape()[-1];
     auto padded_hidden_embedding_dim = mutable_weight.get_shape().with_tile_padding()[-1];
@@ -47,28 +48,29 @@ ttnn::Tensor EmbeddingOperation::invoke(
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
-    if(input_tensor.get_legacy_shape()[-1] % TILE_HEIGHT == 0 &&
-        weight.get_legacy_shape()[-1] % TILE_WIDTH == 0){
-        if(layout.has_value()){
-            if(layout.value() == ttnn::TILE_LAYOUT) fused_tilized = true;
-        }
-        else if(weight_arg.get_layout() == ttnn::TILE_LAYOUT){
+    if (input_tensor.get_legacy_shape()[-1] % TILE_HEIGHT == 0 && weight.get_legacy_shape()[-1] % TILE_WIDTH == 0) {
+        if (layout.has_value()) {
+            if (layout.value() == ttnn::TILE_LAYOUT) {
+                fused_tilized = true;
+            }
+        } else if (weight_arg.get_layout() == ttnn::TILE_LAYOUT) {
             fused_tilized = true;
         }
     }
 
     auto embeddings = operation::run(
-                            Embeddings{
-                                .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                                .tilized = fused_tilized,
-                                .embeddings_type = embeddings_type,
-                                .pad_token = pad_token,
-                                .output_dtype = dtype.value_or(weight.get_dtype())},
-                            {input_tensor, weight})
-                            .at(0);
+                          Embeddings{
+                              .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+                              .tilized = fused_tilized,
+                              .embeddings_type = embeddings_type,
+                              .pad_token = pad_token,
+                              .output_dtype = dtype.value_or(weight.get_dtype())},
+                          {input_tensor, weight})
+                          .at(0);
     embeddings = ttnn::reshape(
         embeddings, ttnn::Shape{std::array<uint32_t, 3>{batch_size, sentence_size, hidden_embedding_dim}});
-    embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.get_layout()), std::nullopt, std::nullopt, (Device*)nullptr);
+    embeddings = ttnn::to_layout(
+        embeddings, layout.value_or(weight_arg.get_layout()), std::nullopt, std::nullopt, (Device*)nullptr);
     return embeddings;
 }
 ttnn::Tensor EmbeddingOperation::invoke(
@@ -79,9 +81,17 @@ ttnn::Tensor EmbeddingOperation::invoke(
     EmbeddingsType embeddings_type,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor
-    ) {
-    return invoke(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, dtype, memory_config, std::move(optional_output_tensor));
+    const std::optional<Tensor>& optional_output_tensor) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_arg,
+        weight_arg,
+        pad_token,
+        layout,
+        embeddings_type,
+        dtype,
+        memory_config,
+        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::embedding

@@ -12,17 +12,17 @@
 
 namespace ttnn::operations::moreh::moreh_sum {
 MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::MorehSumNCIntFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
     auto output = output_tensor;
     auto dim = operation_attributes.dim;
 
     auto memory_config = operation_attributes.memory_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    tt::tt_metal::Device *device{input.device()};
+    tt::tt_metal::Device* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
@@ -76,9 +76,9 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
         all_cores,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},              // input
+            {tt::CBIndex::c_0, in0_t},         // input
             {tt::CBIndex::c_24, intermed0_t},  // accumulated sum
-            {tt::CBIndex::c_16, out0_t},            // output
+            {tt::CBIndex::c_16, out0_t},       // output
         });
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
@@ -87,10 +87,8 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/writer_moreh_sum_nc.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -160,28 +158,28 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
 }
 
 void MorehSumOperation::MorehSumNCIntFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &tensor_return_value) {
-    auto &program = cached_program.program;
-    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    const auto *input_buffer{tensor_args.input.buffer()};
-    const auto *output_buffer{tensor_return_value.buffer()};
+    const auto* input_buffer{tensor_args.input.buffer()};
+    const auto* output_buffer{tensor_return_value.buffer()};
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = input_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = output_buffer->address();
         }
     }

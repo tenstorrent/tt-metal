@@ -13,8 +13,9 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     auto floored_p = std::floor(p);
     auto decimal = p - floored_p;
     bool p_is_negative = floored_p < 0.0f;
-    if (p_is_negative)
+    if (p_is_negative) {
         floored_p = -floored_p;
+    }
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 

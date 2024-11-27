@@ -14,7 +14,6 @@ void kernel_main() {
     const uint32_t num_batches = get_arg_val<uint32_t>(5);
     const uint32_t packed_pad_value = get_arg_val<uint32_t>(6);
 
-
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t pad_cb = get_compile_time_arg_val(2);
@@ -44,12 +43,12 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_id_in1, num_padded_tiles_per_batch);
 
-    for(uint32_t b = 1; b < num_batches; ++b) {
+    for (uint32_t b = 1; b < num_batches; ++b) {
         cb_reserve_back(cb_id_in1, num_padded_tiles_per_batch);
         write_addr = get_write_ptr(cb_id_in1);
         noc_async_read(read_noc_addr, write_addr, input_block_size);
         read_noc_addr += input_block_size;
-        write_addr+= input_block_size;
+        write_addr += input_block_size;
         for (uint32_t i = 0; i < num_padded_rows; ++i) {
             noc_async_read(pad_noc_addr, write_addr, input_width_bytes);
             write_addr += input_width_bytes;

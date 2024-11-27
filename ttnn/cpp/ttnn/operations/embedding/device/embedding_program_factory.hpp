@@ -15,24 +15,24 @@ using namespace tt;
 namespace ttnn::operations::embedding::detail {
 
 operation::ProgramWithCallbacks embeddings_tilized(
-    const Tensor &a,
-    const Tensor &weights,
-    Tensor &output,
+    const Tensor& a,
+    const Tensor& weights,
+    Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer *a_buffer = a.buffer();
-    tt_metal::Buffer *weights_buffer = weights.buffer();
-    tt_metal::Buffer *out_buffer = output.buffer();
+    tt_metal::Buffer* a_buffer = a.buffer();
+    tt_metal::Buffer* weights_buffer = weights.buffer();
+    tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
+    Device* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -81,13 +81,11 @@ operation::ProgramWithCallbacks embeddings_tilized(
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     EmbeddingsIndexType embeddings_index_type;
-    if(a.get_dtype() == DataType::BFLOAT16) {
+    if (a.get_dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
-    }
-    else{
+    } else {
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
-
 
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
     uint32_t weights_single_tile_size = tt_metal::detail::TileSize(weights_cb_data_format);
@@ -135,7 +133,8 @@ operation::ProgramWithCallbacks embeddings_tilized(
     bool input_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_page_size);
     uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_page_size) : 0;
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
-    uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;
+    uint32_t weight_log2_stick_size =
+        weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;
 
     // Create Kernels
     // reader
@@ -151,15 +150,15 @@ operation::ProgramWithCallbacks embeddings_tilized(
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)TILE_HEIGHT * input_element_size_bytes};
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {
+        {magic_enum::enum_name(embeddings_type).data(), "1"},
+        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-             embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     if (num_blocks_per_core_group_1 > 0) {
         std::vector<uint32_t> compute_args_1 = {
@@ -192,8 +191,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -215,7 +213,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord &core = cores[i];
+        const CoreCoord& core = cores[i];
 
         uint32_t local_input_offset = input_offset;
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
@@ -240,22 +238,22 @@ operation::ProgramWithCallbacks embeddings_tilized(
     }
 
     auto override_runtime_args_callback = [num_cores_x, num_cores_y, reader_kernel_id, writer_kernel_id, cores, device](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto output_dram_buffer = output_buffers.at(0);
         auto input_dram_buffer = input_buffers.at(0);
         auto weights_dram_buffer = input_buffers.at(1);
 
-        for (const auto &core : cores) {
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = input_dram_buffer->address();
                 runtime_args[1] = weights_dram_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = output_dram_buffer->address();
             }
         }
@@ -265,24 +263,24 @@ operation::ProgramWithCallbacks embeddings_tilized(
 }
 
 operation::ProgramWithCallbacks embeddings_rm(
-    const Tensor &a,
-    const Tensor &weights,
-    Tensor &output,
+    const Tensor& a,
+    const Tensor& weights,
+    Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer *a_buffer = a.buffer();
-    tt_metal::Buffer *weights_buffer = weights.buffer();
-    tt_metal::Buffer *out_buffer = output.buffer();
+    tt_metal::Buffer* a_buffer = a.buffer();
+    tt_metal::Buffer* weights_buffer = weights.buffer();
+    tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
+    Device* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -372,7 +370,8 @@ operation::ProgramWithCallbacks embeddings_rm(
     bool input_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_page_size);
     uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_page_size) : 0;
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
-    uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;
+    uint32_t weight_log2_stick_size =
+        weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;
 
     // Create Kernels
     // reader
@@ -389,25 +388,25 @@ operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)block_height * input_element_size_bytes};
 
     EmbeddingsIndexType embeddings_index_type;
-    if(a.get_dtype() == DataType::BFLOAT16) {
+    if (a.get_dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
-    }
-    else{
+    } else {
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {
+        {magic_enum::enum_name(embeddings_type).data(), "1"},
+        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-            embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-    uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
+    uint32_t output_log2_stick_size =
+        output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)out_is_dram,
@@ -440,7 +439,7 @@ operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord &core = cores[i];
+        const CoreCoord& core = cores[i];
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
@@ -465,22 +464,22 @@ operation::ProgramWithCallbacks embeddings_rm(
     }
 
     auto override_runtime_args_callback = [num_cores_x, num_cores_y, reader_kernel_id, writer_kernel_id, cores, device](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto output_dram_buffer = output_buffers.at(0);
         auto input_dram_buffer = input_buffers.at(0);
         auto weights_dram_buffer = input_buffers.at(1);
 
-        for (const auto &core : cores) {
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = input_dram_buffer->address();
                 runtime_args[1] = weights_dram_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = output_dram_buffer->address();
             }
         }
@@ -490,9 +489,9 @@ operation::ProgramWithCallbacks embeddings_rm(
 }
 
 operation::ProgramWithCallbacks embeddings_(
-    const Tensor &a,
-    const Tensor &weights,
-    Tensor &output,
+    const Tensor& a,
+    const Tensor& weights,
+    Tensor& output,
     bool tilized,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {

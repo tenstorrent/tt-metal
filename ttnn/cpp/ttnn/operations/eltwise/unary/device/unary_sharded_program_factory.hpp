@@ -9,7 +9,6 @@
 
 namespace ttnn::operations::unary::program {
 
-
 struct UnaryShardedProgramFactory {
     struct shared_variables_t {
         CBHandle cb_src0;
@@ -29,4 +28,4 @@ struct UnaryShardedProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-} // namespace ttnn::operations::unary::program
+}  // namespace ttnn::operations::unary::program

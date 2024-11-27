@@ -6,7 +6,8 @@
 #include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::examples {
-ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultipleReturnDeviceOperation::SingleCore::create(
+ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t
+ExampleMultipleReturnDeviceOperation::SingleCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -25,7 +26,8 @@ ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultip
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    auto output_dtype = output_tensor1.has_value() ? output_tensor1.value().get_dtype() : output_tensor2.value().get_dtype();
+    auto output_dtype =
+        output_tensor1.has_value() ? output_tensor1.value().get_dtype() : output_tensor2.value().get_dtype();
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
@@ -57,9 +59,14 @@ ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultip
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
 
-    bool dst_is_dram1 = output_tensor1.has_value() ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0) : 0;
-    bool dst_is_dram2 = output_tensor2.has_value() ? (output_tensor2.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0) : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram1, (std::uint32_t)dst_is_dram2};
+    bool dst_is_dram1 = output_tensor1.has_value()
+                            ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)
+                            : 0;
+    bool dst_is_dram2 = output_tensor2.has_value()
+                            ? (output_tensor2.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)
+                            : 0;
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram1, (std::uint32_t)dst_is_dram2};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -121,7 +128,10 @@ ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultip
         auto dst_buffer1_address = output_tensor1.has_value() ? output_tensor1.value().buffer()->address() : 0;
         auto dst_buffer2_address = output_tensor2.has_value() ? output_tensor2.value().buffer()->address() : 0;
         tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer1_address, dst_buffer2_address, num_tiles_per_core, num_tiles_written});
+            program,
+            unary_writer_kernel_id,
+            core,
+            {dst_buffer1_address, dst_buffer2_address, num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 

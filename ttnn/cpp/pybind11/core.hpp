@@ -31,7 +31,11 @@ void py_module(py::module& module) {
     py_config.def_property_readonly("report_path", &ttnn::Config::get<"report_path">);
 
     module.def("get_memory_config", &ttnn::get_memory_config);
-    module.def("set_printoptions", &ttnn::set_printoptions, py::kw_only(), py::arg("profile"),
+    module.def(
+        "set_printoptions",
+        &ttnn::set_printoptions,
+        py::kw_only(),
+        py::arg("profile"),
         R"doc(
 
         Set print options for tensor output.

@@ -14,7 +14,7 @@ namespace py = pybind11;
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
-void bind_moreh_nll_loss_unreduced_backward_operation(py::module &module) {
+void bind_moreh_nll_loss_unreduced_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_nll_loss_unreduced_backward,

@@ -52,10 +52,7 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 // }
 #endif
 
-template <
-    uint32_t num_output_tiles,
-    bool is_partial_tile,
-    uint32_t split_reader>
+template <uint32_t num_output_tiles, bool is_partial_tile, uint32_t split_reader>
 inline void reduce_h_fused(
     const uint32_t in_cb_id,
     const uint32_t in_scalar_cb_id,
@@ -63,8 +60,7 @@ inline void reduce_h_fused(
     const uint32_t unpA_face_r_dim) {
     uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : unpA_face_r_dim < 32 ? 2 : 4;
     constexpr uint32_t num_out_rows = 1;
-    const uint32_t curr_in_cb_id =
-        split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
+    const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
     cb_wait_front(curr_in_cb_id, 1);
     unpack_tilizeA_B_block(
         curr_in_cb_id,
@@ -83,7 +79,8 @@ namespace NAMESPACE {
 
 void MAIN {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet.
-    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0); // note ntiles_hw will always be 1 in this kernel, when ntiles_hw > 1 the large kernel is called
+    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(
+        0);  // note ntiles_hw will always be 1 in this kernel, when ntiles_hw > 1 the large kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(3);
     constexpr uint32_t out_h = get_compile_time_arg_val(4);
@@ -134,10 +131,7 @@ void MAIN {
                 tile_regs_acquire();
 
                 reduce_h_fused<num_output_tiles, is_partial_tile, split_reader>(
-                    in_cb_id,
-                    in_scalar_cb_id,
-                    i,
-                    max_rows_for_reduction);
+                    in_cb_id, in_scalar_cb_id, i, max_rows_for_reduction);
                 tile_regs_wait();
                 tile_regs_commit();
                 pack_untilize_dst<num_output_tiles>(
@@ -152,8 +146,7 @@ void MAIN {
             pack_untilize_uninit(interm_reduction_cb_id);
             cb_wait_front(interm_reduction_cb_id, 1);
 
-            pack_untilize_dst_init_short<num_output_tiles>(
-                out_cb_id, num_out_rows, num_faces_in_output_tile);
+            pack_untilize_dst_init_short<num_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
 
             tile_regs_acquire();
             unpack_tilizeA_B_block(

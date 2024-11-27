@@ -56,9 +56,7 @@ void bind_normalization_group_norm(pybind11::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("inplace") = true,
-            py::arg("output_layout") = std::nullopt
-        }
-    );
+            py::arg("output_layout") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::normalization::detail

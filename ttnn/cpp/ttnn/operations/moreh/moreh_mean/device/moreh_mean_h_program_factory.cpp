@@ -68,12 +68,12 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         all_cores,
         data_format,
         {
-            {CBIndex::c_0, num_input_tiles},                        // input
-            {CBIndex::c_2, 1},                                      // scaler
-            {CBIndex::c_3, 1},                                      // mask
+            {CBIndex::c_0, num_input_tiles},                   // input
+            {CBIndex::c_2, 1},                                 // scaler
+            {CBIndex::c_3, 1},                                 // mask
             {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},  //
             {CBIndex::c_25, 1},                                //
-            {CBIndex::c_16, 1},                                     // output
+            {CBIndex::c_16, 1},                                // output
         });
 
     float scaler = 1.0f / origin_H;
@@ -125,7 +125,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         units_per_core_group_2,  // Wt
         1,                       // NC
         origin_H};
-
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,

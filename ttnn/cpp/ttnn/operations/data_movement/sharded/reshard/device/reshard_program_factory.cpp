@@ -14,7 +14,6 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-
 namespace ttnn::operations::data_movement::detail {
 
 std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
@@ -299,8 +298,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
     return runtime_args;
 }
 
-
-template<bool is_reader>
+template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& input, Tensor& output) {
     auto device = input.device();
 
@@ -318,8 +316,8 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
     auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto remote_cores =
-        corerange_to_cores(remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto remote_cores = corerange_to_cores(
+        remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     uint32_t total_size, unit_size, local_units_per_shard, remote_units_per_shard;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
@@ -337,19 +335,16 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         total_size = remote_units_per_shard * unit_size;
     }
 
-    const std::string kernel_name = is_reader ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp" : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
+    const std::string kernel_name =
+        is_reader
+            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
+            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
-    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program,
-        kernel_name,
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({cb_index}));
+    tt::tt_metal::KernelHandle kernel_id_0 =
+        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index}));
 
-    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program,
-        kernel_name,
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig({cb_index}));
+    tt::tt_metal::KernelHandle kernel_id_1 =
+        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -383,9 +378,11 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;
                         remote_core_units_rem = remote_units_per_shard;
-                        bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
+                        bank_id =
+                            device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
                         bank_offset = device->bank_offset(remote_buffer_type, bank_id);
-                        remote_core = device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
+                        remote_core =
+                            device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
                     auto remote_core =
@@ -431,7 +428,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
-
 
 operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, Tensor& output) {
     auto device = input.device();

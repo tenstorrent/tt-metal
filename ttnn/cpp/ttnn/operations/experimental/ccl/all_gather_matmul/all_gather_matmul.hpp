@@ -32,7 +32,7 @@ struct ExecuteAllGatherMatmul {
         const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 };
 
-}  // namespace opereations::experimental::ccl
+}  // namespace operations::experimental::ccl
 
 namespace experimental {
 

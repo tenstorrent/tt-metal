@@ -87,10 +87,10 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         all_cores,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},              // input
-            {tt::CBIndex::c_1, in1_t},              // mask
+            {tt::CBIndex::c_0, in0_t},         // input
+            {tt::CBIndex::c_1, in1_t},         // mask
             {tt::CBIndex::c_24, intermed0_t},  // accumalated sum
-            {tt::CBIndex::c_16, out0_t},            // output
+            {tt::CBIndex::c_16, out0_t},       // output
         });
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -105,10 +105,9 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_int_sum_w.cpp"};
     const auto writer_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_int_sum_w.cpp"};
-    const auto reader_kernel_id{CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
-    const auto writer_kernel_id{
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
+    const auto reader_kernel_id{
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
+    const auto writer_kernel_id{CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

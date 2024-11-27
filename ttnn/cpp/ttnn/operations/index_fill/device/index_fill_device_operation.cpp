@@ -24,13 +24,9 @@ void IndexFillOperation::validate(
     TT_FATAL(
         operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
-    TT_FATAL(index.get_logical_shape().rank() == 1,
-        "Index fill: Index tensor must be 1D!");
-    TT_FATAL(
-        dim < input.get_logical_shape().rank() && dim >= 0,
-        "Index fill: Invalid dimension");
-    TT_FATAL(index.get_logical_shape().rank() == 1,
-        "Index fill: Index tensor must be 1D!");
+    TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
+    TT_FATAL(dim < input.get_logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
+    TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
 }
 void IndexFillOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -49,11 +45,7 @@ IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tens
     const auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
     const auto& input = tensor_args.input;
     return create_device_tensor(
-        output_shape,
-        input.dtype(),
-        input.layout(),
-        input.device(),
-        operation_attributes.memory_config);
+        output_shape, input.dtype(), input.layout(), input.device(), operation_attributes.memory_config);
 }
 std::tuple<IndexFillOperation::operation_attributes_t, IndexFillOperation::tensor_args_t> IndexFillOperation::invoke(
     const Tensor& input,

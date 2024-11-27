@@ -80,8 +80,9 @@ OptionalTensors MorehGroupNormBackward::create_async_optional_output_tensors(
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-
-    TT_FATAL(are_required_outputs[0] or are_required_outputs[1] or are_required_outputs[2], "backward is called, but all gradients are not required");
+    TT_FATAL(
+        are_required_outputs[0] or are_required_outputs[1] or are_required_outputs[2],
+        "backward is called, but all gradients are not required");
 
     return {
         are_required_outputs.at(0)

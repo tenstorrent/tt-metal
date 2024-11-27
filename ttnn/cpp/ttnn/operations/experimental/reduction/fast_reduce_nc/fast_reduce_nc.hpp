@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
-namespace operations::experimental::reduction   {
+namespace operations::experimental::reduction {
 
 struct FastReduceNCOperation {
     static ttnn::Tensor invoke(

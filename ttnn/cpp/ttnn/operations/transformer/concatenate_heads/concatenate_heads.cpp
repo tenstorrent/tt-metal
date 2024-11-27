@@ -4,7 +4,6 @@
 
 #include "concatenate_heads.hpp"
 
-
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -13,7 +12,6 @@ namespace ttnn::operations::transformer {
 
 struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NLPConcatHeadsDeviceOperation {
     void validate(const std::vector<Tensor>& input_tensors) const {
-
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
         const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
@@ -23,14 +21,15 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
 
         TT_FATAL(
             head_size % ttnn::types::TILE_SIZE == 0,
-                "Head size must be a multiple of {} but was found to be {}. Update the matmul that uses the output of this "
-                "operation to include padding in the weights.",
-                ttnn::types::TILE_SIZE,
-                head_size);
+            "Head size must be a multiple of {} but was found to be {}. Update the matmul that uses the output of this "
+            "operation to include padding in the weights.",
+            ttnn::types::TILE_SIZE,
+            head_size);
 
         TT_FATAL(
             padded_head_size - head_size == 0,
-            "Head size ({}) cannot have tile padding. Ensure that the head size is not padded.", head_size);
+            "Head size ({}) cannot have tile padding. Ensure that the head size is not padded.",
+            head_size);
 
         NLPConcatHeadsDeviceOperation::validate(input_tensors);
     }
@@ -74,11 +73,9 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
     }
 };
 
-
-ttnn::Tensor ExecuteConcatenateHeads::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    return operation::run(
-        ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())},
-        {input_tensor}).at(0);
+ttnn::Tensor ExecuteConcatenateHeads::invoke(
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    return operation::run(ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor}).at(0);
 }
 
-}
+}  // namespace ttnn::operations::transformer

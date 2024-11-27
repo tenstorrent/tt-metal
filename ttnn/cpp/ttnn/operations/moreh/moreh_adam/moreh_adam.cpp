@@ -71,10 +71,14 @@ OptionalTensors MorehAdam::create_async_optional_output_tensors(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     // First three are always true, last one depends on amsgrad
     return {
-        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        amsgrad.value_or(false) ? std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})) : std::nullopt
-    };
+        std::optional<Tensor>(
+            operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        std::optional<Tensor>(
+            operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        std::optional<Tensor>(
+            operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        amsgrad.value_or(false) ? std::optional<Tensor>(operation::get_workers_for_op_output(
+                                      {param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in}))
+                                : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_adam

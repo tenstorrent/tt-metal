@@ -7,7 +7,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-
 namespace ttnn::operations::data_movement {
 
 struct ShardedToInterleavedPartialDeviceOperation {
@@ -16,11 +15,11 @@ struct ShardedToInterleavedPartialDeviceOperation {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
     static constexpr auto attribute_names =
         std::make_tuple("num_slices", "slice_index", "output_mem_config", "output_dtype");
@@ -33,4 +32,4 @@ struct ShardedToInterleavedPartialDeviceOperation {
     }
 };
 
-}
+}  // namespace ttnn::operations::data_movement

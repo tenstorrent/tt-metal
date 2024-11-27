@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_untilize(py::module &module) {
+void bind_untilize(py::module& module) {
     auto doc =
         R"doc(
             Changes data layout of input tensor to ROW_MAJOR.
@@ -43,12 +43,14 @@ void bind_untilize(py::module &module) {
         ttnn::untilize,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const std::optional<MemoryConfig> &memory_config,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize); },
+               uint8_t queue_id) {
+                return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize);
+            },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,

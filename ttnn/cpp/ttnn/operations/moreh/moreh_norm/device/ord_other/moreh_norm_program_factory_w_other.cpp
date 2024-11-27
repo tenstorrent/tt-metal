@@ -110,8 +110,9 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
         compute_defines["IS_ZERO"] = "1";
     } else {
         compute_defines["REDUCE_OP"] = "PoolType::MAX";
-        if (p == -std::numeric_limits<float>::infinity())
+        if (p == -std::numeric_limits<float>::infinity()) {
             compute_defines["MINUS_INF"] = "1";
+        }
     }
 
     const auto compute_kernel_file =

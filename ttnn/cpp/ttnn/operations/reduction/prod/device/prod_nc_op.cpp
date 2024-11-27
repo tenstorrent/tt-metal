@@ -47,7 +47,6 @@ std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& input
 std::vector<ttnn::SimpleShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
-
 }
 
 operation::ProgramWithCallbacks Prod::create_program(
@@ -63,8 +62,7 @@ tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& 
     auto padding = output_shape.padding();
     switch (dim) {
         case 0:
-        case 1: output_shape[dim] = 1;
-        break;
+        case 1: output_shape[dim] = 1; break;
     }
 
     return {tt::tt_metal::LegacyShape(output_shape, padding)};
@@ -73,7 +71,8 @@ tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& 
 inline Tensor create_output_tensor(
     const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-    return create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
+    return create_device_tensor(
+        output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
 
 // output as arg

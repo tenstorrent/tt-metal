@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -16,7 +15,8 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 template <typename data_movement_sharded_operation_t>
-void bind_interleaved_to_sharded_partial(pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
+void bind_interleaved_to_sharded_partial(
+    pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -24,15 +24,24 @@ void bind_interleaved_to_sharded_partial(pybind11::module& module, const data_mo
         ttnn::pybind_overload_t{
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::variant<CoreCoord, CoreRangeSet> & grid,
-               const std::array<uint32_t,2> & shard_shape,
+               const std::variant<CoreCoord, CoreRangeSet>& grid,
+               const std::array<uint32_t, 2>& shard_shape,
                int64_t& num_slices,
                int64_t& slice_index,
                tt::tt_metal::TensorMemoryLayout shard_scheme,
                tt::tt_metal::ShardOrientation shard_orientation,
-               const std::optional<ttnn::DataType> & output_dtype,
+               const std::optional<ttnn::DataType>& output_dtype,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, grid, shard_shape, num_slices, slice_index, shard_scheme, shard_orientation, output_dtype);
+                return self(
+                    queue_id,
+                    input_tensor,
+                    grid,
+                    shard_shape,
+                    num_slices,
+                    slice_index,
+                    shard_scheme,
+                    shard_orientation,
+                    output_dtype);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("grid"),
@@ -45,12 +54,12 @@ void bind_interleaved_to_sharded_partial(pybind11::module& module, const data_mo
             py::arg("output_dtype") = std::nullopt,
             py::arg("queue_id") = 0,
 
-            });
+        });
 }
 
 }  // namespace detail
 
-//TODO: Add more descriptions to the arguments
+// TODO: Add more descriptions to the arguments
 void py_bind_interleaved_to_sharded_partial(pybind11::module& module) {
     detail::bind_interleaved_to_sharded_partial(
         module,

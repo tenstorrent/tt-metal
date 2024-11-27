@@ -19,20 +19,20 @@
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
-inline uint32_t get_num_device_cores(Device *device) {
+inline uint32_t get_num_device_cores(Device* device) {
     const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
     const auto num_cores_y = static_cast<uint32_t>(device->compute_with_storage_grid_size().y);
     return num_cores_x * num_cores_y;
 }
 
 Tensor MorehClipGradNorm::invoke(
-    const std::vector<Tensor> &inputs,
+    const std::vector<Tensor>& inputs,
     float max_norm,
     float norm_type,
     bool error_if_nonfinite,
-    const std::optional<const Tensor> &total_norm,
-    const std::optional<MemoryConfig> &memory_config,
-    const std::optional<DeviceComputeKernelConfig> &compute_kernel_config) {
+    const std::optional<const Tensor>& total_norm,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);

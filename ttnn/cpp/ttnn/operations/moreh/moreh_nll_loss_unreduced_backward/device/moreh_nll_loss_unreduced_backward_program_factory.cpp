@@ -67,8 +67,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -88,10 +87,10 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
-    auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
@@ -195,8 +194,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -216,10 +214,10 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
-    auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto output_grad_addr = output_grad.buffer()->address();
@@ -322,8 +320,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -343,10 +340,10 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
-    auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto output_grad_addr = output_grad.buffer()->address();

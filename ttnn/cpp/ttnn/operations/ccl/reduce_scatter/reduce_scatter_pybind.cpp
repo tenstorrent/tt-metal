@@ -33,7 +33,15 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
-                return self(input_tensor, dim, math_op, num_links, memory_config, topology, num_workers, num_buffers_per_channel);
+                return self(
+                    input_tensor,
+                    dim,
+                    math_op,
+                    num_links,
+                    memory_config,
+                    topology,
+                    num_workers,
+                    num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -57,7 +65,17 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, mesh_device, math_op, num_links, output_mem_config, topology, num_workers, num_buffers_per_channel);
+                return self(
+                    input_tensor,
+                    dim,
+                    cluster_axis,
+                    mesh_device,
+                    math_op,
+                    num_links,
+                    output_mem_config,
+                    topology,
+                    num_workers,
+                    num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -74,9 +92,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
 
 }  // namespace detail
 
-
 void py_bind_reduce_scatter(pybind11::module& module) {
-
     detail::bind_reduce_scatter(
         module,
         ttnn::reduce_scatter,

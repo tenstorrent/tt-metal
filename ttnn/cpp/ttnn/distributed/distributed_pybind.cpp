@@ -17,9 +17,7 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
-void py_module_types(py::module& module) {
-    py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
-}
+void py_module_types(py::module& module) { py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice"); }
 
 void py_module(py::module& module) {
     py::enum_<MeshType>(module, "MeshType")
@@ -71,11 +69,18 @@ void py_module(py::module& module) {
             Returns:
                 List[Device]: The devices in the device mesh.
         )doc")
-        .def("create_submesh", &MeshDevice::create_submesh,
-            py::arg("submesh_shape"), py::arg("offset"), py::arg("mesh_type"),
+        .def(
+            "create_submesh",
+            &MeshDevice::create_submesh,
+            py::arg("submesh_shape"),
+            py::arg("offset"),
+            py::arg("mesh_type"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
-        .def("create_submeshes", &MeshDevice::create_submeshes,
-            py::arg("submesh_shape"), py::arg("mesh_type"),
+        .def(
+            "create_submeshes",
+            &MeshDevice::create_submeshes,
+            py::arg("submesh_shape"),
+            py::arg("mesh_type"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
             "compute_with_storage_grid_size",

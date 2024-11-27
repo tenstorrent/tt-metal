@@ -17,9 +17,10 @@ FullLikeOperation::program_factory_t FullLikeOperation::select_program_factory(
 
 void FullLikeOperation::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    if (operation_attributes.dtype != input.get_dtype())
+    if (operation_attributes.dtype != input.get_dtype()) {
         TT_FATAL(
             input.get_layout() == Layout::TILE, "Full Like: Data type conversion is only supported with tile layout");
+    }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Full Like: Input must be allocated in buffer on device");
     TT_FATAL(

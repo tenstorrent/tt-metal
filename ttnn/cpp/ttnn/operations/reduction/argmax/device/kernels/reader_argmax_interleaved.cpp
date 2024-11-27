@@ -40,33 +40,32 @@ void kernel_main() {
     uint32_t max_val = 0;
     uint32_t index_counter = 0;
 
-    for(uint32_t l = 0; l < B; l ++) {
-        for(uint32_t k = 0; k < C; k++) {
-            for(uint32_t j = 0; j < H; j++) {
-                noc_async_read_page(l*C*H + k*H + j, s0, cb_addr);
+    for (uint32_t l = 0; l < B; l++) {
+        for (uint32_t k = 0; k < C; k++) {
+            for (uint32_t j = 0; j < H; j++) {
+                noc_async_read_page(l * C * H + k * H + j, s0, cb_addr);
                 noc_async_read_barrier();
                 if (dim == 3) {
                     index_counter = 0;
                     max_index = 0;
                     max_val = stick[0];
                 }
-                for(uint32_t i = 0; i < W; i++) {
+                for (uint32_t i = 0; i < W; i++) {
                     uint16_t val = stick[i];
-                    if(bfloat16_greater(val, max_val)) {
+                    if (bfloat16_greater(val, max_val)) {
                         max_index = index_counter;
                         max_val = val;
                     }
                     index_counter++;
-
                 }
                 if (dim == 3) {
-                    max_vals[l*C*H + k*H + j] = max_index;
+                    max_vals[l * C * H + k * H + j] = max_index;
                 }
             }
         }
     }
     // TODO: Generalize write for argmax for other dims
-    if  constexpr (all) {
+    if constexpr (all) {
         max_vals[0] = max_index;
     }
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);

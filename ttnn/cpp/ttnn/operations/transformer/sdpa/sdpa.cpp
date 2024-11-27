@@ -16,17 +16,18 @@ namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     uint8_t queue_id,
-    const ttnn::Tensor &input_tensor_q,
-    const ttnn::Tensor &input_tensor_k,
-    const ttnn::Tensor &input_tensor_v,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
     const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                    ? input_tensor_q.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
@@ -45,13 +46,13 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
 }
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
-    const ttnn::Tensor &input_tensor_q,
-    const ttnn::Tensor &input_tensor_k,
-    const ttnn::Tensor &input_tensor_v,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
     const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     return invoke(

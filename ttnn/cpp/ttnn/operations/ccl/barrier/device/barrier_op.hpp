@@ -14,24 +14,24 @@ struct Barrier {
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
     std::vector<Device*> devices;
-    bool is_starting_core=false;
-    uint32_t ring_size=devices.size();
-    uint32_t ring_index=0;
-    std::optional<chip_id_t> receiver_device_id=0;
-    std::optional<chip_id_t> sender_device_id=0;
+    bool is_starting_core = false;
+    uint32_t ring_size = devices.size();
+    uint32_t ring_index = 0;
+    std::optional<chip_id_t> receiver_device_id = 0;
+    std::optional<chip_id_t> sender_device_id = 0;
 
-    //Required functions to all tensor op functions
-    void update_structure (const Tensor& input_tensor);
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    // Required functions to all tensor op functions
+    void update_structure(const Tensor& input_tensor);
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
 namespace ccl::barrier::detail {
-//Template for the barrier_with_workers function
-//Found in device/host/barrier_full_worker_grid.cpp
+// Template for the barrier_with_workers function
+// Found in device/host/barrier_full_worker_grid.cpp
 operation::ProgramWithCallbacks barrier_with_workers(
     const Tensor& input_tensors,
     const Tensor& output_tensors,
@@ -41,13 +41,11 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology);
-}; // namespace ccl::barrier::detail
+};  // namespace ccl::barrier::detail
 
-namespace operations::ccl{
-    //Template for the barrier tensor found in device/barrier_op.cpp
-Tensor barrier_function(
-    const Tensor& input_tensor,
-    const ttnn::Barrier& barrier_struct);
-} // namespace operations::ccl
+namespace operations::ccl {
+// Template for the barrier tensor found in device/barrier_op.cpp
+Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct);
+}  // namespace operations::ccl
 
-}// namespace ttnn
+}  // namespace ttnn

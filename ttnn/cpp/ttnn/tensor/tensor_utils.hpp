@@ -29,10 +29,12 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_grouped_layout(
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 // Converts convolution weights to depthwise layout with broadcasted weights
-Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_depthwise_layout(
+    Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
 const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
@@ -46,8 +48,9 @@ static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
 }
 
 static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
-    if (shape.rank() == 0)
+    if (shape.rank() == 0) {
         return {};
+    }
 
     auto num_elements = shape.volume();
     ttnn::SmallVector<uint32_t> strides;
@@ -173,7 +176,7 @@ inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
     return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
 }
 
-template<class T>
+template <class T>
 inline uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
     for (auto i = 0; i < shape.rank() - 2; i++) {

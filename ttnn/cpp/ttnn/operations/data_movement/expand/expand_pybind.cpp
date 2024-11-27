@@ -8,8 +8,8 @@
 #include "ttnn/operations/data_movement/expand/expand.hpp"
 
 namespace ttnn::operations::data_movement::detail {
-void py_bind_expand(py::module &module) {
-    const auto *doc =
+void py_bind_expand(py::module& module) {
+    const auto* doc =
         R"doc(expand(input: ttnn.Tensor, sizes: List[int], output: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
         Returns a new tensor where singleton dimensions are expanded to a larger side.
         Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.

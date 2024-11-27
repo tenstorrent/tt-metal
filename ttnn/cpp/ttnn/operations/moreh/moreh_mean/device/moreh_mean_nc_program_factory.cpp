@@ -83,11 +83,11 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, 2},        // input
-            {CBIndex::c_1, 1},        // zero
-            {CBIndex::c_2, 1},        // scaler
+            {CBIndex::c_0, 2},   // input
+            {CBIndex::c_1, 1},   // zero
+            {CBIndex::c_2, 1},   // scaler
             {CBIndex::c_24, 1},  // accumulated mean
-            {CBIndex::c_16, 2},       // output
+            {CBIndex::c_16, 2},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////

@@ -80,9 +80,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
         case DataType::FLOAT32: reader_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
-        default:
-            TT_FATAL(false, "Unsupported datatype");
-            break;
+        default: TT_FATAL(false, "Unsupported datatype"); break;
     }
 
     auto index_cb_index = CBIndex::c_1;

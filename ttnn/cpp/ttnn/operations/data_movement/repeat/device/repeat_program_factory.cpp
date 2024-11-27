@@ -10,14 +10,13 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks repeat_multi_core(
-    const Tensor &input_tensor, const uint32_t repeat_dim, const uint32_t num_repeats, const Tensor &output) {
+    const Tensor& input_tensor, const uint32_t repeat_dim, const uint32_t num_repeats, const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::Device *device = output.device();
+    tt::tt_metal::Device* device = output.device();
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
@@ -41,7 +40,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
 
-    tt::tt_metal::Buffer *dst_buffer = output.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
@@ -123,23 +122,25 @@ operation::ProgramWithCallbacks repeat_multi_core(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        rm_layout
-            ? "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/reader_repeat_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/reader_repeat_interleaved_start_id.cpp",
+        rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/"
+                    "reader_repeat_stick_layout_interleaved_start_id.cpp"
+                  : "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/"
+                    "reader_repeat_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, repeat_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        rm_layout ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
-                  : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        rm_layout
+            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
-        const CoreCoord &core = cores[i];
+        const CoreCoord& core = cores[i];
         uint32_t num_pages_per_core = 0;
         if (i < g1_num_cores) {
             num_pages_per_core = num_tiles_per_core_group_1;
@@ -179,21 +180,21 @@ operation::ProgramWithCallbacks repeat_multi_core(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
 
         auto dst_buffer = output_buffers.at(0);
 
-        for (const auto &core : cores) {
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
         }
@@ -202,4 +203,4 @@ operation::ProgramWithCallbacks repeat_multi_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}
+}  // namespace ttnn::operations::data_movement::detail

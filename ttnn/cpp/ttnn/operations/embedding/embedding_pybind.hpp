@@ -65,17 +65,26 @@ void py_module(py::module& module) {
         ttnn::embedding,
         doc,
         ttnn::pybind_overload_t{
-        [] (const OperationType& self,
-            const ttnn::Tensor& input_tensor,
-            const ttnn::Tensor& weight,
-            const std::optional<int>& padding_idx,
-            const std::optional<ttnn::Layout>& layout,
-            EmbeddingsType embeddings_type,
-            const std::optional<const DataType> dtype,
-            std::optional<ttnn::Tensor> &optional_output_tensor,
-            const std::optional<ttnn::MemoryConfig>& memory_config,
-            uint8_t queue_id) {
-                return self(queue_id, input_tensor, weight, padding_idx, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& weight,
+               const std::optional<int>& padding_idx,
+               const std::optional<ttnn::Layout>& layout,
+               EmbeddingsType embeddings_type,
+               const std::optional<const DataType> dtype,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               uint8_t queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    weight,
+                    padding_idx,
+                    layout,
+                    embeddings_type,
+                    dtype,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("weight").noconvert(),

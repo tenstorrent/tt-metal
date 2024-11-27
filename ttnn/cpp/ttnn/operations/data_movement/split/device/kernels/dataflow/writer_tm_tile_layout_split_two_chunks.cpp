@@ -8,7 +8,7 @@
 
 #include "dataflow_api.h"
 
-//#define DEBUG
+// #define DEBUG
 
 void kernel_main() {
     // WRITER RUNTIME ARGS
@@ -22,7 +22,7 @@ void kernel_main() {
     // interleaved accessor args
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(1);
     // WRITER COMPILE TIME ARGS
-    //constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
+    // constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
     constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(2);
     constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(3);
     constexpr uint32_t z = get_compile_time_arg_val(4);
@@ -50,7 +50,7 @@ void kernel_main() {
 
     std::array<InterleavedAddrGenFast<out_is_dram_bool>, 2> output_banks{s0, s1};
     uint32_t out_split_tensor_tile_id;
-//    uint32_t out_num_tiles_read = out_num_tiles_per_tensor;
+    //    uint32_t out_num_tiles_read = out_num_tiles_per_tensor;
 
     uint32_t bank_id = 0;
     uint32_t tile_id = 0;
@@ -58,10 +58,10 @@ void kernel_main() {
     // DPRINT << "Writer Tile ID Offset: " << out_tensor_tile_id << ENDL() << ENDL();
 #endif
     for (const auto& s : output_banks) {
-        if(out1_only && (bank_id == 0)){
-            #ifdef DEBUG
-                // DPRINT << "Writer is K Only " << ENDL();
-            #endif
+        if (out1_only && (bank_id == 0)) {
+#ifdef DEBUG
+            // DPRINT << "Writer is K Only " << ENDL();
+#endif
             bank_id++;
             continue;
         }
@@ -77,8 +77,8 @@ void kernel_main() {
                     noc_async_write_barrier();
                     cb_pop_front(cb_id_out0, onetile);
 #ifdef DEBUG
-            // DPRINT << "Writer for Bank: " << bank_id << " has Tile ID: " << tile_id + out_tensor_tile_id << ENDL();
-            // DPRINT << "Writer Address: " << l1_read_addr << ENDL() << ENDL();
+                    // DPRINT << "Writer for Bank: " << bank_id << " has Tile ID: " << tile_id + out_tensor_tile_id <<
+                    // ENDL(); DPRINT << "Writer Address: " << l1_read_addr << ENDL() << ENDL();
 #endif
                 }
                 y_stride_cum += y_stride;
@@ -86,10 +86,10 @@ void kernel_main() {
             z_stride_cum += z_stride;
         }
         bank_id++;
-        if(out0_only){
-            #ifdef DEBUG
-                // DPRINT << "Writer is Q Only " << ENDL();
-            #endif
+        if (out0_only) {
+#ifdef DEBUG
+            // DPRINT << "Writer is Q Only " << ENDL();
+#endif
             break;
         }
     }

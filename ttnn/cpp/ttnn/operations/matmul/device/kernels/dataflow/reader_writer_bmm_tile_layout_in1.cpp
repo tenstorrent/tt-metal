@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 
-
 void kernel_main() {
     // in0/in1 common args
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);

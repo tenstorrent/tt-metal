@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "unsqueeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -13,7 +12,9 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
     const auto rank = tensor_shape.rank();
     SmallVector<uint32_t> output_shape_vector;
 
-    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()), "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
+    TT_FATAL(
+        input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()),
+        "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
 
     int normal_dim = dim;
     // Handle negative dimension by converting it to positive
@@ -37,4 +38,4 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
     return ttnn::reshape(input_tensor, ttnn::SimpleShape(std::move(output_shape_vector)));
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

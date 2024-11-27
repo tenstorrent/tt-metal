@@ -36,10 +36,10 @@ struct Config {
         std::optional<std::filesystem::path> report_name = std::nullopt;
     };
 
-   private:
+private:
     attributes_t attributes;
 
-   public:
+public:
     Config(auto&&... args) : attributes{std::forward<decltype(args)>(args)...} {}
 
     template <reflect::fixed_string name>
@@ -78,8 +78,7 @@ struct Config {
     }
 
     void validate(std::string_view name) {
-        if (
-            name == "enable_fast_runtime_mode" or name == "enable_logging") {
+        if (name == "enable_fast_runtime_mode" or name == "enable_logging") {
             if (this->attributes.enable_fast_runtime_mode) {
                 if (this->attributes.enable_logging) {
                     tt::log_warning(
@@ -90,8 +89,7 @@ struct Config {
             }
         }
 
-        if (
-            name == "enable_fast_runtime_mode" or name == "enable_graph_report" or
+        if (name == "enable_fast_runtime_mode" or name == "enable_graph_report" or
             name == "enable_detailed_buffer_report" or name == "enable_detailed_tensor_report") {
             if (not this->attributes.enable_logging) {
                 if (this->attributes.enable_graph_report) {

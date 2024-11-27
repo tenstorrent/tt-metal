@@ -313,7 +313,6 @@ void get_dram_reader_core_coords_wormhole_b0(
 
 void get_dram_reader_core_coords_blackhole(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
     // hardcoded for blackhole
     uint32_t full_grid_size_x = 17;
 
@@ -370,7 +369,8 @@ void get_dram_reader_core_coords_blackhole(
         auto x = coord.x;
 
         // if col is harvested, move core right by 1
-        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and x < (full_grid_size_x - 1)) {
+        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and
+               x < (full_grid_size_x - 1)) {
             x += 1;
         }
 
@@ -487,7 +487,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
     uint32_t per_core_N_in1_sender = per_core_N_compute;
-    auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
+    auto subblock_hw =
+        bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -512,7 +513,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         per_core_N_compute = out_subblock_w * num_subblock_w_per_core_N;
     }
 
-    log_debug("per_core_M: {}, per_core_N_compute: {}, per_core_N_in1_sender: {}", per_core_M, per_core_N_compute, per_core_N_in1_sender);
+    log_debug(
+        "per_core_M: {}, per_core_N_compute: {}, per_core_N_in1_sender: {}",
+        per_core_M,
+        per_core_N_compute,
+        per_core_N_in1_sender);
     log_debug("out_subblock_h: {}, out_subblock_w: {}", out_subblock_h, out_subblock_w);
 
     uint32_t num_blocks = K / in0_block_w;
@@ -698,7 +703,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         // in0/in1 common args
         (std::uint32_t)num_blocks,                                    // num_blocks
         (std::uint32_t)out_block_tiles,                               // out_block_num_tiles
-        (std::uint32_t)per_core_N_compute * output_single_tile_size,          // out_tensor_stride_w_bytes
+        (std::uint32_t)per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
         (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
         (std::uint32_t)per_core_M};
     if (bias_buffer != nullptr) {
@@ -784,8 +789,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in1_per_core_w,     // in1_per_core_w
 
         num_blocks,  // num_blocks
-        1, // out_num_blocks_x
-        1, // out_num_blocks_y
+        1,           // out_num_blocks_x
+        1,           // out_num_blocks_y
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -1051,8 +1056,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
     uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
-    tt::log_debug("per_core_N_storage: {}",per_core_N_storage);
-    tt::log_debug("num_cores_written_back: {}",num_cores_written_back);
+    tt::log_debug("per_core_N_storage: {}", per_core_N_storage);
+    tt::log_debug("num_cores_written_back: {}", num_cores_written_back);
     uint32_t total_tensor_width_written_back = 0;
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
@@ -1086,8 +1091,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         if (per_core_N_in1_sender < per_core_N_storage) {
             if (curr_storage_core_idx < num_cores_written_back) {
                 uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
-                uint32_t per_core_N_reshard_1 =
-                    (remaining_per_core_N_storage > per_core_N_in1_sender) ? per_core_N_in1_sender : remaining_per_core_N_storage;
+                uint32_t per_core_N_reshard_1 = (remaining_per_core_N_storage > per_core_N_in1_sender)
+                                                    ? per_core_N_in1_sender
+                                                    : remaining_per_core_N_storage;
                 uint32_t per_core_N_reshard_2 = per_core_N_in1_sender - per_core_N_reshard_1;
 
                 if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
@@ -1173,7 +1179,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
                     num_cores_write_back++;
 
                     bool increment_worker_core = (worker_core_stride + per_core_N_storage) >= per_core_N_in1_sender;
-                    uint32_t current_worker_stride_total = increment_worker_core ? per_core_N_in1_sender : worker_core_stride + per_core_N_storage;
+                    uint32_t current_worker_stride_total =
+                        increment_worker_core ? per_core_N_in1_sender : worker_core_stride + per_core_N_storage;
                     uint32_t current_worker_write_back_tiles = current_worker_stride_total - worker_core_stride;
 
                     log_debug(
@@ -1209,7 +1216,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_ASSERT(total_tensor_width_written_back <= expected_max_total_width, "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}", expected_max_total_width, total_tensor_width_written_back);
+    TT_ASSERT(
+        total_tensor_width_written_back <= expected_max_total_width,
+        "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}",
+        expected_max_total_width,
+        total_tensor_width_written_back);
 
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
@@ -1313,7 +1324,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
     TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
 
-   auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////

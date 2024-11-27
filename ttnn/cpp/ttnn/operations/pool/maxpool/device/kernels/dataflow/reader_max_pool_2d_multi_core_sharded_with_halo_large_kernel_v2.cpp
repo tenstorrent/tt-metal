@@ -70,7 +70,7 @@ void kernel_main() {
 
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512; // TILE_WIDTH * 8 * numbytes
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
     constexpr uint32_t ROW_HW = 64;
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
@@ -115,8 +115,9 @@ void kernel_main() {
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
             uint32_t out_l1_write_addr = out_l1_write_addr_base;
             // fill interm buffer with minus_inf if we have only one chunk
-            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction)
+            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                 fill_with_val(out_l1_write_addr, in_cb_sz, minus_inf);
+            }
             for (uint32_t h = 0; h < window_h; ++h) {
                 for (uint32_t w = 0; w < window_w; w++) {
                     uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
@@ -132,8 +133,9 @@ void kernel_main() {
                         out_l1_write_addr_base = get_write_ptr(in_cb_id);
                         out_l1_write_addr = out_l1_write_addr_base;
                         // If next is last chunk, fill whole buffer with -inf.
-                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction)
+                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                             fill_with_val(out_l1_write_addr, in_cb_sz, minus_inf);
+                        }
                     }
                 }
             }
@@ -143,7 +145,8 @@ void kernel_main() {
             }
         }
         counter++;
-        if (split_reader)
+        if (split_reader) {
             counter++;  // interleave the indices
+        }
     }
 }  // kernel_main()

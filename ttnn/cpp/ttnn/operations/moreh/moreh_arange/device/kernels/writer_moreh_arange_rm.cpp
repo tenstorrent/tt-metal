@@ -40,7 +40,7 @@ void kernel_main() {
         uint32_t w_addr = get_write_ptr(cb_out);
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
-        auto ptr = reinterpret_cast<uint16_t *>(w_addr);
+        auto ptr = reinterpret_cast<uint16_t*>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -50,7 +50,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-        auto ptr = reinterpret_cast<uint32_t *>(w_addr);
+        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -60,7 +60,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-        auto ptr = reinterpret_cast<uint32_t *>(w_addr);
+        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;

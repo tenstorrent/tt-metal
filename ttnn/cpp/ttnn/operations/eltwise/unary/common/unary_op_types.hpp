@@ -104,7 +104,7 @@ struct UnaryWithParam {
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
-}
+}  // namespace ttnn::operations::unary
 
 namespace tt::stl::json {
 

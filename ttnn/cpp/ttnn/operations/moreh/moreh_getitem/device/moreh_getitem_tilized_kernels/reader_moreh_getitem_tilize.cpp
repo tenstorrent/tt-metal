@@ -175,10 +175,11 @@ void kernel_main() {
                 volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 uint32_t index_dim_offset;
                 uint32_t index_tile_idx = index_index % TILE_WIDTH;
-                if (index_tile_idx < FACE_WIDTH)
+                if (index_tile_idx < FACE_WIDTH) {
                     index_dim_offset = index_tile_idx;
-                else
+                } else {
                     index_dim_offset = index_tile_idx + 256 - 16;
+                }
 
                 int32_t index_val = index_l1_ptr[index_dim_offset];
 #endif

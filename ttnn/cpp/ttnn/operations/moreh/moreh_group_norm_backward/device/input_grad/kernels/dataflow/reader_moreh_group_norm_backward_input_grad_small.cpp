@@ -174,7 +174,7 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
-            auto mean_ptr = reinterpret_cast<uint16_t *>(mean_l1_write_ptr);
+            auto mean_ptr = reinterpret_cast<uint16_t*>(mean_l1_write_ptr);
             mean_ptr[0] = mean_ptr[tilized_mean_rstd_idx_in_tile];
         }
         cb_push_back(cb_id_mean, onetile);
@@ -188,7 +188,7 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
-            auto rstd_ptr = reinterpret_cast<uint16_t *>(rstd_l1_write_ptr);
+            auto rstd_ptr = reinterpret_cast<uint16_t*>(rstd_l1_write_ptr);
             rstd_ptr[0] = rstd_ptr[tilized_mean_rstd_idx_in_tile];
         }
         cb_push_back(cb_id_rstd, onetile);
@@ -232,7 +232,7 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 if (tilized_gamma_idx_in_tile != 0) {
-                    auto gamma_ptr = reinterpret_cast<uint16_t *>(gamma_l1_write_ptr);
+                    auto gamma_ptr = reinterpret_cast<uint16_t*>(gamma_l1_write_ptr);
                     gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                 }
                 cb_push_back(cb_id_gamma, onetile);

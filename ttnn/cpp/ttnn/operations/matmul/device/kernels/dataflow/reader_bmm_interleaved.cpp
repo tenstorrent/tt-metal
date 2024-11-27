@@ -78,7 +78,8 @@ void kernel_main() {
             itileA += Kt;  // A is MK, advance to next M
         }  // Mt loop
         itileA_batch += MtKt;  // update batch strides
-        if (bcast_B == 0)      // don't increment batch if we broadcast matrix B
+        if (bcast_B == 0) {    // don't increment batch if we broadcast matrix B
             itileB_batch += KtNt;
+        }
     }  // batch loop
 }

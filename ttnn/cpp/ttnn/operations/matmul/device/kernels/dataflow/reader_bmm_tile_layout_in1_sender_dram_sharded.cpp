@@ -23,9 +23,9 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(4);
     const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(5);
     const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t *per_core_N_reshard_bytes = (tt_l1_ptr uint32_t *)(get_arg_addr(7));
-    tt_l1_ptr uint32_t *in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t *)(get_arg_addr(8));
-    tt_l1_ptr uint32_t *in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t *)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
 
     // COMPILE TIME ARGS
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);

@@ -42,8 +42,7 @@ void MorehAdamOperation::validate_inputs(
     }
 
     if (tensor_args.output_tensors.at(3).has_value()) {
-        check_tensor(
-            tensor_args.output_tensors.at(3).value(), "moreh_adam", "max_exp_avg_sq_out");
+        check_tensor(tensor_args.output_tensors.at(3).value(), "moreh_adam", "max_exp_avg_sq_out");
     }
 }
 

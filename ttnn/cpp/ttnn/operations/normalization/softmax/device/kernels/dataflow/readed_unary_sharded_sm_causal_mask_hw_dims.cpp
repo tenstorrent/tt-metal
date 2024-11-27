@@ -11,7 +11,7 @@ FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     uint32_t u = get_arg_val<uint32_t>(1);
     cb_reserve_back(cb_fused_scale, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_fused_scale));
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_fused_scale));
     ptr[0] = u >> 16;
     cb_push_back(cb_fused_scale, 1);
 }

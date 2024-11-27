@@ -87,8 +87,8 @@ std::vector<Tensor> Untilize::create_output_tensors(
             uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
             auto num_cores =
                 untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
-            auto shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
+            auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(
+                num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
             uint32_t fused_height = input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.get_legacy_shape()[-1]};
             ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
@@ -115,9 +115,11 @@ operation::ProgramWithCallbacks Untilize::create_program(
     auto in_or_out_sharded = input_tensor_a.memory_config().is_sharded() || output_tensor.memory_config().is_sharded();
     // FIXME: Remove this restriction once multicore untilize is supported on blackhole
     if (this->use_multicore && (in_or_out_sharded || !device_is_blackhole)) {
-        return detail::untilize_multi_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+        return detail::untilize_multi_core(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     } else {
-        return detail::untilize_single_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+        return detail::untilize_single_core(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
 }
 

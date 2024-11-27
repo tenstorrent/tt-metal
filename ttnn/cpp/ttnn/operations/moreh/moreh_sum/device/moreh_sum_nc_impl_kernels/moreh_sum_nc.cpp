@@ -27,9 +27,9 @@ void MAIN {
         add_tiles_init(cb_in0, cb_in1, acc_to_dest);
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             cb_wait_front(cb_in0, onetile);
-            #if defined FP32_DEST_ACC_EN
-                reconfig_data_format(cb_in0, cb_in1);
-            #endif
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_in0, cb_in1);
+#endif
             add_tiles(cb_in0, cb_in1, idx0, idx0, dst0);
             cb_pop_front(cb_in0, onetile);
         }
@@ -37,9 +37,9 @@ void MAIN {
 
         cb_reserve_back(cb_out0, onetile);
         tile_regs_wait();
-        #if defined FP32_DEST_ACC_EN
-            pack_reconfig_data_format(cb_out0);
-        #endif
+#if defined FP32_DEST_ACC_EN
+        pack_reconfig_data_format(cb_out0);
+#endif
         pack_tile(dst0, cb_out0);
         tile_regs_release();
         cb_push_back(cb_out0, onetile);

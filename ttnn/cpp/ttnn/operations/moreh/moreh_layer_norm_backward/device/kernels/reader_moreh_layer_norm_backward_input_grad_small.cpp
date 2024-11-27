@@ -23,7 +23,7 @@ void read_mean_rstd(
     cb_reserve_back(cb_id, onetile);
 
     uint32_t l1_write_addr = get_write_ptr(cb_id);
-    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(l1_write_addr);
+    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
     if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto tile_idx = tile_offset + outer_idx;

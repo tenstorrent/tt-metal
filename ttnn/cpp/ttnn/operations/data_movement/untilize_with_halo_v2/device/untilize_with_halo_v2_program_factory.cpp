@@ -182,8 +182,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_block_sharded,
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded
-    };
+        is_width_sharded};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;

@@ -22,7 +22,7 @@ struct Stride {
 struct PageStride {
     CoreCoord start_core;
     uint32_t start_data;
-    uint32_t stride_size; //number of pages per stride
+    uint32_t stride_size;  // number of pages per stride
     Stride stride;
     uint32_t num_strides;
     bool skip;
@@ -38,7 +38,6 @@ struct CorePageStride {
     PageStride page_stride;
 };
 
-
 operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output);
 
-}
+}  // namespace ttnn::operations::data_movement::detail

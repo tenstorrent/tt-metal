@@ -13,14 +13,14 @@ struct IndexInfo {
     uint32_t address;
     uint32_t unit_size;
 };
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace ttnn::operations::moreh::moreh_getitem {
 MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOperation::MorehGetItemRmFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -103,8 +103,9 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     for (uint32_t dim = 0; dim < 5; dim++) {
-        if (!index_info[dim].is_defined)
+        if (!index_info[dim].is_defined) {
             continue;
+        }
 
         auto src1_cb_index = CBIndex::c_1 + dim;
         auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
@@ -234,14 +235,14 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 }
 
 void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &tensor_return_value) {
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    auto &program = cached_program.program;
-    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
     auto index_dims = cached_program.shared_variables.index_dims;
@@ -263,7 +264,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
         CoreCoord core = {icore / core_h, icore % core_h};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = index_info[0].address;
             runtime_args[2] = index_info[1].address;
@@ -273,7 +274,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     }

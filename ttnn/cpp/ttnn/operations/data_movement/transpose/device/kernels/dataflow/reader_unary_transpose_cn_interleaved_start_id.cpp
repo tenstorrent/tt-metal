@@ -6,12 +6,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t N = get_arg_val<uint32_t>(1);
     const uint32_t C = get_arg_val<uint32_t>(2);
     const uint32_t HtWt = get_arg_val<uint32_t>(3);
-    const uint32_t batch_step = get_arg_val<uint32_t>(4); // CHtWt - HtWt
-    const uint32_t channel_step = get_arg_val<uint32_t>(5); // NCHtWt - HtWt
+    const uint32_t batch_step = get_arg_val<uint32_t>(4);    // CHtWt - HtWt
+    const uint32_t channel_step = get_arg_val<uint32_t>(5);  // NCHtWt - HtWt
     const uint32_t num_tiles = get_arg_val<uint32_t>(6);
     const uint32_t start_id = get_arg_val<uint32_t>(7);
     uint32_t hw = get_arg_val<uint32_t>(8);
@@ -26,10 +26,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_in0);
 
     const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t tile_idx = start_id;

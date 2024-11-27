@@ -5,24 +5,22 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-
 void kernel_main() {
     // READER RUNTIME ARGS
-    uint32_t in0_tensor_addr                     = get_arg_val<uint32_t>(0);
-    uint32_t in1_tensor_addr                     = get_arg_val<uint32_t>(1);
-    uint32_t num_blocks                          = get_arg_val<uint32_t>(2);
-    uint32_t in0_tensor_tile_id                  = get_arg_val<uint32_t>(3);
-    uint32_t in1_tensor_tile_id                  = get_arg_val<uint32_t>(4);
+    uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
+    uint32_t in1_tensor_addr = get_arg_val<uint32_t>(1);
+    uint32_t num_blocks = get_arg_val<uint32_t>(2);
+    uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(3);
+    uint32_t in1_tensor_tile_id = get_arg_val<uint32_t>(4);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t in0_is_dram               = get_compile_time_arg_val(0);
-    constexpr uint32_t in1_is_dram               = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_is_dram = get_compile_time_arg_val(0);
+    constexpr uint32_t in1_is_dram = get_compile_time_arg_val(1);
     // READER COMPILE TIME ARGS
-    constexpr uint32_t q_num_tiles               = get_compile_time_arg_val(2);
+    constexpr uint32_t q_num_tiles = get_compile_time_arg_val(2);
 
-
-    constexpr uint32_t cb_id_qv = 1; // cb for Q, V heads
+    constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads
 
     constexpr uint32_t onetile = 1;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_qv);
@@ -34,7 +32,6 @@ void kernel_main() {
         .page_size = single_tile_size_bytes,
         .data_format = data_format,
     };
-
 
     for (uint32_t block = 0; block < num_blocks; block++) {
         // Q

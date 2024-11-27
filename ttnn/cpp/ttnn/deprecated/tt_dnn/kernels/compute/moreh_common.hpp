@@ -27,130 +27,125 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-
 // Deprecated
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
 namespace ckernel {
 
-ALWI void pack_tile_with_dt(uint32_t ifrom_dst, uint32_t icb)
-{
-    #if defined FP32_DEST_ACC_EN
-        pack_reconfig_data_format(icb);
-    #endif
+ALWI void pack_tile_with_dt(uint32_t ifrom_dst, uint32_t icb) {
+#if defined FP32_DEST_ACC_EN
+    pack_reconfig_data_format(icb);
+#endif
     pack_tile(ifrom_dst, icb);
 }
 
-ALWI void copy_tile_init_with_dt(uint32_t icb, uint32_t transpose = 0)
-{
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format_srca(icb);
-    #endif
+ALWI void copy_tile_init_with_dt(uint32_t icb, uint32_t transpose = 0) {
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format_srca(icb);
+#endif
     copy_tile_to_dst_init_short(icb, transpose);
 }
 
 ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     add_tiles_init(icb0, icb1);
 }
 
 ALWI void add_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     add_bcast_rows_init_short(icb0, icb1);
 }
 
 ALWI void add_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     add_bcast_cols_init_short(icb0, icb1);
 }
 
 ALWI void add_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     add_bcast_scalar_init_short(icb0, icb1);
 }
 
 ALWI void sub_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     sub_tiles_init(icb0, icb1);
 }
 
 ALWI void sub_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
-    MATH(( llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>() )); // TODO(AP)
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
+    MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
-    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1) ));
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
 
 ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     sub_bcast_cols_init_short(icb0, icb1);
 }
 
 ALWI void sub_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     sub_tiles_bcast_scalar_init_short(icb0, icb1);
 }
 
 ALWI void mul_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_tiles_init(icb0, icb1);
 }
 
 ALWI void mul_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_bcast_rows_init_short(icb0, icb1);
 }
 
 ALWI void mul_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_bcast_cols_init_short(icb0, icb1);
 }
 
 ALWI void mul_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_tiles_bcast_scalar_init_short(icb0, icb1);
 }
 
-template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_delta_with_dt(uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
-{
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+ALWI void reduce_init_delta_with_dt(uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1) {
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     reduce_init_delta<at_start, reduce_type, reduce_dim>(ocb, icb0, icb1);
 }
 
-
 class ArgFetcher {
-   private:
+private:
     int arg_idx = 0;
 
-   public:
+public:
     template <typename T>
     T get_next_arg_val() {
         return get_arg_val<T>(arg_idx++);
@@ -181,10 +176,12 @@ ALWI void mul_tiles_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -216,10 +213,12 @@ ALWI void mul_tiles_and_negative_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -259,12 +258,15 @@ ALWI void mul_tiles_and_mask_tile_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
-    if (popm)
+    }
+    if (popm) {
         cb_pop_front(maskcb, popm);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -296,10 +298,12 @@ ALWI void mul_tiles_log_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -321,9 +325,9 @@ ALWI void mul_tiles_bcast_rows_to_cb(
     cb_wait_front(icb1, itile1 + 1);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_bcast_rows_init_short();
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
@@ -332,10 +336,12 @@ ALWI void mul_tiles_bcast_rows_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -357,9 +363,9 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
     cb_wait_front(icb1, itile1 + 1);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_bcast_rows_init_short();
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
 
@@ -371,10 +377,12 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -396,9 +404,9 @@ ALWI void mul_tiles_bcast_cols_to_cb(
     cb_wait_front(icb1, itile1 + 1);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_bcast_cols_init_short();
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
@@ -407,10 +415,12 @@ ALWI void mul_tiles_bcast_cols_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -432,9 +442,9 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
     cb_wait_front(icb1, itile1 + 1);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     mul_bcast_cols_init_short();
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
 
@@ -446,10 +456,12 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -470,8 +482,9 @@ ALWI void copy_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
     cb_push_back(ocb, onetile);
 }
 
@@ -494,8 +507,9 @@ ALWI void sign_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
     cb_push_back(ocb, onetile);
 }
 
@@ -523,15 +537,24 @@ ALWI void add_tiles_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
 
-ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
+ALWI void mask_tile_to_cb(
+    uint32_t icb,
+    uint32_t maskcb,
+    uint32_t ocb,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
     constexpr int dst_mask = 1;
@@ -555,23 +578,19 @@ ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t 
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
-    if (popm)
+    }
+    if (popm) {
         cb_pop_front(maskcb, popm);
+    }
 
     cb_push_back(ocb, onetile);
 }
 
-
-template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile_to_cb(
-    uint32_t icb0,
-    uint32_t icb1,
-    uint32_t ocb,
-    uint32_t size,
-    uint32_t pop0 = 1,
-    uint32_t pop1 = 1) {
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -590,10 +609,12 @@ ALWI void reduce_tile_to_cb(
     reduce_revert_delta(ocb);
     tile_regs_commit();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
@@ -619,9 +640,9 @@ ALWI void sub_tiles_bcast_cols_to_cb(
     cb_wait_front(icb1, itile1 + 1);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     sub_bcast_cols_init_short();
     sub_tiles_bcast<BroadcastType::COL>(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
@@ -630,10 +651,12 @@ ALWI void sub_tiles_bcast_cols_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -655,9 +678,9 @@ ALWI void sub_tiles_bcast_rows_to_cb(
     cb_wait_front(icb1, itile1 + 1);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(icb0, icb1);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    reconfig_data_format(icb0, icb1);
+#endif
     // sub_bcast_rows_init_short();
     {
         MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>()));
@@ -670,10 +693,12 @@ ALWI void sub_tiles_bcast_rows_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -702,10 +727,12 @@ ALWI void sub_tiles_to_cb(
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     cb_push_back(ocb, onetile);
 }
@@ -728,8 +755,9 @@ ALWI void exp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     pack_tile_with_dt(dst, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
     cb_push_back(ocb, onetile);
 }
 
@@ -754,8 +782,9 @@ ALWI void rexp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     pack_tile_with_dt(dst, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
     cb_push_back(ocb, onetile);
 }
 
@@ -779,8 +808,9 @@ ALWI void exp_tile_and_mask_tile_to_cb(
     copy_tile_init_with_dt(icb);
     copy_tile(icb, itile, dst);
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
 
     exp_tile_init();
     exp_tile(dst);
@@ -792,8 +822,9 @@ ALWI void exp_tile_and_mask_tile_to_cb(
     mask_tile(dst, dst_mask);
     tile_regs_commit();
 
-    if (popm)
+    if (popm) {
         cb_pop_front(maskcb, popm);
+    }
 
     tile_regs_wait();
     pack_tile_with_dt(dst, ocb);
@@ -822,8 +853,9 @@ ALWI void rexp_tile_and_mask_tile_to_cb(
     copy_tile_init_with_dt(icb);
     copy_tile(icb, itile, dst);
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
 
     negative_tile_init();
     negative_tile(dst);
@@ -838,8 +870,9 @@ ALWI void rexp_tile_and_mask_tile_to_cb(
     mask_tile(dst, dst_mask);
     tile_regs_commit();
 
-    if (popm)
+    if (popm) {
         cb_pop_front(maskcb, popm);
+    }
 
     tile_regs_wait();
     pack_tile_with_dt(dst, ocb);
@@ -867,8 +900,9 @@ ALWI void recip_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint3
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
     cb_push_back(ocb, onetile);
 }
 
@@ -891,19 +925,15 @@ ALWI void log_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
 
-    if (pop)
+    if (pop) {
         cb_pop_front(icb, pop);
+    }
     cb_push_back(ocb, onetile);
 }
 
-template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_and_recip_tile_to_cb(
-    uint32_t icb0,
-    uint32_t icb1,
-    uint32_t ocb,
-    uint32_t size,
-    uint32_t pop0 = 1,
-    uint32_t pop1 = 1) {
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -918,10 +948,12 @@ ALWI void reduce_and_recip_tile_to_cb(
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
         reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
     }
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     reduce_revert_delta();
 
@@ -936,15 +968,9 @@ ALWI void reduce_and_recip_tile_to_cb(
     cb_push_back(ocb, onetile);
 }
 
-
-template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_and_log_tile_to_cb(
-    uint32_t icb0,
-    uint32_t icb1,
-    uint32_t ocb,
-    uint32_t size,
-    uint32_t pop0 = 1,
-    uint32_t pop1 = 1) {
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -959,10 +985,12 @@ ALWI void reduce_and_log_tile_to_cb(
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
         reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
     }
-    if (pop0)
+    if (pop0) {
         cb_pop_front(icb0, pop0);
-    if (pop1)
+    }
+    if (pop1) {
         cb_pop_front(icb1, pop1);
+    }
 
     reduce_revert_delta();
 

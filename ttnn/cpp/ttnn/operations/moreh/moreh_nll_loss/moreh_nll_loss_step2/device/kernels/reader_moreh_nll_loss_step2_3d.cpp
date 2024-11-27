@@ -86,7 +86,12 @@ void kernel_main() {
         uint32_t traget_noc_id = nt * Wt + wt;
         uint32_t target_offset;
         get_noc_offset(n, w, target_element_size, target_offset);
-        read_tile(cb_target, addrg_target, traget_noc_id, NOC_MINIMUM_READ_SIZE / element_size * target_element_size, target_offset);
+        read_tile(
+            cb_target,
+            addrg_target,
+            traget_noc_id,
+            NOC_MINIMUM_READ_SIZE / element_size * target_element_size,
+            target_offset);
 
 #if defined(WEIGHT)
         cb_reserve_back(cb_tmp_weight, onetile);
