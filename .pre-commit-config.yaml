@@ -97,3 +97,4 @@ repos:
         |^ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils\.hpp$
         |^ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op\.cpp$
         |^ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op\.hpp$
+        |^tt-train/.*  # This excludes everything in the tt-train directory
