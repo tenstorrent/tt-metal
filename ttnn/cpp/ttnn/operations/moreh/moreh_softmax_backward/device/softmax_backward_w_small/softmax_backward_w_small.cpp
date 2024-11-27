@@ -51,16 +51,14 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CBIndex::c_0, Wt},  // output
-            {tt::CBIndex::c_1, Wt},  // output_grad
-            {tt::CBIndex::c_2, 1},   // scaler
-            {tt::CBIndex::c_3, 1},   // mask
-            {tt::CBIndex::c_16, 2},  // input_grad
-            {tt::CBIndex::c_24,
-             Wt,
-             fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},                          // output * output_grad
-            {tt::CBIndex::c_25, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
-            {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
+            {tt::CBIndex::c_0, Wt},                                                             // output
+            {tt::CBIndex::c_1, Wt},                                                             // output_grad
+            {tt::CBIndex::c_2, 1},                                                              // scaler
+            {tt::CBIndex::c_3, 1},                                                              // mask
+            {tt::CBIndex::c_16, 2},                                                             // input_grad
+            {tt::CBIndex::c_24, Wt, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // reduce
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // dy - sum
         });
     // create read/wrtie kernel
     bool y_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -84,10 +82,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create(
         writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxBackwardOp::SOFTMAX)
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
         compute_defines["LOG"] = 1;
@@ -125,8 +124,9 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create(
 
         float scaler = 1.0f;
         uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0)
+        if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
+        }
         std::vector<uint32_t> reader_args = {
             output.buffer()->address(),
             output_grad.buffer()->address(),

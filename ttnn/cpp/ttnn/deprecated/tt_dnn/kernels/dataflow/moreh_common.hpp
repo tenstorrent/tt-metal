@@ -55,10 +55,10 @@ union Scalar {
 };
 
 class ArgFetcher {
-   private:
+private:
     int arg_idx = 0;
 
-   public:
+public:
     template <typename T>
     T get_next_arg_val() {
         return get_arg_val<T>(arg_idx++);
@@ -108,20 +108,24 @@ FORCE_INLINE void generate_bcast_scaler(uint32_t cb_scaler, uint32_t scaler) {
     } u;
     u.u = scaler;
     cb_reserve_back(cb_scaler, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_scaler));
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler));
 
-    for (int j = 0; j < 1024; j++) ptr[j] = uint16_t(0);
+    for (int j = 0; j < 1024; j++) {
+        ptr[j] = uint16_t(0);
+    }
 
-    for (int k = 0; k < 4; k++)
-        for (int j = 0; j < 16; j++) ptr[k * 256 + j] = uint16_t(u.u >> 16);
+    for (int k = 0; k < 4; k++) {
+        for (int j = 0; j < 16; j++) {
+            ptr[k * 256 + j] = uint16_t(u.u >> 16);
+        }
+    }
     cb_push_back(cb_scaler, 1);
 }
 
 template <typename T>
 FORCE_INLINE void process_data(int cb_id, uint32_t value, int32_t num_of_elems) {
     T* ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
-    for (int j = 0; j < num_of_elems; j++)
-    {
+    for (int j = 0; j < num_of_elems; j++) {
         ptr[j] = static_cast<T>(value);
     }
 }
@@ -129,8 +133,7 @@ FORCE_INLINE void process_data(int cb_id, uint32_t value, int32_t num_of_elems) 
 template <>
 FORCE_INLINE void process_data<uint16_t>(int cb_id, uint32_t value, int32_t num_of_elems) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
-    for (int j = 0; j < num_of_elems; j++)
-    {
+    for (int j = 0; j < num_of_elems; j++) {
         ptr[j] = static_cast<uint16_t>(value >> 16);
     }
 }
@@ -138,14 +141,10 @@ FORCE_INLINE void process_data<uint16_t>(int cb_id, uint32_t value, int32_t num_
 FORCE_INLINE void fill_cb_with_value(uint32_t cb_id, uint32_t value, int32_t num_of_elems = 1024) {
     cb_reserve_back(cb_id, 1);
     const DataFormat data_format = get_dataformat(cb_id);
-    switch((uint)data_format & 0x1F) {
-        case ((uint8_t)DataFormat::Float32):
-            process_data<uint32_t>(cb_id, value, num_of_elems);
-            break;
+    switch ((uint)data_format & 0x1F) {
+        case ((uint8_t)DataFormat::Float32): process_data<uint32_t>(cb_id, value, num_of_elems); break;
         case ((uint8_t)DataFormat::Float16_b):
-        default:
-            process_data<uint16_t>(cb_id, value, num_of_elems);
-            break;
+        default: process_data<uint16_t>(cb_id, value, num_of_elems); break;
     }
     cb_push_back(cb_id, 1);
 }
@@ -192,14 +191,15 @@ FORCE_INLINE void generate_mask_h(uint32_t cb_mask, uint32_t mask_h) {
     zero.f = 0.0f;
 
     cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask));
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
 
     for (uint32_t w = 0; w < 16; w++) {
         // sub tile 0
         {
             uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16)
+            if (mask_h_0 >= 16) {
                 mask_h_0 = 16;
+            }
             uint32_t h = 0;
             for (; h < mask_h_0; h++) {
                 ptr[h * 16 + w] = uint16_t(one.u >> 16);
@@ -212,8 +212,9 @@ FORCE_INLINE void generate_mask_h(uint32_t cb_mask, uint32_t mask_h) {
         // sub tile 1
         {
             uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16)
+            if (mask_h_0 >= 16) {
                 mask_h_0 = 16;
+            }
             uint32_t h = 0;
             for (; h < mask_h_0; h++) {
                 ptr[h * 16 + w + 256] = uint16_t(one.u >> 16);
@@ -259,14 +260,15 @@ FORCE_INLINE void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
     zero.f = 0.0f;
 
     cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask));
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
 
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
             uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16)
+            if (mask_w_0 >= 16) {
                 mask_w_0 = 16;
+            }
             uint32_t w = 0;
             for (; w < mask_w_0; w++) {
                 ptr[h * 16 + w] = uint16_t(one.u >> 16);
@@ -291,8 +293,9 @@ FORCE_INLINE void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
         // sub tile 2
         {
             uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16)
+            if (mask_w_0 >= 16) {
                 mask_w_0 = 16;
+            }
             uint32_t w = 0;
             for (; w < mask_w_0; w++) {
                 ptr[h * 16 + w + 512] = uint16_t(one.u >> 16);
@@ -327,14 +330,15 @@ FORCE_INLINE void generate_int_mask_h(uint32_t cb_mask, uint32_t mask_h) {
     zero.u = 0;
 
     cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<int32_t *>(get_write_ptr(cb_mask));
+    auto ptr = reinterpret_cast<int32_t*>(get_write_ptr(cb_mask));
 
     for (uint32_t w = 0; w < 16; w++) {
         // sub tile 0
         {
             uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16)
+            if (mask_h_0 >= 16) {
                 mask_h_0 = 16;
+            }
             uint32_t h = 0;
             for (; h < mask_h_0; h++) {
                 ptr[h * 16 + w] = one.u;
@@ -347,8 +351,9 @@ FORCE_INLINE void generate_int_mask_h(uint32_t cb_mask, uint32_t mask_h) {
         // sub tile 1
         {
             uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16)
+            if (mask_h_0 >= 16) {
                 mask_h_0 = 16;
+            }
             uint32_t h = 0;
             for (; h < mask_h_0; h++) {
                 ptr[h * 16 + w + 256] = one.u;
@@ -400,8 +405,9 @@ FORCE_INLINE void generate_int_mask_w(uint32_t cb_mask, uint32_t mask_w) {
         // sub tile 0
         {
             uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16)
+            if (mask_w_0 >= 16) {
                 mask_w_0 = 16;
+            }
             uint32_t w = 0;
             for (; w < mask_w_0; w++) {
                 ptr[h * 16 + w] = one.u;
@@ -426,8 +432,9 @@ FORCE_INLINE void generate_int_mask_w(uint32_t cb_mask, uint32_t mask_w) {
         // sub tile 2
         {
             uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16)
+            if (mask_w_0 >= 16) {
                 mask_w_0 = 16;
+            }
             uint32_t w = 0;
             for (; w < mask_w_0; w++) {
                 ptr[h * 16 + w + 512] = one.u;
@@ -468,7 +475,7 @@ FORCE_INLINE void generate_mask_h_w(
 
     // mask_h
     // first tile ptr
-    auto mask_h_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask_h_w));
+    auto mask_h_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_h_w));
     for (uint32_t w = 0; w < 16; w++) {
         // sub tile 0
         {
@@ -527,7 +534,7 @@ FORCE_INLINE void generate_mask_h_w(
 
     // mask_w
     // second tile ptr
-    auto mask_w_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask_h_w) + single_tile_size);
+    auto mask_w_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_h_w) + single_tile_size);
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
@@ -608,7 +615,7 @@ FORCE_INLINE void mask_tile_hw(uint32_t l1_addr, uint32_t mask_h = 32, uint32_t 
     zero.f = 0.0f;
     const auto u16_zero = uint16_t(zero.u >> 16);
 
-    volatile tt_l1_ptr uint16_t *ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(l1_addr);
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
@@ -680,7 +687,7 @@ FORCE_INLINE void generate_mask_tiles(
 
     // mask_h
     // first tile ptr
-    auto mask_h_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask));
+    auto mask_h_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
     for (uint32_t w = 0; w < 16; w++) {
         // sub tile 0
         {
@@ -739,7 +746,7 @@ FORCE_INLINE void generate_mask_tiles(
 
     // mask_w
     // second tile ptr
-    auto mask_w_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask) + single_tile_size);
+    auto mask_w_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask) + single_tile_size);
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
@@ -798,7 +805,7 @@ FORCE_INLINE void generate_mask_tiles(
 
     // mask_hw
     // third tile ptr
-    auto mask_hw_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask) + (single_tile_size * 2));
+    auto mask_hw_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask) + (single_tile_size * 2));
     for (uint32_t i = 0; i < 1024; ++i) {
         if (mask_h_ptr[i] == mask_w_ptr[i]) {
             mask_hw_ptr[i] = mask_h_ptr[i];
@@ -826,7 +833,7 @@ uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
     return idx;
 }
 
-void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t &noc_offset) {
+void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc_offset) {
     noc_offset = 0;
 
     // compute h, w in tile
@@ -838,46 +845,53 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t &noc
 
     const uint32_t face_width_bytes = FACE_WIDTH * element_size;
 
-    if (h < FACE_WIDTH && is_even_face)
+    if (h < FACE_WIDTH && is_even_face) {
         noc_offset += h * face_width_bytes + w * element_size;  // face 0
-    else if (h < FACE_WIDTH && is_odd_face)
+    } else if (h < FACE_WIDTH && is_odd_face) {
         noc_offset += (FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 1
-    else if (h >= FACE_WIDTH && is_even_face)
+    } else if (h >= FACE_WIDTH && is_even_face) {
         noc_offset += (FACE_HEIGHT + h) * face_width_bytes + w * element_size;  // face 2
-    else if (h >= FACE_WIDTH && is_odd_face)
+    } else if (h >= FACE_WIDTH && is_odd_face) {
         noc_offset += (2 * FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 3
+    }
 
     const uint32_t noc_offset_alilgn_32 = (noc_offset / NOC_MINIMUM_READ_SIZE) * NOC_MINIMUM_READ_SIZE;
 
     noc_offset = noc_offset_alilgn_32;
 }
 
-template<typename T>
+template <typename T>
 volatile tt_l1_ptr T* get_read_ptr(uint32_t cb_id) {
-
     auto l1_write_addr = get_read_ptr(cb_id);
     auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_addr);
     return l1_ptr;
 }
 
-template<typename T>
+template <typename T>
 volatile tt_l1_ptr T* get_write_ptr(uint32_t cb_id) {
-
     auto l1_write_addr = get_write_ptr(cb_id);
     auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_addr);
     return l1_ptr;
 }
 
 // It reads values from one tile.
-template<typename T>
-void read_tile(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t size = 0, uint32_t offset = 0, bool do_reserve = true, bool do_push_back = true) {
-
+template <typename T>
+void read_tile(
+    uint32_t cb_id,
+    T addrgen,
+    uint32_t noc_id,
+    uint32_t size = 0,
+    uint32_t offset = 0,
+    bool do_reserve = true,
+    bool do_push_back = true) {
     constexpr uint32_t onetile = 1;
 
-    if (do_reserve) cb_reserve_back(cb_id, onetile);
+    if (do_reserve) {
+        cb_reserve_back(cb_id, onetile);
+    }
 
     // If the size is 0, it reads one tile.
-    if (size == 0){
+    if (size == 0) {
         size = get_tile_size(cb_id);
     }
 
@@ -887,15 +901,24 @@ void read_tile(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t size = 0, ui
 
     noc_async_read_barrier();
 
-    if (do_push_back) cb_push_back(cb_id, onetile);
+    if (do_push_back) {
+        cb_push_back(cb_id, onetile);
+    }
 }
 
-template<typename T>
-void read_value(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t tilized_idx = 0, bool do_reserve = true, bool do_push_back = true) {
-
+template <typename T>
+void read_value(
+    uint32_t cb_id,
+    T addrgen,
+    uint32_t noc_id,
+    uint32_t tilized_idx = 0,
+    bool do_reserve = true,
+    bool do_push_back = true) {
     constexpr uint32_t onetile = 1;
 
-    if (do_reserve) cb_reserve_back(cb_id, onetile);
+    if (do_reserve) {
+        cb_reserve_back(cb_id, onetile);
+    }
 
     uint32_t size = get_tile_size(cb_id) / 1024;
 
@@ -904,15 +927,17 @@ void read_value(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t tilized_idx
     noc_async_read(noc_addr + tilized_idx * size, l1_write_addr + tilized_idx * size, size);
     noc_async_read_barrier();
 
-    if (do_push_back) cb_push_back(cb_id, onetile);
+    if (do_push_back) {
+        cb_push_back(cb_id, onetile);
+    }
 }
 
-
 // It reads values from a tilized tensor with shape (1, W).
-template<typename T>
+template <typename T>
 void read_line(uint32_t cb_id, T addrgen, uint32_t num_tiles, bool do_reserve = true, bool do_push_back = true) {
-
-    if (do_reserve) cb_reserve_back(cb_id, num_tiles);
+    if (do_reserve) {
+        cb_reserve_back(cb_id, num_tiles);
+    }
 
     auto tile_bytes = get_tile_size(cb_id);
     auto element_size = tile_bytes / 1024;
@@ -933,5 +958,7 @@ void read_line(uint32_t cb_id, T addrgen, uint32_t num_tiles, bool do_reserve = 
         l1_write_addr += noc_read_size;
     }
 
-    if (do_push_back) cb_push_back(cb_id, num_tiles);
+    if (do_push_back) {
+        cb_push_back(cb_id, num_tiles);
+    }
 }

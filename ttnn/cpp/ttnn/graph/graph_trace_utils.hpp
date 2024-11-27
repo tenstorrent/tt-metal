@@ -12,9 +12,10 @@
 namespace ttnn::graph {
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
-uint32_t extract_l1_output_buffer_allocation_size_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
+uint32_t extract_l1_output_buffer_allocation_size_per_core(
+    const nlohmann::json& trace, size_t interleaved_storage_cores);
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
-uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json &trace);
+uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace);
 
 // Returns count of intermediate and output tensors
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace);
@@ -31,7 +32,6 @@ struct TensorInfo {
     bool operator==(const TensorInfo& other) const = default;
 };
 
-
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace);
 
-} // namespace ttnn::graph
+}  // namespace ttnn::graph

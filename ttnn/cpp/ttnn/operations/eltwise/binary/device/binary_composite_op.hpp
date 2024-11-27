@@ -11,7 +11,7 @@
 #include <magic_enum.hpp>
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::binary{
+namespace ttnn::operations::binary {
 
 enum class BinaryCompositeOpType {
     HYPOT,
@@ -42,7 +42,6 @@ Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfi
 Tensor _scatter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _outer(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _polyval(const Tensor&, const std::vector<float>&, const std::optional<MemoryConfig>&);
-
 
 // OpHandler struct template
 template <BinaryCompositeOpType OpType>
@@ -92,7 +91,13 @@ struct OpHandler<BinaryCompositeOpType::SUBALPHA> {
 
 template <>
 struct OpHandler<BinaryCompositeOpType::ISCLOSE> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, float rtol, float atol, const bool equal_nan, const std::optional<MemoryConfig>& mem_cfg) {
+    static Tensor handle(
+        const Tensor& t1,
+        const Tensor& t2,
+        float rtol,
+        float atol,
+        const bool equal_nan,
+        const std::optional<MemoryConfig>& mem_cfg) {
         return _isclose(t1, t2, rtol, atol, equal_nan, mem_cfg);
     }
 };
@@ -133,9 +138,10 @@ struct OpHandler<BinaryCompositeOpType::OUTER> {
 
 template <>
 struct OpHandler<BinaryCompositeOpType::POLYVAL> {
-    static Tensor handle(const Tensor& t1, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& mem_cfg) {
+    static Tensor handle(
+        const Tensor& t1, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& mem_cfg) {
         return _polyval(t1, coeffs, mem_cfg);
     }
 };
 
-}
+}  // namespace ttnn::operations::binary
