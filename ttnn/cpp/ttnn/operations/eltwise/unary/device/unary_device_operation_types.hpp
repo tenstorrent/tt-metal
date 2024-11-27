@@ -28,6 +28,8 @@ struct tensor_args_t {
 
 using tensor_return_value_t = Tensor;
 
-using shape_return_value_t = ttnn::SimpleShape;
+// using shape_return_value_t = ttnn::SimpleShape;
+
+using shape_return_value_t =  ttnn::TensorSpec;
 
 } // namespace ttnn::operations::unary

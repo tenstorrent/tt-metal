@@ -138,7 +138,8 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_shapes(args, tensor_args);
+
+        const auto computed_output_shape =  compute_output_specs(args, tensor_args)[0].logical_shape();
         const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
@@ -155,26 +156,50 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-shape_return_value_t UnaryDeviceOperation::compute_output_shapes(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return {tensor_args.input.get_logical_shape()};
-}
+// shape_return_value_t UnaryDeviceOperation::compute_output_shapes(
+//     const operation_attributes_t&, const tensor_args_t& tensor_args) {
+//     return {tensor_args.input.get_logical_shape()};
+// }
 
-tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
+std::vector<shape_return_value_t> UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
 
-    auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.get_layout();
-    }
+    auto output_shape = tensor_args.input.get_logical_shape();
+    auto output_padded_shape = tensor_args.input.get_padded_shape();
 
-    const auto output_shape = tensor_args.input.shape();
-    return create_device_tensor(
-        output_shape, args.output_dtype, output_layout, tensor_args.input.device(), args.output_memory_config);
+    // if (tensor_args.preallocated_output.has_value()) {
+    //     return tensor_args.preallocated_output.value();
+    // }
+
+    // auto output_layout = Layout::TILE;
+    // if (args.output_memory_config.is_sharded()) {
+    //     output_layout = tensor_args.input.get_layout();
+    // }
+
+    // const auto output_shape = tensor_args.input.shape();
+    // return create_device_tensor(
+    //     output_shape, args.output_dtype, output_layout, tensor_args.input.device(), args.output_memory_config);
+    return {ttnn::TensorSpec(output_shape, tt::tt_metal::TensorLayout(tensor_args.input.get_dtype(),
+    PageConfig(tensor_args.input.get_layout()),  args.output_memory_config))};
+
 }
+
+
+// tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
+//     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+//     if (tensor_args.preallocated_output.has_value()) {
+//         return tensor_args.preallocated_output.value();
+//     }
+
+//     auto output_layout = Layout::TILE;
+//     if (args.output_memory_config.is_sharded()) {
+//         output_layout = tensor_args.input.get_layout();
+//     }
+
+//     const auto output_shape = tensor_args.input.shape();
+//     return create_device_tensor(
+//         output_shape, args.output_dtype, output_layout, tensor_args.input.device(), args.output_memory_config);
+// }
 
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {

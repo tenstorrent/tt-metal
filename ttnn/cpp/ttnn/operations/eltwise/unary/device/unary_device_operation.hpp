@@ -33,9 +33,10 @@ struct UnaryDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    // static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<shape_return_value_t> compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    // static tensor_return_value_t create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
