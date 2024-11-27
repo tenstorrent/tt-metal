@@ -16,6 +16,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     uint32_t num_heads = config.num_heads;
     float dropout_prob = config.dropout_prob;
     uint32_t num_blocks = config.num_blocks;
+    auto use_composite_layernorm = config.experimental.use_composite_layernorm;
 
     fmt::print("Transformer configuration:\n");
     fmt::print("    Vocab size: {}\n", vocab_size);
@@ -42,9 +43,10 @@ Transformer::Transformer(const TransformerConfig& config) {
     pos_emb = std::make_shared<ttml::modules::Embedding>(max_sequence_length, embedding_dim);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob));
+        blocks.push_back(
+            std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
-    ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim);
+    ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
     fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size);
 
     create_name("transformer");
@@ -81,6 +83,10 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
     transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
+    if (auto experimental_config = config["experimental"]) {
+        transformer_config.experimental.use_composite_layernorm =
+            experimental_config["use_composite_layernorm"].as<bool>();
+    }
     return transformer_config;
 }
 

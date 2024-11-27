@@ -19,6 +19,11 @@ struct TransformerConfig {
     uint32_t num_blocks = 6;
     uint32_t vocab_size = 256;
     uint32_t max_sequence_length = 256;
+
+    struct Experimental {
+        bool use_composite_layernorm = false;
+    };
+    Experimental experimental;
 };
 
 class Transformer : public ttml::autograd::ModuleBase {
