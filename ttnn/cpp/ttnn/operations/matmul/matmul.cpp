@@ -42,9 +42,9 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    std::optional<ttnn::Tensor>& optional_output_tensor,
     const struct Matmul& parameters,
-    const uint8_t& queue_id) {
+    const uint8_t& queue_id,
+    std::optional<ttnn::Tensor>& optional_output_tensor) {
     const auto& input_tensor_a_adjusted = parameters.transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
@@ -105,14 +105,14 @@ Tensor MatmulOperation::invoke(
     const Tensor& input_tensor_b,
     const bool transpose_a,
     const bool transpose_b,
-    std::optional<Tensor>& optional_output_tensor,
     const std::optional<const MemoryConfig> memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const tt::tt_metal::Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<Tensor> optional_output_tensor) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -122,7 +122,6 @@ Tensor MatmulOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
-        optional_output_tensor,
         Matmul{
             program_config,
             /*bcast_batch=*/std::nullopt,
@@ -136,7 +135,8 @@ Tensor MatmulOperation::invoke(
             transpose_a,
             transpose_b,
             output_tile},
-        /*queue_id=*/0);
+        /*queue_id=*/0,
+        optional_output_tensor);
 }
 
 Tensor LinearOperation::invoke(
@@ -145,14 +145,14 @@ Tensor LinearOperation::invoke(
     const std::optional<const Tensor>& bias,
     const bool transpose_a,
     const bool transpose_b,
-    std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<const MemoryConfig> memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const tt::tt_metal::Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<ttnn::Tensor> optional_output_tensor) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -164,7 +164,6 @@ Tensor LinearOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         bias,
-        optional_output_tensor,
         Matmul{
             program_config,
             /*bcast_batch=*/std::nullopt,
@@ -178,7 +177,8 @@ Tensor LinearOperation::invoke(
             transpose_a,
             transpose_b,
             output_tile},
-        /*queue_id=*/0);
+        /*queue_id=*/0,
+        optional_output_tensor);
 }
 
 }  // namespace matmul
