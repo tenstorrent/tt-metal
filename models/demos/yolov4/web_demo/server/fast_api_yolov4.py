@@ -45,7 +45,7 @@ async def startup():
             device_id,
             dispatch_core_type=get_dispatch_core_type(),
             l1_small_size=24576,
-            trace_region_size=1622016,
+            trace_region_size=3096576,
             num_command_queues=2,
         )
         ttnn.enable_program_cache(device)
