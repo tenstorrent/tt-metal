@@ -108,6 +108,46 @@ test_sweep_args = [
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
     ),
+    (
+        (5, 1, 32, 10240),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,
+    ),
+    (
+        (2, 1, 352, 2048),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        False,
+    ),
+    (
+        (5, 1, 32, 10240),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,
+    ),
+    (
+        (2, 1, 352, 2048),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        False,
+    ),
+    (
+        (5, 1, 160, 32),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.COL_MAJOR,
+        True,
+    ),
 ]
 
 
