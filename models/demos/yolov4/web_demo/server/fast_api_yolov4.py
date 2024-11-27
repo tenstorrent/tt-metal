@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import json
+import os
 from fastapi import FastAPI, File, UploadFile
 from io import BytesIO
 from PIL import Image
@@ -25,14 +26,37 @@ async def root():
     return {"message": "Hello World"}
 
 
+def get_dispatch_core_type():
+    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
+    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
+    # if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+    if os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
+    return dispatch_core_type
+
+
 @app.on_event("startup")
 async def startup():
-    device_id = 0
-    device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3096576, num_command_queues=2)
-    ttnn.enable_program_cache(device)
     global model
-    model = Yolov4Trace2CQ()
-    model.initialize_yolov4_trace_2cqs_inference(device)
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+        print("WH_ARCH_YAML:", os.environ.get("WH_ARCH_YAML"))
+        device_id = 0
+        device = ttnn.CreateDevice(
+            device_id,
+            dispatch_core_type=get_dispatch_core_type(),
+            l1_small_size=24576,
+            trace_region_size=1622016,
+            num_command_queues=2,
+        )
+        ttnn.enable_program_cache(device)
+        model = Yolov4Trace2CQ()
+        model.initialize_yolov4_trace_2cqs_inference(device)
+    else:
+        device_id = 0
+        device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3096576, num_command_queues=2)
+        ttnn.enable_program_cache(device)
+        model = Yolov4Trace2CQ()
+        model.initialize_yolov4_trace_2cqs_inference(device)
 
 
 @app.on_event("shutdown")
@@ -46,32 +70,19 @@ def process_output(output):
     cnt = 0
     for item in output:
         cnt = cnt + 1
-        print("cnt: ", cnt)
-        print("item is: ", item)
         output_i = [element.item() for element in item]
-        # output_i = item[0]
-        print("output_i as passed into process_output: ", output_i)
-        # output_i = [element.item() for element in output_i]
         outs.append(output_i)
-    print("\n\n\nouts before return is: ", outs)
     return outs
-    # return [output]
 
 
 def post_processing(img, conf_thresh, nms_thresh, output):
-    print("output before post_processing: ", output)
-    print()
-    print("the length of output before post processing is: ", len(output))
     box_array = output[0]
     confs = output[1]
-    print("confs: ", confs)
-    t1 = time.time()
 
     box_array = np.array(box_array.to(torch.float32))
     confs = np.array(confs.to(torch.float32))
 
     num_classes = confs.shape[2]
-    print("num_classes: ", num_classes)
 
     # [batch, num, 4]
     box_array = box_array[:, :, 0]
@@ -79,8 +90,6 @@ def post_processing(img, conf_thresh, nms_thresh, output):
     # [batch, num, num_classes] --> [batch, num]
     max_conf = np.max(confs, axis=2)
     max_id = np.argmax(confs, axis=2)
-
-    t2 = time.time()
 
     bboxes_batch = []
     for i in range(box_array.shape[0]):
@@ -119,15 +128,6 @@ def post_processing(img, conf_thresh, nms_thresh, output):
 
         bboxes_batch.append(bboxes)
 
-    t3 = time.time()
-
-    print("-----------------------------------")
-    print("       max and argmax : %f" % (t2 - t1))
-    print("                  nms : %f" % (t3 - t2))
-    print("Post processing total : %f" % (t3 - t1))
-    print("-----------------------------------")
-
-    print("bboxes_batch: ", bboxes_batch)
     return bboxes_batch
 
 
@@ -185,25 +185,10 @@ async def objdetection_v2(file: UploadFile = File(...)):
     response = model.run_traced_inference(image)
     t2 = time.time()
     print("the inference on the sever side took: ", t2 - t1)
-    # conf_thresh = 0.6
-    conf_thresh = 0.1
+    conf_thresh = 0.6
     nms_thresh = 0.5
 
     boxes = post_processing(image, conf_thresh, nms_thresh, response)
-    print("\n\n\nboxes after post processing: ", boxes)
-    """
-bboxes_batch:  [[[0.01953125, 0.2890625, 1.015625, 0.984375, 0.97265625, 0.97265625, 0], [0.41210938, 0.66015625, 0.67578125, 0.99609375, 0.30273438, 0.30273438, 41]]]
-
-
-
-boxes after post processing:  [[[0.01953125, 0.2890625, 1.015625, 0.984375, 0.97265625, 0.97265625, 0], [0.41210938, 0.66015625, 0.67578125, 0.99609375, 0.30273438, 0.30273438, 41]]]
-cnt:  1
-output_i as passed into process_output:  [0.01953125, 0.2890625, 1.015625, 0.984375, 0.97265625, 0.97265625, 0]
-
-
-
-
-    """
     output = boxes[0]
     # output = boxes
     try:
