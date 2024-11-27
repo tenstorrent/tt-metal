@@ -37,7 +37,7 @@ uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst,
 
     // Get the wrapped distances
     uint32_t dist_right = src_x <= dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
-    uint32_t dist_left =  src_x < dst_x ? src_x + MAX_X - dst_x : src_x - dst_x;
+    uint32_t dist_left = src_x < dst_x ? src_x + MAX_X - dst_x : src_x - dst_x;
 
     uint32_t dist_bottom = src_y <= dst_y ? dst_y - src_y : MAX_Y - src_y + dst_y;
     uint32_t dist_top = src_y < dst_y ? src_y + MAX_Y - dst_y : src_y - dst_y;
@@ -47,12 +47,12 @@ uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst,
 
     uint32_t noc = dist_noc_0 < dist_noc_1 ? 0 : 1;
 
-    // Debug pring if needed
-    // std::cout << "src: (" << src_x << ", " << src_y << "), dst: (" << dst_x << ", " << dst_y << "), noc: " << noc << std::endl;
+    // Debug print if needed
+    // std::cout << "src: (" << src_x << ", " << src_y << "), dst: (" << dst_x << ", " << dst_y << "), noc: " << noc <<
+    // std::endl;
 
     return noc;
 }
-
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program& program,
@@ -297,7 +297,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_w,               // in0_block_w
             (std::uint32_t)per_core_M,                // in0_block_h
             (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
-            (std::uint32_t)false,                     // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t) false,                    // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)0,                         // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)0,                         // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
@@ -1682,9 +1682,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out
-) {
-
+    bool untilize_out) {
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
@@ -1736,19 +1734,18 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* Compile time args */
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        (std::uint32_t) in0_shard_width_in_tiles,
-        (std::uint32_t) per_core_M, // in0_shard_height_in_tiles
-        (std::uint32_t) B,  // batch
-        (std::uint32_t) ring_size, // ring_size
-        (std::uint32_t) in0_signal_semaphore_id,
+        (std::uint32_t)in0_shard_width_in_tiles,
+        (std::uint32_t)per_core_M,  // in0_shard_height_in_tiles
+        (std::uint32_t)B,           // batch
+        (std::uint32_t)ring_size,   // ring_size
+        (std::uint32_t)in0_signal_semaphore_id,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        (std::uint32_t) in1_shard_width_in_tiles, // in1_shard_width_in_tiles
-        (std::uint32_t) in1_shard_height_in_tiles,
-        (std::uint32_t) B,  // batch
+        (std::uint32_t)in1_shard_width_in_tiles,  // in1_shard_width_in_tiles
+        (std::uint32_t)in1_shard_height_in_tiles,
+        (std::uint32_t)B,  // batch
     };
-
 
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
@@ -1819,6 +1816,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = in1_sender_writer_compile_time_args});
 
     auto mm_kernel = tt_metal::CreateKernel(
@@ -1907,16 +1905,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device);
 
         std::vector<uint32_t> mm_in0_args = {
-            i, // ring_index
-            next_core_noc.x, // next_core_noc_x
-            next_core_noc.y, // next_core_noc_y
+            i,                // ring_index
+            next_core_noc.x,  // next_core_noc_x
+            next_core_noc.y,  // next_core_noc_y
             noc,
         };
-        tt_metal::SetRuntimeArgs(
-            program,
-            mm_kernel_in0_id,
-            core,
-            mm_in0_args);
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
@@ -1927,14 +1921,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id,
-         mm_kernel_in1_sender_writer_id,
-         cb_src0,
-         cb_src1,
-         cb_output,
-         num_cores,
-         cores
-        ](
+        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1943,9 +1930,9 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
             TT_ASSERT(output_tensors.size() == 1);
 
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto src_buffer_a = input_tensors[0].buffer();
+            auto src_buffer_b = input_tensors[1].buffer();
+            auto dst_buffer = output_tensors[0].buffer();
 
             bool src0_sharded = input_tensors[0].is_sharded();
             bool src1_sharded = input_tensors[1].is_sharded();
@@ -1964,7 +1951,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-
 }
 
 }  // namespace reuse_mcast_1d_optimized_helpers
@@ -2041,12 +2027,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (fp32_dest_acc_en) {
-        TT_FATAL(
-            out_subblock_h * out_subblock_w <= 8,
-            "Total number of tiles in a subblock must be less than 8 when in fp32_dest_acc mode");
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -2085,13 +2065,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             num_blocks_total == num_cores_x * num_cores_y,
             "Number of blocks must equal number of cores for gather_in0 mode: {} blocks != {} cores",
             num_blocks_total,
-            num_cores_x * num_cores_y
-        );
+            num_cores_x * num_cores_y);
 
-        TT_FATAL(
-            !untilize_out,
-            "Untilize out is not suported wit gather_in0 mode"
-        );
+        TT_FATAL(!untilize_out, "Untilize out is not suported wit gather_in0 mode");
     }
 
     ////////////////////////////////////////////////////////////////////////////

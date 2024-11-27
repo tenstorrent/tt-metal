@@ -10,13 +10,7 @@
 #include "mod_div_lib.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "debug/dprint.h"
-
-
-// Please update
-// tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
-// when making any changes to this file.
-// Have to keep a copy because cannot import ttnn into tests/tt_metal.
+// #include "debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -44,7 +38,6 @@ FORCE_INLINE void reload_from_cb_to_dst(
 }
 
 void MAIN {
-
     // Runtime args
     uint32_t rt_args_idx = 0;
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
@@ -89,7 +82,8 @@ void MAIN {
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    mm_block_init(
+        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
