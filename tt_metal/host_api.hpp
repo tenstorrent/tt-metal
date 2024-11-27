@@ -85,7 +85,7 @@ Device* CreateDevice(
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER,
+    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {});
 
 // clang-format off
@@ -100,7 +100,9 @@ Device* CreateDevice(
  * */
 // clang-format on
 Device* CreateDeviceMinimal(
-    chip_id_t device_id, const uint8_t num_hw_cqs = 1, DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs = 1,
+    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
 // clang-format off
 /**
