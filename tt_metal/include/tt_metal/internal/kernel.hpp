@@ -11,9 +11,6 @@
 //                INTERNAL KERNEL EXECUTION
 //==================================================
 
-namespace tt::tt_metal{
-namespace v1 {
-
-
-} // namespace v1
-} // namespace tt::tt_metal
+namespace tt::tt_metal {
+namespace v1 {}  // namespace v1
+}  // namespace tt::tt_metal

@@ -55,7 +55,7 @@ static_assert(LogType_Count < 64, "Exceeded number of log types");
 
 #pragma GCC visibility push(hidden)
 class Logger {
-   public:
+public:
     static constexpr char const* type_names[LogType_Count] = {
     // clang-format off
 #define X(a) #a,
@@ -107,8 +107,9 @@ class Logger {
 
     template <typename... Args>
     void log_level_type(Level level, LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
-        if (static_cast<std::underlying_type_t<Level>>(level) < static_cast<std::underlying_type_t<Level>>(min_level))
+        if (static_cast<std::underlying_type_t<Level>>(level) < static_cast<std::underlying_type_t<Level>>(min_level)) {
             return;
+        }
 
         if ((1 << type) & mask) {
 #if defined(UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT) && (UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT == 1)
@@ -127,7 +128,7 @@ class Logger {
 
     void flush() { *fd << std::flush; }
 
-   private:
+private:
     Logger() {
         static char const* env = std::getenv("TT_METAL_LOGGER_TYPES");
         if (env) {

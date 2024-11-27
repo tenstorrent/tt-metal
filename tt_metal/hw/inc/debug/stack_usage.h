@@ -7,7 +7,8 @@
 #include "watcher_common.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STACK_USAGE) && !defined(COMPILE_FOR_ERISC) && !defined(FORCE_WATCHER_OFF)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STACK_USAGE) && !defined(COMPILE_FOR_ERISC) && \
+    !defined(FORCE_WATCHER_OFF)
 
 #define STACK_DIRTY_PATTERN 0xBABABABA
 
@@ -56,7 +57,8 @@ uint32_t get_dispatch_class() {
     return DISPATCH_CLASS_TENSIX_DM0;
 #elif defined(COMPILE_FOR_NCRISC)
     return DISPATCH_CLASS_TENSIX_DM1;
-#elif defined(COMPILE_FOR_ERISC) || (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0) // make this compile_for_active_erisc=0/1
+#elif defined(COMPILE_FOR_ERISC) || \
+    (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0)  // make this compile_for_active_erisc=0/1
     return DISPATCH_CLASS_ETH_DM0;
 #elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
     return DISPATCH_CLASS_ETH_DM1;
@@ -69,7 +71,7 @@ void dirty_stack_memory() {
     // Dirty the back 3/4 of the stack
     constexpr uint32_t stack_dirty_fraction_numerator = 3;
     constexpr uint32_t stack_dirty_fraction_denominator = 4;
-    uint32_t tt_l1_ptr *stack_ptr = (uint32_t tt_l1_ptr *) get_stack_base();
+    uint32_t tt_l1_ptr* stack_ptr = (uint32_t tt_l1_ptr*)get_stack_base();
     uint32_t stack_size = get_stack_size();
     uint32_t stack_max_offset = stack_size / sizeof(uint32_t);
     uint32_t stack_dirty_offset = stack_max_offset * stack_dirty_fraction_numerator / stack_dirty_fraction_denominator;
@@ -83,18 +85,18 @@ void dirty_stack_memory() {
 
 void record_stack_usage() {
     // Write the pause flag for this core into the memory mailbox for host to read.
-    debug_stack_usage_t tt_l1_ptr *stack_usage_msg = GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage);
+    debug_stack_usage_t tt_l1_ptr* stack_usage_msg = GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage);
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-    launch_msg_t tt_l1_ptr *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
+    launch_msg_t tt_l1_ptr* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     uint32_t stack_size = get_stack_size();
 
-    uint32_t tt_l1_ptr *stack_ptr = (uint32_t tt_l1_ptr *) get_stack_base();
+    uint32_t tt_l1_ptr* stack_ptr = (uint32_t tt_l1_ptr*)get_stack_base();
     for (uint32_t stack_offset = 0; stack_offset < (get_stack_size() / sizeof(uint32_t)); stack_offset++) {
         // If we don't find the dirty pattern, this is the highest the stack has gotten, just store that and return.
         if (stack_ptr[stack_offset] != STACK_DIRTY_PATTERN) {
             // Only update if the stack size used in this kernel is larger than what we've seen before.
             uint16_t stack_usage = stack_size - stack_offset * sizeof(uint32_t);
-            if (stack_usage_msg->watcher_kernel_id[debug_get_which_riscv()] == 0 || // No entry recorded
+            if (stack_usage_msg->watcher_kernel_id[debug_get_which_riscv()] == 0 ||  // No entry recorded
                 stack_usage_msg->max_usage[debug_get_which_riscv()] < stack_usage) {
                 stack_usage_msg->max_usage[debug_get_which_riscv()] = stack_size - stack_offset * sizeof(uint32_t);
                 stack_usage_msg->watcher_kernel_id[debug_get_which_riscv()] =
@@ -108,9 +110,9 @@ void record_stack_usage() {
 #define DIRTY_STACK_MEMORY() dirty_stack_memory()
 #define RECORD_STACK_USAGE() record_stack_usage()
 
-#else // !WATCHER_ENABLED
+#else  // !WATCHER_ENABLED
 
 #define DIRTY_STACK_MEMORY()
 #define RECORD_STACK_USAGE()
 
-#endif // WATCHER_ENABLED
+#endif  // WATCHER_ENABLED
