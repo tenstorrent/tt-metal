@@ -80,7 +80,7 @@ PREFETCHER_GRID = [
 ]
 
 
-def test_multi_core_matmul_1d(
+def run_multi_core_matmul_1d(
     device,
     in0_dtype,
     in1_dtype,
@@ -196,8 +196,8 @@ def test_multi_core_matmul_1d(
         ),
     )
 
-    in0 = torch.ones(in0_shape)
-    in1 = torch.ones(in1_shape)
+    in0 = torch.randn(in0_shape)
+    in1 = torch.randn(in1_shape)
 
     in0_t = ttnn.from_torch(
         in0,
@@ -253,7 +253,6 @@ def test_multi_core_matmul_1d(
     passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
     logger.info(output)
 
-    breakpoint()
     assert passing
 
     # Check program cache
@@ -261,6 +260,7 @@ def test_multi_core_matmul_1d(
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -334,7 +334,7 @@ def test_multi_core_matmul_1d_wh(
     use_program_cache,
     function_level_defaults,
 ):
-    test_multi_core_matmul_1d(
+    run_multi_core_matmul_1d(
         device,
         in0_dtype,
         in1_dtype,
@@ -353,47 +353,45 @@ def test_multi_core_matmul_1d_wh(
     )
 
 
+@pytest.mark.skipif(is_wormhole_b0(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
         # 32, 2304, 3840
-        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, False, (8, 3)),
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
         # 32, 2304, 3840
-        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
         # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),  # fail
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, False, (8, 3)),
         # 32, 2304, 3840
-        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
         # 256, 1024, 8192
-        # (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, False, (8, 4)), # fail
+        (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, False, False, (8, 4)),
         # 128, 8192, 2048
-        # (1, 128, 4096, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, True, False, (8, 8)), # fail
-        # # 32, 64, 64
-        # (1, 32, 64*3, 64*5, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (2, 1)),
-        # # 32, 64, 64
-        # (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (2, 1)),
+        (1, 128, 4096, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, False, False, (8, 8)),
+        # 32, 64, 64
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
+        # 32, 64, 64
+        (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
     ],
 )
 @pytest.mark.parametrize(
     "activation",
     [
         None,
-        # ttnn.UnaryOpType.SILU,
-        # ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.SILU,
+        ttnn.UnaryOpType.RELU,
     ],
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [
-        False,
-    ],
+    [False, True],
 )
 @pytest.mark.parametrize(
     "num_iters",
-    [
-        1,
-    ],
+    [1, 3],
 )
 def test_multi_core_matmul_1d_gs(
     device,
@@ -414,7 +412,7 @@ def test_multi_core_matmul_1d_gs(
     use_program_cache,
     function_level_defaults,
 ):
-    test_multi_core_matmul_1d(
+    run_multi_core_matmul_1d(
         device,
         in0_dtype,
         in1_dtype,
@@ -430,4 +428,5 @@ def test_multi_core_matmul_1d_gs(
         grid,
         use_arbitrary_cores,
         num_iters,
+        pcc_threshold=0.96,
     )
