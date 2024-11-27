@@ -30,7 +30,7 @@ namespace reduce_scatter_detail {
 void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slices, std::vector<uint32_t>& args_out);
 
 struct ReduceScatterWorkerArgBuilder {
-    ReduceScatterWorkerArgBuilder(
+    ReduceScatterWorkerArgBuilder (
         tt::tt_metal::Device const* device,
         ttnn::ccl::CCLOpConfig const& op_config,
         ttnn::ccl::RingTopology const& topology_config,
@@ -40,14 +40,14 @@ struct ReduceScatterWorkerArgBuilder {
         std::size_t scatter_dim,
         std::size_t cb_num_pages_per_packet,
         std::optional<uint32_t> receiver_worker_partial_ready_semaphore_id,
-        std::size_t num_buffers_per_channel);
+        std::size_t num_buffers_per_channel
+        );
 
     std::size_t get_total_num_math_pages(WorkerAttributes const& worker_attrs) const;
 
     std::vector<uint32_t> generate_reduce_op_kernel_ct_args() const;
 
-    std::vector<uint32_t> generate_reduce_op_kernel_rt_args(
-        WorkerAttributes const& worker_attrs, std::size_t ring_size) const;
+    std::vector<uint32_t> generate_reduce_op_kernel_rt_args(WorkerAttributes const& worker_attrs, std::size_t ring_size) const;
 
     std::vector<uint32_t> generate_receiver_kernel_ct_args() const;
 
@@ -60,7 +60,9 @@ struct ReduceScatterWorkerArgBuilder {
     std::vector<uint32_t> generate_sender_kernel_ct_args() const;
 
     std::vector<uint32_t> generate_sender_kernel_rt_args(
-        WorkerEdmInterfaceArgs const& edm_interface, WorkerAttributes const& worker_attrs) const;
+        WorkerEdmInterfaceArgs const& edm_interface,
+        WorkerAttributes const& worker_attrs) const;
+
 
     std::vector<uint32_t> generate_line_start_sender_kernel_rt_args(
         WorkerEdmInterfaceArgs const& edm_interface,
@@ -69,7 +71,7 @@ struct ReduceScatterWorkerArgBuilder {
 
     std::vector<uint32_t> generate_line_start_sender_kernel_ct_args() const;
 
-    tt::tt_metal::Device const* device;
+    tt::tt_metal::Device const*device;
     ttnn::ccl::RingTopology const topology_config;
     ttnn::ccl::CCLOpConfig const op_config;
     ttnn::ccl::InterleavedTensorWorkerSlice const worker_input_slice;
@@ -86,6 +88,6 @@ struct ReduceScatterWorkerArgBuilder {
     bool dst_is_dram;
 };
 
-}  // namespace reduce_scatter_detail
-}  // namespace ccl
-}  // namespace ttnn
+} // namespace reduce_scatter_detail
+} // namespace ccl
+} // namespace ttnn

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
+
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 #include "conv_transpose2d_pybind.hpp"
@@ -14,6 +16,7 @@ namespace operations::conv {
 namespace conv_transpose2d {
 
 void py_bind_conv_transpose2d(py::module& module) {
+
     bind_registered_operation(
         module,
         ttnn::conv_transpose2d,
@@ -85,42 +88,24 @@ void py_bind_conv_transpose2d(py::module& module) {
                 )
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv_transpose2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::Device* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
-               std::array<uint32_t, 2> output_padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               std::optional<const conv2d::Conv2dConfig> conv_config,
-               const uint8_t& queue_id) -> Result {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    output_padding,
-                    dilation,
-                    groups,
-                    bias_tensor,
-                    conv_config);
+            [](const decltype(ttnn::conv_transpose2d)& self, const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& weight_tensor,
+                ttnn::Device* device,
+                uint32_t in_channels,
+                uint32_t out_channels,
+                uint32_t batch_size,
+                uint32_t input_height,
+                uint32_t input_width,
+                std::array<uint32_t, 2> kernel_size,
+                std::array<uint32_t, 2> stride,
+                std::array<uint32_t, 2> padding,
+                std::array<uint32_t, 2> output_padding,
+                std::array<uint32_t, 2> dilation,
+                uint32_t groups,
+                std::optional<const ttnn::Tensor> bias_tensor,
+                std::optional<const conv2d::Conv2dConfig> conv_config,
+                const uint8_t& queue_id) -> Result {
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -142,42 +127,24 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv_transpose2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::MeshDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
-               std::array<uint32_t, 2> output_padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               std::optional<const conv2d::Conv2dConfig> conv_config,
-               const uint8_t& queue_id) -> Result {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    output_padding,
-                    dilation,
-                    groups,
-                    bias_tensor,
-                    conv_config);
+            [](const decltype(ttnn::conv_transpose2d)& self, const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& weight_tensor,
+                ttnn::MeshDevice* device,
+                uint32_t in_channels,
+                uint32_t out_channels,
+                uint32_t batch_size,
+                uint32_t input_height,
+                uint32_t input_width,
+                std::array<uint32_t, 2> kernel_size,
+                std::array<uint32_t, 2> stride,
+                std::array<uint32_t, 2> padding,
+                std::array<uint32_t, 2> output_padding,
+                std::array<uint32_t, 2> dilation,
+                uint32_t groups,
+                std::optional<const ttnn::Tensor> bias_tensor,
+                std::optional<const conv2d::Conv2dConfig> conv_config,
+                const uint8_t& queue_id) -> Result {
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -196,9 +163,10 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = 0}
+    );
 }
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
+}  // namespace conv2d
+}  // namespace operations
 }  // namespace ttnn
