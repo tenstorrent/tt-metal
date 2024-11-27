@@ -301,34 +301,33 @@ void py_module(py::module& module) {
                const ttnn::Tensor& input_tensor_b,
                const bool transpose_a,
                const bool transpose_b,
-               std::optional<Tensor>& optional_output_tensor,
                const std::optional<const ttnn::MemoryConfig> memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+               const std::optional<const Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
                     transpose_a,
                     transpose_b,
-                    optional_output_tensor,
                     memory_config,
                     dtype,
                     program_config,
                     activation,
                     compute_kernel_config,
                     core_grid,
-                    output_tile);
+                    output_tile,
+                    optional_output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,
-            py::arg("optional_output_tensor") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,
@@ -336,6 +335,7 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -381,34 +381,33 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::Tensor>& bias,
                const bool transpose_a,
                const bool transpose_b,
-               std::optional<Tensor>& optional_output_tensor,
                const std::optional<const ttnn::MemoryConfig> memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+               const std::optional<const Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
                     bias,
                     transpose_a,
                     transpose_b,
-                    optional_output_tensor,
                     memory_config,
                     dtype,
                     program_config,
                     activation,
                     compute_kernel_config,
                     core_grid,
-                    output_tile);
+                    output_tile,
+                    optional_output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("bias") = std::nullopt,
-            py::arg("optional_output_tensor") = std::nullopt,
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,
             py::arg("memory_config") = std::nullopt,
@@ -418,6 +417,7 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
         });
 }
 
