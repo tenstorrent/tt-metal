@@ -840,7 +840,7 @@ def run_llama3_demo(
     ),
 )
 @pytest.mark.parametrize(  # TODO Substitute these values for a proper vLLM integration
-    "paged_attention_params",
+    "page_params",
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
@@ -854,7 +854,7 @@ def test_llama_demo(
     batch_size,
     num_batches,
     paged_attention,
-    paged_attention_params,
+    page_params,
     max_generated_tokens,
     optimizations,
     single_layer,
@@ -872,8 +872,8 @@ def test_llama_demo(
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
-            block_size=paged_attention_params["page_block_size"],
-            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
         )
     else:
         paged_attention_config = None

@@ -49,7 +49,7 @@ from models.utility_functions import skip_for_grayskull
     ),
 )
 @pytest.mark.parametrize(
-    "paged_attention_params",
+    "page_params",
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
@@ -82,7 +82,7 @@ def test_llama_model_inference(
     max_seq_len,
     batch_size,
     paged_attention,
-    paged_attention_params,
+    page_params,
     optimizations, 
     mesh_device,
     use_program_cache,
@@ -206,8 +206,8 @@ def test_llama_model_inference(
     # Prepare page table for paged attention
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
-            block_size=paged_attention_params["page_block_size"],
-            max_num_blocks=paged_attention_params["page_max_num_blocks"],
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
         )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
