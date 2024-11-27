@@ -52,8 +52,14 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 }
 
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    // Revert X dim value to default.
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
+
+    // Revert Z dim value back to default.
+    const uint Tile_z_dim = get_operand_num_faces(operand);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(Tile_z_dim);
+
     std::uint32_t operand_id = get_operand_id(operand);
     unpack_config_u config = {0};
 
