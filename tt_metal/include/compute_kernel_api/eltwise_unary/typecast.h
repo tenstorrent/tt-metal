@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_typecast.h"
@@ -13,8 +12,6 @@
 #else
 #define MATH(x)
 #endif
-
-
 
 namespace ckernel {
 
@@ -39,23 +36,22 @@ namespace ckernel {
  *
  * Note: This operation is not supported on Grayskull.
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | IN_DTYPE       | Input data format                                                          | uint32_t | Must be valid tt::DataFormat                          | True     |
- * | OUT_DTYPE      | Desired output data format                                                 | uint32_t | Must be valid tt::DataFormat                          | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be
+ * less than the size of the DST register buffer | True     | | IN_DTYPE       | Input data format | uint32_t | Must be
+ * valid tt::DataFormat                          | True     | | OUT_DTYPE      | Desired output data format | uint32_t |
+ * Must be valid tt::DataFormat                          | True     |
  */
 template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
 ALWI void typecast_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void typecast_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_typecast_init<APPROX>() ));
-}
+ALWI void typecast_tile_init() { MATH((llk_math_eltwise_unary_sfpu_typecast_init<APPROX>())); }
 
-
-} // namespace ckernel
+}  // namespace ckernel

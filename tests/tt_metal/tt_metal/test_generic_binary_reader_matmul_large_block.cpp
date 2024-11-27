@@ -90,7 +90,7 @@ std::vector<std::uint32_t> transpose_tiles(std::vector<std::uint32_t> data, int 
     return result;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
     for(int i = 0 ; i < rows ; i++) {
@@ -103,7 +103,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout<<std::endl;
 }
 
-void print_faces(std::vector<bfloat16> data, string name) {
+void print_faces(std::vector<bfloat16> data, const string& name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
 
@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
             .set_page_size(src1_cb_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t interm0_cb_index = 24;
         uint32_t num_output_tiles = M * N;
         CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});

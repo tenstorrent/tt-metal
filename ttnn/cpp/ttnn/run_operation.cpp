@@ -84,9 +84,8 @@ template void override_addresses<OptionalTensors>(
 
 }  // namespace detail
 
-template<typename OutputTensors>
+template <typename OutputTensors>
 struct OldInfraDeviceOperation {
-
     using operation_attributes_t = operation::DeviceOperation<OutputTensors>;
 
     struct tensor_args_t {
@@ -101,8 +100,9 @@ struct OldInfraDeviceOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            std::optional<operation::OverrideAddressesCallback>  override_addresses_callback;
-            std::optional<operation::OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback;
+            std::optional<operation::OverrideAddressesCallback> override_addresses_callback;
+            std::optional<operation::OverrideRuntimeArgumentsCallback<OutputTensors>>
+                override_runtime_arguments_callback;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -116,8 +116,7 @@ struct OldInfraDeviceOperation {
                 std::move(program_with_callbacks.program),
                 shared_variables_t{
                     program_with_callbacks.override_addresses_callback,
-                    program_with_callbacks.override_runtime_arguments_callback}
-            };
+                    program_with_callbacks.override_runtime_arguments_callback}};
         }
 
         static void override_runtime_arguments(
@@ -126,7 +125,8 @@ struct OldInfraDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;
-            auto& override_runtime_arguments_callback = cached_program.shared_variables.override_runtime_arguments_callback;
+            auto& override_runtime_arguments_callback =
+                cached_program.shared_variables.override_runtime_arguments_callback;
             auto& program = cached_program.program;
 
             if (override_addresses_callback.has_value()) {
@@ -155,31 +155,37 @@ struct OldInfraDeviceOperation {
     // Mandatory methods
 
     // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
         return ProgramFactory{};
     }
 
     // Validate the operation when it creates a program. Usually will have more checks
-    static void validate_on_program_cache_miss(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        attributes.validate(tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_args.optional_output_tensors);
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        attributes.validate(
+            tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_args.optional_output_tensors);
     }
 
     // Validate the operation when it reuses a program. Usually will have less checks
-    static void validate_on_program_cache_hit(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
         validate_on_program_cache_miss(attributes, tensor_args);
     }
 
     // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    static shape_return_value_t compute_output_shapes(
+        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
         return attributes.compute_output_shapes(tensor_args.input_tensors);
     }
 
     // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
         return attributes.create_output_tensors(tensor_args.input_tensors, tensor_args.optional_output_tensors);
     }
 
-     static tt::stl::hash::hash_t compute_program_hash(
+    static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
         return attributes.compute_program_hash(tensor_args.input_tensors, tensor_args.optional_input_tensors);
     }
@@ -188,28 +194,24 @@ struct OldInfraDeviceOperation {
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
-        return attributes.create_op_performance_model(tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+        return attributes.create_op_performance_model(
+            tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
     }
 
-    static std::string get_type_name(const operation_attributes_t& attributes) {
-        return attributes.get_type_name();
-    }
+    static std::string get_type_name(const operation_attributes_t& attributes) { return attributes.get_type_name(); }
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         operation_attributes_t&& operation_attributes,
         const operation::Tensors& input_tensors,
         const operation::OptionalConstTensors& optional_input_tensors,
-        const operation::OptionalTensors& optional_output_tensors
-    ) {
+        const operation::OptionalTensors& optional_output_tensors) {
         return std::make_tuple(
             std::move(operation_attributes),
-            tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors}
-        );
+            tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors});
     }
 };
 
-
-} // namespace tt::tt_metal::operation
+}  // namespace tt::tt_metal::operation
 
 namespace ttnn::prim {
 constexpr auto old_infra_device_operation = ttnn::register_operation<
@@ -229,11 +231,12 @@ OutputTensors run(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id) {
-
     if constexpr (std::is_same_v<OutputTensors, Tensors>) {
-        return ttnn::prim::old_infra_device_operation(cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+        return ttnn::prim::old_infra_device_operation(
+            cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
-        return ttnn::prim::old_infra_device_operation_with_optional_output_tensors(cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+        return ttnn::prim::old_infra_device_operation_with_optional_output_tensors(
+            cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
     }
 }
 
@@ -280,7 +283,8 @@ OutputTensors run_without_autoformat(
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
         }
     }
-    return run<OutputTensors>(std::move(operation), input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors, cq_id);
+    return run<OutputTensors>(
+        std::move(operation), input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors, cq_id);
 }
 
 template Tensors run_without_autoformat<Tensors>(
@@ -298,7 +302,11 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     uint8_t cq_id);
 
 std::vector<LegacyShape> extract_legacy_shapes(
-    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>, std::vector<ttnn::TensorSpec>>&& shapes, const std::function<TensorLayout(size_t idx)>& layout_provider, const bool use_tensor_layout_from_tensor_spec) {
+    const std::
+        variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>, std::vector<ttnn::TensorSpec>>&&
+            shapes,
+    const std::function<TensorLayout(size_t idx)>& layout_provider,
+    const bool use_tensor_layout_from_tensor_spec) {
     if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(shapes)) {
         return std::get<std::vector<tt::tt_metal::LegacyShape>>(std::move(shapes));
     } else if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(shapes)) {
@@ -307,7 +315,8 @@ std::vector<LegacyShape> extract_legacy_shapes(
         legacy_shapes.reserve(simple_shapes.size());
         for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
             TensorLayout tensor_layout = layout_provider(idx);
-            legacy_shapes.emplace_back(simple_shapes[idx].view(), tensor_layout.compute_padded_shape(simple_shapes[idx]).view());
+            legacy_shapes.emplace_back(
+                simple_shapes[idx].view(), tensor_layout.compute_padded_shape(simple_shapes[idx]).view());
         }
         return legacy_shapes;
     } else if (std::holds_alternative<std::vector<ttnn::TensorSpec>>(shapes)) {
@@ -316,7 +325,8 @@ std::vector<LegacyShape> extract_legacy_shapes(
         legacy_shapes.reserve(tensor_specs.size());
         for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
             const auto& tensor_spec = tensor_specs[idx];
-            TensorLayout tensor_layout = use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
+            TensorLayout tensor_layout =
+                use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
             auto logical_shape = tensor_spec.logical_shape();
             legacy_shapes.emplace_back(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view());
         }
@@ -371,12 +381,20 @@ Tensors run_with_autoformat(
     }
 
     auto output_specs = operation.compute_output_shapes(input_tensors);
-    auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
+    auto output_tensors = run<Tensors>(
+        std::move(operation),
+        formatted_input_tensors,
+        formatted_optional_input_tensors,
+        optional_output_tensors,
+        cq_id);
 
-    auto legacy_output_shapes = extract_legacy_shapes(std::move(output_specs), [&](size_t idx) {
-        auto tensor = output_tensors[idx];
-        return TensorLayout(tensor.get_dtype(), Layout::TILE, tensor.memory_config());
-    }, /*use_tensor_layout_from_tensor_spec=*/ true);
+    auto legacy_output_shapes = extract_legacy_shapes(
+        std::move(output_specs),
+        [&](size_t idx) {
+            auto tensor = output_tensors[idx];
+            return TensorLayout(tensor.get_dtype(), Layout::TILE, tensor.memory_config());
+        },
+        /*use_tensor_layout_from_tensor_spec=*/true);
 
     TT_ASSERT(output_tensors.size() == legacy_output_shapes.size());
 
@@ -384,7 +402,8 @@ Tensors run_with_autoformat(
     formatted_optional_input_tensors.clear();
 
     for (auto i = 0; i < output_tensors.size(); ++i) {
-        output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], legacy_output_shapes[i], device, Layout::TILE);
+        output_tensors[i] =
+            AutoFormat::format_output_tensor(output_tensors[i], legacy_output_shapes[i], device, Layout::TILE);
     }
     return output_tensors;
 }
@@ -435,12 +454,20 @@ Tensors run_with_autoformat(
     }
 
     auto output_specs = operation.compute_output_shapes(input_tensors);
-    auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
+    auto output_tensors = run<Tensors>(
+        std::move(operation),
+        formatted_input_tensors,
+        formatted_optional_input_tensors,
+        optional_output_tensors,
+        cq_id);
 
-    auto legacy_output_shapes = extract_legacy_shapes(std::move(output_specs), [&](size_t idx) {
-        auto tensor = output_tensors[idx];
-        return TensorLayout(tensor.get_dtype(), output_layouts[idx], tensor.memory_config());
-    }, /*use_tensor_layout_from_tensor_spec=*/ false);
+    auto legacy_output_shapes = extract_legacy_shapes(
+        std::move(output_specs),
+        [&](size_t idx) {
+            auto tensor = output_tensors[idx];
+            return TensorLayout(tensor.get_dtype(), output_layouts[idx], tensor.memory_config());
+        },
+        /*use_tensor_layout_from_tensor_spec=*/false);
 
     TT_ASSERT(output_tensors.size() == legacy_output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());
@@ -458,10 +485,10 @@ Tensors run_with_autoformat(
 
 void launch_with_autoformat(
     std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors input_tensors,
+    const Tensors& input_tensors,
     Tensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors) {
+    const OptionalConstTensors& optional_input_tensors,
+    const OptionalTensors& optional_output_tensors) {
     // Mark each output tensor as having dynamic storage (can be on host or device, depending
     // on autoformat behaviour). Multi device tensors do not support dynamic storage.
     for (auto& output_tensor : output_tensors) {
@@ -469,7 +496,6 @@ void launch_with_autoformat(
     }
     launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
 }
-
 
 void validate_workers_and_storage(
     const std::vector<Tensor>& inputs,

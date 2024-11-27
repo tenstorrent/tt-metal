@@ -14,7 +14,6 @@
 #include "ttnn/decorators.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
-
 namespace ttnn::operations::data_movement {
 
 struct PermuteDeviceOperation {
@@ -22,12 +21,12 @@ struct PermuteDeviceOperation {
         const SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
     };
-     struct tensor_args_t {
+    struct tensor_args_t {
         const Tensor& input_tensor;
         std::optional<Tensor> optional_output_tensor;
     };
 
-    using shape_return_value_t = ttnn::SimpleShape; // waiting on TensorSpec here
+    using shape_return_value_t = ttnn::SimpleShape;  // waiting on TensorSpec here
 
     using tensor_return_value_t = Tensor;
 
@@ -71,18 +70,20 @@ struct PermuteDeviceOperation {
 
     // API call to map user arguments to operation attributes and tensor args.
     // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output = ttnn::prim::example(input_tensor)` after the op is registered
-    // Keep in mind that the the overload with `queue_id` argument will be added automatically for primitive operations
-    // So, the user can also call this operation using `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor, const SmallVector<uint32_t>& dims,
-            const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) ;
-
+    // The user will be able to call the operation using `tensor_return_value_t output =
+    // ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`
+    // argument will be added automatically for primitive operations So, the user can also call this operation using
+    // `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const SmallVector<uint32_t>& dims,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<Tensor> optional_output_tensor);
 };
-}
+}  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-    // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto permute = ttnn::register_operation<
-    "ttnn::prim::permute",
-    ttnn::operations::data_movement::PermuteDeviceOperation>();
-}
+// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
+constexpr auto permute =
+    ttnn::register_operation<"ttnn::prim::permute", ttnn::operations::data_movement::PermuteDeviceOperation>();
+}  // namespace ttnn::prim

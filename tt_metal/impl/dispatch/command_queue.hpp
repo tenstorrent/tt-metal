@@ -726,13 +726,13 @@ class CommandQueue {
 void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking);
 void EnqueueSetRuntimeArgs(
     CommandQueue& cq,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     std::shared_ptr<RuntimeArgs> runtime_args_ptr,
     bool blocking);
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     Program& program,
     bool blocking);
 

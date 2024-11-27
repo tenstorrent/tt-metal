@@ -27,7 +27,7 @@ FORCE_INLINE uint64_t get_index_noc_address(uint32_t tile_idx, uint32_t offset =
 FORCE_INLINE uint32_t get_index(uint32_t input_l1_addr, uint32_t idx) {
     constexpr bool is_index_bfloat16 = get_compile_time_arg_val(6) == 1;
     if constexpr (is_index_bfloat16) {
-        auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(input_l1_addr);
+        auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_addr);
         union {
             float f;
             uint32_t u;
@@ -35,14 +35,14 @@ FORCE_INLINE uint32_t get_index(uint32_t input_l1_addr, uint32_t idx) {
         u.u = (uint32_t)input_l1_ptr[idx] << 16;
         return static_cast<uint32_t>(u.f);
     } else {
-        auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(input_l1_addr);
+        auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
         return input_l1_ptr[idx];
     }
 }
 
 // TODO: Helper for printing mask (can remove this)
 FORCE_INLINE uint32_t get_mask(uint32_t input_l1_addr, uint32_t idx) {
-    auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(input_l1_addr);
+    auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_l1_addr);
     return input_l1_ptr[idx];
 }
 
@@ -70,7 +70,7 @@ FORCE_INLINE uint32_t process_index_chunk(uint32_t index_l1_addr, uint32_t chunk
 }
 
 FORCE_INLINE void generate_mask(uint32_t index_l1_addr, uint32_t chunk_id, uint32_t mask_l1_addr) {
-    auto mask_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(mask_l1_addr);
+    auto mask_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(mask_l1_addr);
 
     uint32_t x_min = chunk_id << 5;  // equivalent to chunk_id * 32
     uint32_t x_max = x_min + INPUT_SIZE;
@@ -87,7 +87,7 @@ FORCE_INLINE void generate_mask(uint32_t index_l1_addr, uint32_t chunk_id, uint3
 
 FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr) {
     constexpr bool is_output_bfloat16 = get_compile_time_arg_val(7) == 1;
-    auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(input_l1_addr);
+    auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
 
     if constexpr (is_output_bfloat16) {
         // 512 * 4 = 2048 bytes = single tile of bfloat16
@@ -116,12 +116,12 @@ void kernel_main() {
     constexpr uint32_t seq_len_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t num_embeddings = get_compile_time_arg_val(11);
 
-    constexpr uint32_t cb_grad = tt::CB::c_in0;
-    constexpr uint32_t cb_index = tt::CB::c_in1;
-    constexpr uint32_t cb_out_intermed = tt::CB::c_in2;
-    constexpr uint32_t cb_mask = tt::CB::c_intermed0;
-    constexpr uint32_t cb_chunk_count_scratch = tt::CB::c_intermed1;
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_grad = tt::CBIndex::c_0;
+    constexpr uint32_t cb_index = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out_intermed = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask = tt::CBIndex::c_24;
+    constexpr uint32_t cb_chunk_count_scratch = tt::CBIndex::c_25;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
 
     constexpr uint32_t grad_page_size = get_tile_size(cb_grad);
     constexpr uint32_t out_page_size = get_tile_size(cb_id_out0);
@@ -154,7 +154,7 @@ void kernel_main() {
     noc_async_write_barrier();
 
     uint32_t chunk_count_l1_addr = get_read_ptr(cb_chunk_count_scratch);
-    auto chunk_count_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(chunk_count_l1_addr);
+    auto chunk_count_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_count_l1_addr);
 
     uint32_t grad_tile_idx = hidden_offset;
     for (uint32_t b = 0; b < batch_size; ++b) {

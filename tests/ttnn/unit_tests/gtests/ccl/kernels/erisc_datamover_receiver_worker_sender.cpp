@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_edm_buffer = get_compile_time_arg_val(3);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     InterleavedAddrGen<dst_is_dram> dest_addr_generator = {
         .bank_base_address = dst_addr, .page_size = page_size};
 

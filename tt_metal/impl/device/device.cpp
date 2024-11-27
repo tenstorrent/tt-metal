@@ -224,7 +224,8 @@ void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t tr
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
+    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -241,7 +242,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_type),
+         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
@@ -266,17 +267,17 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->storage_only_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
@@ -759,21 +760,14 @@ void Device::clear_l1_state() {
             zero_vec_above_tile_header_buffer,
             eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
 
-        /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
-        std::vector<uint32_t> zero_vec_below_command_q_base(
-            (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
-
-        llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
-        */
     }
     // TODO: clear idle eriscs as well
 }
 
 void Device::configure_kernel_variant(
     Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,
+    const string& path,
+    const std::vector<uint32_t>& compile_args,
     CoreCoord kernel_core,
     CoreCoord kernel_physical_core,
     CoreType dispatch_core_type,
@@ -1825,6 +1819,7 @@ void Device::setup_tunnel_for_remote_devices() {
             uint8_t num_hw_cqs = this->num_hw_cqs_;
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
             CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
             uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             dispatch_worker_build_settings_t settings = {};
@@ -2195,7 +2190,8 @@ void Device::compile_command_queue_programs() {
         uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+            CoreType dispatch_core_type = dispatch_core_config.get_core_type();
             tt_cxy_pair prefetch_core = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
@@ -3065,8 +3061,8 @@ CoreCoord Device::logical_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id_);
-    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_type);
+    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(id_);
+    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
 CoreCoord Device::dram_grid_size() const {
@@ -3682,7 +3678,7 @@ v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions optio
         options.num_hw_cqs,
         options.l1_small_size,
         options.trace_region_size,
-        options.dispatch_core_type,
+        options.dispatch_core_config,
         options.l1_bank_remap);
 
     return tt::DevicePool::instance().get_active_device(device_id);

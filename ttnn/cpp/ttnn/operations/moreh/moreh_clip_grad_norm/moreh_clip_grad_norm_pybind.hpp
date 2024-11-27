@@ -9,5 +9,5 @@
 namespace py = pybind11;
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
-void bind_moreh_clip_grad_norm_operation(py::module &module);
+void bind_moreh_clip_grad_norm_operation(py::module& module);
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm

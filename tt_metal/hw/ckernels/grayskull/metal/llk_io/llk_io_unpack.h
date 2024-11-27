@@ -16,7 +16,7 @@ using namespace ckernel;
 // Wait for N tiles available in the incoming stream
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     // TODO(MO): Manually uncomment until issue #6619 is resolved
-    //DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+    // DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
@@ -25,7 +25,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     uint16_t num_tiles_recv;
     do {
-        tiles_received = (std::uint16_t) reg_read((std::uint32_t)tiles_received_ptr);
+        tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - cb_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 }
@@ -33,7 +33,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 // Pop N tiles from the incoming stream
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
-
     std::uint32_t input = operand;
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);

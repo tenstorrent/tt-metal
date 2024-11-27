@@ -17,7 +17,6 @@
 namespace ttnn::operations::experimental::transformer {
 
 struct NlpCreateHeadsDeviceOperation {
-
     struct operation_attributes_t {
         uint32_t num_q_heads;
         uint32_t num_kv_heads;
@@ -28,7 +27,7 @@ struct NlpCreateHeadsDeviceOperation {
 
     struct tensor_args_t {
         const Tensor& input_tensor_q;
-        const std::optional<Tensor> &input_tensor_kv;
+        const std::optional<Tensor>& input_tensor_kv;
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 
@@ -121,11 +120,13 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t head_dim,
         const bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors);
+        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
 };
 
-} // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer
 
 namespace ttnn::prim {
-constexpr auto nlp_create_qkv_heads = ttnn::register_operation<"ttnn::prim::nlp_create_qkv_heads", ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation>();
-} // namespace ttnn::prim
+constexpr auto nlp_create_qkv_heads = ttnn::register_operation<
+    "ttnn::prim::nlp_create_qkv_heads",
+    ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation>();
+}  // namespace ttnn::prim

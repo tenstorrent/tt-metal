@@ -66,27 +66,27 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 1},                      // param_in
-            {tt::CB::c_in1, 1},                      // grad
-            {tt::CB::c_in2, 1},                      // exp_avg_in
-            {tt::CB::c_in3, 1},                      // exp_avg_sq_in
-            {tt::CB::c_in4, 1},                      // max_exp_avg_sq_in (optional)
-            {tt::CB::c_in5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
-            {tt::CB::c_in6, 1, intermed_cb_format},  // 1.0f
+            {tt::CBIndex::c_0, 1},                      // param_in
+            {tt::CBIndex::c_1, 1},                      // grad
+            {tt::CBIndex::c_2, 1},                      // exp_avg_in
+            {tt::CBIndex::c_3, 1},                      // exp_avg_sq_in
+            {tt::CBIndex::c_4, 1},                      // max_exp_avg_sq_in (optional)
+            {tt::CBIndex::c_5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
+            {tt::CBIndex::c_6, 1, intermed_cb_format},  // 1.0f
 
-            {tt::CB::c_intermed0, 1, intermed_cb_format},  // tmp_grad
-            {tt::CB::c_intermed1, 1, intermed_cb_format},  // tmp_exp_avg
-            {tt::CB::c_intermed2, 1, intermed_cb_format},  // tmp_exp_avg_sq
-            {tt::CB::c_intermed3, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
-            {tt::CB::c_intermed4, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed5, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed6, 1, intermed_cb_format},  // tmp1
-            {tt::CB::c_intermed7, 1, intermed_cb_format},  // tmp2
+            {tt::CBIndex::c_24, 1, intermed_cb_format},  // tmp_grad
+            {tt::CBIndex::c_25, 1, intermed_cb_format},  // tmp_exp_avg
+            {tt::CBIndex::c_26, 1, intermed_cb_format},  // tmp_exp_avg_sq
+            {tt::CBIndex::c_27, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
+            {tt::CBIndex::c_28, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_29, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_30, 1, intermed_cb_format},  // tmp1
+            {tt::CBIndex::c_31, 1, intermed_cb_format},  // tmp2
 
-            {tt::CB::c_out0, 1},  // param_out
-            {tt::CB::c_out1, 1},  // exp_avg_out
-            {tt::CB::c_out2, 1},  // exp_avg_sq_out
-            {tt::CB::c_out3, 1},  // max_exp_avg_sq_out (optional)
+            {tt::CBIndex::c_16, 1},  // param_out
+            {tt::CBIndex::c_17, 1},  // exp_avg_out
+            {tt::CBIndex::c_18, 1},  // exp_avg_sq_out
+            {tt::CBIndex::c_19, 1},  // max_exp_avg_sq_out (optional)
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -120,10 +120,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (fp32_dest_acc_en) {
         data_movement_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
+    const auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

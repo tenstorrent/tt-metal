@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include "dev_msgs.h"
 #include "llrt/hal.hpp"
@@ -19,6 +20,7 @@
 #include "tools/profiler/profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -268,9 +270,9 @@ inline void SetRuntimeArgsImpl(
 
 inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args,
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args,
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
     for (size_t i = 0; i < core_spec.size(); i++) {
@@ -336,11 +338,11 @@ std::map<chip_id_t, Device *> CreateDevices(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -357,7 +359,7 @@ std::map<chip_id_t, Device *> CreateDevices(
     return ret_devices;
 }
 
-void CloseDevices(std::map<chip_id_t, Device *> devices) {
+void CloseDevices(const std::map<chip_id_t, Device *>& devices) {
     std::vector<Device *> devices_to_close;
     for (auto& [id, device] : devices) {
         devices_to_close.push_back(device);
@@ -387,7 +389,7 @@ void print_page(
     CoreCoord noc_coordinates,
     uint32_t l1_address,
     uint32_t bank_id,
-    std::vector<uint32_t> page) {
+    const std::vector<uint32_t>& page) {
     std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
     std::cout << "host_page_index " << host_page_id << std::endl;
     std::cout << "noc coordinates " << noc_coordinates.str() << std::endl;
@@ -577,7 +579,7 @@ void ReadFromDevice(Buffer &buffer, uint8_t* host_buffer, bool shard_order) {
     }
 }
 
-void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
@@ -623,7 +625,7 @@ void ReadShard(Buffer &buffer, uint8_t* host_buffer, const uint32_t &core_id) {
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done) {
+void LaunchProgram(Device *device, const std::shared_ptr<Program>& program, bool wait_until_cores_done) {
     LaunchProgram(device, *program, wait_until_cores_done);
 }
 
@@ -724,11 +726,11 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                         uint32_t num_pages = circular_buffer->num_pages(buffer_index);
                         uint32_t page_size = size_in_bytes / num_pages;
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index) =
-                            addr_in_bytes >> 4;  // convert to addr in 16B words
+                            addr_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 1) =
-                            size_in_bytes >> 4;  // convert to addr in 16B words
+                            size_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 2) = num_pages;
-                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> 4;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                     }
                 }  // PROF_END("CBS")
 
@@ -910,18 +912,18 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
+Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig &dispatch_core_config) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -1237,18 +1239,18 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args) {
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, std::move(runtime_args), false);
 }
 
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args) {
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args) {
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mismatch between number of cores {} and number of runtime args {} getting updated",

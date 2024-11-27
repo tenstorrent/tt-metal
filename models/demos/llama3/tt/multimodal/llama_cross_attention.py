@@ -269,16 +269,15 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # All reduce
         if self.is_multichip:
-            dense_out_reduced = ttnn.reduce_scatter(
+            output = ttnn.reduce_scatter(
                 output,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            return dense_out_reduced
-        else:
-            return output
+
+        return ttnn.to_memory_config(output, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
     def forward_prefill(
         self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, user_id, vision_tokens
@@ -358,7 +357,7 @@ class TtLlamaCrossAttention(LightweightModule):
         if self.is_multichip:  # TODO use_fused_all_gather_matmul
             dense_out_reduced = ttnn.reduce_scatter(
                 output,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

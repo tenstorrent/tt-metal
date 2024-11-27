@@ -75,13 +75,13 @@ void py_bind_split_query_key_value_and_split_heads(pybind11::module& module) {
 
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::transformer::split_query_key_value_and_split_heads) &self,
-               const Tensor &input_tensor,
-               const std::optional<Tensor> &kv_input_tensor,
+            [](const decltype(ttnn::transformer::split_query_key_value_and_split_heads)& self,
+               const Tensor& input_tensor,
+               const std::optional<Tensor>& kv_input_tensor,
                const uint32_t num_heads,
                const std::optional<uint32_t> num_kv_heads,
                const bool transpose_key,
-               const std::optional<MemoryConfig> &memory_config)
+               const std::optional<MemoryConfig>& memory_config)
                 -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(input_tensor, kv_input_tensor, num_heads, num_kv_heads, transpose_key, memory_config);
             },

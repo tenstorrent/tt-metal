@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 
 #include "device/tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
@@ -44,10 +45,16 @@ static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translatio
 
     std::unordered_map<LogicalCoordinate, PhysicalCoordinate> result;
     for (const auto& mapping : j[key]) {
-        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 4) {
+        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 5) {
             throw std::runtime_error("Invalid coordinate format in JSON file: " + filename);
         }
-        result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{mapping[1][1], mapping[1][0], mapping[1][2], mapping[1][3]});
+        result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{
+            mapping[1][0], // cluster_id
+            mapping[1][2], // x
+            mapping[1][1], // y
+            mapping[1][3], // rack
+            mapping[1][4] // shelf
+        });
     }
 
     return result;
@@ -152,11 +159,11 @@ void SystemMesh::register_mesh_device(const std::shared_ptr<MeshDevice> &mesh_de
 }
 
 std::vector<Device*> SystemMesh::map_mesh_device(
-    std::shared_ptr<MeshDevice> mesh_device,
+    const std::shared_ptr<MeshDevice>& mesh_device,
     size_t num_command_queues,
     size_t l1_small_size,
     size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config) {
 
     auto [requested_num_rows, requested_num_cols] = mesh_device->shape();
@@ -173,7 +180,7 @@ std::vector<Device*> SystemMesh::map_mesh_device(
         config.physical_device_ids;
 
     this->opened_devices[mesh_device->get_mesh_id()] = tt::tt_metal::detail::CreateDevices(
-        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
     std::vector<Device*> mapped_devices;
     for (auto physical_device_id : physical_device_ids) {
@@ -215,17 +222,17 @@ static MeshDeviceID generate_unique_mesh_id() {
 }
 
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh)
-    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(parent_mesh) {}
+    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type)
+    const DispatchCoreConfig &dispatch_core_config)
 {
     auto mesh_device = std::make_shared<MeshDevice>(config.mesh_shape, config.mesh_type);
-    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, config);
+    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
 
     return mesh_device;
 }
@@ -282,7 +289,7 @@ void MeshDevice::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config)
 {
     auto [num_rows, num_cols] = this->shape();
@@ -295,7 +302,7 @@ void MeshDevice::initialize(
 
     auto& instance = SystemMesh::instance();
     this->devices = instance.map_mesh_device(
-        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_type, config);
+        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_config, config);
     this->primary_view = std::make_shared<MeshDeviceView>(*this);
 }
 

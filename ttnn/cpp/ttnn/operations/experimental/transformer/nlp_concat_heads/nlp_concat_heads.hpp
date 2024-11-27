@@ -20,9 +20,8 @@ struct NLPConcatHeadsOperation {
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
-
 };
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace operations::experimental::transformer
 
 namespace experimental {
 

@@ -8,13 +8,13 @@
 
 namespace ttml::core {
 
-MeshDevice::MeshDevice([[maybe_unused]]int device_index) :
+MeshDevice::MeshDevice([[maybe_unused]] int device_index) :
     m_mesh_device(ttnn::distributed::api::open_mesh_device(
         ttnn::distributed::MeshShape(1, 1),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         /* num_command_queues*/ 1,
-        DispatchCoreType::WORKER,
+        DispatchCoreConfig{},
         ttnn::distributed::MeshType::RowMajor)) {
     assert(m_mesh_device);
 }

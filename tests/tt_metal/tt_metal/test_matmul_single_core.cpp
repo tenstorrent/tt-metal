@@ -89,7 +89,7 @@ std::vector<std::uint32_t> transpose_tiles(std::vector<std::uint32_t> data, int 
     return result;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
     for(int i = 0 ; i < rows ; i++) {
@@ -226,8 +226,8 @@ int main(int argc, char **argv) {
             .set_page_size(src1_cb_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t interm0_cb_index = 24;
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
+        uint32_t interm0_cb_index = tt::CBIndex::c_24;
         std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
             {ouput_cb_index, tt::DataFormat::Float16_b},
             {interm0_cb_index, tt::DataFormat::Float16_b}

@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
 
@@ -37,7 +37,7 @@ uint32_t get_device_buffer_address(const Tensor& tensor) {
 }
 }
 
-TEST_F(CommonFixture, TestTensorOwnershipSanity) {
+TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
@@ -112,7 +112,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 128})));
 }
 
-TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
+TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
     Device* device = this->devices_[0];
     device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
@@ -169,7 +169,7 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
 
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
-TEST_F(CommonFixture, TestAsyncRefCountManager) {
+TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     Device* device = this->devices_[0];
     device->enable_async(true);
 
@@ -226,7 +226,7 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
     device->enable_async(false);
 }
 
-TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
+TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
     // Test 2 data paths here (resembles async mode):
     // 1. Main -> Worker: Create a tensor in the main thread. Ensure that it is accessible in the worker thread even
     // after its destroyed

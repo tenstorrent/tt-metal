@@ -25,17 +25,13 @@ inline void llk_math_eltwise_unary_sfpu_erfc_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf, APPROXIMATE>,
-        dst_index,
-        (int)VectorMode::RC);
+        ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf, APPROXIMATE>, dst_index, (int)VectorMode::RC);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc, APPROXIMATE>,
-        dst_index,
-        (int)VectorMode::RC);
+        ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc, APPROXIMATE>, dst_index, (int)VectorMode::RC);
 }
 
-}
+}  // namespace ckernel

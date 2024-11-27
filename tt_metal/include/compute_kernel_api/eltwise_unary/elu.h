@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_elu.h"
@@ -13,8 +12,6 @@
 #else
 #define MATH(x)
 #endif
-
-
 
 namespace ckernel {
 
@@ -26,20 +23,18 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     | | slope          | slope used in elu calculation |
+ * uint32_t | Greater than 0                                        | True     |
  */
-ALWI void elu_tile(uint32_t idst, uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_elu<APPROX>(idst, param0) ));
-}
+ALWI void elu_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_elu<APPROX>(idst, param0))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void elu_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_elu_init<APPROX>() ));
-}
+ALWI void elu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_elu_init<APPROX>())); }
 
-} // namespace ckernel
+}  // namespace ckernel

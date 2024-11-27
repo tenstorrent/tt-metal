@@ -203,28 +203,27 @@ constexpr uint8_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(35) >> 24) & 0xFF
     };
 
-void kernel_main() {
-    packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
-    packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
+packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
 
+void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX+1, 0xbb000000 | router_lanes);
 
-    for (uint32_t i = 0; i < router_lanes; i++) {
-        output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
-                              remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
-                              &input_queues[i], 1,
-                              output_depacketize[i], output_depacketize_log_page_size[i],
-                              output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
-                              output_depacketize_remove_header[i]);
-    }
     for (uint32_t i = 0; i < router_lanes; i++) {
         input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
                         remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], remote_rx_network_type[i],
                         input_packetize[i], input_packetize_log_page_size[i],
                         input_packetize_local_sem[i], input_packetize_upstream_sem[i],
                         input_packetize_src_endpoint[i], input_packetize_dest_endpoint[i]);
+
+        output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
+                              remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
+                              &input_queues[i], 1,
+                              output_depacketize[i], output_depacketize_log_page_size[i],
+                              output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
+                              output_depacketize_remove_header[i]);
     }
 
     if (!wait_all_src_dest_ready(input_queues, router_lanes, output_queues, router_lanes, timeout_cycles)) {
