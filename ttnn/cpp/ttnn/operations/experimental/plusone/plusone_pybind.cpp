@@ -24,7 +24,7 @@ void bind_experimental_plusone_operation(py::module& module) {
                 return torch.add(input_tensor, 1)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for plusone. 
+                * :attr:`input_tensor`: Input Tensor for plusone.
 
         )doc";
 
