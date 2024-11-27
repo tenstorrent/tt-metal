@@ -286,13 +286,13 @@ def analyze_op(row, prev_row):
     )
 
     if prev_row is not None and pd.notna(prev_row["OP TO OP LATENCY [ns]"]):
-        dispatch_time = Cell(
+        op_to_op_gap = Cell(
             row["OP TO OP LATENCY [ns]"] / 1000 if pd.notna(row["OP TO OP LATENCY [ns]"]) else None,
             unit="us",
             decimals=0,
         )
     else:
-        dispatch_time = Cell(None, unit="us", decimals=0)
+        op_to_op_gap = Cell(None, unit="us", decimals=0)
 
     output_datatype = row["OUTPUT_0_DATATYPE"]
     input_0_datatype = row["INPUT_0_DATATYPE"]
@@ -319,6 +319,7 @@ def analyze_op(row, prev_row):
         dram_percentage = Cell(dram_percentage, unit="%", decimals=1)
         flops = Cell(flops / 1e12 if pd.notna(flops) else None, unit="TFLOPs", decimals=1)
         flops_percentage = Cell(flops_percentage, unit="%", decimals=1)
+        cores.raw_value = adjusted_core_count
 
         math_fidelity_cell = Cell(
             f"{math_fidelity} {short_name(input_0_datatype)} x {short_name(input_1_datatype)} => {short_name(output_datatype)}".strip()
@@ -344,7 +345,7 @@ def analyze_op(row, prev_row):
         "Bound": Cell(""),
         "OP Code": op_code,
         "Device Time": device_time,
-        "Dispatch Time": dispatch_time,
+        "Op-to-Op Gap": op_to_op_gap,
         "Cores": cores,
         "DRAM": dram_speed,
         "DRAM %": dram_percentage,
@@ -383,18 +384,18 @@ def analyze_op(row, prev_row):
     output["Output Subblock H"] = out_subblock_h
     output["Output Subblock W"] = out_subblock_w
 
-    return output, dispatch_time.raw_value
+    return output, op_to_op_gap.raw_value
 
 
 def add_derived_columns(rows):
     total_duration = sum(
         op_data["Device Time"].raw_value for op_data in rows if op_data["Device Time"].raw_value is not None
-    ) + sum(op_data["Dispatch Time"].raw_value for op_data in rows if op_data["Dispatch Time"].raw_value is not None)
+    ) + sum(op_data["Op-to-Op Gap"].raw_value for op_data in rows if op_data["Op-to-Op Gap"].raw_value is not None)
     for op_data in rows:
         device_time = op_data["Device Time"].raw_value if op_data["Device Time"].raw_value is not None else 0
-        dispatch_time = op_data["Dispatch Time"].raw_value if op_data["Dispatch Time"].raw_value is not None else 0
-        op_data["Total %"] = Cell(((device_time + dispatch_time) / total_duration) * 100, unit="%", decimals=1)
-        if op_data["Device Time"].raw_value is None and op_data["Device Time"].raw_value is None:
+        op_to_op_gap = op_data["Op-to-Op Gap"].raw_value if op_data["Op-to-Op Gap"].raw_value is not None else 0
+        op_data["Total %"] = Cell(((device_time + op_to_op_gap) / total_duration) * 100, unit="%", decimals=1)
+        if op_data["Device Time"].raw_value is None and op_data["Op-to-Op Gap"].raw_value is None:
             op_data["Total %"].raw_value = None
 
         if "Matmul" in op_data["OP Code"].raw_value:
@@ -477,8 +478,8 @@ def color_row(op_data, percentage, min_percentage):
         elif op_data["Bound"].raw_value == "HOST":
             op_data["Bound"].color = "red"
 
-        if op_data["Dispatch Time"].raw_value is not None and op_data["Dispatch Time"].raw_value > 6.5:
-            op_data["Dispatch Time"].color = "red"
+        if op_data["Op-to-Op Gap"].raw_value is not None and op_data["Op-to-Op Gap"].raw_value > 6.5:
+            op_data["Op-to-Op Gap"].color = "red"
 
         if "Matmul" in op_data["OP Code"].raw_value and op_data["Math Fidelity"].raw_value:
             math_fidelity = op_data["Math Fidelity"].raw_value.split()[0]
@@ -516,8 +517,8 @@ def print_performance_table(rows, headers, col_widths, device_ops, host_ops):
     total_device_time = sum(
         op_data["Device Time"].raw_value for op_data in rows if op_data["Device Time"].raw_value is not None
     )
-    total_visible_dispatch = sum(
-        op_data["Dispatch Time"].raw_value for op_data in rows if op_data["Dispatch Time"].raw_value is not None
+    total_visible_gap = sum(
+        op_data["Op-to-Op Gap"].raw_value for op_data in rows if op_data["Op-to-Op Gap"].raw_value is not None
     )
     total_row = {
         "ID": Cell(""),
@@ -525,7 +526,7 @@ def print_performance_table(rows, headers, col_widths, device_ops, host_ops):
         "Bound": Cell(""),
         "OP Code": Cell(f"{device_ops} device ops, {host_ops} host ops"),
         "Device Time": Cell(total_device_time, unit="us", decimals=0),
-        "Dispatch Time": Cell(total_visible_dispatch, unit="us", decimals=0),
+        "Op-to-Op Gap": Cell(total_visible_gap, unit="us", decimals=0),
     }
     for header in headers:
         if header not in total_row:
@@ -539,7 +540,7 @@ def print_advice_section(rows, headers, col_widths):
     print("\n💡 Advice 💡\n============\n")
 
     print_fallback_advice(rows, headers, col_widths)
-    print_dispatch_advice(rows, headers, col_widths)
+    print_op_to_op_gap_advice(rows, headers, col_widths)
     print_matmul_advice(rows, headers, col_widths)
 
 
@@ -552,31 +553,30 @@ def print_fallback_advice(rows, headers, col_widths):
         print("\nThese ops should be moved to run on device.\n")
 
 
-def print_dispatch_advice(rows, headers, col_widths):
-    high_dispatch_ops = [
+def print_op_to_op_gap_advice(rows, headers, col_widths):
+    high_gap_ops = [
         (idx + 1, op_data)
         for idx, op_data in enumerate(rows)
-        if op_data["Dispatch Time"].raw_value is not None and op_data["Dispatch Time"].raw_value > 6.5
+        if op_data["Op-to-Op Gap"].raw_value is not None and op_data["Op-to-Op Gap"].raw_value > 6.5
     ]
 
-    if high_dispatch_ops:
-        print("High Dispatch Overhead\n----------------------")
-        for idx, op_data in high_dispatch_ops:
+    if high_gap_ops:
+        print("High Op-to-Op Gap\n----------------")
+        for idx, op_data in high_gap_ops:
             print_row(op_data, col_widths, headers)
-        max_dispatch_overhead = sum(op_data["Dispatch Time"].raw_value - 6 for _, op_data in high_dispatch_ops)
+        max_gap_overhead = sum(op_data["Op-to-Op Gap"].raw_value - 6 for _, op_data in high_gap_ops)
 
-        # Include both device times and dispatch times in total_duration
         total_duration = sum(
             op_data["Device Time"].raw_value for op_data in rows if op_data["Device Time"].raw_value is not None
-        ) + sum(
-            op_data["Dispatch Time"].raw_value for op_data in rows if op_data["Dispatch Time"].raw_value is not None
-        )
+        ) + sum(op_data["Op-to-Op Gap"].raw_value for op_data in rows if op_data["Op-to-Op Gap"].raw_value is not None)
 
-        percentage_saved = (max_dispatch_overhead / total_duration) * 100
+        percentage_saved = (max_gap_overhead / total_duration) * 100
         print(
-            f"\nThese ops have >6us dispatch latency. Running with tracing could save {max_dispatch_overhead:.0f} us ({percentage_saved:.1f}% of overall time)"
+            f"\nThese ops have a >6us gap since the previous operation. Running with tracing could save {max_gap_overhead:.0f} us ({percentage_saved:.1f}% of overall time)"
         )
-        print("Alternatively try moving runtime args in the kernels to compile-time args.\n")
+        print(
+            "Alternatively ensure device is not waiting for the host and use device.enable_async(True). Experts can try moving runtime args in the kernels to compile-time args.\n"
+        )
 
 
 def print_matmul_advice(rows, headers, col_widths):
@@ -719,15 +719,15 @@ def filter_by_id_range(rows, id_range):
             print(colored(f"Filtering rows with IDs from {start} to {end}", "cyan"))
             filtered_rows = [row for row in rows if start <= row["ID"].raw_value <= end]
 
-        # Reset the dispatch time for the first item in the filtered range
+        # Reset the op-to-op gap for the first item in the filtered range
         if filtered_rows:
-            filtered_rows[0]["Dispatch Time"] = Cell(None, unit="us", decimals=0)
+            filtered_rows[0]["Op-to-Op Gap"] = Cell(None, unit="us", decimals=0)
 
         return filtered_rows
     return rows
 
 
-def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output, no_advice):
+def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output_file, no_advice):
     df = pd.read_csv(csv_file, low_memory=False)
 
     # Add a column for original row numbers
@@ -752,7 +752,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
     device_ops = 0
     host_ops = 0
     for _, row in df.iterrows():
-        op_data, current_dispatch_latency = analyze_op(row, prev_row)
+        op_data, current_gap = analyze_op(row, prev_row)
         op_data["ID"] = Cell(row["ORIGINAL_ROW"])  # Use the original row number
         rows.append(op_data)
         prev_row = row
@@ -780,7 +780,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
         "Bound",
         "OP Code",
         "Device Time",
-        "Dispatch Time",
+        "Op-to-Op Gap",
         "Cores",
         "DRAM",
         "DRAM %",
@@ -789,7 +789,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
         "Math Fidelity",
     ]
 
-    if csv_output:
+    if csv_output_file:
         all_headers = visible_headers + [
             "Output Datatype",
             "Input 0 Datatype",
@@ -800,9 +800,11 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
             "Output Subblock H",
             "Output Subblock W",
         ]
-        print(",".join(all_headers))
-        for op_data in rows:
-            print(",".join(str(op_data[header].raw_value) for header in all_headers))
+        print(colored(f"Writing CSV output to {csv_output_file}", "cyan"))
+        with open(csv_output_file, "w") as f:
+            f.write(",".join(all_headers) + "\n")
+            for op_data in rows:
+                f.write(",".join(str(op_data[header].raw_value) for header in all_headers) + "\n")
     else:
         col_widths = [
             max(max(visible_length(str(row[header])) for row in rows), visible_length(header))
@@ -828,7 +830,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--color", action="store_true", help="Force colored output even when output is redirected")
     parser.add_argument("--no-color", action="store_true", help="Force output without color")
-    parser.add_argument("--csv", action="store_true", help="Output in CSV format")
+    parser.add_argument("--csv", type=str, help="Output filename for CSV format", metavar="OUTPUT_FILE")
     parser.add_argument("--no-advice", action="store_true", help="Only show the table section of the report")
     args = parser.parse_args()
 
