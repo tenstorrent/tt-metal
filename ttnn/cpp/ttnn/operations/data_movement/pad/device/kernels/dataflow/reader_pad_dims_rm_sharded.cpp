@@ -50,6 +50,7 @@ void kernel_main() {
             uint32_t read_data_size_bytes = curr_num_sticks * stick_size_bytes;
 
             if ((curr_start_id != (uint32_t)-1) and (curr_start_id != (uint32_t)-2)) {
+                DPRINT << "src_noc_addr: " << src_noc_addr << ENDL();
                 DPRINT << "l1_read_offset: " << l1_read_offset << " read_data_size_bytes: " << read_data_size_bytes << ENDL();
                 noc_async_read(src_noc_addr + l1_read_offset, l1_write_addr, read_data_size_bytes);
             }

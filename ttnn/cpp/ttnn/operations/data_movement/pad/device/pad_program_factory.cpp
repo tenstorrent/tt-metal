@@ -1487,12 +1487,20 @@ operation::ProgramWithCallbacks pad_rm_sharded(
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            shard_height_padded * stick_size_padded, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, stick_size_padded)
-            .set_globally_allocated_address(*output.buffer());
+    std::cout << "output buffer size: " << output.buffer()->size() << std::endl;
+    std::cout << "stick size unpadded: " << stick_size_unpadded << std::endl;
+    std::cout << "shard height padded: " << shard_height_padded << std::endl;
+    std::cout << "shard height unpadded: " << shard_height_unpadded << std::endl;
+    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height_padded * stick_size_unpadded, {{output_cb_index, dst_cb_data_format}})
+        .set_page_size(output_cb_index, stick_size_unpadded)
+        .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
+
+    uint32_t output_writer_cb_index = tt::CBIndex::c_15;
+    tt::tt_metal::CircularBufferConfig cb_output_writer_config = tt::tt_metal::CircularBufferConfig(shard_height_padded * stick_size_padded, {{output_writer_cb_index, dst_cb_data_format}})
+        .set_page_size(output_writer_cb_index, 4)
+        .set_globally_allocated_address(*output.buffer());
+    auto cb_output_writer = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_writer_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
@@ -1577,6 +1585,8 @@ operation::ProgramWithCallbacks pad_rm_sharded(
         std::cout << "} ";
     }
     std::cout << std::endl;
+
+    std::cout << "Output buffer size: " << output.buffer()->size() << std::endl;
 
     for (uint32_t i = 0; i < num_cores_padded; i++) {
         CoreCoord core;
