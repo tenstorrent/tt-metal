@@ -46,9 +46,11 @@ static CoreDescriptorSet GetAllCores(tt::tt_metal::Device* device) {
 static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device* device) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = device->num_hw_cqs();
-    CoreType dispatch_core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    const auto& dispatch_core_config =
+        tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
-    for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_type)) {
+    for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_config)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
     }
     return dispatch_cores;
