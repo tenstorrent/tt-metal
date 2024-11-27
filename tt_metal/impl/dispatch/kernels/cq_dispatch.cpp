@@ -115,7 +115,7 @@ static GoSignalState go_signal_state_ring_buf[4];
 static uint8_t go_signal_state_wr_ptr = 0;
 static uint8_t go_signal_state_rd_ptr = 0;
 
-static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries] = {0};
+static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
     return reinterpret_cast<volatile uint32_t*>(dev_completion_q_rd_ptr);

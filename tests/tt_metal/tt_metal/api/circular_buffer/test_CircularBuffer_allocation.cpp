@@ -22,7 +22,8 @@ void validate_cb_address(
     detail::LaunchProgram(device, program);
 
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange& core_range : cr_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -38,7 +39,7 @@ void validate_cb_address(
                 std::map<uint8_t, uint32_t> address_per_buffer_index = core_to_address_per_buffer_index.at(core_coord);
 
                 for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
-                    auto base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                    auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                     EXPECT_EQ(expected_address >> 4, cb_config_vector.at(base_index));
                 }
             }
@@ -337,7 +338,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
 
         vector<uint32_t> cb_config_vector;
         uint32_t cb_config_buffer_size =
-            NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+            NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
         for (const CoreRange& core_range : cr_set.ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -354,7 +355,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                     std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
-                        auto base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                        auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                         EXPECT_EQ(expected_address >> 4, cb_config_vector.at(base_index));  // address validation
                         EXPECT_EQ(
                             num_pages_per_buffer_index.at(buffer_index),
@@ -385,7 +386,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                     std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
-                        auto base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                        auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                         EXPECT_EQ(expected_address >> 4, cb_config_vector.at(base_index));  // address validation
                         EXPECT_EQ(
                             num_pages_per_buffer_index.at(buffer_index),

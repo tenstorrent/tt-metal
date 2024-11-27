@@ -62,7 +62,8 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uin
 
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
     std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    std::uint32_t base_address =
+        get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t src_format = (uint)unpack_src_format[operand_id];
 
     WAYPOINT("UPTW");
@@ -208,7 +209,8 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t num_faces = 4) {
     // Setup SrcA unpack
     std::uint32_t operandA_id = get_operand_id(operandA);
-    std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    std::uint32_t base_address_a =
+        get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t unpack_srca_format = (uint)unpack_src_format[operandA_id];
 
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_srca_format, tile_index_a) << 1;
@@ -222,7 +224,8 @@ inline void llk_unpack_tilizeA_B(
     // Set Tile address for Src B
     // Src B just does rowmajor unpack, with z counters incremented for every face
     std::uint32_t operandB_id = get_operand_id(operandB);
-    std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    std::uint32_t base_address_b =
+        get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX<true>(unpack_src_format[operandB_id], tile_index_b);
     std::uint32_t address_b = base_address_b + offset_address_b;
 
