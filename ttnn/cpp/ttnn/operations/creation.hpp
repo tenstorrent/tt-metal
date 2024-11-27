@@ -4,20 +4,72 @@
 
 #pragma once
 
+#include <functional>
+#include <variant>
+
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "ttnn/common/constants.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/any_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/common/constants.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace creation {
+
+namespace detail {
+
+// Non-type template parameters (NTTPs) disallow floating point values
+// This works around that limitation by using a structural type
+// https://godbolt.org/z/hxKje3MYe
+template <class T>
+struct boxed {
+    T value;
+    consteval boxed(T value) noexcept : value(value) {}
+    consteval auto invoke() const noexcept -> T { return value; }
+};
+
+// Helper class to transparently bind instances of Device / MeshDevice along with their reference wrappers to
+// AnyDevice
+class OptionalAnyDevice {
+public:
+    OptionalAnyDevice() = default;
+    OptionalAnyDevice(std::nullopt_t);
+    OptionalAnyDevice(ttnn::AnyDevice device);
+    OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::Device>>& device);
+    OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>>& mesh_device);
+    OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::Device> device);
+    OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device);
+    OptionalAnyDevice(tt::tt_metal::Device& device);
+    OptionalAnyDevice(tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+    OptionalAnyDevice(const OptionalAnyDevice&) = default;
+    OptionalAnyDevice& operator=(const OptionalAnyDevice&) = default;
+    OptionalAnyDevice(OptionalAnyDevice&&) = delete;
+    OptionalAnyDevice& operator=(OptionalAnyDevice&&) = delete;
+
+    bool has_value() { return device_.has_value(); }
+    ttnn::AnyDevice* operator->() { return &(*device_); }
+    ttnn::AnyDevice operator*() { return *device_; }
+
+private:
+    std::optional<ttnn::AnyDevice> device_;
+};
+
+// Converts an instance of AnyDevice to a vector of the underlying Devices.
+// TODO: Consider moving the helper into a dedicated header with the related utils.
+inline std::vector<Device*> get_workers_from_device(OptionalAnyDevice device) {
+    return device.has_value() ? device->get_devices() : std::vector<Device*>{};
+}
+
+}  // namespace detail
 
 template <typename T, std::size_t rank = 4>
 Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device) {
@@ -55,12 +107,12 @@ inline ttnn::Tensor full_impl(
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
+    const std::vector<Device*>& workers = {},
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
-    Device* device = optional_output_tensor.has_value() ? optional_output_tensor.value().device()
-                     : device_arg.has_value()           ? &(device_arg.value().get())
-                                                        : nullptr;
+    const std::vector<Device*>& workers_to_use =
+        optional_output_tensor.has_value() ? optional_output_tensor->get_workers(/*blocking=*/true) : workers;
+
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
                                                              : layout.value_or(ttnn::ROW_MAJOR_LAYOUT);
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
@@ -69,8 +121,9 @@ inline ttnn::Tensor full_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().get_legacy_shape() : shape.value;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+
     return numpy::full_impl(
-        queue_id, shape_value, fill_value, dtype_value, layout_value, device, mem_cfg, optional_output_tensor);
+        queue_id, shape_value, fill_value, dtype_value, layout_value, workers, mem_cfg, optional_output_tensor);
 }
 
 template <typename T>
@@ -79,26 +132,20 @@ inline ttnn::Tensor full(
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
+    detail::OptionalAnyDevice device = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
     uint8_t queue_id = ttnn::DefaultQueueId) {
-    return full_impl(queue_id, shape, fill_value, dtype, layout, device_arg, memory_config, optional_output_tensor);
+    return full_impl(
+        queue_id,
+        shape,
+        fill_value,
+        dtype,
+        layout,
+        detail::get_workers_from_device(device),
+        memory_config,
+        optional_output_tensor);
 }
-
-namespace detail {
-
-// Non-type template parameters (NTTPs) disallow floating point values
-// This works around that limitation by using a structural type
-// https://godbolt.org/z/hxKje3MYe
-template <class T>
-struct boxed {
-    T value;
-    consteval boxed(T value) noexcept : value(value) {}
-    consteval auto invoke() const noexcept -> T { return value; }
-};
-
-}  // namespace detail
 
 template <detail::boxed FillValue>
 struct FullWith {
@@ -108,7 +155,7 @@ struct FullWith {
         const ttnn::Shape& shape,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return full(shape, fill_value, dtype, layout, device, memory_config);
     }
@@ -127,7 +174,7 @@ inline ttnn::Tensor full_like_impl(
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+    detail::OptionalAnyDevice device = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
@@ -150,7 +197,7 @@ inline ttnn::Tensor full_like_impl(
                 fill_value,
                 dtype_value,
                 layout_value,
-                device.value_or(*tensor.device()),
+                device.has_value() ? device->get_devices() : tensor.get_workers(/*blocking=*/true),
                 memory_config.value_or(tensor.memory_config()),
                 optional_output_tensor);
         }
@@ -161,7 +208,7 @@ inline ttnn::Tensor full_like_impl(
             fill_value,
             dtype_value,
             layout_value,
-            device,
+            detail::get_workers_from_device(device),
             memory_config,
             optional_output_tensor);
     }
@@ -173,7 +220,7 @@ inline ttnn::Tensor full_like(
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+    detail::OptionalAnyDevice device = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
     return full_like_impl(ttnn::DefaultQueueId, tensor, fill_value, dtype, layout, device, memory_config, std::nullopt);
 }
@@ -187,7 +234,7 @@ struct FullLikeWith {
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
@@ -198,7 +245,7 @@ struct FullLikeWith {
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
@@ -217,18 +264,9 @@ struct Empty {
         const ttnn::Shape& shape,
         const DataType& dtype,
         const Layout& layout,
-        Device* device,
+        ttnn::AnyDevice device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
-    }
-
-    static ttnn::Tensor invoke(
-        const ttnn::Shape& shape,
-        const DataType& dtype,
-        const Layout& layout,
-        distributed::MeshDevice* device,
-        const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(shape, dtype, layout, device, memory_config);
+        return allocate_tensor_on_devices(shape, dtype, layout, device.get_devices(), memory_config);
     }
 };
 
@@ -237,13 +275,14 @@ struct EmptyLike {
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
+        detail::OptionalAnyDevice device_arg = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        Device* device = device_arg.has_value() ? &(device_arg.value().get()) : tensor.device();
+        const std::vector<Device*>& devices =
+            device_arg.has_value() ? device_arg->get_devices() : tensor.get_workers(/*blocking=*/true);
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        return create_device_tensor(tensor.get_shape(), dtype_value, layout_value, device, mem_cfg);
+        return allocate_tensor_on_devices(tensor.get_shape(), dtype_value, layout_value, devices, mem_cfg);
     }
 };
 
@@ -254,10 +293,18 @@ struct Full {
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
-        return full_impl(queue_id, shape, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+        return full_impl(
+            queue_id,
+            shape,
+            fill_value,
+            dtype,
+            layout,
+            detail::get_workers_from_device(device),
+            memory_config,
+            optional_output_tensor);
     }
 
     static ttnn::Tensor invoke(
@@ -266,10 +313,18 @@ struct Full {
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
-        return full_impl(queue_id, shape, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+        return full_impl(
+            queue_id,
+            shape,
+            fill_value,
+            dtype,
+            layout,
+            detail::get_workers_from_device(device),
+            memory_config,
+            optional_output_tensor);
     }
 
     static ttnn::Tensor invoke(
@@ -277,11 +332,18 @@ struct Full {
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_impl(
-            ttnn::DefaultQueueId, shape, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            ttnn::DefaultQueueId,
+            shape,
+            fill_value,
+            dtype,
+            layout,
+            detail::get_workers_from_device(device),
+            memory_config,
+            optional_output_tensor);
     }
 
     static ttnn::Tensor invoke(
@@ -289,11 +351,18 @@ struct Full {
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_impl(
-            ttnn::DefaultQueueId, shape, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            ttnn::DefaultQueueId,
+            shape,
+            fill_value,
+            dtype,
+            layout,
+            detail::get_workers_from_device(device),
+            memory_config,
+            optional_output_tensor);
     }
 };
 
@@ -304,7 +373,7 @@ struct FullLike {
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
@@ -317,7 +386,7 @@ struct FullLike {
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
@@ -329,7 +398,7 @@ struct FullLike {
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
@@ -341,7 +410,7 @@ struct FullLike {
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        detail::OptionalAnyDevice device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
@@ -349,6 +418,7 @@ struct FullLike {
     }
 };
 
+// TODO: #14974 - Onboard this API onto AnyDevice.
 struct Arange {
     static ttnn::Tensor invoke(
         const int64_t stop,
@@ -385,14 +455,13 @@ struct Arange {
 }  // namespace creation
 }  // namespace operations
 
-constexpr auto full =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::full", ttnn::operations::creation::Full>();
+constexpr auto full = ttnn::decorators::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
 constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();
 constexpr auto ones = ttnn::decorators::register_operation<"ttnn::ones", ttnn::operations::creation::Ones>();
 constexpr auto empty = ttnn::decorators::register_operation<"ttnn::empty", ttnn::operations::creation::Empty>();
 
 constexpr auto full_like =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::full_like", ttnn::operations::creation::FullLike>();
+    ttnn::decorators::register_operation<"ttnn::full_like", ttnn::operations::creation::FullLike>();
 constexpr auto zeros_like =
     ttnn::decorators::register_operation<"ttnn::zeros_like", ttnn::operations::creation::ZerosLike>();
 constexpr auto ones_like =

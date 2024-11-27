@@ -15,6 +15,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::core {
 
@@ -85,8 +86,8 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     Device* device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_device(
-        shape, data_type, layout, device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return tt::tt_metal::allocate_tensor_on_devices(
+        shape, data_type, layout, {device}, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
 ttnn::Tensor allocate_tensor_on_device(
@@ -95,8 +96,8 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_device(
-        shape, data_type, layout, mesh_device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return tt::tt_metal::allocate_tensor_on_devices(
+        shape, data_type, layout, mesh_device->get_devices(), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
 void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id) {
