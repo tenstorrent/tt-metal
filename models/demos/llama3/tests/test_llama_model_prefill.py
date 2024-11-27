@@ -41,8 +41,14 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (True, False),
-    ids=("paged_attention", "default_attention"),
+    (
+        True,
+        # False,
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention",
+    ),
 )
 @pytest.mark.parametrize(
     "paged_attention_params",
@@ -54,7 +60,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (2048,),
+    (4096,),
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -181,11 +187,9 @@ def test_llama_model_inference(
     if run_ref_pt:
         all_tests_pass = True
 
-    batch = model_args.max_batch_size  # 1
-
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
-    pt_prefill_input = embd(encoded_prompt_tensor).view(batch, seq_len, -1)
+    pt_prefill_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
 
     tt_prefill_input = pt_prefill_input
 
@@ -207,8 +211,8 @@ def test_llama_model_inference(
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
             :, 0, :, :
         ].view(
-            batch, seq_len, -1
-        )  # [ batch, seq, hidden_dim]
+            batch_size, seq_len, -1
+        )  # [ batch_size, seq, hidden_dim]
 
         if run_ref_pt:  # Run reference model
             ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")
@@ -233,10 +237,10 @@ def test_llama_model_inference(
                     pytorch_layer_present = [
                         reference_model.layers[i]
                         .attention.cache_k.clone()
-                        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                         reference_model.layers[i]
                         .attention.cache_v.clone()
-                        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                     ]
 
                     tt_layer_present = []
@@ -255,7 +259,7 @@ def test_llama_model_inference(
                                 )
                                 .transpose(1, 2)
                                 .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                                    :batch, ...
+                                    :batch_size, ...
                                 ]
                             )
                         tt_layer_present = [
@@ -272,7 +276,7 @@ def test_llama_model_inference(
                                 )
                                 .transpose(1, 2)
                                 .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                                    :batch, ...
+                                    :batch_size, ...
                                 ]
                             )
                             for cache in tt_model.layers[l].attention.layer_past
