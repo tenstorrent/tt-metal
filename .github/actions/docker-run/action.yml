@@ -8,7 +8,7 @@ inputs:
   docker_os_arch:
     description: 'Docker image architecture'
     required: false
-    default: ubuntu-20.04-amd64
+    default: tt-metalium/ubuntu-20.04-amd64
   docker_username:
     description: docker login username
     required: true
