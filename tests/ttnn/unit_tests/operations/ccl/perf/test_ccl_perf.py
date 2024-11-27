@@ -365,7 +365,7 @@ def test_all_gather_on_tg(
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 10281600}], indirect=True)
-def test_line_reduce_scatter_on_TG_rows_post_commit(
+def test_reduce_scatter_on_tg(
     mesh_device,
     num_devices,
     per_chip_output_shape,

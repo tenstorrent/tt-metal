@@ -49,8 +49,9 @@ def run_with_trace(
     mesh_device,
     all_gather_topology,
     input_tensor,
-    scatter_dim,
+    dim,
     num_links,
+    math_op,
     cluster_axis,
     output_mem_config,
     n_worker=None,
@@ -60,8 +61,8 @@ def run_with_trace(
     # Compile Run
     logger.info("Compiling model")
     tt_out_tensor = ttnn.reduce_scatter(
-        ttnn_tensor,
-        scatter_dim=scatter_dim,
+        input_tensor,
+        dim=dim,
         cluster_axis=cluster_axis,
         mesh_device=mesh_device,
         math_op=math_op,
@@ -77,8 +78,8 @@ def run_with_trace(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
         tt_out_tensor = ttnn.reduce_scatter(
-            ttnn_tensor,
-            scatter_dim=scatter_dim,
+            input_tensor,
+            dim=dim,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             math_op=math_op,
@@ -198,22 +199,9 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
 
-    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    ttnn_tensor_out = ttnn.reduce_scatter(
-        ttnn_tensor,
-        dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=ttnn.Topology.Linear,
-    )
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    for _ in range(num_iters):
-        ttnn_tensor_out = ttnn.reduce_scatter(
-            ttnn_tensor,
+    if trace_mode:
+        ttnn_tensor_out = run_with_trace(
+            input_tensor=ttnn_tensor,
             dim=dim,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
@@ -227,7 +215,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         for _ in range(num_iters):
             ttnn_tensor_out = ttnn.reduce_scatter(
                 ttnn_tensor,
-                scatter_dim=dim,
+                dim=dim,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 math_op=math_op,
