@@ -528,6 +528,8 @@ v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::B
 
 void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
 
+std::size_t v1::GetId(const BufferHandle& buffer) { return buffer->unique_id(); }
+
 void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
     detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});
 }
