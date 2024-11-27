@@ -1,5 +1,7 @@
 # Performance Report Analysis Tool
 
+![Example perf report](images/example_perf_report.png)
+
 This tool analyzes performance traces from Metal operations, providing insights into throughput, bottlenecks, and optimization opportunities.
 
 ## Generating Performance Traces
@@ -64,6 +66,43 @@ This is particularly useful for:
 - `--color/--no-color`: Force colored/plain output
 - `--csv FILENAME`: Output the table to CSV format for further analysis or inclusion into automated reporting pipelines
 - `--no-advice`: Show only performance table, skip optimization advice
+
+## Understanding the Performance Report
+
+The performance report provides several key metrics for analyzing operation performance:
+
+### Core Metrics
+
+- **Device Time**: Time spent executing the operation on device (in microseconds)
+- **Op-to-op Gap**: Time between operations, including host overhead and kernel dispatch (in microseconds)
+- **Total %**: Percentage of total execution time spent on this operation
+- **Cores**: Number of cores used by the operation (max 64 on Wormhole)
+
+### Performance Metrics
+
+- **DRAM**: Memory bandwidth achieved (in GB/s)
+- **DRAM %**: Percentage of theoretical peak DRAM bandwidth (288 GB/s on Wormhole)
+- **FLOPs**: Compute throughput achieved (in TFLOPs)
+- **FLOPs %**: Percentage of theoretical peak compute for the given math fidelity
+- **Bound**: Performance classification of the operation:
+  - `DRAM`: Memory bandwidth bound (>65% of peak DRAM)
+  - `FLOP`: Compute bound (>65% of peak FLOPs)
+  - `BOTH`: Both memory and compute bound
+  - `SLOW`: Neither memory nor compute bound
+  - `HOST`: Operation running on host CPU
+
+### Additional Fields
+
+- **Math Fidelity**: Precision configuration used for matrix operations:
+  - `HiFi4`: Highest precision (74 TFLOPs/core)
+  - `HiFi2`: Medium precision (148 TFLOPs/core)
+  - `LoFi`: Lowest precision (262 TFLOPs/core)
+
+The tool automatically highlights potential optimization opportunities:
+- Red op-to-op times indicate high host or kernel launch overhead (>6.5μs)
+- Red core counts indicate underutilization (<10 cores)
+- Green metrics indicate good utilization of available resources
+- Yellow metrics indicate room for optimization
 
 ## Examples
 

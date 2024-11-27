@@ -319,6 +319,7 @@ def analyze_op(row, prev_row):
         dram_percentage = Cell(dram_percentage, unit="%", decimals=1)
         flops = Cell(flops / 1e12 if pd.notna(flops) else None, unit="TFLOPs", decimals=1)
         flops_percentage = Cell(flops_percentage, unit="%", decimals=1)
+        cores.raw_value = adjusted_core_count
 
         math_fidelity_cell = Cell(
             f"{math_fidelity} {short_name(input_0_datatype)} x {short_name(input_1_datatype)} => {short_name(output_datatype)}".strip()
