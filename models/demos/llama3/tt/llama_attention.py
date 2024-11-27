@@ -207,7 +207,6 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-        # assert self.max_batch_size * self.n_kv_heads < 64  # TODO Miguel Are these needed? - check these params
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -491,6 +490,7 @@ class TtLlamaAttention(LightweightModule):
             v_heads_V1SD_8b,
             is_causal=True,
             scale=self.scale,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
         )
 
@@ -550,7 +550,6 @@ class TtLlamaAttention(LightweightModule):
         else:
             return output_11SH
 
-    # TODO Miguel: Remove transformation_mats input (send at initialization instead)
     def forward(self, x, current_pos, rot_mats=None, user_id=0, mode="decode", page_table=None):
         if mode == "prefill":
             return self.forward_prefill(x, rot_mats, user_id, page_table)

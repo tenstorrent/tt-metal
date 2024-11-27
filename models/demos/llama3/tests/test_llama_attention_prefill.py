@@ -54,7 +54,11 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (2048,),
+    (
+        2048,
+        # 1024 * 32,
+        # 1024 * 64,
+    ),
 )
 def test_llama_attention_inference(
     max_seq_len,
