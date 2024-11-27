@@ -6,11 +6,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <typeinfo>
 #include <utility>
 
 #include "common/bfloat16.hpp"
 #include "impl/buffers/buffer_constants.hpp"
 #include "tensor_ops.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -111,11 +114,15 @@ Tensor::Tensor(
         }
     }
     auto memory_config = CMAKE_UNIQUE_NAMESPACE::extract_memory_config(storage);
+    std::optional<Tile> tile_opt = std::nullopt;
+    if (layout == Layout::TILE) {
+        tile_opt = tile;
+    }
     init(
         std::move(storage),
         TensorSpec(
             shape.logical_shape(),
-            TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), memory_config, shape)));
+            TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile_opt), memory_config, shape)));
 }
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
