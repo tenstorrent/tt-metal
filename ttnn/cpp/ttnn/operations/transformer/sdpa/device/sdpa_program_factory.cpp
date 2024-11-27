@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
     const Tensor& output_tensor,
-    const std::optional<const Tensor> attn_mask,
+    const std::optional<const Tensor>& attn_mask,
     std::optional<float> scale,
     bool is_causal,
     std::size_t q_chunk_size,
@@ -51,7 +51,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t q_num_chunks = S / q_chunk_size;
     const uint32_t k_num_chunks = S / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
-
 
     // log_debug all of the above
     tt::log_debug("B: {}", B);
@@ -85,12 +84,16 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
-    bool exp_approx_mode = program_config.has_value() ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true) : true;
+    bool exp_approx_mode =
+        program_config.has_value()
+            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
+            : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
+    TT_FATAL(
+        num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
@@ -213,63 +216,60 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     scale_union.f = scale.value_or(1.0f);
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-        B,
-        NQH,
-        NKH,
-        St,
-        DHt,
-        Sq_chunk_t,
-        q_num_chunks,
-        Sk_chunk_t,
-        k_num_chunks,
-        num_cores,
-        (std::uint32_t)is_causal,
-        (std::uint32_t)use_provided_mask
-    };
+                                                      B,
+                                                      NQH,
+                                                      NKH,
+                                                      St,
+                                                      DHt,
+                                                      Sq_chunk_t,
+                                                      q_num_chunks,
+                                                      Sk_chunk_t,
+                                                      k_num_chunks,
+                                                      num_cores,
+                                                      (std::uint32_t)is_causal,
+                                                      (std::uint32_t)use_provided_mask};
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-        B,
-        NQH,
-        NKH,
-        St,
-        DHt,
-        Sq_chunk_t,
-        q_num_chunks,
-        Sk_chunk_t,
-        k_num_chunks,
-        packed_identity_scalar,
-        scale_union.u,
-        num_cores,
-        (std::uint32_t)is_causal,
-        (std::uint32_t)use_provided_mask
-    };
+                                                      B,
+                                                      NQH,
+                                                      NKH,
+                                                      St,
+                                                      DHt,
+                                                      Sq_chunk_t,
+                                                      q_num_chunks,
+                                                      Sk_chunk_t,
+                                                      k_num_chunks,
+                                                      packed_identity_scalar,
+                                                      scale_union.u,
+                                                      num_cores,
+                                                      (std::uint32_t)is_causal,
+                                                      (std::uint32_t)use_provided_mask};
 
     std::vector<uint32_t> compute_compile_time_args = {// matmul args
-        B,
-        NQH,
-        NKH,
-        St,
-        DHt,
-        Sq_chunk_t,
-        q_num_chunks,
-        Sk_chunk_t,
-        k_num_chunks,
-        qk_in0_block_w,
-        qk_out_subblock_w,
-        qk_out_subblock_h,
-        qk_in0_num_subblocks,
-        qk_in1_num_subblocks,
-        qk_num_blocks,
-        out_in0_block_w,
-        out_out_subblock_w,
-        out_out_subblock_h,
-        out_in0_num_subblocks,
-        out_in1_num_subblocks,
-        out_num_blocks,
-        num_cores,
-        (std::uint32_t)is_causal,
-        (std::uint32_t)use_provided_mask
-    };
+                                                       B,
+                                                       NQH,
+                                                       NKH,
+                                                       St,
+                                                       DHt,
+                                                       Sq_chunk_t,
+                                                       q_num_chunks,
+                                                       Sk_chunk_t,
+                                                       k_num_chunks,
+                                                       qk_in0_block_w,
+                                                       qk_out_subblock_w,
+                                                       qk_out_subblock_h,
+                                                       qk_in0_num_subblocks,
+                                                       qk_in1_num_subblocks,
+                                                       qk_num_blocks,
+                                                       out_in0_block_w,
+                                                       out_out_subblock_w,
+                                                       out_out_subblock_h,
+                                                       out_in0_num_subblocks,
+                                                       out_in1_num_subblocks,
+                                                       out_num_blocks,
+                                                       num_cores,
+                                                       (std::uint32_t)is_causal,
+                                                       (std::uint32_t)use_provided_mask};
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -281,7 +281,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel = (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
+    uint32_t balanced_q_parallel =
+        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
@@ -321,7 +322,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b; // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
+                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
@@ -343,17 +345,17 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug("statistics_data_format: {}", stats_df);
 
     // Q input
-    auto c_in0_config =
-        CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}}).set_page_size(tt::CBIndex::c_0, q_tile_size);
+    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
+                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
     auto cb_in0_id = CreateCircularBuffer(program, core_grid, c_in0_config);
     // K input
-    auto c_in1_config =
-        CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}}).set_page_size(tt::CBIndex::c_1, k_tile_size);
+    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
     auto cb_in1_id = CreateCircularBuffer(program, core_grid, c_in1_config);
     // V input
-    auto c_in2_config =
-        CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}}).set_page_size(tt::CBIndex::c_2, v_tile_size);
+    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
     // attn_mask input
@@ -412,8 +414,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_intermed7_id = CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // Output
-    auto c_out0_config =
-        CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}}).set_page_size(tt::CBIndex::c_16, out_tile_size);
+    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
+                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
 
     auto cb_out0_id = CreateCircularBuffer(program, core_grid, c_out0_config);
 

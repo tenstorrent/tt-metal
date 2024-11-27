@@ -51,11 +51,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CBIndex::c_0, 2},                                                                  // output
-            {tt::CBIndex::c_1, 2},                                                                  // output_grad
-            {tt::CBIndex::c_2, 1},                                                                  // scaler
-            {tt::CBIndex::c_3, 1},                                                                  // mask
-            {tt::CBIndex::c_16, 2},                                                                 // input_grad
+            {tt::CBIndex::c_0, 2},                                                             // output
+            {tt::CBIndex::c_1, 2},                                                             // output_grad
+            {tt::CBIndex::c_2, 1},                                                             // scaler
+            {tt::CBIndex::c_3, 1},                                                             // mask
+            {tt::CBIndex::c_16, 2},                                                            // input_grad
             {tt::CBIndex::c_24, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
             {tt::CBIndex::c_25, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
             {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
@@ -72,10 +72,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create(
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxBackwardOp::SOFTMAX)
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
         compute_defines["LOG"] = 1;
@@ -130,8 +131,9 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create(
 
         float scaler = 1.0f;
         uint32_t mask_h = shape.without_padding()[-2] % tt::constants::TILE_HEIGHT;
-        if (mask_h == 0)
+        if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
+        }
         std::vector<uint32_t> reader_args = {
             output.buffer()->address(),
             output_grad.buffer()->address(),

@@ -51,8 +51,8 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CBIndex::c_0, 2},                              // input
-            {tt::CBIndex::c_16, 2},                             // output
+            {tt::CBIndex::c_0, 2},                         // input
+            {tt::CBIndex::c_16, 2},                        // output
             {tt::CBIndex::c_24, 1, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},  // recips
             {tt::CBIndex::c_26, 2, intermed_data_format},  // add
@@ -88,10 +88,11 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto inner_size = outer_stride / dim_size;
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX)
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }

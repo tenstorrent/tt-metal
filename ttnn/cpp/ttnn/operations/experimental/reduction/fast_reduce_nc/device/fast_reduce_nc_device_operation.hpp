@@ -18,20 +18,20 @@ struct FastReduceNCDeviceOperation {
     MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
+        const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const;
 };
 
 Tensor fast_reduce_nc(
     uint8_t queue_id,
-    const ttnn::Tensor &input,
+    const ttnn::Tensor& input,
     tt::stl::Span<const int32_t> dims,
-    const std::optional<const ttnn::Tensor> output = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<const ttnn::Tensor>& output = std::nullopt,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::reduction::detail

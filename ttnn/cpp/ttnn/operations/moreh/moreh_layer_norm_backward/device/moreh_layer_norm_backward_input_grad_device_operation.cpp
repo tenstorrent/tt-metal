@@ -38,8 +38,9 @@ MorehLayerNormBackwardInputGradOperation::compute_output_shapes(
 MorehLayerNormBackwardInputGradOperation::tensor_return_value_t
 MorehLayerNormBackwardInputGradOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad.has_value())
+    if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
+    }
     auto output_grad = tensor_args.output_grad;
     return create_device_tensor(
         compute_output_shapes(operation_attributes, tensor_args),

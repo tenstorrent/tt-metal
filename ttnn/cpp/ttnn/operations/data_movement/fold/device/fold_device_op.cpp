@@ -4,20 +4,20 @@
 
 #include "fold_device_op.hpp"
 
-
 namespace ttnn::operations::data_movement {
 
-Fold::program_factory_t Fold::select_program_factory(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
+Fold::program_factory_t Fold::select_program_factory(
+    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     if (op_attr.is_sharded) {
         return MultiCore{};
     }
     return SingleCore{};
 }
 
-void validate_fold(const std::vector<Tensor> &input_tensors, bool is_sharded, uint32_t stride_h, uint32_t stride_w) {
-    const Tensor &input_tensor = input_tensors.at(0);
+void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, uint32_t stride_h, uint32_t stride_w) {
+    const Tensor& input_tensor = input_tensors.at(0);
 
-    const Shape &input_shape = Shape(input_tensor.get_legacy_shape());
+    const Shape& input_shape = Shape(input_tensor.get_legacy_shape());
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
@@ -38,23 +38,29 @@ void validate_fold(const std::vector<Tensor> &input_tensors, bool is_sharded, ui
         "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
 }
 
-void Fold::validate_on_program_cache_miss(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
+void Fold::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return validate_fold({tensors.input_tensor}, op_attr.is_sharded, op_attr.stride_h, op_attr.stride_w);
 }
 
-void Fold::validate_on_program_cache_hit(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
+void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return validate_fold({tensors.input_tensor}, op_attr.is_sharded, op_attr.stride_h, op_attr.stride_w);
 }
 
-Fold::shape_return_value_t Fold::compute_output_shapes(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
+Fold::shape_return_value_t Fold::compute_output_shapes(
+    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_tensor = tensors.input_tensor;
     const ttnn::SimpleShape input_shape = input_tensor.get_logical_shape();
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
-    return ttnn::SimpleShape({1, 1, input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w), input_shape[3] * op_attr.stride_h * op_attr.stride_w});
+    return ttnn::SimpleShape(
+        {1,
+         1,
+         input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w),
+         input_shape[3] * op_attr.stride_h * op_attr.stride_w});
 }
 
-Fold::tensor_return_value_t Fold::create_output_tensors(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
-    const Tensor &input_tensor = tensors.input_tensor;
+Fold::tensor_return_value_t Fold::create_output_tensors(
+    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    const Tensor& input_tensor = tensors.input_tensor;
     DataType output_dtype = input_tensor.get_dtype();
 
     auto output_shape = compute_output_shapes(op_attr, tensors);
@@ -65,30 +71,24 @@ Fold::tensor_return_value_t Fold::create_output_tensors(const operation_attribut
         mem_config.shard_spec->shape[1] *= op_attr.stride_h * op_attr.stride_w;
 
         return {create_device_tensor(
-            output_shape,
-            output_dtype,
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            mem_config
-            )};
+            output_shape, output_dtype, input_tensor.get_layout(), input_tensor.device(), mem_config)};
     } else {
-        return {create_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), input_tensor.memory_config())};
+        return {create_device_tensor(
+            output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), input_tensor.memory_config())};
     }
 }
 
-std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t>
- Fold::invoke(
-            const ttnn::Tensor &input_tensor,
-            uint32_t stride_h,
-            uint32_t stride_w,
-            const std::optional<const tt::tt_metal::LegacyShape> &output_shape,
-            uint32_t pad_c,
-            uint32_t pad_h,
-            uint32_t pad_w) {
+std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
+    const ttnn::Tensor& input_tensor,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    const std::optional<const tt::tt_metal::LegacyShape>& output_shape,
+    uint32_t pad_c,
+    uint32_t pad_h,
+    uint32_t pad_w) {
     bool is_sharded = input_tensor.is_sharded();
     Fold::operation_attributes_t op_attr = {.stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded};
     return {op_attr, Fold::tensor_args_t{.input_tensor = input_tensor}};
 }
 
-
-} // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement

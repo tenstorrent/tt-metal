@@ -23,7 +23,9 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& shape = a.get_legacy_shape();
     TT_FATAL(shape.rank() == 4, "Expected input tensors to be rank 4");
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Dimension 0 and 1 should be size 1");
-    TT_FATAL(shape[2] >= tt::constants::TILE_HEIGHT && shape[2] % tt::constants::TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
+    TT_FATAL(
+        shape[2] >= tt::constants::TILE_HEIGHT && shape[2] % tt::constants::TILE_HEIGHT == 0,
+        "Sequence length should be a multiple of 32");
 
     const auto& h = input_tensors.at(2);
     TT_FATAL(h.dtype() == DataType::BFLOAT16, "Expected initial hidden state to be bfloat16");
@@ -44,7 +46,8 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
         "Expected h tensor to be row major orientation");
 }
 
-std::vector<tt::tt_metal::LegacyShape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> PrefixScan::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& a = input_tensors.at(0);
     return {a.get_legacy_shape()};
 }

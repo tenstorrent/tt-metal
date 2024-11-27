@@ -27,46 +27,48 @@ class Device;
 
 namespace detail {
 class SubDeviceManager {
-   public:
+public:
     static constexpr uint32_t MAX_NUM_SUB_DEVICES = 16;
-    static_assert(MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(), "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
+    static_assert(
+        MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(),
+        "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
-    SubDeviceManager(Device *device, std::unique_ptr<Allocator> &&global_allocator);
+    SubDeviceManager(Device* device, std::unique_ptr<Allocator>&& global_allocator);
     // Constructor used for regular sub-devices
-    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, Device *device);
+    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, Device* device);
 
-    SubDeviceManager(const SubDeviceManager &other) = delete;
-    SubDeviceManager &operator=(const SubDeviceManager &other) = delete;
+    SubDeviceManager(const SubDeviceManager& other) = delete;
+    SubDeviceManager& operator=(const SubDeviceManager& other) = delete;
 
-    SubDeviceManager(SubDeviceManager &&other) noexcept = default;
-    SubDeviceManager &operator=(SubDeviceManager &&other) noexcept = default;
+    SubDeviceManager(SubDeviceManager&& other) noexcept = default;
+    SubDeviceManager& operator=(SubDeviceManager&& other) noexcept = default;
 
     ~SubDeviceManager();
 
-    const std::vector<SubDeviceId> &get_sub_device_ids() const;
-    const SubDevice &sub_device(SubDeviceId sub_device_id) const;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const;
+    const SubDevice& sub_device(SubDeviceId sub_device_id) const;
 
-    const vector_memcpy_aligned<uint32_t> &noc_mcast_unicast_data() const;
+    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data() const;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
     uint8_t noc_mcast_data_start_index(SubDeviceId sub_device_id) const;
     uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
 
-    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const;
-    std::unique_ptr<Allocator> &sub_device_allocator(SubDeviceId sub_device_id);
+    const std::unique_ptr<Allocator>& get_initialized_allocator(SubDeviceId sub_device_id) const;
+    std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
 
-    std::shared_ptr<TraceBuffer> &create_trace(uint32_t tid);
+    std::shared_ptr<TraceBuffer>& create_trace(uint32_t tid);
     void release_trace(uint32_t tid);
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
 
     void reset_worker_launch_message_buffer_state();
-    LaunchMessageRingBufferState &get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
+    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
 
-   private:
+private:
     void validate_sub_devices() const;
     uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;
     void populate_sub_device_ids();
@@ -78,7 +80,7 @@ class SubDeviceManager {
     // TODO: We have a max number of sub-devices, so we can use a fixed size array
     std::vector<SubDevice> sub_devices_;
     std::vector<SubDeviceId> sub_device_ids_;
-    Device *device_;
+    Device* device_;
 
     DeviceAddr local_l1_size_;
     std::vector<std::unique_ptr<Allocator>> sub_device_allocators_;
@@ -99,4 +101,4 @@ class SubDeviceManager {
 
 }  // namespace detail
 
-}  // namespace tt_metal
+}  // namespace tt::tt_metal

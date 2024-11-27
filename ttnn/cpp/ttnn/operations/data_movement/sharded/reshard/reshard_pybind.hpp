@@ -10,5 +10,4 @@ namespace ttnn::operations::data_movement {
 
 void py_bind_reshard(pybind11::module& module);
 
-
 }  // namespace ttnn::operations::data_movement

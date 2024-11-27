@@ -17,9 +17,9 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_workers,
     const std::optional<size_t> num_buffers_per_channel) {
-
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return ttnn::operations::ccl::reduce_scatter(input_tensor, dim, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
+    return ttnn::operations::ccl::reduce_scatter(
+        input_tensor, dim, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
 }
 ttnn::Tensor ExecuteReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
@@ -32,9 +32,18 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_workers,
     const std::optional<size_t> num_buffers_per_channel) {
-
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return ttnn::operations::ccl::reduce_scatter(input_tensor, dim, cluster_axis, mesh_device, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
+    return ttnn::operations::ccl::reduce_scatter(
+        input_tensor,
+        dim,
+        cluster_axis,
+        mesh_device,
+        math_op,
+        num_links,
+        out_memory_config,
+        topology,
+        num_workers,
+        num_buffers_per_channel);
 }
 
 }  // namespace ttnn::operations::ccl

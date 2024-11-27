@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_left_shift.h"
@@ -14,15 +13,13 @@
 #define MATH(x)
 #endif
 
-
-
 namespace ckernel {
 
 /**
  * Performs element-wise left_shift computation on input x by y bits , where x is each element of a tile
- * in DST register at index tile_index. The input must be of int data type only. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
+ * in DST register at index tile_index. The input must be of int data type only. The value is provided as const param0
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * on the compute engine.
  *
  * Return value: None
  *
@@ -42,5 +39,4 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void left_shift_tile_init() { MATH((llk_math_eltwise_unary_sfpu_left_shift_init<APPROX>())); }
 
-
-} // namespace ckernel
+}  // namespace ckernel

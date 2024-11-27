@@ -109,8 +109,12 @@ void py_module(py::module& module) {
                 >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
-    module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true,
-    R"doc(
+    module.def(
+        "deallocate",
+        &ttnn::operations::core::deallocate,
+        py::arg("tensor"),
+        py::arg("force") = true,
+        R"doc(
         Deallocates device tensor. Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
         Args:
@@ -344,7 +348,6 @@ void py_module(py::module& module) {
         "num_cores_to_corerangeset",
         py::overload_cast<const uint32_t, const CoreCoord, const bool>(&tt::tt_metal::num_cores_to_corerangeset),
         R"doc(Create a CoreRangeSet containing the specified number of cores)doc");
-
 }
 
 }  // namespace core

@@ -17,23 +17,24 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::sliding_window {
 
 owned_buffer::Buffer<bfloat16> ref_conv_op(
-    const Tensor &input_padded_tensor,
-    const Shape &input_nchw_shape,
+    const Tensor& input_padded_tensor,
+    const Shape& input_nchw_shape,
     uint32_t stride_h,
     uint32_t stride_w,
-    const std::vector<float> &filter_vector,
-    const Shape &filter_pyt_tensor_shape,
-    const Shape &out_golden_pyt_tensor_shape) {
+    const std::vector<float>& filter_vector,
+    const Shape& filter_pyt_tensor_shape,
+    const Shape& out_golden_pyt_tensor_shape) {
     uint32_t input_n, input_h, input_w;
     uint32_t filter_h, filter_w;
     uint32_t output_n, output_h, output_w;
     uint32_t out_idx = 0;
     auto input_padded_tensor_buf = owned_buffer::get_as<bfloat16>(input_padded_tensor);
 
-    std::tie(output_n, output_h, output_w) =
-        std::forward_as_tuple(out_golden_pyt_tensor_shape[0], out_golden_pyt_tensor_shape[1], out_golden_pyt_tensor_shape[2]);
+    std::tie(output_n, output_h, output_w) = std::forward_as_tuple(
+        out_golden_pyt_tensor_shape[0], out_golden_pyt_tensor_shape[1], out_golden_pyt_tensor_shape[2]);
     std::tie(filter_h, filter_w) = std::forward_as_tuple(filter_pyt_tensor_shape[0], filter_pyt_tensor_shape[1]);
-    std::tie(input_n, input_h, input_w) = std::forward_as_tuple(input_nchw_shape[0], input_nchw_shape[1], input_nchw_shape[2]);
+    std::tie(input_n, input_h, input_w) =
+        std::forward_as_tuple(input_nchw_shape[0], input_nchw_shape[1], input_nchw_shape[2]);
     auto out_golden_pyt_tensor = owned_buffer::create<bfloat16>(output_n * output_h * output_w);
 
     std::vector<float> input_window;
@@ -45,10 +46,11 @@ owned_buffer::Buffer<bfloat16> ref_conv_op(
                 for (int m = 0; m < filter_h; m++) {
                     for (int n = 0; n < filter_w; n++) {
                         auto idx = anchor + m * input_w * stride_h + n * stride_w;
-                        if (idx >= input_padded_tensor_buf.size())
+                        if (idx >= input_padded_tensor_buf.size()) {
                             input_window.push_back(0);
-                        else
+                        } else {
                             input_window.push_back(input_padded_tensor_buf[idx].to_float());
+                        }
                     }
                 }
                 out_golden_pyt_tensor[out_idx] = bfloat16(static_cast<float>(
@@ -63,9 +65,9 @@ owned_buffer::Buffer<bfloat16> ref_conv_op(
 }
 
 owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
-    const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
-    const std::vector<float> &filter_vector,
-    const std::vector<uint32_t> &op_trace_metadata,
+    const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
+    const std::vector<float>& filter_vector,
+    const std::vector<uint32_t>& op_trace_metadata,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t filter_h,
@@ -79,10 +81,11 @@ owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
         for (uint32_t h = 0; h < filter_h; h++) {
             for (uint32_t w = 0; w < filter_w; w++) {
                 auto idx = anchor + h * stride_h * padded_input_w + w * stride_w;
-                if (idx >= input_padded_tensor_buf.size())
+                if (idx >= input_padded_tensor_buf.size()) {
                     input_window.push_back(0);
-                else
+                } else {
                     input_window.push_back(input_padded_tensor_buf[idx].to_float());
+                }
             }
         }
         conv_tensor_buf[out_idx] = bfloat16(
@@ -94,9 +97,9 @@ owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
 }
 
 owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
-    const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
-    const std::vector<float> &filter_vector,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
+    const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
+    const std::vector<float>& filter_vector,
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t padded_input_h,
@@ -121,10 +124,11 @@ owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
                                      ((i % output_hw) / output_w) * padded_input_w * stride_h +
                                      (i % output_w) * stride_w;
                     input_idx = input_idx_strt + fh * padded_input_w * stride_h + fw * stride_w;
-                    if (input_idx >= input_padded_tensor_buf.size())
+                    if (input_idx >= input_padded_tensor_buf.size()) {
                         input_window.push_back(0);
-                    else
+                    } else {
                         input_window.push_back(input_padded_tensor_buf[input_idx].to_float());
+                    }
                 }
             }
             conv_tensor_buf[i] = bfloat16(static_cast<float>(
@@ -136,11 +140,11 @@ owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
 }
 
 owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
-    const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
-    const std::vector<float> &filter_vector,
-    const std::vector<uint32_t> &op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
-    const std::vector<std::vector<uint16_t>> &sharded_input_top_left_indices,
+    const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
+    const std::vector<float>& filter_vector,
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<std::vector<uint16_t>>& sharded_input_top_left_indices,
     uint32_t input_h,
     uint32_t input_w,
     uint32_t stride_h,
@@ -162,10 +166,11 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
                 for (auto fw = 0; fw < filter_w; fw++) {
                     auto input_idx =
                         op_trace_metadata[output_shard_start] + idx + fh * padded_input_w * stride_h + fw * stride_w;
-                    if (input_idx >= input_padded_tensor_buf.size())
+                    if (input_idx >= input_padded_tensor_buf.size()) {
                         input_window.push_back(0);
-                    else
+                    } else {
                         input_window.push_back(input_padded_tensor_buf[input_idx].to_float());
+                    }
                 }
             }
             conv_tensor_buf[out_idx] = bfloat16(static_cast<float>(
@@ -177,7 +182,8 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     return conv_tensor_buf;
 }
 
-std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<std::pair<bool, uint32_pair_t>> &tensor_metadata) {
+std::vector<bool> pad_metadata_from_tensor_metadata(
+    const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata) {
     std::vector<bool> ref_pad_metadata;
     for (auto i = 0; i < tensor_metadata.size(); i++) {
         auto is_pad_stick = tensor_metadata[i].first;
@@ -191,8 +197,8 @@ std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<std::pair<
 }
 
 std::vector<uint32_t> pad_indices_from_flattened_pad_config(
-    const std::vector<std::vector<uint16_t>> &flattened_pad_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries) {
+    const std::vector<std::vector<uint16_t>>& flattened_pad_config,
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
     std::vector<uint32_t> abs_indices;
     for (auto i = 0; i < shard_boundaries.size(); i++) {
         uint32_pair_t input_boundry = shard_boundaries[i].second;
@@ -202,15 +208,17 @@ std::vector<uint32_t> pad_indices_from_flattened_pad_config(
         for (auto j = 0; j < pad_config.size(); j += 2) {
             uint32_t local_idx = padded_input_tensor_buf_idx + pad_config[j];
             uint32_t length = pad_config[j + 1];
-            for (auto k = local_idx; k < (local_idx + length); k++) abs_indices.push_back(k);
+            for (auto k = local_idx; k < (local_idx + length); k++) {
+                abs_indices.push_back(k);
+            }
         }
     }
     return abs_indices;
 }
 
 std::vector<uint32_t> input_indices_from_flattened_local_config(
-    const std::vector<std::vector<uint16_t>> &flattened_local_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries) {
+    const std::vector<std::vector<uint16_t>>& flattened_local_config,
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
     std::vector<uint32_t> abs_indices;
     for (auto i = 0; i < shard_boundaries.size(); i++) {
         uint32_pair_t input_boundry = shard_boundaries[i].second;
@@ -221,16 +229,18 @@ std::vector<uint32_t> input_indices_from_flattened_local_config(
         for (auto j = 3; j < (sz + 3); j += 3) {
             uint32_t local_idx = padded_input_tensor_buf_idx + local_config[j + 1];
             uint32_t length = local_config[j + 2];
-            for (auto k = local_idx; k < (local_idx + length); k++) abs_indices.push_back(k);
+            for (auto k = local_idx; k < (local_idx + length); k++) {
+                abs_indices.push_back(k);
+            }
         }
     }
     return abs_indices;
 }
 
 std::vector<uint32_t> input_indices_from_flattened_remote_config(
-    tt::tt_metal::Device *device,
-    const std::vector<std::vector<uint16_t>> &flattened_remote_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
+    tt::tt_metal::Device* device,
+    const std::vector<std::vector<uint16_t>>& flattened_remote_config,
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
     bool remote_read,
     bool is_block_sharded,
     bool transpose_mcast) {
@@ -259,7 +269,9 @@ std::vector<uint32_t> input_indices_from_flattened_remote_config(
             for (auto i = local_idx; i < local_idx + sz; i += 3) {
                 uint32_t local_idx = padded_input_tensor_buf_idx + remote_config[i + 1];
                 uint32_t length = remote_config[i + 2];
-                for (auto k = local_idx; k < (local_idx + length); k++) abs_indices.push_back(k);
+                for (auto k = local_idx; k < (local_idx + length); k++) {
+                    abs_indices.push_back(k);
+                }
             }
             local_idx += sz;
             coord = {remote_config[local_idx], remote_config[local_idx + 1]};
@@ -274,4 +286,4 @@ std::vector<uint32_t> input_indices_from_flattened_remote_config(
     return abs_indices;
 }
 
-}  // namespace tt::tt_metal::sliding_window
+}  // namespace ttnn::operations::sliding_window

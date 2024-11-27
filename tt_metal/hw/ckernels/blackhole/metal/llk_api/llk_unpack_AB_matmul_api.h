@@ -11,7 +11,7 @@
  *************************************************************************/
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
+inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t* unpack_AB_params) {
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
     // In0 -> unpB
@@ -81,7 +81,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
     const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces = partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const uint32_t unpB_num_faces =
+        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -107,7 +108,7 @@ inline void llk_unpack_AB_matmul(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);

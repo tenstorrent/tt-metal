@@ -17,10 +17,10 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     const Tensor& rstd,
     const uint32_t num_groups,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> input_grad,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& input_grad,
+    const std::optional<const Tensor>& gamma_grad,
+    const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
@@ -72,16 +72,17 @@ OptionalTensors MorehGroupNormBackward::create_async_optional_output_tensors(
     const Tensor& rstd,
     const uint32_t num_groups,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> input_grad,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& input_grad,
+    const std::optional<const Tensor>& gamma_grad,
+    const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-
-    TT_FATAL(are_required_outputs[0] or are_required_outputs[1] or are_required_outputs[2], "backward is called, but all gradients are not required");
+    TT_FATAL(
+        are_required_outputs[0] or are_required_outputs[1] or are_required_outputs[2],
+        "backward is called, but all gradients are not required");
 
     return {
         are_required_outputs.at(0)

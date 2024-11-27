@@ -85,8 +85,8 @@ Tensor create_tt_tensor_from_py_data(
     const DataType data_type,
     const std::optional<Tile> &optional_tile,
     bool enable_borrow,
-    std::function<void()> on_creation_callback = [] {},
-    std::function<void()> on_destruction_callback = [] {}) {
+    const std::function<void()>& on_creation_callback = [] {},
+    const std::function<void()>& on_destruction_callback = [] {}) {
     switch (data_type) {
         case DataType::UINT8: {
             auto data_ptr = reinterpret_cast<uint8_t *>(py_data_ptr);
@@ -635,7 +635,7 @@ void pytensor_module_types(py::module &m_tensor) {
 void pytensor_module(py::module &m_tensor) {
     m_tensor.def(
         "decorate_external_operation",
-        [](const py::function &function, std::optional<std::string> function_name) -> py::function {
+        [](const py::function &function, const std::optional<std::string>& function_name) -> py::function {
             return py::cpp_function(std::function([function, function_name](
                                                       const py::args &args, const py::kwargs &kwargs) {
                 ZoneScopedN("TT_DNN_FALLBACK_OP");

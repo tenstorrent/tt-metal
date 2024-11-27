@@ -27,9 +27,13 @@ struct Coordinate {
     // Add support for structured bindings
     template <size_t I>
     decltype(auto) get() const {
-        if constexpr (I == 0) return row;
-        else if constexpr (I == 1) return col;
-        else static_assert(I < 2, "Index out of bounds for Coordinate");
+        if constexpr (I == 0) {
+            return row;
+        } else if constexpr (I == 1) {
+            return col;
+        } else {
+            static_assert(I < 2, "Index out of bounds for Coordinate");
+        }
     }
 
     friend std::ostream& operator<<(std::ostream& os, const Coordinate& coord) {
@@ -54,11 +58,7 @@ struct Coordinate {
  *    (CCL-ops), such as line all-gather, which require column or row views of the device mesh.
  */
 
-enum class MeshType {
-    RowMajor,
-    Ring,
-    Line
-};
+enum class MeshType { RowMajor, Ring, Line };
 
 class MeshDeviceView {
 public:
@@ -70,7 +70,7 @@ public:
 
     MeshDeviceView(const MeshDevice& mesh);
     MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coordinate bottom_right);
-    MeshDeviceView(std::vector<device_pointer> devices, CoordinateMapper mapper);
+    MeshDeviceView(std::vector<device_pointer> devices, const CoordinateMapper& mapper);
 
     [[nodiscard]] device_pointer get_device(size_t row, size_t col);
     [[nodiscard]] const_device_pointer get_device(size_t row, size_t col) const;
@@ -108,8 +108,10 @@ public:
 
     // Given a starting coordinate, get the coordinates of a line of devices where device[i-1] is connected to device[i]
     // The current support only provides left-to-right and right-to-left snaking of the line.
-    [[nodiscard]] static std::vector<Coordinate> get_line_coordinates(size_t length, const Coordinate& offset, size_t num_rows, size_t num_cols);
-    [[nodiscard]] std::vector<Coordinate> get_ring_coordinates(const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols);
+    [[nodiscard]] static std::vector<Coordinate> get_line_coordinates(
+        size_t length, const Coordinate& offset, size_t num_rows, size_t num_cols);
+    [[nodiscard]] std::vector<Coordinate> get_ring_coordinates(
+        const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols);
     [[nodiscard]] std::vector<device_pointer> get_ring_devices();
     [[nodiscard]] std::vector<device_pointer> get_line_devices();
 
@@ -119,7 +121,7 @@ private:
     Coordinate top_left_;
     Coordinate bottom_right_;
 
-    void initialize_from_devices(const std::vector<device_pointer>& devices, CoordinateMapper mapper);
+    void initialize_from_devices(const std::vector<device_pointer>& devices, const CoordinateMapper& mapper);
     void validate_coordinates() const;
 };
 
@@ -128,23 +130,25 @@ inline MeshDeviceView make_mesh_device_view(std::vector<Device*> devices, MeshDe
     return MeshDeviceView(std::move(devices), std::move(mapper));
 }
 
-} // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::distributed
 
 namespace std {
-    // Specializations to enable structured bindings
-    template<> struct tuple_size<tt::tt_metal::distributed::Coordinate> : std::integral_constant<size_t, 2> {};
-    template<size_t I> struct tuple_element<I, tt::tt_metal::distributed::Coordinate> {
-        using type = size_t;
-    };
+// Specializations to enable structured bindings
+template <>
+struct tuple_size<tt::tt_metal::distributed::Coordinate> : std::integral_constant<size_t, 2> {};
+template <size_t I>
+struct tuple_element<I, tt::tt_metal::distributed::Coordinate> {
+    using type = size_t;
+};
 
-    // Specialization to enable hashing of Coordinate
-    template <>
-    struct hash<tt::tt_metal::distributed::Coordinate> {
-        size_t operator()(const tt::tt_metal::distributed::Coordinate& coord) const noexcept {
-            size_t seed = 0;
-            tt::utils::hash_combine(seed, coord.row);
-            tt::utils::hash_combine(seed, coord.col);
-            return seed;
-        }
-    };
-} // namespace std
+// Specialization to enable hashing of Coordinate
+template <>
+struct hash<tt::tt_metal::distributed::Coordinate> {
+    size_t operator()(const tt::tt_metal::distributed::Coordinate& coord) const noexcept {
+        size_t seed = 0;
+        tt::utils::hash_combine(seed, coord.row);
+        tt::utils::hash_combine(seed, coord.col);
+        return seed;
+    }
+};
+}  // namespace std
