@@ -8,7 +8,7 @@
 #include <emmintrin.h>
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"
-#include "tt_metal/third_party/umd/device/device_api_metal.h"
+#include "umd/device/device_api_metal.h"
 
 namespace tt::tt_metal {
 

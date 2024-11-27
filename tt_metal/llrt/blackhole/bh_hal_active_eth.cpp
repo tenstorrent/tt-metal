@@ -16,7 +16,7 @@
 #include "hal_asserts.hpp"
 #include "blackhole/bh_hal.hpp"
 
-#include "tt_soc_descriptor.h"  // CoreType
+#include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((std::uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
