@@ -104,6 +104,7 @@ jobs:
       - name: Tag latest if this is a major version release
         if: ${{ inputs.is_major_version }}
         run: |
+          set -eu # basic shell hygiene
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
