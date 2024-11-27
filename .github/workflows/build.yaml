@@ -8,6 +8,7 @@ on:
 jobs:
   build-lib:
     strategy:
+      fail-fast: false
       matrix:
         build: [
           {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-20.04},
