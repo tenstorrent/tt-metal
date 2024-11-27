@@ -82,7 +82,6 @@ jobs:
         with:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_image_arch: ${{ inputs.arch }}
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
