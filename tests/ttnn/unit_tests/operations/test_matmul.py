@@ -1853,3 +1853,28 @@ def test_interleaved_input_sharded_output_matmul(device):
     output3 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output3)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "n_size, c, m, k, n",
+    [
+        (1, 1, 1024, 64, 512),
+    ],
+)
+def test_optional_output_argument(device, n_size, c, m, k, n):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((n_size, c, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n_size, c, k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    torch_opt_output_tensor = torch.zeros_like(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    optional_output_tensor = ttnn.from_torch(torch_opt_output_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
+    output = ttnn.to_torch(output)
+
+    assert len(output.shape) == len(torch_output_tensor.shape)
+    assert output.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.999)
