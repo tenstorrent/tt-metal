@@ -1,5 +1,5 @@
 # LLMs in TT-NN
-Authors: Mark O'Connor, 
+Authors: Mark O'Connor,
 
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
@@ -8,7 +8,7 @@ Authors: Mark O'Connor,
   - [2. Modules](#2-modules)
     - [2.1 Embedding](#21-embedding)
     - [2.2 RoPE](#22-rope)
-    - [2.3 Norm](#23-norm) 
+    - [2.3 Norm](#23-norm)
     - [2.4 Attention](#24-attention)
     - [2.5 MLP](#25-mlp)
     - [2.6 Decoder](#26-decoder)
@@ -58,7 +58,7 @@ Authors: Mark O'Connor,
 ### 3.1 Generative Decoding
 ### 3.2 Prefill and Decode
   - submodules, tests
-  - how to combine prefill and decode, 
+  - how to combine prefill and decode,
   - slicing prefill to fit in L1
 ### 3.3 Multi-Device
   - device mesh
@@ -70,15 +70,34 @@ Authors: Mark O'Connor,
   - Our vLLM repo and what's needed to integrate with it.
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
-  - link to existing doc, why it helps decode more
+Check out the [Metal Trace guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for background on this. Essentially it lets you record a single pass of your model and stores the list of commands and buffers used on-device. You can then execute that trace in a single command with no additional work performed on the host. This eliminates all the overhead in stages 1-3 (you are still responsible for transferring any data needed to and from device, but host-device transfer of commands is eliminated).
+
+We typically use tracing for the decode pass of LLMs but not the prefill pass. The main reasons for this are linked to tracing’s key limitation:
+
+* You cannot allocate or deallocate tensors during a trace. When executing a trace every buffer will be the same size every time.
+
+This doesn’t fit well with prefill, in which the sequence length and so matmul row counts will likely change each time. For decode it’s no problem (see the sections on kv-cache and paging for how we handle those with tracing). Conveniently, in prefill we have big operations in the millisecond plus range which the host can usually dispatch fast enough that it doesn’t matter. Decode, with a comparatively small batch size, is another story. There we iterate through the entire model in like 10ms with microsecond-length op times where we cannot afford to wait for a CPU, the whims of linux process scheduling or anything else but the speed at which electrons coruscate from DRAM and the NoC through our cores and out again.
+
 ### 4.2 Async Mode
+
+Async mode allows the host to continuously send commands to the device without blocking until data is read back from device, improving performance. Enable it with:
+
+```python
+mesh_device.enable_async(True)
+```
+
+Without async mode each python call to ttnn will block until the device has finished and the results are available. This is good for debugging, because any crash or error will show you the correct python line of code that caused it. With async mode enabled your python thread keeps on running whilst the host and device handle the calls in the background, only blocking when data needs to be read back from device.
+
+Async mode is obviously much faster, but if something asserts or crashes then your python stack will be several lines further on than the call that caused the problem.
+For performance work async mode should always be enabled. For debugging it can be useful to disable it.
+
 ### 4.3 Multiple CQs
   - how to feed back output to input and read output asyncronously
 ### 4.4 Op Configs
-  - Writing correct program configs and shard specs 
+  - Writing correct program configs and shard specs
   - Deciding how many cores to run an op on
     - Why did we use 16 cores for MLP
-  - Which matmul to use when @Colman Glagovich 
+  - Which matmul to use when @Colman Glagovich
     - 1d, 2d, dram-sharded, ...
   - Implicitly padding weights in program config for matmuls
 ### 4.5 Accuracy
@@ -98,30 +117,9 @@ Think of ttnn performance as having five components:
 4. **Device dispatch** - we can measure the gap between one op finishing and the next starting. At time of writing the lower limit of this is single-digit microseconds and there is work underway to reduce it to zero. However, for various reasons you might see much higher dispatch times, most notably if there are a lot of runtime arguments to a function or if something else is happening in between calls.
 5. **Device op performance** - how long it takes the hardware to run a given operation. Ideally we want this to be limited either by DRAM bandwidth or math throughput and for larger ops both of these are generally achievable. Doing so is mostly about how the data is placed (DRAM vs L1, sharded vs interleaved) and how the compute kernels are configured (process more than one tile at once and use smaller data formats).
 
-We will dive into all of these in detail - how we like to measure each section and tips and tricks to optimize it.
-However, the high-order bit we should consider first is this: should you use tracing?
+We will dive into all of these in detail - how we like to measure each section and tips and tricks to optimize it. However, the high-order bit is whether tracing is enabled. See [4.1 Tracing](#41-tracing) for more details, but briefly tracing should be used for decode mode but not prefill mode.
 
-#### What is tracing and when (not) to use it
-
-Check out the [Metal Trace guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for background on this. Essentially it lets you record a single pass of your model and stores the list of commands and buffers used on-device. You can then execute that trace in a single command with no additional work performed on the host. This eliminates all the overhead in stages 1-4 (you are still responsible for transferring any data needed to and from device, but host-device transfer of commands is eliminated).
-
-We typically use tracing for the decode pass of LLMs but not the prefill pass. The main reasons for this are linked to tracing’s key limitation:
-
-* You cannot allocate or deallocate tensors during a trace. When executing a trace every buffer will be the same size every time.
-
-This doesn’t fit well with prefill, in which the sequence length and so matmul row counts will likely change each time. For decode it’s no problem (see the sections on kv-cache and paging for how we handle those with tracing). Conveniently, in prefill we have big operations in the millisecond plus range which the host can usually dispatch fast enough that it doesn’t matter. Decode, with a comparatively small batch size, is another story. There we iterate through the entire model in like 10ms with microsecond-length op times where we cannot afford to wait for a CPU, the whims of linux process scheduling or anything else but the speed at which electrons coruscate from DRAM and the NoC through our cores and out again.
-**TL;DR: for decode mode you won’t have to worry about 1-3 but for prefill mode you will.** We will cover everything anyway.
-
-#### What is async mode and when (not) to use it
-
-```python
-mesh_device.enable_async(True)
-```
-
-Without async mode each python call to ttnn will block until the device has finished and the results are available. This is good for debugging, because any crash or error will show you the correct python line of code that caused it. With async mode enabled your python thread keeps on running whilst the host and device handle the calls in the background, only blocking when data needs to be read back from device.
-
-Async mode is obviously much faster, but if something asserts or crashes then your python stack will be several lines further on than the call that caused the problem.
-For performance work async mode should always be enabled. For debugging it can be useful to disable it from time to time.
+**This means that for decode mode you won’t have to worry about 1-3 but for prefill mode you will.** We will cover everything anyway.
 
 #### 1. Main python thread
 
@@ -147,7 +145,7 @@ You can view this file with `vizviewer trace.json` - it’s entirely self-suffic
 What to look for:
 
 * You should be able to see your model forward pass running quickly and then waiting in a ttnn.to_torch or similar call reading data back from device.
-* Measure the time from the start to the end of the forward pass of your model. If this is shorter than the target latency of your device then it is Fast Enough™ and you are done with this section. 
+* Measure the time from the start to the end of the forward pass of your model. If this is shorter than the target latency of your device then it is Fast Enough™ and you are done with this section.
 
 Top tips:
 
@@ -239,7 +237,9 @@ There are two main contributors to op-to-op gap: **host time** and **dispatch ti
 
 Typically tracing reduces the op-to-op gap below 6us and as of November 2024 there are roadmap plans to reduce this to zero, so as long as your ops are below this level your opportunities for optimization here are limited.
 
-##### Overall op performance advice
+See [the next section](#47-misc-performance-optimizations) for tips on how to optimize performance of the rest of the ops!
+
+### 4.7 Misc. Performance Optimizations
 
 There are a lot of individual tips here but let’s start with overall advice:
 
@@ -248,7 +248,7 @@ There are a lot of individual tips here but let’s start with overall advice:
 
 Essentially the perfect op runs on the entire core grid using sharded inputs from L1. Let’s look more at data movement first, then specific tips.
 
-##### Data movement
+#### Data movement
 
 Ops can read data from:
 
@@ -265,7 +265,7 @@ Typically activations should be placed in L1 and weights placed in DRAM.
 
 See the [op config section](#44-op-configs) for more details on writing shard specs in your code.
 
-##### Specific tips
+#### Specific tips
 
 Ok so your ops are reading from the fastest memory they can, sharded if possible. What might still make things slow?
 
@@ -310,19 +310,13 @@ self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
 ```
 
 As always, do not recreate these every single forward pass if you want your python thread to be fast (which you do).
-
-
-### 4.7 Misc. Performance Optimizations
-  - Which dim to shard matmuls on
-  - DRAM-sharding
-  - Avoiding sharded to interleaved calls
 ### 4.8 Module Tests
 ### 4.9 Performance Testing
 ### 4.10 Common Pitfalls
 #### 4.10.1 Error Messages
   - Running out of L1
   - Shard spec and program config mismatches
-  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument. 
+  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument.
     - You'll see an error related to op invocation where the arguments don't match
 #### 4.10.2 Shard Spec Mismatches
 #### 4.10.3 Ethernet Dispatch Cores
