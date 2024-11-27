@@ -91,10 +91,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
-    Program &program,
-    const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &compile_args,
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::vector<uint32_t>& compile_args,
     std::map<string, string> defines) {
     return tt_metal::CreateKernel(
         program,
@@ -108,10 +108,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
-    Program &program,
-    const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &compile_args,
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::vector<uint32_t>& compile_args,
     std::map<string, string> defines) {
     return tt_metal::CreateKernel(
         program,
@@ -125,8 +125,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program,
-    const std::string &file_name,
+    Program& program,
+    const std::string& file_name,
     const std::vector<ComputeKernelArg>& args,
     const std::map<std::string, std::string>& defines,
     MathFidelity math_fidelity,
@@ -144,8 +144,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program,
-    const std::string &file_name,
+    Program& program,
+    const std::string& file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines,
     MathFidelity math_fidelity,
@@ -170,7 +170,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program, const std::string &file_name, const std::vector<ComputeKernelArg>& args, const ComputeKernelConfig& config) {
+    Program& program,
+    const std::string& file_name,
+    const std::vector<ComputeKernelArg>& args,
+    const ComputeKernelConfig& config) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -181,7 +184,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program, const std::string &file_name, ComputeKernelArg arg, const ComputeKernelConfig& config) {
+    Program& program, const std::string& file_name, ComputeKernelArg arg, const ComputeKernelConfig& config) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
@@ -200,8 +203,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_range,
     tt::DataFormat data_format,
     const std::vector<CircularBufferArg>& args) {
     std::vector<CBHandle> cb_ids{};
@@ -214,8 +217,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] CBHandle CreateCircularBuffer(
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_range,
     tt::DataFormat data_format,
     const CircularBufferArg& arg) {
     CBHandle cb_id{0};
@@ -236,10 +239,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 void check_tensor(
-    const Tensor &tensor,
-    const std::string &op_name,
-    const std::string &tensor_name,
-    const std::initializer_list<DataType> &data_types,
+    const Tensor& tensor,
+    const std::string& op_name,
+    const std::string& tensor_name,
+    const std::initializer_list<DataType>& data_types,
     Layout layout,
     bool check_dtype,
     bool check_layout) {
@@ -256,7 +259,7 @@ void check_tensor(
 
     if (check_dtype) {
         bool dtype_supported = false;
-        for (const auto &data_type : data_types) {
+        for (const auto& data_type : data_types) {
             if (tensor.get_dtype() == data_type) {
                 dtype_supported = true;
                 break;
@@ -265,7 +268,7 @@ void check_tensor(
         if (!dtype_supported) {
             std::string dtype_string = "[";
             bool is_first = true;
-            for (const auto &data_type : data_types) {
+            for (const auto& data_type : data_types) {
                 if (!is_first) {
                     dtype_string += ", ";
                 }
@@ -282,9 +285,9 @@ void check_tensor(
 
 void check_tensor(
     std::optional<Tensor> tensor,
-    const std::string &op_name,
-    const std::string &tensor_name,
-    const std::initializer_list<DataType> &data_types,
+    const std::string& op_name,
+    const std::string& tensor_name,
+    const std::initializer_list<DataType>& data_types,
     Layout layout,
     bool check_dtype,
     bool check_layout) {
@@ -325,7 +328,7 @@ uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t> &dim, const ttnn::SimpleShape &shape) {
+void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -333,7 +336,7 @@ void expand_to_max_dim(ttnn::SmallVector<uint32_t> &dim, const ttnn::SimpleShape
     }
 }
 
-void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
+void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
     auto input_shape = input.get_legacy_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
@@ -345,7 +348,7 @@ void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keepdim) {
+void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim) {
     auto input_shape = input.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
@@ -404,21 +407,22 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
         log_debug(
             LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
         for (int i = 0; i < input_rank; ++i) {
-            if (i == dim)
+            if (i == dim) {
                 continue;
+            }
             TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
             TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
 }
 
-void initialize_dims_with_range(ttnn::SmallVector<int64_t> &dims, uint32_t input_rank) {
+void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input_rank) {
     dims.resize(input_rank);
     std::iota(dims.begin(), dims.end(), 0);
 }
 
 ttnn::SmallVector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> &dim, uint32_t input_rank) {
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim, uint32_t input_rank) {
     ttnn::SmallVector<int64_t> dims;
     if (!dim.has_value()) {
         initialize_dims_with_range(dims, input_rank);
@@ -434,7 +438,7 @@ ttnn::SmallVector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape &shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -450,7 +454,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Simple
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
-    const ttnn::SimpleShape &shape, uint32_t dim) {
+    const ttnn::SimpleShape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");

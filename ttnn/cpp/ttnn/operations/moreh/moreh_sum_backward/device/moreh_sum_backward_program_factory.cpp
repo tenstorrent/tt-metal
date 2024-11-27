@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const Shape &shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -29,7 +29,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const Shape &shape) {
 }
 
 Shape get_output_grad_shape(
-    const Tensor &output_grad, const Tensor &input_grad, const ttnn::SmallVector<int64_t> &dims, const bool &keepdim) {
+    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
         return output_grad.get_shape();
     }
@@ -51,9 +51,9 @@ Shape get_output_grad_shape(
     return Shape(tt::tt_metal::LegacyShape(shape, padding));
 }
 MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOperation::ProgramFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     auto output_grad = tensor_args.output_grad;
     auto input = tensor_args.input;
     auto input_grad = output_tensor;
@@ -66,7 +66,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto *device = output_grad.device();
+    auto* device = output_grad.device();
     auto program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -75,15 +75,15 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
 
-    const auto &input_grad_shape = input_grad.get_shape();
-    const auto &input_grad_shape_wo_padding = input_grad_shape.value.without_padding();
+    const auto& input_grad_shape = input_grad.get_shape();
+    const auto& input_grad_shape_wo_padding = input_grad_shape.value.without_padding();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
     ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
-    const auto &output_grad_shape_wo_padding = output_grad_shape.value.without_padding();
+    const auto& output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
+    const auto& output_grad_shape_wo_padding = output_grad_shape.value.without_padding();
 
     ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "output_grad");
@@ -142,18 +142,14 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/reader_moreh_sum_backward.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/writer_moreh_sum_backward.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -223,13 +219,13 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
 }
 
 void MorehSumBackwardOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &tensor_return_value) {
-    auto &program = cached_program.program;
-    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
@@ -241,12 +237,12 @@ void MorehSumBackwardOperation::ProgramFactory::override_runtime_arguments(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = output_grad_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = input_grad_buffer->address();
         }
     }

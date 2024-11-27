@@ -8,7 +8,7 @@
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
-void bind_moreh_mean_backward_operation(py::module &module) {
+void bind_moreh_mean_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_mean_backward,

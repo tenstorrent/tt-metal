@@ -39,7 +39,7 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
 
 template <uint8_t NUM_BUFFERS>
 class EthChannelBuffer final {
-   public:
+public:
     // The channel structure is as follows:
     //              &header->  |----------------| channel_base_address
     //                         |    header      |
@@ -72,13 +72,13 @@ class EthChannelBuffer final {
                 channel_base_address + i * this->max_eth_payload_size_in_bytes;  //(this->buffer_size_in_bytes);
 
             uint32_t channel_sync_addr = this->buffer_addresses[i] + buffer_size_in_bytes;
-            auto channel_sync_ptr = reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr);
+            auto channel_sync_ptr = reinterpret_cast<eth_channel_sync_t*>(channel_sync_addr);
 
             channel_bytes_sent_addresses[i] =
-                reinterpret_cast<volatile tt_l1_ptr size_t *>(&(channel_sync_ptr->bytes_sent));
+                reinterpret_cast<volatile tt_l1_ptr size_t*>(&(channel_sync_ptr->bytes_sent));
             channel_bytes_acked_addresses[i] =
-                reinterpret_cast<volatile tt_l1_ptr size_t *>(&(channel_sync_ptr->receiver_ack));
-            channel_src_id_addresses[i] = reinterpret_cast<volatile tt_l1_ptr size_t *>(&(channel_sync_ptr->src_id));
+                reinterpret_cast<volatile tt_l1_ptr size_t*>(&(channel_sync_ptr->receiver_ack));
+            channel_src_id_addresses[i] = reinterpret_cast<volatile tt_l1_ptr size_t*>(&(channel_sync_ptr->src_id));
 
             ASSERT((uint32_t)channel_bytes_acked_addresses[i] != (uint32_t)(channel_bytes_sent_addresses[i]));
             *(channel_bytes_sent_addresses[i]) = 0;
@@ -92,8 +92,8 @@ class EthChannelBuffer final {
         return this->buffer_addresses[this->buffer_index()];
     }
 
-    [[nodiscard]] FORCE_INLINE volatile PacketHeader *get_current_packet_header() const {
-        return reinterpret_cast<volatile PacketHeader *>(this->buffer_addresses[this->buffer_index()]);
+    [[nodiscard]] FORCE_INLINE volatile PacketHeader* get_current_packet_header() const {
+        return reinterpret_cast<volatile PacketHeader*>(this->buffer_addresses[this->buffer_index()]);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_current_payload_size() const {
@@ -106,15 +106,15 @@ class EthChannelBuffer final {
     // TODO: Split off into two separate functions:
     //       volatile tt_l1_ptr size_t *get_current_bytes_sent_ptr() const
     //       size_t get_current_bytes_sent_address() const
-    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_current_bytes_sent_address() const {
+    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t* get_current_bytes_sent_address() const {
         return this->channel_bytes_sent_addresses[this->buffer_index()];
     }
 
-    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_current_bytes_acked_address() const {
+    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t* get_current_bytes_acked_address() const {
         return this->channel_bytes_acked_addresses[this->buffer_index()];
     }
 
-    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_current_src_id_address() const {
+    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t* get_current_src_id_address() const {
         return this->channel_src_id_addresses[this->buffer_index()];
     }
 
@@ -158,16 +158,16 @@ class EthChannelBuffer final {
         return drained;
     }
 
-   private:
+private:
     FORCE_INLINE auto buffer_index() const {
         ASSERT(this->buff_idx < NUM_BUFFERS);
         return buff_idx;
     }
 
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
-    std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_bytes_sent_addresses;
-    std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_bytes_acked_addresses;
-    std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_src_id_addresses;
+    std::array<volatile tt_l1_ptr size_t*, NUM_BUFFERS> channel_bytes_sent_addresses;
+    std::array<volatile tt_l1_ptr size_t*, NUM_BUFFERS> channel_bytes_acked_addresses;
+    std::array<volatile tt_l1_ptr size_t*, NUM_BUFFERS> channel_src_id_addresses;
 
     // header + payload regions only
     const std::size_t buffer_size_in_bytes;
@@ -189,9 +189,9 @@ struct EdmChannelWorkerInterface {
         // completion field so that way we don't have to do a volatile read for every
         // packet... Then we'll also be able to cache the uint64_t addr of the worker
         // semaphore directly (saving on regenerating it each time)
-        volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr,
-        volatile tt_l1_ptr uint32_t *const local_semaphore_address,
-        volatile tt_l1_ptr uint32_t *const connection_live_semaphore) :
+        volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
+        volatile tt_l1_ptr uint32_t* const local_semaphore_address,
+        volatile tt_l1_ptr uint32_t* const connection_live_semaphore) :
         worker_location_info_ptr(worker_location_info_ptr),
         local_semaphore_address(local_semaphore_address),
         connection_live_semaphore(connection_live_semaphore) {}
@@ -209,7 +209,7 @@ struct EdmChannelWorkerInterface {
     }
 
     void increment_worker_semaphore() const {
-        auto const &worker_info = *worker_location_info_ptr;
+        auto const& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
 
@@ -224,9 +224,9 @@ struct EdmChannelWorkerInterface {
 
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == 1; }
 
-    volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr;
-    volatile tt_l1_ptr uint32_t *const local_semaphore_address;
-    volatile tt_l1_ptr uint32_t *const connection_live_semaphore;
+    volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr;
+    volatile tt_l1_ptr uint32_t* const local_semaphore_address;
+    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
 };
 
 }  // namespace tt::fabric

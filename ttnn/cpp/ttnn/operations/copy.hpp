@@ -23,19 +23,30 @@ inline Tensor copy_impl(
     const std::vector<ttnn::operations::unary::UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    DataType output_dtype = (op_chain[0].op_type == unary::UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_tensor.get_dtype();
+    DataType output_dtype = (op_chain[0].op_type == unary::UnaryOpType::TYPECAST)
+                                ? static_cast<DataType>(op_chain[0].params[1])
+                                : input_tensor.get_dtype();
     auto arch = input_tensor.device()->arch();
     bool preserve_fp32_precision = (arch != tt::ARCH::GRAYSKULL) and (input_tensor.get_dtype() == DataType::FLOAT32);
-    bool fp32_dest_acc_en = preserve_fp32_precision or
-                            output_dtype == DataType::UINT32 or
-                            output_dtype == DataType::INT32 or
-                            output_dtype == DataType::FLOAT32 or
-                            input_tensor.get_dtype() == DataType::UINT32 or
-                            input_tensor.get_dtype() == DataType::INT32;
-    bool bfp8_pack_precise = (op_chain[0].op_type == unary::UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
+    bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
+                            output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
+                            input_tensor.get_dtype() == DataType::UINT32 or input_tensor.get_dtype() == DataType::INT32;
+    bool bfp8_pack_precise =
+        (op_chain[0].op_type == unary::UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
-    auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, optional_output_tensor);
+    auto output_memory_config = optional_output_tensor.has_value()
+                                    ? optional_output_tensor.value().memory_config()
+                                    : memory_config.value_or(input_tensor.memory_config());
+    return prim::unary(
+        queue_id,
+        input_tensor,
+        op_chain,
+        output_dtype,
+        output_memory_config,
+        fp32_dest_acc_en,
+        preserve_fp32_precision,
+        bfp8_pack_precise,
+        optional_output_tensor);
 }
 }  // namespace detail
 
@@ -52,7 +63,8 @@ struct Typecast {
                 "If both output dtype and output tensor provided dtype should match");
         }
         if (input.device()->arch() == tt::ARCH::GRAYSKULL) {
-            return ttnn::experimental::typecast(queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
+            return ttnn::experimental::typecast(
+                queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
         }
         DataType input_dtype = input.get_dtype();
         return detail::copy_impl(
@@ -111,6 +123,7 @@ struct Typecast {
 }  // namespace copy
 }  // namespace operations
 
-constexpr auto typecast = ttnn::register_operation_with_auto_launch_op<"ttnn::typecast", ttnn::operations::copy::Typecast>();
+constexpr auto typecast =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::typecast", ttnn::operations::copy::Typecast>();
 
 }  // namespace ttnn

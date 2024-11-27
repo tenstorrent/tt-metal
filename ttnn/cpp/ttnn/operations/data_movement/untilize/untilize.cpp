@@ -14,8 +14,8 @@ namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ExecuteUntilize::invoke(
     uint8_t queue_id,
-    const ttnn::Tensor &input_tensor,
-    const std::optional<MemoryConfig> &memory_config,
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
     bool fp32_dest_acc_en =
@@ -36,8 +36,8 @@ ttnn::Tensor ExecuteUntilize::invoke(
 }
 
 ttnn::Tensor ExecuteUntilize::invoke(
-    const ttnn::Tensor &input_tensor,
-    const std::optional<MemoryConfig> &memory_config,
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
     return invoke(DefaultQueueId, input_tensor, memory_config, use_multicore, use_pack_untilize);
