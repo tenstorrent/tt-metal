@@ -17,6 +17,14 @@
 
 namespace tt::fabric {
 
+void nop(){
+    // Debug loop to let time pass
+    volatile uint32_t i = 0;
+    for (i = 0; i < 1000000; i++) {
+        asm volatile("" : "+r"(i) : : "memory");
+    }
+}
+
 struct WorkerToFabricEdmSender{
 
     static constexpr uint32_t open_connection_value = 1;
@@ -95,7 +103,9 @@ struct WorkerToFabricEdmSender{
         noc_semaphore_set(this->worker_sem_addr, 0);
     }
     FORCE_INLINE void wait_for_empty_write_slot() const {
-        DPRINT << "Waiting for empty write slot @ " << (uint32_t)this->worker_sem_addr << "\n";
+        // DPRINT << "Waiting for empty write slot @ " << (uint32_t)this->worker_sem_addr << "\n";
+        // DPRINT << "Waiting for empty write slot @ \n" << (uint32_t)0<<"\n";
+        // nop();
         noc_semaphore_wait(this->worker_sem_addr, 1);
     }
 
@@ -216,11 +226,16 @@ struct WorkerToFabricEdmSender{
             storage_offset += 64;
             storage_offset = storage_offset & (~0x1F);
         }*/
-        DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
-        DPRINT << "SND PKT " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(source_address) << "\n";
+        // DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
+        // DPRINT << "SND PKT " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(source_address) << "\n";
+        // DPRINT << "SND PKT TO @ " << (uint32_t)0 << "\n";
+        // DPRINT << "SND PKT " << (uint32_t)0 << "\n";
+        // nop();
         ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader *>(reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
-        DPRINT << "SND SEMINC TO @ " << (uint64_t)edm_semaphore_addr << "\n";
+        // DPRINT << "SND SEMINC TO @ " << (uint64_t)edm_semaphore_addr << "\n";
+        // DPRINT << "SND SEMINC TO @ " << (uint32_t)0 << "\n";
+        // nop();
         noc_semaphore_inc(edm_semaphore_addr, 1);
 
         *this->buffer_index_ptr = (*this->buffer_index_ptr == this->last_buffer_index) ? 0 : *this->buffer_index_ptr + 1;

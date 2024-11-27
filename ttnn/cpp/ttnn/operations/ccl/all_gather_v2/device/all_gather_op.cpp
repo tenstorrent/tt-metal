@@ -84,6 +84,7 @@ std::vector<ttnn::SimpleShape> AllGatherV2::compute_output_shapes(const std::vec
 std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto output_tensors = std::vector<Tensor>();
+    auto tile = input_tensor.get_tensor_spec().tile();
     output_tensors.reserve(1);
     if(this->output_mem_config.is_sharded()) {
         output_tensors.push_back(create_device_tensor(
@@ -92,10 +93,10 @@ std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor>
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config,
-            input_tensor.get_tile()
+            tile
             ));
     } else {
-        output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
+        output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
     }
     log_debug(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
     return output_tensors;
@@ -129,7 +130,7 @@ Tensor all_gather_v2(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
 
-    tt::log_debug(tt::LogOp, "DEBUG: all_gather is called");
+    tt::log_info(tt::LogOp, "DEBUG: all_gather is called");
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
@@ -189,7 +190,7 @@ Tensor all_gather_v2(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
 
-    tt::log_debug(tt::LogOp, "DEBUG: all_gather with cluster_axis is called");
+    tt::log_info(tt::LogOp, "DEBUG: all_gather with cluster_axis is called");
 
     TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
