@@ -51,9 +51,8 @@ namespace tt::tt_metal {
  * @see detect_arch
  */
 inline tt::ARCH get_platform_architecture() {
-
     auto arch = tt::ARCH::Invalid;
-    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
+    if (std::getenv("TT_METAL_SIMULATOR_EN")) {
         auto arch_env = std::getenv("ARCH_NAME");
         TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
         arch = tt::get_arch_from_string(arch_env);
@@ -77,4 +76,4 @@ inline tt::ARCH get_platform_architecture() {
     return arch;
 }
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

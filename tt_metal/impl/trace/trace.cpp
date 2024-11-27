@@ -28,7 +28,11 @@ static constexpr uint32_t kExecBufPageMax = 4096;
 size_t interleaved_page_size(
     const uint32_t buf_size, const uint32_t num_banks, const uint32_t min_size, const uint32_t max_size) {
     // Populate power of 2 numbers within min and max as candidates
-    TT_FATAL(min_size > 0 and min_size <= max_size, "min_size {} not positive and less than or equal to max_size {}.", min_size, max_size);
+    TT_FATAL(
+        min_size > 0 and min_size <= max_size,
+        "min_size {} not positive and less than or equal to max_size {}.",
+        min_size,
+        max_size);
     std::vector<uint32_t> candidates;
     candidates.reserve(__builtin_clz(min_size) - __builtin_clz(max_size) + 1);
     for (uint32_t size = 1; size <= max_size; size <<= 1) {
@@ -49,7 +53,12 @@ size_t interleaved_page_size(
             pick = size;
         }
     }
-    TT_FATAL(pick >= min_size and pick <= max_size, "pick {} not between min_size {} and max_size {}", pick, min_size, max_size);
+    TT_FATAL(
+        pick >= min_size and pick <= max_size,
+        "pick {} not between min_size {} and max_size {}",
+        pick,
+        min_size,
+        max_size);
     return pick;
 }
 }  // namespace
@@ -58,15 +67,10 @@ namespace tt::tt_metal {
 
 std::atomic<uint32_t> Trace::global_trace_id = 0;
 
-uint32_t Trace::next_id() {
-    return global_trace_id++;
-}
+uint32_t Trace::next_id() { return global_trace_id++; }
 
 std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
-    return std::make_shared<TraceBuffer>(
-        std::make_shared<detail::TraceDescriptor>(),
-        nullptr
-    );
+    return std::make_shared<TraceBuffer>(std::make_shared<detail::TraceDescriptor>(), nullptr);
 }
 
 void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer) {
@@ -83,10 +87,13 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     auto trace_region_size = cq.device()->get_initialized_allocator()->config.trace_region_size;
     TT_FATAL(
         cq.device()->trace_buffers_size <= trace_region_size,
-        "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",  cq.device()->trace_buffers_size, cq.device()->id(),  trace_region_size);
+        "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",
+        cq.device()->trace_buffers_size,
+        cq.device()->id(),
+        trace_region_size);
     // Commit trace to device DRAM
-    trace_buffer->buffer = Buffer::create(
-                            cq.device(), padded_size, page_size, BufferType::TRACE, TensorMemoryLayout::INTERLEAVED);
+    trace_buffer->buffer =
+        Buffer::create(cq.device(), padded_size, page_size, BufferType::TRACE, TensorMemoryLayout::INTERLEAVED);
     EnqueueWriteBuffer(cq, trace_buffer->buffer, trace_data, kBlocking);
     log_trace(
         LogMetalTrace,

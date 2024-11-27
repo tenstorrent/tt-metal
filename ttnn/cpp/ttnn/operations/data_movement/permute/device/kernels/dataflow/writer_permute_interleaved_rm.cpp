@@ -5,25 +5,21 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-
 void kernel_main() {
-    constexpr bool dst_is_dram          = (bool) get_compile_time_arg_val(0);
-    constexpr uint32_t N                 = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size         = get_compile_time_arg_val(2);
-    constexpr uint32_t num_rows          = get_compile_time_arg_val(3);
+    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
+    constexpr uint32_t N = get_compile_time_arg_val(1);
+    constexpr uint32_t page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(3);
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
-    const InterleavedAddrGen<dst_is_dram> s0 = {
-        .bank_base_address = dst_addr,
-        .page_size = page_size
-    };
+    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = page_size};
 
     uint32_t input_shape[N], perm[N], dest_strides[N];
     for (uint32_t i = 1; i <= N; i++) {
         input_shape[i - 1] = get_arg_val<uint32_t>(i);
         perm[i - 1] = get_arg_val<uint32_t>(i + N);
-        dest_strides[i - 1] = get_arg_val<uint32_t>(i + 2*N);
+        dest_strides[i - 1] = get_arg_val<uint32_t>(i + 2 * N);
     }
 
     uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
@@ -32,22 +28,22 @@ void kernel_main() {
         // Compute multi-dimensional index for the source row
         uint32_t src_multi_idx[N];
         size_t remaining = row;
-        for(uint32_t i = 0; i < N - 1; ++i) {
+        for (uint32_t i = 0; i < N - 1; ++i) {
             size_t dim = N - 2 - i;  // Start from the second last dimension
             src_multi_idx[dim] = remaining % input_shape[dim];
             remaining /= input_shape[dim];
         }
-        src_multi_idx[N - 1] = 0; // Row dimension index
+        src_multi_idx[N - 1] = 0;  // Row dimension index
 
         // Apply permutation to get destination multi-dimensional index
         uint32_t dest_multi_idx[N];
-        for(uint32_t i = 0; i < N; ++i) {
+        for (uint32_t i = 0; i < N; ++i) {
             dest_multi_idx[i] = src_multi_idx[perm[i]];
         }
 
         // Convert destination multi-dimensional index to linear index
         uint32_t dest_linear_idx = 0;
-        for(uint32_t i = 0; i < N - 1; ++i) {
+        for (uint32_t i = 0; i < N - 1; ++i) {
             dest_linear_idx += dest_multi_idx[i] * dest_strides[i];
         }
         cb_wait_front(tt::CBIndex::c_0, 1);
@@ -57,5 +53,4 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(tt::CBIndex::c_0, 1);
     }
-
 }

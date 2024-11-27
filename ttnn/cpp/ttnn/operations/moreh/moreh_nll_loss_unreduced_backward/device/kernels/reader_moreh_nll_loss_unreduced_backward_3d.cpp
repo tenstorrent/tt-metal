@@ -85,11 +85,11 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w); // target(n, w)
+                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w);  // target(n, w)
                 int32_t target_val = target_l1_ptr[nw_tilized_idx];
 
                 uint32_t c = ct * TILE_HEIGHT + h;
-                uint32_t input_grad_idx = get_tilized_idx(h, w); // input_grad(c, w)
+                uint32_t input_grad_idx = get_tilized_idx(h, w);  // input_grad(c, w)
 
                 uint16_t input_grad_val;
 

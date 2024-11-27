@@ -153,6 +153,8 @@ from ttnn.types import (
 from ttnn.device import (
     Device,
     DispatchCoreType,
+    DispatchCoreAxis,
+    DispatchCoreConfig,
     open_device,
     close_device,
     enable_program_cache,
@@ -292,7 +294,7 @@ from ttnn.operations.ccl import (
     Topology,
 )
 
-from ttnn.operations.conv2d import Conv2dConfig, get_conv_padded_input_shape_and_mem_config, get_conv_output_dim
+from ttnn.operations.conv2d import Conv2dConfig, get_conv_output_dim
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig

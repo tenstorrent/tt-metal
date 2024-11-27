@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "ethernet/dataflow_api.h"
 
-
 namespace erisc {
 namespace datamover {
 
@@ -49,17 +48,17 @@ static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
  * See ChannelBuffer::eth_receiver_channel_ack for more information
  */
 FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_register_address) {
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[4] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[5] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[6] = 0x1c0ffee1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[7] = 0x1c0ffee2;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[4] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[5] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[6] = 0x1c0ffee1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[7] = 0x1c0ffee2;
 
     erisc_info->channels[0].receiver_ack = 0;
     for (uint32_t i = 1; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
         erisc_info->channels[i].bytes_sent = 0;
         erisc_info->channels[i].receiver_ack = 0;
     }
-    *(volatile tt_l1_ptr uint32_t *)handshake_register_address = 0;
+    *(volatile tt_l1_ptr uint32_t*)handshake_register_address = 0;
 }
 
 /*
@@ -90,9 +89,7 @@ FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) 
  * Return: true if slave EDM handshake core is able to complete the handshake with
  * an ack.
  */
-FORCE_INLINE bool receiver_side_can_finish() {
-    return eth_bytes_are_available_on_channel(0);
-}
+FORCE_INLINE bool receiver_side_can_finish() { return eth_bytes_are_available_on_channel(0); }
 
 /*
  * As the designated slave EDM core, send the acknowledgement to the master EDM core.
@@ -106,7 +103,7 @@ FORCE_INLINE void receiver_side_finish(std::uint32_t handshake_register_address)
     }
     eth_receiver_channel_done(0);
 }
-} // namespace handshake
+}  // namespace handshake
 
-} // namespace datamover
-} // namespace erisc
+}  // namespace datamover
+}  // namespace erisc

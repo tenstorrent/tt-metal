@@ -71,7 +71,7 @@ void kernel_main() {
             const auto gamma_grad_dtype_bytes = gamma_grad_tile_bytes / (TILE_H * TILE_W);
             cb_wait_front(cb_id_gamma_grad, onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
-                auto gamma_grad_ptr = reinterpret_cast<uint16_t *>(gamma_grad_l1_read_ptr);
+                auto gamma_grad_ptr = reinterpret_cast<uint16_t*>(gamma_grad_l1_read_ptr);
                 gamma_grad_ptr[tilized_gamma_beta_idx_in_tile] = gamma_grad_ptr[0];
             }
             const auto gamma_grad_noc_addr = gamma_grad_is_dram
@@ -90,7 +90,7 @@ void kernel_main() {
             const auto beta_grad_dtype_bytes = beta_grad_tile_bytes / (TILE_H * TILE_W);
             cb_wait_front(cb_id_beta_grad, onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
-                auto beta_grad_ptr = reinterpret_cast<uint16_t *>(beta_grad_l1_read_ptr);
+                auto beta_grad_ptr = reinterpret_cast<uint16_t*>(beta_grad_l1_read_ptr);
                 beta_grad_ptr[tilized_gamma_beta_idx_in_tile] = beta_grad_ptr[0];
             }
             const auto beta_grad_noc_addr = beta_grad_is_dram ? get_noc_addr(gamma_beta_tile_idx, dram_beta_grad_addrg)

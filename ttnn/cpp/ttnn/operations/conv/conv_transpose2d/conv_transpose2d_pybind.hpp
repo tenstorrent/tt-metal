@@ -7,5 +7,5 @@
 #include "pybind11/pybind_fwd.hpp"
 
 namespace ttnn::operations::conv::conv_transpose2d {
-    void py_bind_conv_transpose2d(pybind11::module& module);
+void py_bind_conv_transpose2d(pybind11::module& module);
 }

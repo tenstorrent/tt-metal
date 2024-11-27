@@ -22,7 +22,7 @@ namespace v1 {
  * @param runtime_args The runtime arguments to be set.
  */
 void SetRuntimeArgs(
-    ProgramHandle &program, KernelHandle kernel, const CoreRangeSet &core_spec, RuntimeArgs runtime_args);
+    ProgramHandle& program, KernelHandle kernel, const CoreRangeSet& core_spec, RuntimeArgs runtime_args);
 
 /**
  * @brief Sets common runtime arguments for a kernel, shared by all cores.
@@ -31,7 +31,7 @@ void SetRuntimeArgs(
  * @param kernel KernelHandle representing the kernel ID.
  * @param runtime_args The runtime arguments to be set.
  */
-void SetCommonRuntimeArgs(ProgramHandle &program, KernelHandle kernel, RuntimeArgs runtime_args);
+void SetCommonRuntimeArgs(ProgramHandle& program, KernelHandle kernel, RuntimeArgs runtime_args);
 
 /**
  * @brief Gets the runtime arguments for a kernel.
@@ -41,7 +41,7 @@ void SetCommonRuntimeArgs(ProgramHandle &program, KernelHandle kernel, RuntimeAr
  * @param logical_core The logical core coordinate.
  * @return Span of runtime arguments.
  */
-RuntimeArgs GetRuntimeArgs(ProgramHandle &program, KernelHandle kernel, CoreCoord logical_core);
+RuntimeArgs GetRuntimeArgs(ProgramHandle& program, KernelHandle kernel, CoreCoord logical_core);
 
 }  // namespace v1
 }  // namespace tt::tt_metal

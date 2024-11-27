@@ -12,6 +12,7 @@
 
 namespace ll_api {
 
-void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor &sdesc, tt_device &device_driver);
+void configure_static_tlbs(
+    tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt_device& device_driver);
 
 }  // namespace ll_api

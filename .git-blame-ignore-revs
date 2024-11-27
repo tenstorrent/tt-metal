@@ -1,2 +1,6 @@
 # CMake formatting
 0be480e4450b902174f8c1f03559a8fc6eebb827
+# clang-format-ttnn
+352e61a97c8d843ac4120aec196e6e062879e98c
+# clang-format-ttmetal
+effbfe00f94b5a46f51f923bee56d6d8044afd01

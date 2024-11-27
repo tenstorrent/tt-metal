@@ -158,4 +158,4 @@ void ExampleDeviceOperation::MultiCore::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::example
+}  // namespace ttnn::operations::examples

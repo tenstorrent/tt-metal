@@ -15,6 +15,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::core {
 
@@ -59,14 +60,12 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
 
 ttnn::Tensor to_device(const ttnn::Tensor& tensor, Device* device, const std::optional<MemoryConfig>& memory_config) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    if(mem_config.is_sharded ()  and (device->arch() == tt::ARCH::BLACKHOLE)) {
-        auto interleaved_tensor =  tensor.to(device, ttnn::DRAM_MEMORY_CONFIG);
+    if (mem_config.is_sharded() and (device->arch() == tt::ARCH::BLACKHOLE)) {
+        auto interleaved_tensor = tensor.to(device, ttnn::DRAM_MEMORY_CONFIG);
         return ttnn::interleaved_to_sharded(ttnn::DefaultQueueId, interleaved_tensor, mem_config, std::nullopt);
-    }
-    else {
+    } else {
         return tensor.to(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
     }
-
 }
 
 ttnn::Tensor to_device(
@@ -87,8 +86,8 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     Device* device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_device(
-        shape, data_type, layout, device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return tt::tt_metal::allocate_tensor_on_devices(
+        shape, data_type, layout, {device}, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
 ttnn::Tensor allocate_tensor_on_device(
@@ -97,27 +96,22 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_device(
-        shape, data_type, layout, mesh_device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return tt::tt_metal::allocate_tensor_on_devices(
+        shape, data_type, layout, mesh_device->get_devices(), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
 void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id) {
     tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor), cq_id);
 }
 
-
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, uint8_t cq_id) {
-
     // Currently no direct sharded read support in BLACKHOLE due to alignment issue
-    if(tensor.is_sharded ()  and (tensor.device()->arch() == tt::ARCH::BLACKHOLE)) {
+    if (tensor.is_sharded() and (tensor.device()->arch() == tt::ARCH::BLACKHOLE)) {
         auto interleaved_tensor = ttnn::sharded_to_interleaved(cq_id, tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
         return interleaved_tensor.cpu(blocking, cq_id);
-    }
-    else {
+    } else {
         return tensor.cpu(blocking, cq_id);
-
     }
-
 }
 
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }

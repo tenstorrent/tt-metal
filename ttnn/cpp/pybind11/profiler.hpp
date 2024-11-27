@@ -12,4 +12,4 @@ namespace ttnn::profiler {
 
 void py_module(py::module& module);
 
-} // namespace ttnn::profiler
+}  // namespace ttnn::profiler

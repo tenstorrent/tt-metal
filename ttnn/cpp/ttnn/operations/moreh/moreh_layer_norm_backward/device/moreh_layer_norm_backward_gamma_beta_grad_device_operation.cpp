@@ -38,15 +38,15 @@ MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     std::vector<std::optional<Tensor>> result;
     result.reserve(2);
-    if (tensor_args.gamma_grad.has_value())
+    if (tensor_args.gamma_grad.has_value()) {
         result.push_back(tensor_args.gamma_grad.value());
-    else {
+    } else {
         result.push_back(std::nullopt);
     }
 
-    if (tensor_args.beta_grad.has_value())
+    if (tensor_args.beta_grad.has_value()) {
         result.push_back(tensor_args.beta_grad.value());
-    else {
+    } else {
         result.push_back(std::nullopt);
     }
     return std::move(result);

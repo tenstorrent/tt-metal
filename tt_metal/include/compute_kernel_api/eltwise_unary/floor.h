@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_floor.h"
@@ -14,16 +13,12 @@
 #define MATH(x)
 #endif
 
-
-
 namespace ckernel {
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void floor_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_floor_init<APPROX>() ));
-}
+ALWI void floor_tile_init() { MATH((llk_math_eltwise_unary_sfpu_floor_init<APPROX>())); }
 
 /**
  * Performs floor operation on each row of a tile.
@@ -33,13 +28,12 @@ ALWI void floor_tile_init() {
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be
+ * less than the size of the DST register buffer | True     |
  */
-ALWI void floor_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_floor<APPROX>(idst) ));
-}
+ALWI void floor_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_floor<APPROX>(idst))); }
 
-
-} // namespace ckernel
+}  // namespace ckernel

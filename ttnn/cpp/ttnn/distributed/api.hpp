@@ -16,7 +16,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    tt::tt_metal::DispatchCoreType dispatch_core_type,
+    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
     MeshType mesh_type = MeshType::RowMajor,
     const std::pair<size_t, size_t>& offset = std::pair<size_t, size_t>(0, 0),
     const std::vector<int>& physical_device_ids = {});
@@ -39,7 +39,6 @@ tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::Device* device);
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
-
 // Returns true has MultiDeviceHost/MultiDevice Storage
 bool is_multi_device_tensor(const Tensor& tensor);
 
@@ -48,7 +47,9 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
 
 // Given a list of per-device shards, return a multi-device tensor
 Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, tt::tt_metal::StorageType storage_type, const tt::tt_metal::DistributedTensorConfig& strategy);
+    const std::vector<Tensor>& tensors,
+    tt::tt_metal::StorageType storage_type,
+    const tt::tt_metal::DistributedTensorConfig& strategy);
 
 }  // namespace ttnn::distributed::api
 

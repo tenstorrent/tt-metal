@@ -93,17 +93,17 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         core_group_1,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},        // input(==x)
-            {tt::CBIndex::c_1, in1_t},        // one
-            {tt::CBIndex::c_2, in2_t},        // decimal
-            {tt::CBIndex::c_3, in3_t},        // mask_h_w
-            {tt::CBIndex::c_16, out0_t},      // output(==y)
-            {tt::CBIndex::c_24, im0_t},  // |x|
-            {tt::CBIndex::c_25, im1_t},  // |x|^p
-            {tt::CBIndex::c_26, im2_t},  // Add[|x|^p * exp(log(|x|) * decimal)]
-            {tt::CBIndex::c_27, im3_t},  // log(|x|)
-            {tt::CBIndex::c_28, im4_t},  // exp(log(|x|) * decimal)
-            {tt::CBIndex::c_29, im5_t},  // |x|^p * exp(log(|x|) * decimal)
+            {tt::CBIndex::c_0, in0_t},    // input(==x)
+            {tt::CBIndex::c_1, in1_t},    // one
+            {tt::CBIndex::c_2, in2_t},    // decimal
+            {tt::CBIndex::c_3, in3_t},    // mask_h_w
+            {tt::CBIndex::c_16, out0_t},  // output(==y)
+            {tt::CBIndex::c_24, im0_t},   // |x|
+            {tt::CBIndex::c_25, im1_t},   // |x|^p
+            {tt::CBIndex::c_26, im2_t},   // Add[|x|^p * exp(log(|x|) * decimal)]
+            {tt::CBIndex::c_27, im3_t},   // log(|x|)
+            {tt::CBIndex::c_28, im4_t},   // exp(log(|x|) * decimal)
+            {tt::CBIndex::c_29, im5_t},   // |x|^p * exp(log(|x|) * decimal)
         });
 
     ////////////////////////////////////////////////////////////////////////////

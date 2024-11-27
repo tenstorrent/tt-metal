@@ -13,7 +13,8 @@ using namespace tt::tt_metal;
 namespace ttnn::events {
 
 MultiDeviceEvent::MultiDeviceEvent(MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "Must provide a valid mesh_device when initializing an event on multiple devices.");
+    TT_ASSERT(
+        mesh_device != nullptr, "Must provide a valid mesh_device when initializing an event on multiple devices.");
     auto devices = mesh_device->get_devices();
     this->events = std::vector<std::shared_ptr<Event>>(devices.size());
     for (int event_idx = 0; event_idx < devices.size(); event_idx++) {
@@ -30,21 +31,15 @@ std::shared_ptr<Event> create_event(Device* device) {
 
 void record_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
     Device* device = event->device;
-    device->push_work([device, event, cq_id] {
-        EnqueueRecordEvent(device->command_queue(cq_id), event);
-    });
+    device->push_work([device, event, cq_id] { EnqueueRecordEvent(device->command_queue(cq_id), event); });
 }
 
 void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
     Device* device = event->device;
-    device->push_work([device, event, cq_id] {
-        EnqueueWaitForEvent(device->command_queue(cq_id), event);
-    });
+    device->push_work([device, event, cq_id] { EnqueueWaitForEvent(device->command_queue(cq_id), event); });
 }
 
-MultiDeviceEvent create_event(MeshDevice* mesh_device) {
-    return MultiDeviceEvent(mesh_device);
-}
+MultiDeviceEvent create_event(MeshDevice* mesh_device) { return MultiDeviceEvent(mesh_device); }
 
 void record_event(uint8_t cq_id, const MultiDeviceEvent& multi_device_event) {
     for (auto& event : multi_device_event.events) {
@@ -58,5 +53,4 @@ void wait_for_event(uint8_t cq_id, const MultiDeviceEvent& multi_device_event) {
     }
 }
 
-
-}
+}  // namespace ttnn::events

@@ -17,9 +17,7 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
-void py_module_types(py::module& module) {
-    py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
-}
+void py_module_types(py::module& module) { py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice"); }
 
 void py_module(py::module& module) {
     py::enum_<MeshType>(module, "MeshType")
@@ -34,7 +32,7 @@ void py_module(py::module& module) {
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
-                        DispatchCoreType dispatch_core_type,
+                        const DispatchCoreConfig& dispatch_core_config,
                         const std::pair<size_t, size_t>& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
@@ -43,14 +41,14 @@ void py_module(py::module& module) {
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
-                    dispatch_core_type);
+                    dispatch_core_config);
             }),
             py::kw_only(),
             py::arg("mesh_shape"),
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
             py::arg("num_command_queues"),
-            py::arg("dispatch_core_type"),
+            py::arg("dispatch_core_config"),
             py::arg("offset"),
             py::arg("physical_device_ids"),
             py::arg("mesh_type"))
@@ -71,11 +69,18 @@ void py_module(py::module& module) {
             Returns:
                 List[Device]: The devices in the device mesh.
         )doc")
-        .def("create_submesh", &MeshDevice::create_submesh,
-            py::arg("submesh_shape"), py::arg("offset"), py::arg("mesh_type"),
+        .def(
+            "create_submesh",
+            &MeshDevice::create_submesh,
+            py::arg("submesh_shape"),
+            py::arg("offset"),
+            py::arg("mesh_type"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
-        .def("create_submeshes", &MeshDevice::create_submeshes,
-            py::arg("submesh_shape"), py::arg("mesh_type"),
+        .def(
+            "create_submeshes",
+            &MeshDevice::create_submeshes,
+            py::arg("submesh_shape"),
+            py::arg("mesh_type"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
             "compute_with_storage_grid_size",
@@ -142,10 +147,11 @@ void py_module(py::module& module) {
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-        py::arg("dispatch_core_type"),
+
         py::arg("offset"),
         py::arg("physical_device_ids"),
-        py::arg("mesh_type"));
+        py::arg("mesh_type"),
+        py::arg("dispatch_core_config"));
 
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
     module.def(

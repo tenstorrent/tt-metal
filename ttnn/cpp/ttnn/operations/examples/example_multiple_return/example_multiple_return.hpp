@@ -14,15 +14,17 @@ namespace ttnn::operations::examples {
 struct CompositeExampleMutipleReturnOperation {
     // The user will be able to call this method as `Tensor output = ttnn::composite_example(input_tensor)` after the op
     // is registered
-    static std::vector<std::optional<Tensor>> invoke(const Tensor& input_tensor, bool return_output1, bool return_output2);
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor& input_tensor, bool return_output1, bool return_output2);
 
     static OptionalTensors create_async_optional_output_tensors(
         const Tensor& input_tensor, bool return_output1, bool return_output2);
-
 };
 
 }  // namespace ttnn::operations::examples
 
 namespace ttnn {
-constexpr auto composite_example_multiple_return = ttnn::register_operation_with_auto_launch_op<"ttnn::composite_example_multiple_return",operations::examples::CompositeExampleMutipleReturnOperation>();
+constexpr auto composite_example_multiple_return = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::composite_example_multiple_return",
+    operations::examples::CompositeExampleMutipleReturnOperation>();
 }  // namespace ttnn
