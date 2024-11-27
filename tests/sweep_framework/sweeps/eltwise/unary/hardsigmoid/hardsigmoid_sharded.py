@@ -76,10 +76,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                         True,
                         "Innermost dimension must be divisible by the x coordinate of coregrid when using block sharding",
                     )
-                if (pre_sharded_height // y) // 32 <= 0:
-                    return True, "Shard height must be a atleast 32"
-                if (pre_sharded_width // x) // 32 <= 0:
-                    return True, "Shard width must be atleast 32"
+                if (pre_sharded_height // y) % 32 != 0:
+                    return True, "Shard height must be a multiple of input tile size"
+                if (pre_sharded_width // x) % 32 != 0:
+                    return True, "Shard width must be a multiple of input tile size"
             else:
                 if pre_sharded_height % x != 0:
                     return (
@@ -91,26 +91,26 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                         True,
                         "Innermost dimension must be divisible by the y coordinate of coregrid when using block sharding",
                     )
-                if (pre_sharded_height // x) // 32 <= 0:
-                    return True, "Shard height must be a atleast 32"
-                if (pre_sharded_width // y) // 32 <= 0:
-                    return True, "Shard width must be a atleast 32"
+                if (pre_sharded_height // x) % 32 != 0:
+                    return True, "Shard height must be a multiple of input tile size"
+                if (pre_sharded_width // y) % 32 != 0:
+                    return True, "Shard width must be a multiple of input tile size"
 
-        if sharding_strategy == ttnn.ShardStrategy.WIDTH:
-            if pre_sharded_width % (Y * X) != 0:
+        elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
+            if pre_sharded_width % (y * x) != 0:
                 return True, "Last dimension must be divisible by a total number of cores when using width sharding"
             if pre_sharded_height % 32 != 0:
                 return True, "Shard height must be a multiple of input tile size"
-            if (pre_sharded_width // (X * Y)) % 32 != 0:
+            if (pre_sharded_width // (x * y)) % 32 != 0:
                 return True, "Shard width must be a multiple of input tile size"
 
         else:
-            if pre_sharded_height % (Y * X) != 0:
+            if pre_sharded_height % (y * x) != 0:
                 return (
                     True,
                     "Prod of all dimensions except the innermost must be divisible by a total number of cores when using width sharding",
                 )
-            if (pre_sharded_height // (X * Y)) % 32 != 0:
+            if (pre_sharded_height // (x * y)) % 32 != 0:
                 return True, "Shard height must be a multiple of input tile size"
             if pre_sharded_width % 32 != 0:
                 return True, "Shard width must be a multiple of input tile size"
