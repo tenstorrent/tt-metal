@@ -11,9 +11,9 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "third_party/umd/device/device_api_metal.h"
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/device_api_metal.h"
+#include "umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_xy_pair.h"
 
 // clang-format off
 #include "noc/noc_parameters.h"

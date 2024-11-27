@@ -17,7 +17,7 @@
 #include <utility>
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
 #include "tt_stl/reflection.hpp"
 
