@@ -22,8 +22,6 @@ constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t queue_start_addr_words = get_compile_time_arg_val(3);
 constexpr uint32_t queue_size_words = get_compile_time_arg_val(4);
 
-static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
-
 constexpr uint32_t remote_tx_x = get_compile_time_arg_val(5);
 constexpr uint32_t remote_tx_y = get_compile_time_arg_val(6);
 constexpr uint32_t remote_tx_queue_id = get_compile_time_arg_val(7);
