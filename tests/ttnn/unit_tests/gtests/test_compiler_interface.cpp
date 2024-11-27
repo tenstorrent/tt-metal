@@ -16,7 +16,7 @@
 #include "gtest/gtest.h"
 #include "impl/event/event.hpp"
 #include "impl/program/program.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "third_party/json/json.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "ttnn/device.hpp"
@@ -46,7 +46,7 @@ namespace binary {
 namespace test {
 
 namespace detail {
-static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::TensorMemoryLayout &tensor_memory_layout) {
+static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorMemoryLayout& tensor_memory_layout) {
     switch (tensor_memory_layout) {
         case TensorMemoryLayout::INTERLEAVED: os << "I"; break;
         case TensorMemoryLayout::WIDTH_SHARDED: os << "WS"; break;
@@ -56,7 +56,7 @@ static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::TensorMemo
     }
     return os;
 }
-static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::BufferType &buffer_type) {
+static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::BufferType& buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM: os << "DRAM"; break;
         case BufferType::L1: os << "L1"; break;
@@ -65,12 +65,12 @@ static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::BufferType
     return os;
 }
 
-static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::TensorLayout &tensor_layout) {
+static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorLayout& tensor_layout) {
     os << tensor_layout.get_memory_config().buffer_type << "_" << tensor_layout.get_memory_config().memory_layout;
     return os;
 }
 
-static std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
+static std::ostream& operator<<(std::ostream& os, const ttnn::SimpleShape& shape) {
     for (size_t i = 0; i < shape.rank(); i++) {
         if (i != 0) {
             os << "x";
@@ -189,13 +189,13 @@ class EltwiseUnaryOpIfTest
       public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::compiler_interface::ResourceUsage>> {};
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
-    const auto &input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const auto &expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
+    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
 
     // Run the test
     {
-        tt::Device *device = &getDevice();
-        const auto &output_spec = input_spec;
+        tt::Device* device = &getDevice();
+        const auto& output_spec = input_spec;
         auto query = compiler_interface::unary_op_constraints<ttnn::relu>(device, input_spec, output_spec);
 
         EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
@@ -221,7 +221,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .cb_peak_size_per_core = (2 * 2 * 2 * 32 * 32),
                 .l1_buffers_peak_per_core = 10240,
                 .l1_output_buffer_per_core = 10240})),
-    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::compiler_interface::ResourceUsage>> &info) {
+    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::compiler_interface::ResourceUsage>>& info) {
         std::stringstream ss;
 
         // print unique id for each test case
@@ -247,14 +247,14 @@ class SoftmaxOpIfTest
       public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, int, ttnn::compiler_interface::ResourceUsage>> {};
 
 TEST_P(SoftmaxOpIfTest, Softmax) {
-    const auto &input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const auto &dim_arg = std::get<int>(GetParam());
-    const auto &expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
+    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& dim_arg = std::get<int>(GetParam());
+    const auto& expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
 
     // Run the test
     {
-        tt::Device *device = &getDevice();
-        const auto &output_spec = input_spec;
+        tt::Device* device = &getDevice();
+        const auto& output_spec = input_spec;
         auto query = compiler_interface::softmax_op_constraints(device, input_spec, dim_arg, output_spec);
 
         EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
@@ -282,7 +282,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .cb_peak_size_per_core = 7 * (2 * 2 * 32 * 32),
                 .l1_buffers_peak_per_core = 10240,
                 .l1_output_buffer_per_core = 10240})),
-    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, int, ttnn::compiler_interface::ResourceUsage>> &info) {
+    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, int, ttnn::compiler_interface::ResourceUsage>>& info) {
         std::stringstream ss;
 
         // print unique id for each test case
@@ -309,14 +309,14 @@ class EltwiseBinaryOpIfTest
           std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::compiler_interface::ResourceUsage>> {};
 
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
-    const auto &input_spec_a = std::get<0>(GetParam());
-    const auto &input_spec_b = std::get<1>(GetParam());
-    const auto &expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
+    const auto& input_spec_a = std::get<0>(GetParam());
+    const auto& input_spec_b = std::get<1>(GetParam());
+    const auto& expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
 
     // Run the test
     {
-        tt::Device *device = &getDevice();
-        const auto &output_spec = input_spec_a;
+        tt::Device* device = &getDevice();
+        const auto& output_spec = input_spec_a;
 
         auto query =
             compiler_interface::binary_op_constraints<ttnn::add>(device, input_spec_a, input_spec_b, input_spec_a);
@@ -361,7 +361,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .l1_buffers_peak_per_core = 20480,
                 .l1_output_buffer_per_core = 10240})),
     [](const testing::TestParamInfo<
-        std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::compiler_interface::ResourceUsage>> &info) {
+        std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::compiler_interface::ResourceUsage>>& info) {
         std::stringstream ss;
 
         // print unique id for each test case
@@ -401,30 +401,38 @@ class MatmulOpIfTest : public TTNNFixtureWithDevice,
                            ttnn::compiler_interface::ResourceUsage>> {};
 
 TEST_P(MatmulOpIfTest, Matmul) {
-    const auto &input_spec_a = std::get<0>(GetParam());
-    const auto &input_spec_b = std::get<1>(GetParam());
-    const auto &matmul_program_config =
+    const auto& input_spec_a = std::get<0>(GetParam());
+    const auto& input_spec_b = std::get<1>(GetParam());
+    const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
-    const auto &expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
+    const auto& expected_resource_usage = std::get<ttnn::compiler_interface::ResourceUsage>(GetParam());
 
     // Run the test
     {
-        tt::Device *device = &getDevice();
+        tt::Device* device = &getDevice();
 
         const auto output_spec = ttnn::TensorSpec(
             ttnn::SimpleShape(tt::tt_metal::Array4D{
-                input_spec_a.logical_shape()[0], input_spec_a.logical_shape()[1], input_spec_a.logical_shape()[-2], input_spec_b.logical_shape()[-1]}),
+                input_spec_a.logical_shape()[0],
+                input_spec_a.logical_shape()[1],
+                input_spec_a.logical_shape()[-2],
+                input_spec_b.logical_shape()[-1]}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
 
-        std::cout << input_spec_a.logical_shape() << "\n" << input_spec_b.logical_shape() << "\n" << output_spec.logical_shape() << std::endl;
+        tt::log_info(
+            "input_a_shape = {}, input_b_shape = {}, output_shape = {}",
+            input_spec_a.logical_shape(),
+            input_spec_b.logical_shape(),
+            output_spec.logical_shape());
 
         auto query = compiler_interface::matumul_op_constraints(
             device, input_spec_a, input_spec_b, output_spec, false, false, matmul_program_config);
 
-        std::cout << "error" << query.error_message.value_or("none");
+        tt::log_info("query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
+
         EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
