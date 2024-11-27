@@ -19,12 +19,12 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig& dispatch_core_config,
     MeshType mesh_type,
     const std::pair<size_t, size_t>& offset,
     const std::vector<int>& physical_device_ids) {
     auto config = MeshDeviceConfig(mesh_shape, offset, physical_device_ids, mesh_type);
-    return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_type);
+    return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close_devices(); }
