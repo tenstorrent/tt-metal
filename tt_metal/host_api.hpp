@@ -80,13 +80,13 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
  * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
-Device *CreateDevice(
+Device* CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER,
-    const std::vector<uint32_t> &l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {});
 
 // clang-format off
 /**
@@ -99,7 +99,7 @@ Device *CreateDevice(
  * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
-Device *CreateDeviceMinimal(
+Device* CreateDeviceMinimal(
     chip_id_t device_id, const uint8_t num_hw_cqs = 1, DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
 
 // clang-format off
@@ -113,7 +113,7 @@ Device *CreateDeviceMinimal(
  * | device   | Pointer to a device object | Device * |             | True     |
  */
 // clang-format on
-bool CloseDevice(Device *device);
+bool CloseDevice(Device* device);
 
 // ==================================================
 //                  HOST API: program & kernels
@@ -143,10 +143,10 @@ Program CreateProgram();
  */
 // clang-format on
 KernelHandle CreateKernel(
-    Program &program,
-    const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
 
 // clang-format off
 /**
@@ -163,10 +163,10 @@ KernelHandle CreateKernel(
  */
 // clang-format on
 KernelHandle CreateKernelFromString(
-    Program &program,
-    const std::string &kernel_src_code,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
 
 // clang-format off
 // ==================================================
@@ -190,9 +190,9 @@ KernelHandle CreateKernelFromString(
  */
 // clang-format on
 CBHandle CreateCircularBuffer(
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const CircularBufferConfig &config);
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config);
 
 // clang-format off
 /**
@@ -206,7 +206,7 @@ CBHandle CreateCircularBuffer(
  * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       |    Yes      |
 */
 // clang-format on
-const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle);
+const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle cb_handle);
 
 // clang-format off
 /**
@@ -221,7 +221,7 @@ const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle c
  * | total_size | New size of the circular buffer in bytes                       | uint32_t                     |             | Yes      |
 */
 // clang-format on
-void UpdateCircularBufferTotalSize(Program &program, CBHandle cb_handle, uint32_t total_size);
+void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size);
 
 // clang-format off
 /**
@@ -237,7 +237,7 @@ void UpdateCircularBufferTotalSize(Program &program, CBHandle cb_handle, uint32_
  * | page_size    | Updated page size in bytes                                                                                                 | uint32_t                     |                               | Yes      |
 */
 // clang-format on
-void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size);
+void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size);
 
 // clang-format off
 /**
@@ -252,7 +252,7 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
  * | buffer    | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  */
 // clang-format on
-void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 
 // clang-format off
 /**
@@ -269,8 +269,8 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
  */
 // clang-format on
 uint32_t CreateSemaphore(
-    Program &program,
-    const std::variant<CoreRange, CoreRangeSet> &core_spec,
+    Program& program,
+    const std::variant<CoreRange, CoreRangeSet>& core_spec,
     uint32_t initial_value,
     CoreType core_type = CoreType::WORKER);
 
@@ -290,7 +290,7 @@ uint32_t CreateSemaphore(
  */
 // clang-format on
 std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
 /**
@@ -308,7 +308,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  */
 // clang-format on
 std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
 /**
@@ -321,7 +321,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 *  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
 
 // clang-format off
 /**
@@ -335,7 +335,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 *  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address);
 
 // clang-format off
 /**
@@ -349,7 +349,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, Devi
 *  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, SubDeviceId sub_device_id);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id);
 
 // clang-format off
 /**
@@ -362,7 +362,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, SubD
 *  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
 
 // clang-format off
 /**
@@ -376,7 +376,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
 *  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address);
 
 // clang-format off
 /**
@@ -390,7 +390,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAd
 *  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, SubDeviceId sub_device_id);
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id);
 
 // clang-format off
 /**
@@ -403,7 +403,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, SubDevic
 *  | buffer   | The buffer to deallocate from device | Buffer & |             | Yes      |
 */
 // clang-format on
-void DeallocateBuffer(Buffer &buffer);
+void DeallocateBuffer(Buffer& buffer);
 
 // clang-format off
 /**
@@ -424,7 +424,7 @@ void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& progra
 //           COMPILE & EXECUTE KENRNELS
 // ==================================================
 // clang-format on
-using RuntimeArgs = std::vector<std::variant<Buffer *, uint32_t>>;
+using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
@@ -441,9 +441,9 @@ using RuntimeArgs = std::vector<std::variant<Buffer *, uint32_t>>;
  */
 // clang-format on
 void SetRuntimeArgs(
-    const Program &program,
+    const Program& program,
     KernelHandle kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     stl::Span<const uint32_t> runtime_args);
 
 // clang-format off
@@ -462,10 +462,10 @@ void SetRuntimeArgs(
  */
 // clang-format on
 void SetRuntimeArgs(
-    const Program &program,
+    const Program& program,
     KernelHandle kernel,
-    const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::vector<uint32_t>> &runtime_args);
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args);
 
 // clang-format off
 /**
@@ -483,9 +483,9 @@ void SetRuntimeArgs(
 */
 // clang-format on
 void SetRuntimeArgs(
-    Device *device,
+    Device* device,
     const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args);
 
 // clang-format off
@@ -503,9 +503,9 @@ void SetRuntimeArgs(
  */
 // clang-format on
 void SetRuntimeArgs(
-    Device *device,
+    Device* device,
     const std::shared_ptr<Kernel>& kernel,
-    const std::vector<CoreCoord> &core_spec,
+    const std::vector<CoreCoord>& core_spec,
     const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args);
 
 // clang-format off
@@ -522,7 +522,7 @@ void SetRuntimeArgs(
  * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -537,7 +537,7 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::S
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
 // clang-format on
-RuntimeArgsData &GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
+RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core);
 
 // clang-format off
 /**
@@ -551,7 +551,7 @@ RuntimeArgsData &GetRuntimeArgs(const Program &program, KernelHandle kernel_id, 
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
 // clang-format on
-std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const Program &program, KernelHandle kernel_id);
+std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id);
 
 // clang-format off
 /**
@@ -565,7 +565,7 @@ std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const Program &program
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
 // clang-format on
-RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
+RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id);
 
 // clang-format off
 /**
@@ -583,9 +583,9 @@ RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kerne
  */
 // clang-format on
 void EnqueueReadBuffer(
-    CommandQueue &cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    void *dst,
+    void* dst,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
@@ -604,21 +604,21 @@ void EnqueueReadBuffer(
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
  */
 // clang-format on
-template<typename DType>
+template <typename DType>
 void EnqueueReadBuffer(
-    CommandQueue &cq,
+    CommandQueue& cq,
     Buffer& buffer,
-    std::vector<DType> &dst,
+    std::vector<DType>& dst,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
     dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
     EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking, sub_device_ids);
 }
-template<typename DType>
+template <typename DType>
 void EnqueueReadBuffer(
-    CommandQueue &cq,
+    CommandQueue& cq,
     std::shared_ptr<Buffer> buffer,
-    std::vector<DType> &dst,
+    std::vector<DType>& dst,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
     EnqueueReadBuffer(cq, *buffer, dst, blocking, sub_device_ids);
@@ -640,11 +640,11 @@ void EnqueueReadBuffer(
 
  */
 // clang-format on
-template<typename DType>
+template <typename DType>
 void EnqueueWriteBuffer(
-    CommandQueue &cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::vector<DType> &src,
+    std::vector<DType>& src,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
     EnqueueWriteBuffer(cq, buffer, src.data(), blocking, sub_device_ids);
@@ -666,7 +666,7 @@ void EnqueueWriteBuffer(
  */
 // clang-format on
 void EnqueueWriteBuffer(
-    CommandQueue &cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking,
@@ -699,7 +699,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
 // clang-format on
-void Finish(CommandQueue &cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // clang-format off
 /**
@@ -715,7 +715,7 @@ void Finish(CommandQueue &cq, tt::stl::Span<const SubDeviceId> sub_device_ids = 
  * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
 */
 // clang-format on
-uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id);
+uint32_t BeginTraceCapture(Device* device, const uint8_t cq_id);
 
 // clang-format off
 /**
@@ -733,7 +733,7 @@ uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id);
  * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
  */
 // clang-format on
-void EndTraceCapture(Device *device, const uint8_t cq_id, const uint32_t tid);
+void EndTraceCapture(Device* device, const uint8_t cq_id, const uint32_t tid);
 
 // clang-format off
 /**
@@ -749,7 +749,7 @@ void EndTraceCapture(Device *device, const uint8_t cq_id, const uint32_t tid);
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
 // clang-format on
-void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const bool blocking);
+void ReplayTrace(Device* device, const uint8_t cq_id, const uint32_t tid, const bool blocking);
 
 // clang-format off
 /**
@@ -765,7 +765,7 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
  * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
  */
 // clang-format on
-void ReleaseTrace(Device *device, const uint32_t tid);
+void ReleaseTrace(Device* device, const uint32_t tid);
 
 // clang-format off
 /**
@@ -781,7 +781,7 @@ void ReleaseTrace(Device *device, const uint32_t tid);
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
 // clang-format on
-void EnqueueTrace(CommandQueue &cq, uint32_t trace_id, bool blocking);
+void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
 
 // clang-format off
 /**
@@ -797,7 +797,7 @@ void EnqueueTrace(CommandQueue &cq, uint32_t trace_id, bool blocking);
  * | program       | The program being profiled.                       | const Program & |                           | True     |
  * */
 // clang-format on
-void DumpDeviceProfileResults(Device *device, const Program &program);
+void DumpDeviceProfileResults(Device* device, const Program& program);
 
 // clang-format off
 /**
@@ -810,7 +810,8 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
 // clang-format on
-void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void EnqueueRecordEvent(
+    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // clang-format off
 /**
@@ -823,7 +824,7 @@ void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event, t
  * | event        | The event object that this CQ will wait on for completion.             | std::shared_ptr<Event>        |                                    | Yes      |
  */
 // clang-format on
-void EnqueueWaitForEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
+void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
@@ -834,7 +835,7 @@ void EnqueueWaitForEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
  * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
  */
 // clang-format on
-void EventSynchronize(const std::shared_ptr<Event> &event);
+void EventSynchronize(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
@@ -845,7 +846,7 @@ void EventSynchronize(const std::shared_ptr<Event> &event);
  * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
  */
 // clang-format on
-bool EventQuery(const std::shared_ptr<Event> &event);
+bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
@@ -862,7 +863,10 @@ bool EventQuery(const std::shared_ptr<Event> &event);
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
 // clang-format on
-void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Synchronize(
+    Device* device,
+    const std::optional<uint8_t> cq_id = std::nullopt,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace v0
 }  // namespace tt_metal
