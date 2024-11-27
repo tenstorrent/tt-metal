@@ -1011,3 +1011,78 @@ def test_transpose_forge_hc(device, b, h, w, dim0, dim1):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [1])
+@pytest.mark.parametrize("h", [256])
+@pytest.mark.parametrize("w", [32])
+def test_tranpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [1])
+@pytest.mark.parametrize("h", [224])
+@pytest.mark.parametrize("w", [32])
+def test_tranpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, h // 32 - 1)),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
