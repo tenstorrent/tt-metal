@@ -266,7 +266,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_w,               // in0_block_w
             (std::uint32_t)per_core_M,                // in0_block_h
             (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
-            (std::uint32_t)false,                     // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t) false,                    // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)0,                         // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)0,                         // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
