@@ -98,7 +98,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                 if (pre_sharded_width // y) // 32 <= 0:
                     return True, "Shard width must be a atleast 32"
 
-        if sharding_strategy == ttnn.ShardStrategy.WIDTH:
+        elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
             if pre_sharded_width % (y * x) != 0:
                 return True, "Last dimension must be divisible by a total number of cores when using width sharding"
             if pre_sharded_height // 32 <= 0:
@@ -106,7 +106,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             if (pre_sharded_width // (x * y)) // 32 <= 0:
                 return True, "Shard width must be a atleast 32"
 
-        if sharding_strategy == ttnn.ShardStrategy.HEIGHT:
+        else:
             if pre_sharded_height % (y * x) != 0:
                 return (
                     True,
