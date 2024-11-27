@@ -222,7 +222,7 @@ Ideally you should run your model in as close to end-user form as possible, whil
 
 ##### What does such a report look like?
 
-Here is an example with no op-to-op tracing. You can instantly see that more time (756us) is spent in between ops (op-to-op gap) than running ops on device (362us)!
+Here is an example without tracing enabled. You can instantly see that more time (756us) is spent in between ops (op-to-op gap) than running ops on device (362us)!
 
 Reducing op-to-op gap
 
