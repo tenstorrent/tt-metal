@@ -66,6 +66,15 @@ FF1 with gelu: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/
 LM head: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests/test_falcon_hang.py -k "test_reproduce_lm_head_nd_32 and 8chips"`
 
 
+## OP unit test
+
+In order to support basic OPs unit testing use case, `EltwiseOpTest` and `UnaryOpTest` classes are added in their respective .py files(test_eltwise.py and test_unary.py). Two example test cases `test_eltwise_add` and `test_unary_sqrt` are added to demonstrate how any ttnn supported eltwise/unary operation can be tested within this framework. Hera are examples of commands that can be used to run supported unit tests:
+
+Eltwise add: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_eltwise.py::test_eltwise_add -k "1chips"`
+
+Unary sqrt: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_unary.py::test_unary_sqrt -k "1chips"`
+
+Supported variations of tests: [Supported systems](#supported-systems), [Targeting specific device](#targetting-specific-device), [Targeting specific board](#targetting-specific-board), [Iterations](#iterations), [Determinism](#determinism). Blackhole support is TBD.
 
 
 # Adding another suspected repro test
