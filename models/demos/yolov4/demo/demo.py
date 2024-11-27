@@ -140,10 +140,10 @@ def yolo_forward_dynamic(
     by_bh /= output.size(2)
 
     # Shape: [batch, num_anchors * H * W, 1]
-    bx = bx_bw[:, :num_anchors].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    by = by_bh[:, :num_anchors].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    bw = bx_bw[:, num_anchors:].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    bh = by_bh[:, num_anchors:].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bx = bx_bw[:, :num_anchors].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    by = by_bh[:, :num_anchors].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bw = bx_bw[:, num_anchors:].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bh = by_bh[:, num_anchors:].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
 
     bx1 = bx - bw * 0.5
     by1 = by - bh * 0.5
@@ -202,7 +202,7 @@ class YoloLayer(nn.Module):
 
 
 def get_region_boxes(boxes_and_confs):
-    print("Getting boxes from boxes and confs ...")
+    # print("Getting boxes from boxes and confs ...")
     boxes_list = []
     confs_list = []
 
@@ -523,6 +523,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             print("-----------------------------------")
 
             boxes = post_processing(img, conf_thresh, nms_thresh, output)
+            print(boxes)
 
             class_names = load_class_names(class_name)
             img = cv2.imread(imgfile)
