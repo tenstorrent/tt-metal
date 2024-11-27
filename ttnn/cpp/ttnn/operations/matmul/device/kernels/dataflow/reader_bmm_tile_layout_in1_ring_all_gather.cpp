@@ -8,7 +8,6 @@
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
-
     // Compile time args
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(1);
