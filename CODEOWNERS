@@ -1,6 +1,10 @@
 # Order is important; the last matching pattern takes the most
 # precedence.
 
+.clang-format @tt-rkim @afuller-TT @blozano-tt @tt-aho
+
+.clang-tidy @tt-rkim @afuller-TT @blozano-tt @tt-aho
+
 .github/ @tt-rkim @ttmchiou @TT-billteng @blozano-tt @afuller-TT
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
