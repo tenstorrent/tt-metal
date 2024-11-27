@@ -21,7 +21,7 @@ struct BernoulliDeviceOperation {
         const std::optional<Tensor>& output;
     };
 
-    using shape_return_value_t = SimpleShape;
+    using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct ProgramFactory {
@@ -52,7 +52,7 @@ struct BernoulliDeviceOperation {
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(

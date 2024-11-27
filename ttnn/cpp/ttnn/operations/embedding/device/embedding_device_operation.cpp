@@ -45,26 +45,16 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<TensorSpec> Embeddings::compute_output_specs(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &weight_tensor = input_tensors.at(1);
-    auto num_output_embeddings = input_tensor.get_legacy_shape()[3];
-    auto batch_num = input_tensor.get_legacy_shape()[0];
-    auto num_embedding_dims = weight_tensor.get_legacy_shape()[3];
+    auto num_output_embeddings = input_tensor.logical_shape()[3];
+    auto batch_num = input_tensor.logical_shape()[0];
+    auto num_embedding_dims = weight_tensor.logical_shape()[3];
 
-    tt::tt_metal::LegacyShape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
-    return {output_shape};
-}
-
-std::vector<Tensor> Embeddings::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto &weight_tensor = input_tensors.at(1);
-    if (!tilized) {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, this->output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
-    }
+    ttnn::SimpleShape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
+    auto output_layout = tilized ? Layout::TILE : Layout::ROW_MAJOR;
+    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(output_layout), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks Embeddings::create_program(

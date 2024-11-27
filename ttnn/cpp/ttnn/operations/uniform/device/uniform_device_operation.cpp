@@ -32,9 +32,9 @@ void UniformDeviceOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-UniformDeviceOperation::shape_return_value_t UniformDeviceOperation::compute_output_shapes(
+TensorSpec UniformDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_logical_shape();
+    return tensor_args.input.get_tensor_spec();
 }
 
 UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_output_tensors(
