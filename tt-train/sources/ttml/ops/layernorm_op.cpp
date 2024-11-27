@@ -18,65 +18,65 @@
 
 namespace ttml::ops {
 
-// // simplified version of layernorm
-// // it works only for 4D tensors and for the last dimension
-// autograd::TensorPtr custom_layernorm(
-//     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
-//     auto tensor_shape = tensor->get_value().get_shape();
-//     auto mean = core::empty(
-//         core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
-//         &autograd::ctx().get_device(),
-//         tensor->get_value().memory_config());
-//     auto rstd = ttnn::empty_like(mean);
-//     auto output = ttnn::empty_like(tensor->get_value());
-
-//     auto out_tensors = ttnn::moreh_layer_norm(
-//         tensor->get_value(),
-//         1,
-//         1e-6F,
-//         /* gamma */ gamma->get_value(),
-//         /* beta */ beta->get_value(),
-//         output,
-//         mean,
-//         rstd,
-//         /* memory_config */ std::nullopt,
-//         /* compute_kernel_config */ std::nullopt);
-
-//     auto out = autograd::create_tensor();
-//     out->set_value(out_tensors[0].value());
-//     mean = out_tensors[1].value();
-//     rstd = out_tensors[2].value();
-
-//     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
-//         auto input_grad = ttnn::empty_like(tensor->get_value());
-//         auto gamma_grad = ttnn::empty_like(gamma->get_value());
-//         auto beta_grad = ttnn::empty_like(beta->get_value());
-
-//         auto res = ttnn::moreh_layer_norm_backward(
-//             out->get_grad(),
-//             tensor->get_value(),
-//             mean,
-//             rstd,
-//             1,
-//             gamma->get_value(),
-//             input_grad,
-//             gamma_grad,
-//             beta_grad,
-//             /* memory_config */ std::nullopt,
-//             /* compute_kernel_config */ std::nullopt);
-
-//         tensor->add_grad(res[0].value());
-//         gamma->add_grad(res[1].value());
-//         beta->add_grad(res[2].value());
-//     };
-
-//     auto links = autograd::get_links(tensor);
-//     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-
-//     return out;
-// }
-
+// simplified version of layernorm
+// it works only for 4D tensors and for the last dimension
 autograd::TensorPtr layernorm(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    auto tensor_shape = tensor->get_value().get_shape();
+    auto mean = core::empty(
+        core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
+        &autograd::ctx().get_device(),
+        tensor->get_value().memory_config());
+    auto rstd = ttnn::empty_like(mean);
+    auto output = ttnn::empty_like(tensor->get_value());
+
+    auto out_tensors = ttnn::moreh_layer_norm(
+        tensor->get_value(),
+        1,
+        1e-6F,
+        /* gamma */ gamma->get_value(),
+        /* beta */ beta->get_value(),
+        output,
+        mean,
+        rstd,
+        /* memory_config */ std::nullopt,
+        /* compute_kernel_config */ std::nullopt);
+
+    auto out = autograd::create_tensor();
+    out->set_value(out_tensors[0].value());
+    mean = out_tensors[1].value();
+    rstd = out_tensors[2].value();
+
+    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+        auto input_grad = ttnn::empty_like(tensor->get_value());
+        auto gamma_grad = ttnn::empty_like(gamma->get_value());
+        auto beta_grad = ttnn::empty_like(beta->get_value());
+
+        auto res = ttnn::moreh_layer_norm_backward(
+            out->get_grad(),
+            tensor->get_value(),
+            mean,
+            rstd,
+            1,
+            gamma->get_value(),
+            input_grad,
+            gamma_grad,
+            beta_grad,
+            /* memory_config */ std::nullopt,
+            /* compute_kernel_config */ std::nullopt);
+
+        tensor->add_grad(res[0].value());
+        gamma->add_grad(res[1].value());
+        beta->add_grad(res[2].value());
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
+autograd::TensorPtr composite_layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
     auto tensor_shape = tensor->get_value().get_shape();
 
@@ -110,8 +110,12 @@ autograd::TensorPtr layernorm(
     auto output = ttnn::add(ttnn::multiply(normalized_tensor, gamma->get_value()), beta->get_value());
     auto out = autograd::create_tensor(output);
 
-    autograd::GradFunction grad = [tensor, out, normalized_tensor, gamma, beta, rstd]() {
+    autograd::GradFunction grad = [tensor, out, gamma, beta, mean, rstd]() {
         auto dout = out->get_grad();
+
+        // recalculate normalized tensor to save memory and avoid storing it
+        auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
+
         auto dbeta = ttnn::moreh_sum(
             dout,
             /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
@@ -130,13 +134,12 @@ autograd::TensorPtr layernorm(
 
         auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
 
-        // dtensor = dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True)
+        // dtensor = (dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True)) * rstd
 
         // dnorm.mean(-1, keepdim=True)
         auto dnorm_shape = dtensor_normalized.get_shape();
         auto shape = core::create_shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
         auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
-
         ttnn::moreh_mean(
             dtensor_normalized,
             /* dim */ 3,
