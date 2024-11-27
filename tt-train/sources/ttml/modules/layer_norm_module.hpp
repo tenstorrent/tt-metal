@@ -14,12 +14,13 @@ namespace ttml::modules {
 
 class LayerNormLayer : public autograd::ModuleBase {
 private:
+    bool m_use_composite_op = false;
     autograd::TensorPtr m_gamma;
     autograd::TensorPtr m_beta;
 
 public:
     void initialize_tensors(uint32_t features);
-    explicit LayerNormLayer(uint32_t features);
+    explicit LayerNormLayer(uint32_t features, bool use_composite_op = false);
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
 };

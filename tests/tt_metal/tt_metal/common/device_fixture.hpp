@@ -44,8 +44,8 @@ class DeviceFixture : public DispatchFixture {
     }
 
     void create_devices(const std::vector<chip_id_t>& device_ids) {
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        tt::DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        const auto &dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        tt::DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         this->num_devices_ = this->devices_.size();
     }

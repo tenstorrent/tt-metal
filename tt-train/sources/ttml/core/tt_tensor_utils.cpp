@@ -166,11 +166,10 @@ tt::tt_metal::Tensor full(
                 (padded[2] + additional_padding_h),
                 (padded[3] + additional_padding_w),
             });
-        // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
+        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device));
     }
     // if not padding available, we can just create a tensor with the given shape
-    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
+    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device));
 }
 
 tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
