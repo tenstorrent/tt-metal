@@ -84,3 +84,7 @@ pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
 # Run 2 continuous batches with general weights
 pytest models/demos/llama3/demo/demo.py -k 'general and 2_batch'
 ```
+
+### Expected performance and accuracy
+
+See [PERF.md](PERF.md) for expected performance and accuracy.
