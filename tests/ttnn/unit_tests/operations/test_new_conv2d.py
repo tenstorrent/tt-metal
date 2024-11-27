@@ -153,7 +153,7 @@ def run_conv(
     if config_override and "act_block_h" in config_override and not auto_shard:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
-    if config_override and "act_block_w_div" in config_override:
+    if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
     if config_override and "num_cores_nhw" in config_override:
@@ -635,7 +635,7 @@ def test_conv_ws(
         enable_split_reader=False,
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
-        act_block_w_div=act_block_w_div,
+        act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
     )
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
