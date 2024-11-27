@@ -17,11 +17,13 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sharding_utilities.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 using namespace tt::constants;
 namespace optimized_conv_op_utils {
 using namespace tt;
@@ -220,6 +222,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     tt::tt_metal::Device* device = input_tensor_a.device();
     auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
     tt::log_info(tt::LogOp, "Allocation Stats with Input/Tensors: {}", stats);
+    bool fp32_accum = get_fp32_dest_acc_en(compute_kernel_config);
+
     auto program_with_cbs =  multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a, input_tensor_b, input_tensor_bias,
         sliding_window_config,
@@ -239,12 +243,86 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         enable_subblock_padding,
         use_non_tile_height);
 
-    program_with_cbs.program.set_pre_exec_callback([device](Program *program) {
+    program_with_cbs.program.set_pre_exec_callback([this,input_tensor_a,input_tensor_b,output_tensor,input_tensor_bias,device,fp32_accum](Program *program) {
         auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
-        auto cb_l1_size = program->get_max_cb_memory_usage(device);
-        tt::log_info(tt::LogOp, "Allocation Stats after CB Allocation: CB Size = {} L1 Allocation =  {}", cb_l1_size, stats);
+        auto actual_cb_size = program->get_max_cb_memory_usage(device);
+        tt::log_info(tt::LogOp, "Allocation Stats after CB Allocation: CB Size = {} L1 Allocation =  {}", actual_cb_size, stats);
+        DataType accum_dtype = fp32_accum ? DataType::FLOAT32 : DataType::BFLOAT16;
+
+        auto [calc_output_size, calc_CB_size] = this->estimate_L1_usage(input_tensor_a.dtype(), input_tensor_b.dtype(), output_tensor.dtype(), accum_dtype, input_tensor_bias.has_value());
+        if(calc_CB_size>0) {
+            if(calc_CB_size != actual_cb_size)
+            tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
+        }
     });
     return program_with_cbs;
+}
+
+std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(DataType input_dtype, DataType weights_dtype, DataType output_dtype, DataType accum_dtype, bool enable_bias) const {
+    if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
+    {
+        uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
+        uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
+        uint32_t bias_tile_size = 0;
+        if(enable_bias) {
+            bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
+        }
+        uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
+        uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(accum_dtype));
+
+        auto output_shape = sliding_window_config.get_output_shape();
+        uint32_t batch_size = output_shape[0];
+        uint32_t conv_output_h = output_shape[1];
+        uint32_t conv_output_w = output_shape[2];
+        uint32_t conv_output_c_per_core = this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH;
+
+        uint32_t output_size_per_core_in_bytes = this->parallelization_config.per_core_out_matrix_width_ntiles * this->parallelization_config.per_core_out_matrix_height_ntiles * tt::tile_size(datatype_to_dataformat_converter(this->dtype));
+
+        uint32_t act_block_w_ntiles = this->block_config.act_block_w_ntiles;
+        uint32_t act_block_num_tiles = this->block_config.act_block_h_ntiles * act_block_w_ntiles;
+        uint32_t act_block_num_bytes = act_block_num_tiles * input_tile_size;
+        uint32_t tilized_act_block_num_bytes = act_block_num_tiles * output_tile_size;
+
+
+        uint32_t weight_block_w_ntiles = this->parallelization_config.per_core_out_matrix_width_ntiles;
+        uint32_t weight_block_num_tiles = weight_block_w_ntiles * act_block_w_ntiles; //act_block_w_ntiles == weight_block_h_ntiles
+        uint32_t weight_block_num_bytes = weight_block_num_tiles * weights_tile_size;
+
+        uint32_t bias_block_num_bytes = this->parallelization_config.per_core_out_matrix_width_ntiles * bias_tile_size;
+
+        uint32_t out_block_num_tiles = this->parallelization_config.per_core_out_matrix_height_ntiles * this->parallelization_config.per_core_out_matrix_width_ntiles;
+        uint32_t partials_block_num_bytes = out_block_num_tiles * partial_tile_size;
+
+
+        //CB 0
+        uint32_t cb0_size = tilized_act_block_num_bytes; tt::log_debug(tt::LogOp, "CB0 Size: {}", cb0_size);
+
+        //CB 1
+        uint32_t cb1_size = weight_block_num_bytes; tt::log_debug(tt::LogOp, "CB1 Size: {}", cb1_size);
+
+        //CB 2
+        uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
+
+        //CB 5
+        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
+
+        //CB 6
+        uint32_t cb6_size = act_block_num_bytes; tt::log_debug(tt::LogOp, "CB6 Size: {}", cb6_size);
+
+        //CB 24
+        uint32_t cb24_size = partials_block_num_bytes; tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
+
+        //CB 25
+        uint32_t cb25_size = tilized_act_block_num_bytes; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
+
+        uint32_t total_CB_size = cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size;
+
+        tt::log_debug(tt::LogOp, "Total CB Size: {}", total_CB_size);
+
+        return {output_size_per_core_in_bytes, total_CB_size};
+    }
+    return {0, 0};
+
 }
 
 operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
