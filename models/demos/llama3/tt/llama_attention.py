@@ -431,20 +431,44 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
 
+        ttnn.deallocate(k_heads_1KSD)
+
+        # sharding k_fill to deal with update_cache memory limitation
+        if (
+            seq_len >= self.min_kv_prefill_shard_seqlen and not page_table
+        ):  # ttnn.experimental.aged_fill_cache only supports interleaved inputs
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            k_fill = k_heads_1KSD_8b
+
+        # sharding v_fill to deal with update_cache memory limitation
+        if (
+            seq_len >= self.min_kv_prefill_shard_seqlen and not page_table
+        ):  # ttnn.experimental.aged_fill_cache only supports interleaved inputs
+            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            v_fill = v_heads_1VSD_8b
+
+        ttnn.deallocate(v_heads_1VSD)
+
         if page_table:
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_heads_1KSD_8b, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_heads_1VSD_8b, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx=user_id)
         else:
             ttnn.fill_cache(
                 keys_BKSD,
-                k_heads_1KSD_8b,
+                k_fill,
                 user_id,
             )
             ttnn.fill_cache(
                 values_BKSD,
-                v_heads_1VSD_8b,
+                v_fill,
                 user_id,
             )
+
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
 
         self.layer_past = [keys_BKSD, values_BKSD]
 

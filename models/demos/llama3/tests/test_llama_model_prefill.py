@@ -39,15 +39,16 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
+# Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 @pytest.mark.parametrize(
     "paged_attention",
     (
         True,
-        # False,
+        False,
     ),
     ids=(
         "paged_attention",
-        # "default_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
