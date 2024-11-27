@@ -4,6 +4,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <ostream>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <future>
 #include <iostream>
@@ -12,7 +15,9 @@
 #include <chrono>
 #include <set>
 #include <filesystem>
+#include <tuple>
 #include "llrt/llrt.hpp"
+#include "tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
 
 #include "dprint_server.hpp"
@@ -27,7 +32,9 @@ using std::cout;
 using std::endl;
 using std::flush;
 using std::int32_t;
+using std::ofstream;
 using std::ostream;
+using std::ostringstream;
 using std::set;
 using std::setw;
 using std::string;
@@ -88,6 +95,8 @@ public:
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
 
+using HartKey = std::tuple<chip_id_t, uint32_t, uint32_t, uint32_t>;
+
 struct DebugPrintServerContext {
     // only one instance is allowed at the moment
     static DebugPrintServerContext* inst;
@@ -141,14 +150,16 @@ private:
     // A counter to keep track of how many iterations the print server has gone through without
     std::atomic<int> wait_loop_iterations_ = 0;
 
-    std::ofstream* outfile_ = nullptr;  // non-cout
-    std::ostream* stream_ = nullptr;    // either == outfile_ or is &cout
+    ofstream* outfile_ = nullptr;  // non-cout
+    ostream* stream_ = nullptr;    // either == outfile_ or is &cout
+
+    std::map<HartKey, ostringstream*> risc_to_string_stream_;
 
     // For printing each riscs dprint to a separate file, a map from {device id, core coord x, y, hard index} to files.
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, std::ofstream*> risc_to_stream_;
+    std::map<HartKey, ofstream*> risc_to_file_stream_;
 
     // A map to from {device id, core coord x, y, hart index} to the signal code it's waiting for.
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
+    std::map<HartKey, uint32_t> hart_waiting_on_signal_;
     // Keep a separate set of raised signal codes so that multiple harts can wait for the same
     // signal.
     std::set<uint32_t> raised_signals_;
@@ -173,11 +184,18 @@ private:
     bool PeekOneHartNonBlocking(
         Device* device, const CoreDescriptor& logical_core, int hart_index, bool new_data_this_iter);
 
+    void TransferToAndFlushOutputStream(
+        const HartKey& hart_key, ostringstream* string_stream, const CoreDescriptor& logical_core);
+
+    ostream* GetOutputStream(const HartKey& hart_key, const CoreDescriptor& logical_core);
+
+    void ResetStream(const HartKey& hart_key, ostringstream* stream);
+
     // Stores the last value of setw, so that array elements can reuse the width.
     char most_recent_setw = 0;
 };
 
-static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
+static void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
     TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
@@ -193,24 +211,22 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
         case DPrintErrorBadPointer: {
             uint32_t ptr = ts->cb_ptr;
             uint8_t count = ts->data_count;
-            stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count)
-                   << std::flush;
+            *stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count);
             return;
         }
         case DPrintErrorUnsupportedFormat: {
             tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
-            stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
+            *stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
             return;
         }
         case DPrintErrorMath:
-            stream << "Warning: MATH core does not support TileSlice printing, omitting print..." << endl << std::flush;
+            *stream << "Warning: MATH core does not support TileSlice printing, omitting print...\n";
             return;
         case DPrintErrorEthernet:
-            stream << "Warning: Ethernet core does not support TileSlice printing, omitting print..." << endl
-                   << std::flush;
+            *stream << "Warning: Ethernet core does not support TileSlice printing, omitting print...\n";
             return;
         default:
-            stream << fmt::format(
+            *stream << fmt::format(
                 "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n", ts->return_code);
             return;
     }
@@ -231,12 +247,12 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
             switch (data_format) {
                 case tt::DataFormat::Float16_b: {
                     uint16_t* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
-                    stream << bfloat16_to_float(float16_b_ptr[i]);
+                    *stream << bfloat16_to_float(float16_b_ptr[i]);
                     break;
                 }
                 case tt::DataFormat::Float32: {
                     float* float32_ptr = reinterpret_cast<float*>(data);
-                    stream << float32_ptr[i];
+                    *stream << float32_ptr[i];
                     break;
                 }
                 case tt::DataFormat::Bfp4_b:
@@ -246,15 +262,13 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
                     uint8_t val = (data_ptr[i] >> 8) & 0xFF;
                     uint8_t exponent = data_ptr[i] & 0xFF;
                     uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
-                    stream << *reinterpret_cast<float*>(&bit_val);
-                    // stream << *reinterpret_cast<float *>(&bit_val) << fmt::format(" (exp={:x}, val={:x}) ", exponent,
-                    // val);
+                    *stream << *reinterpret_cast<float*>(&bit_val);
                     break;
                 }
                 default: break;
             }
             if (w + ts->slice_range.ws < ts->slice_range.w1) {
-                stream << " ";
+                *stream << " ";
             }
             i++;
         }
@@ -262,13 +276,12 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
         // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
         // know that the slice has been truncated.
         if (count_exceeded) {
-            stream << "<TileSlice data truncated due to exceeding max count (" << to_string(ts->data_count) << ")>"
-                   << endl;
+            *stream << "<TileSlice data truncated due to exceeding max count (" << to_string(ts->data_count) << ")>\n";
             break;
         }
 
         if (ts->endl_rows) {
-            stream << endl;
+            *stream << "\n";
         }
     }
 }  // PrintTileSlice
@@ -292,37 +305,37 @@ static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint3
 }
 
 // Prints a given datum in the array, given the data_format
-static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t datum, uint16_t data_format) {
+static void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum, uint16_t data_format) {
     switch (data_format) {
         case static_cast<std::uint8_t>(tt::DataFormat::Float16):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp4):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp2):
         case static_cast<std::uint8_t>(tt::DataFormat::Lf8):
-            stream << setw(setwidth) << make_float(5, 10, datum & 0xffff) << " ";
-            stream << setw(setwidth) << make_float(5, 10, (datum >> 16) & 0xffff) << " ";
+            *stream << setw(setwidth) << make_float(5, 10, datum & 0xffff) << " ";
+            *stream << setw(setwidth) << make_float(5, 10, (datum >> 16) & 0xffff) << " ";
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp8_b):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp4_b):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp2_b):
         case static_cast<std::uint8_t>(tt::DataFormat::Float16_b):
-            stream << setw(setwidth) << make_float(8, 7, datum & 0xffff) << " ";
-            stream << setw(setwidth) << make_float(8, 7, (datum >> 16) & 0xffff) << " ";
+            *stream << setw(setwidth) << make_float(8, 7, datum & 0xffff) << " ";
+            *stream << setw(setwidth) << make_float(8, 7, (datum >> 16) & 0xffff) << " ";
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Tf32):
-            stream << setw(setwidth) << make_float(8, 10, datum) << " ";
+            *stream << setw(setwidth) << make_float(8, 10, datum) << " ";
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Float32): {
             float value;
             memcpy(&value, &datum, sizeof(float));
-            stream << setw(setwidth) << value << " ";
+            *stream << setw(setwidth) << value << " ";
         } break;
-        case static_cast<std::uint8_t>(tt::DataFormat::UInt32): stream << setw(setwidth) << datum << " "; break;
+        case static_cast<std::uint8_t>(tt::DataFormat::UInt32): *stream << setw(setwidth) << datum << " "; break;
         case static_cast<std::uint8_t>(tt::DataFormat::UInt16):
-            stream << setw(setwidth) << (datum & 0xffff) << " ";
-            stream << setw(setwidth) << (datum >> 16) << " ";
+            *stream << setw(setwidth) << (datum & 0xffff) << " ";
+            *stream << setw(setwidth) << (datum >> 16) << " ";
             break;
-        default: stream << "Unknown data format " << data_format << " "; break;
+        default: *stream << "Unknown data format " << data_format << " "; break;
     }
 }
 
@@ -330,7 +343,7 @@ static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t datu
 // If force_element_type is set to a valid type, it is assumed that the type is not included in the
 // data array, and the type is forced to be the given type.
 static void PrintTypedUint32Array(
-    ostream& stream,
+    ostringstream* stream,
     int setwidth,
     uint32_t raw_element_count,
     uint32_t* data,
@@ -340,14 +353,13 @@ static void PrintTypedUint32Array(
 
     raw_element_count = (force_array_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
 
-    // stream << setwidth << "  ARRAY[len=" << std::dec << raw_element_count - 1 << ", type=" << array_type << "] = ";
     for (uint32_t i = 0; i < raw_element_count - 1; i++) {
         switch (array_type) {
-            case TypedU32_ARRAY_Format_Raw: stream << std::hex << "0x" << data[i] << " "; break;
+            case TypedU32_ARRAY_Format_Raw: *stream << std::hex << "0x" << data[i] << " "; break;
             case TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type:
                 PrintTensixRegisterData(stream, setwidth, data[i], array_subtype);
                 break;
-            default: stream << "Unknown type " << array_type; break;
+            default: *stream << "Unknown type " << array_type; break;
         }
     }
 }
@@ -415,7 +427,7 @@ DebugPrintServerContext::DebugPrintServerContext() {
     std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     if (file_name != "" && !one_file_per_risc) {
-        outfile_ = new std::ofstream(file_name);
+        outfile_ = new ofstream(file_name);
     }
     stream_ = outfile_ ? outfile_ : &cout;
 
@@ -444,9 +456,12 @@ DebugPrintServerContext::~DebugPrintServerContext() {
         outfile_->close();
         delete outfile_;
     }
-    for (auto& key_and_stream : risc_to_stream_) {
+    for (auto& key_and_stream : risc_to_file_stream_) {
         key_and_stream.second->close();
         delete key_and_stream.second;
+    }
+    for (auto& [key, string_stream] : risc_to_string_stream_) {
+        delete string_stream;
     }
     inst = nullptr;
 }  // ~DebugPrintServerContext
@@ -681,7 +696,7 @@ void DebugPrintServerContext::ClearLogFile() {
         delete outfile_;
 
         string file_name = tt::llrt::OptionsG.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
-        outfile_ = new std::ofstream(file_name);
+        outfile_ = new ofstream(file_name);
         stream_ = outfile_ ? outfile_ : &cout;
     }
 }  // ClearLogFile
@@ -717,28 +732,11 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     uint32_t sigval = 0;
     char val = 0;
 
-    // Choose which stream to output the dprint data to. Can be auto-generated files, the user-selected file, stdout, or
-    // nothing.
-    ostream* stream_ptr = stream_;
-    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key{chip_id, phys_core.x, phys_core.y, hart_id};
-    if (tt::llrt::OptionsG.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
-        if (!risc_to_stream_[hart_key]) {
-            std::string filename = tt::llrt::OptionsG.get_root_dir() + logfile_path;
-            filename += fmt::format(
-                "device-{}_{}-core-{}-{}_{}.txt",
-                chip_id,
-                tt::llrt::get_core_type_name(logical_core.type),
-                logical_core.coord.x,
-                logical_core.coord.y,
-                GetRiscName(logical_core.type, hart_id));
-            risc_to_stream_[hart_key] = new std::ofstream(filename);
-        }
-        stream_ptr = risc_to_stream_[hart_key];
+    HartKey hart_key{chip_id, phys_core.x, phys_core.y, hart_id};
+    if (!risc_to_string_stream_[hart_key]) {
+        risc_to_string_stream_[hart_key] = new ostringstream;
     }
-    if (mute_print_server_) {
-        stream_ptr = &null_stream;
-    }
-    ostream& stream = *stream_ptr;
+    ostringstream* string_stream = risc_to_string_stream_[hart_key];
 
     // Check whether this hart is currently waiting on a WAIT to be fulfilled.
     raise_wait_lock_.lock();
@@ -764,9 +762,11 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     tt::llrt::get_core_type_name(logical_core.type),
                     logical_core.coord,
                     hart_id);
-                string error_str = fmt::format(
-                    "DPRINT server timed out on {}, waiting on a RAISE signal: {}\n", core_str, wait_signal);
-                stream << error_str << flush;
+                string error_str =
+                    fmt::format("DPRINT server timed out on {}, waiting on a RAISE signal: {}", core_str, wait_signal);
+                *string_stream << error_str << endl;
+                TransferToAndFlushOutputStream(hart_key, string_stream, logical_core);
+                string_stream = risc_to_string_stream_[hart_key];
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
                 raise_wait_lock_.unlock();
                 TT_THROW("{}", error_str);
@@ -813,118 +813,126 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     cptr = reinterpret_cast<const char*>(ptr);
                     nlen = strnlen(cptr, sizeof(DebugPrintMemLayout::data));
                     if (nlen >= 200) {
-                        stream << "STRING BUFFER OVERFLOW DETECTED" << endl;
+                        *string_stream << "STRING BUFFER OVERFLOW DETECTED" << endl;
+                        TransferToAndFlushOutputStream(hart_key, string_stream, logical_core);
+                        string_stream = risc_to_string_stream_[hart_key];
                     } else {
-                        stream << cptr;
+                        *string_stream << cptr;
                     }
                     AssertSize(sz, strlen(cptr) + 1);
                     break;
-                case DPrintTILESLICE: PrintTileSlice(stream, ptr, hart_id); break;
+                case DPrintTILESLICE: PrintTileSlice(string_stream, ptr); break;
 
                 case DPrintENDL:
-                    stream << endl;
+                    *string_stream << endl;
+                    TransferToAndFlushOutputStream(hart_key, string_stream, logical_core);
+                    string_stream = risc_to_string_stream_[hart_key];
                     AssertSize(sz, 1);
                     break;
                 case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
-                    stream << setw(val);
+                    *string_stream << setw(val);
                     most_recent_setw = val;
                     AssertSize(sz, 1);
                     break;
                 case DPrintSETPRECISION:
-                    stream << std::setprecision(*ptr);
+                    *string_stream << std::setprecision(*ptr);
                     AssertSize(sz, 1);
                     break;
                 case DPrintFIXED:
-                    stream << std::fixed;
+                    *string_stream << std::fixed;
                     AssertSize(sz, 1);
                     break;
                 case DPrintDEFAULTFLOAT:
-                    stream << std::defaultfloat;
+                    *string_stream << std::defaultfloat;
                     AssertSize(sz, 1);
                     break;
                 case DPrintHEX:
-                    stream << std::hex;
+                    *string_stream << std::hex;
                     AssertSize(sz, 1);
                     break;
                 case DPrintOCT:
-                    stream << std::oct;
+                    *string_stream << std::oct;
                     AssertSize(sz, 1);
                     break;
                 case DPrintDEC:
-                    stream << std::dec;
+                    *string_stream << std::dec;
                     AssertSize(sz, 1);
                     break;
                 case DPrintUINT8:
                     // iostream default uint8_t printing is as char, not an int
-                    stream << *reinterpret_cast<uint8_t*>(ptr);
+                    *string_stream << *reinterpret_cast<uint8_t*>(ptr);
                     AssertSize(sz, 1);
                     break;
                 case DPrintUINT16: {
                     uint16_t value;
                     memcpy(&value, ptr, sizeof(uint16_t));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 2);
                 } break;
                 case DPrintUINT32: {
                     uint32_t value;
                     memcpy(&value, ptr, sizeof(uint32_t));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 4);
                 } break;
                 case DPrintUINT64: {
                     uint64_t value;
                     memcpy(&value, ptr, sizeof(uint64_t));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 8);
                 } break;
                 case DPrintINT8: {
                     int8_t value;
                     memcpy(&value, ptr, sizeof(int8_t));
-                    stream << (int)value;  // Cast to int to ensure it prints as a number, not a char
+                    *string_stream << (int)value;  // Cast to int to ensure it prints as a number, not a char
                     AssertSize(sz, 1);
                 } break;
                 case DPrintINT16: {
                     int16_t value;
                     memcpy(&value, ptr, sizeof(int16_t));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 2);
                 } break;
                 case DPrintINT32: {
                     int32_t value;
                     memcpy(&value, ptr, sizeof(int32_t));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 4);
                 } break;
                 case DPrintINT64: {
                     int64_t value;
                     memcpy(&value, ptr, sizeof(int64_t));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 8);
                 } break;
                 case DPrintFLOAT32: {
                     float value;
                     memcpy(&value, ptr, sizeof(float));
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 4);
                 } break;
                 case DPrintBFLOAT16: {
                     uint16_t rawValue;
                     memcpy(&rawValue, ptr, sizeof(uint16_t));
                     float value = bfloat16_to_float(rawValue);
-                    stream << value;
+                    *string_stream << value;
                     AssertSize(sz, 2);
                 } break;
                 case DPrintCHAR:
-                    stream << *reinterpret_cast<char*>(ptr);
+                    *string_stream << *reinterpret_cast<char*>(ptr);
                     AssertSize(sz, 1);
                     break;
                 case DPrintU32_ARRAY:
                     PrintTypedUint32Array(
-                        stream, most_recent_setw, sz / 4, reinterpret_cast<uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
+                        string_stream,
+                        most_recent_setw,
+                        sz / 4,
+                        reinterpret_cast<uint32_t*>(ptr),
+                        TypedU32_ARRAY_Format_Raw);
                     break;
                 case DPrintTYPED_U32_ARRAY:
-                    PrintTypedUint32Array(stream, most_recent_setw, sz / 4, reinterpret_cast<uint32_t*>(ptr));
+                    PrintTypedUint32Array(string_stream, most_recent_setw, sz / 4, reinterpret_cast<uint32_t*>(ptr));
                     break;
                 case DPrintRAISE:
                     memcpy(&sigval, ptr, sizeof(uint32_t));
@@ -932,22 +940,19 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     raise_wait_lock_.lock();
                     raised_signals_.insert(sigval);
                     raise_wait_lock_.unlock();
-                    // stream << "\nRaised signal=" << sigval << endl;
                     AssertSize(sz, 4);
                     break;
                 case DPrintWAIT: {
                     memcpy(&sigval, ptr, sizeof(uint32_t));
                     // Given that we break immediately on a wait, this core should never be waiting
                     // on multiple signals at the same time.
-                    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key{
-                        chip_id, phys_core.x, phys_core.y, hart_id};
+                    HartKey hart_key{chip_id, phys_core.x, phys_core.y, hart_id};
                     raise_wait_lock_.lock();
                     TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
                     // Set that this hart is waiting on this signal, and then stop reading for now.
                     hart_waiting_on_signal_[hart_key] = sigval;
                     raise_wait_lock_.unlock();
                     break_due_to_wait = true;
-                    // stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
                     AssertSize(sz, 4);
                 } break;
                 default:
@@ -960,9 +965,6 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         phys_core.x,
                         phys_core.y);
             }
-
-            // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves
-            stream << flush;
 
             rpos += sz;  // parse the payload size
             TT_ASSERT(rpos <= wpos);
@@ -1058,6 +1060,47 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         wait_loop_iterations_++;
     }
 }  // PollPrintData
+
+void DebugPrintServerContext::TransferToAndFlushOutputStream(
+    const HartKey& hart_key, ostringstream* string_stream, const CoreDescriptor& logical_core) {
+    const string& string_stream_data = string_stream->str();
+    ostream* output_stream = GetOutputStream(hart_key, logical_core);
+    *output_stream << string_stream_data << flush;
+    ResetStream(hart_key, string_stream);
+}  // TransferToAndFlushOutputStream
+
+ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key, const CoreDescriptor& logical_core) {
+    // Choose which stream to output the dprint data to. Can be auto-generated files, the user-selected file, stdout, or
+    // nothing.
+    ostream* output_stream = stream_;
+    if (tt::llrt::OptionsG.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
+        if (!risc_to_file_stream_[hart_key]) {
+            const chip_id_t chip_id = get<0>(hart_key);
+            const int hart_id = get<3>(hart_key);
+            string filename = tt::llrt::OptionsG.get_root_dir() + logfile_path;
+            filename += fmt::format(
+                "device-{}_{}-core-{}-{}_{}.txt",
+                chip_id,
+                tt::llrt::get_core_type_name(logical_core.type),
+                logical_core.coord.x,
+                logical_core.coord.y,
+                GetRiscName(logical_core.type, hart_id));
+            risc_to_file_stream_[hart_key] = new ofstream(filename);
+        }
+        output_stream = risc_to_file_stream_[hart_key];
+    }
+
+    if (mute_print_server_) {
+        output_stream = &null_stream;
+    }
+
+    return output_stream;
+}  // GetOutputStream
+
+void DebugPrintServerContext::ResetStream(const HartKey& hart_key, ostringstream* stream) {
+    delete stream;
+    risc_to_string_stream_[hart_key] = new ostringstream;
+}
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
 bool DebugPrintServerContext::ProfilerIsRunning = false;
