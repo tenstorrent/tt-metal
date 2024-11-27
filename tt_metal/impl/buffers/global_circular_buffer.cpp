@@ -38,7 +38,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         num_receiver_cores += receiver_cores.num_cores();
         sender_cores.emplace_back(sender_core);
-        this->receiver_cores_.merge(receiver_cores);
+        this->receiver_cores_ = this->receiver_cores_.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
     }
     this->sender_cores_ = CoreRangeSet(sender_cores);
@@ -69,8 +69,8 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         std::nullopt);
 
     auto l1_alignment = hal.get_alignment(HalMemType::L1);
-    // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_acked/sent
-    constexpr uint32_t num_config_elements = 8;
+    // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
+    constexpr uint32_t num_config_elements = 7;
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
     auto cb_config_page_size = align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                2 * max_num_receivers_per_sender * l1_alignment;
@@ -88,20 +88,20 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
 
     std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
     uint32_t buffer_address = this->cb_buffer_->address();
-    uint32_t noc_xy_address = num_config_elements * sizeof(uint32_t);
-    uint32_t pages_acked_address = align((noc_xy_address + num_noc_xy_words) * sizeof(uint32_t), l1_alignment);
-    uint32_t pages_sent_address = pages_acked_address + max_num_receivers_per_sender * l1_alignment;
+    uint32_t noc_xy_address = this->cb_config_buffer_->address() + num_config_elements * sizeof(uint32_t);
+    uint32_t pages_sent_address = align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
 
     for (const auto& [sender_core, receiver_cores] : this->sender_receiver_core_mapping_) {
         const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
         uint32_t sender_idx = core_to_core_id.at(sender_core) * cb_config_page_size / sizeof(uint32_t);
+        uint32_t num_receivers = receiver_cores.num_cores();
+        uint32_t pages_acked_address = pages_sent_address + num_receivers * l1_alignment;
         cb_config_host_buffer[sender_idx++] = 1;
-        cb_config_host_buffer[sender_idx++] = receiver_cores.size();
+        cb_config_host_buffer[sender_idx++] = receiver_cores.num_cores();
         cb_config_host_buffer[sender_idx++] = buffer_address;
         cb_config_host_buffer[sender_idx++] = this->size_;
         cb_config_host_buffer[sender_idx++] = buffer_address;
         cb_config_host_buffer[sender_idx++] = noc_xy_address;
-        cb_config_host_buffer[sender_idx++] = pages_acked_address;
         cb_config_host_buffer[sender_idx++] = pages_sent_address;
 
         auto sender_physical_coord = this->device_->worker_core_from_logical_core(sender_core);
@@ -117,8 +117,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
             cb_config_host_buffer[receiver_idx++] = this->size_;
             cb_config_host_buffer[receiver_idx++] = buffer_address;
             cb_config_host_buffer[receiver_idx++] = noc_xy_address;
-            cb_config_host_buffer[receiver_idx++] = pages_acked_address;
-            cb_config_host_buffer[receiver_idx++] = pages_sent_address;
+            cb_config_host_buffer[receiver_idx++] = pages_sent_address + 2 * i * l1_alignment;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
         }

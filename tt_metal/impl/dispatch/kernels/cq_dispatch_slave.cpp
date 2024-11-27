@@ -56,7 +56,7 @@ static uint32_t cmd_ptr;
 // To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
 static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
 
-static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries] = {0};
+static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 static uint32_t num_worker_sems = 1;
 

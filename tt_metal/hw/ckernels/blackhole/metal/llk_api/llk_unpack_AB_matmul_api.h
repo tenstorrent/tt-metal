@@ -37,8 +37,8 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
         transpose_xy_srca,
         unpA_num_faces,
         unpB_num_faces,
-        cb_interface[unpA_operand_id].fifo_page_size,
-        cb_interface[unpB_operand_id].fifo_page_size);
+        get_local_cb_interface(unpA_operand_id).fifo_page_size,
+        get_local_cb_interface(unpB_operand_id).fifo_page_size);
 }
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
@@ -119,11 +119,11 @@ inline void llk_unpack_AB_matmul(
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
-    std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    std::uint32_t tile_size_a = cb_interface[operandA_id].fifo_page_size;
-    std::uint32_t tile_size_b = cb_interface[operandB_id].fifo_page_size;
+    std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

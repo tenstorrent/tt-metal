@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <bitset>
 #include <memory>
 #include <optional>
 
@@ -28,6 +27,16 @@ class CircularBuffer;
 class Device;
 class Program;
 class CircularBufferConfig;
+
+namespace experimental {
+class GlobalCircularBuffer;
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const GlobalCircularBuffer& global_circular_buffer);
+
+}  // namespace experimental
 
 }  // namespace v0
 
@@ -61,12 +70,13 @@ struct KernelGroup {
 
     KernelGroup();
     KernelGroup(
-        const detail::Program_ &program,
+        const detail::Program_& program,
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
-        int last_cb_index,
-        const CoreRangeSet &new_ranges);
+        uint32_t max_local_cb_end_index,
+        uint32_t min_remote_cb_start_index,
+        const CoreRangeSet& new_ranges);
 
     uint32_t get_programmable_core_type_index() const;
 
@@ -82,6 +92,7 @@ struct ProgramConfig {
     uint32_t sem_size;
     uint32_t cb_offset;
     uint32_t cb_size;
+    uint32_t local_cb_size;
     uint32_t kernel_text_offset; // offset of first kernel bin
     uint32_t kernel_text_size;   // max size of all kernel bins across all kernel groups
 };
@@ -157,6 +168,11 @@ class Program {
     std::unique_ptr<detail::Program_> pimpl_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+    friend CBHandle experimental::CreateCircularBuffer(
+        Program& program,
+        const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+        const CircularBufferConfig& config,
+        const experimental::GlobalCircularBuffer& global_circular_buffer);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
@@ -166,6 +182,10 @@ class Program {
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const experimental::GlobalCircularBuffer& global_circular_buffer);
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
