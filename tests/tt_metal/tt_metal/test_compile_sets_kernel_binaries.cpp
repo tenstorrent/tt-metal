@@ -22,7 +22,7 @@
 using std::vector;
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<Kernel> kernel) {
+std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<Kernel>& kernel) {
     auto root_dir = jit_build_get_kernel_compile_outpath(mask);
     TT_FATAL(kernel != nullptr, "Error");
     TT_FATAL(std::filesystem::exists(root_dir + kernel->name()), "Error");
@@ -64,7 +64,7 @@ void construct_program(Program& program, Device * device, CoreCoord& core) {
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the
     // input CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to
     // math kernel, input CB and reader
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 8;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
@@ -72,7 +72,7 @@ void construct_program(Program& program, Device * device, CoreCoord& core) {
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t ouput_cb_index = 16;  // output operands start at index 16
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(

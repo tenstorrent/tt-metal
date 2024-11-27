@@ -5,6 +5,7 @@
 #include "moreh_helper_functions.hpp"
 
 #include <magic_enum.hpp>
+#include <utility>
 
 #include "common/constants.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -18,9 +19,9 @@ using namespace tt::tt_metal;
 using namespace constants;
 
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
-    CoreRangeSet all_cores,
-    CoreRangeSet core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& all_cores,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
     uint32_t offset_x,
     uint32_t offset_y) {
     std::set<CoreRange> new_all_cores_set;
@@ -103,7 +104,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
-            .defines = defines});
+            .defines = std::move(defines)});
 }
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
@@ -120,18 +121,18 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
-            .defines = defines});
+            .defines = std::move(defines)});
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
-    std::vector<ComputeKernelArg> args,
-    std::map<std::string, std::string> defines,
+    const std::vector<ComputeKernelArg>& args,
+    const std::map<std::string, std::string>& defines,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode) {
+    const std::vector<UnpackToDestMode>& unpack_to_dest_mode) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -160,16 +161,16 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
                 .math_approx_mode = math_approx_mode,
                 .compile_args = arg.compile_args,
-                .defines = defines});
+                .defines = std::move(defines)});
     }
     return compute_kernel_id;
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config) {
+    Program &program, const std::string &file_name, const std::vector<ComputeKernelArg>& args, const ComputeKernelConfig& config) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -180,7 +181,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config) {
+    Program &program, const std::string &file_name, ComputeKernelArg arg, const ComputeKernelConfig& config) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
@@ -202,7 +203,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     Program &program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
-    std::vector<CircularBufferArg> args) {
+    const std::vector<CircularBufferArg>& args) {
     std::vector<CBHandle> cb_ids{};
     CBHandle cb_id{};
     for (const auto& arg : args) {
@@ -216,7 +217,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     Program &program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
-    CircularBufferArg arg) {
+    const CircularBufferArg& arg) {
     CBHandle cb_id{0};
     if (arg.num_tiles > 0) {
         auto _buffer_index = arg.buffer_index;

@@ -17,7 +17,7 @@ void kernel_main() {
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool pad_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t cb_id = tt::CB::c_in0;
+    constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
     const InterleavedAddrGen<src_is_dram> s0 = {
         .bank_base_address = src_addr,

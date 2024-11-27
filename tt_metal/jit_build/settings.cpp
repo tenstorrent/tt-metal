@@ -36,11 +36,11 @@ namespace tt::tt_metal
         hlk_desc.set_hlk_args(args, size);
     }
 
-    void JitBuildOptions::set_cb_dataformat_all_cores(CB cb_id, DataFormat data_format) {
+    void JitBuildOptions::set_cb_dataformat_all_cores(CBIndex cb_id, DataFormat data_format) {
         set_hlk_operand_dataformat_all_cores((HlkOperand)cb_id, data_format);
     }
 
-    void JitBuildOptions::set_cb_tile_dims_all_cores(CB cb_id, uint32_t num_faces, uint32_t partial_face, uint32_t face_r_dim, uint32_t narrow_tile, uint32_t tile_r_dim, uint32_t tile_c_dim) {
+    void JitBuildOptions::set_cb_tile_dims_all_cores(CBIndex cb_id, uint32_t num_faces, uint32_t partial_face, uint32_t face_r_dim, uint32_t narrow_tile, uint32_t tile_r_dim, uint32_t tile_c_dim) {
         hlk_desc.set_buf_num_faces((int)cb_id, num_faces);
         hlk_desc.set_buf_partial_face((int)cb_id, partial_face);
         hlk_desc.set_buf_face_r_dim((int)cb_id, face_r_dim);
@@ -49,27 +49,13 @@ namespace tt::tt_metal
         hlk_desc.set_buf_tile_c_dim((int)cb_id, tile_c_dim);
     }
 
-    void JitBuildOptions::set_cb_tile_size_all_cores(CB cb_id, uint32_t tile_size) {
+    void JitBuildOptions::set_cb_tile_size_all_cores(CBIndex cb_id, uint32_t tile_size) {
         hlk_desc.set_buf_tile_size((int)cb_id, tile_size);
     }
 
     void JitBuildOptions::set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format)
     {
-        static_assert(HlkOperand::in7 == int(HlkOperand::param0)-1);
-        static_assert(HlkOperand::param7 == int(HlkOperand::out0)-1);
-        static_assert(HlkOperand::out7 == int(HlkOperand::intermed0)-1);
-        if (op_id <= HlkOperand::in7) {
-            hlk_desc.set_input_buf_dataformat((int)op_id, data_format);
-        } else if (op_id <= HlkOperand::param7) {
-            hlk_desc.set_param_buf_dataformat((int)op_id - ((int)HlkOperand::in7+1), data_format);
-        } else if (op_id <= HlkOperand::out7) {
-            hlk_desc.set_output_buf_dataformat((int)op_id - ((int)HlkOperand::param7+1), data_format);
-        } else if (op_id <= HlkOperand::intermed7) {
-            hlk_desc.set_intermediate_buf_dataformat((int)op_id - ((int)HlkOperand::out7+1), data_format);
-        } else {
-            std::cout << "Error: incorrect operand identifier" << std::endl;
-            TT_ASSERT(false);
-        }
+        hlk_desc.set_buf_dataformat((int)op_id, data_format);
     }
 
 } // end namespace tt

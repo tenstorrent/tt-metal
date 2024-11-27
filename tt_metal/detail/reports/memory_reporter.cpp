@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -112,7 +113,7 @@ void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const Devic
     populate_reports(device, this->program_memory_usage_summary_report_, this->program_detailed_memory_usage_report_, this->program_l1_usage_summary_report_);
 }
 
-void MemoryReporter::dump_memory_usage_state(const Device *device, std::string prefix) const {
+void MemoryReporter::dump_memory_usage_state(const Device *device, const std::string& prefix) const {
     std::ofstream memory_usage_summary_report, l1_usage_summary_report, detailed_memory_usage_report;
 
     fs::create_directories(metal_reports_dir());
@@ -135,8 +136,8 @@ void MemoryReporter::init_reports() {
     this->program_detailed_memory_usage_report_.open(metal_reports_dir() + "program_detailed_memory_usage.csv");
     write_headers(this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
-void DumpDeviceMemoryState(const Device *device, std::string prefix) {
-    MemoryReporter::inst().dump_memory_usage_state(device, prefix);
+void DumpDeviceMemoryState(const Device *device, const std::string& prefix) {
+    MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
 }
 
 bool MemoryReporter::enabled() {

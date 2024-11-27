@@ -432,7 +432,7 @@ void SetRuntimeArgs(
 */
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args);
 
@@ -450,9 +450,9 @@ void SetRuntimeArgs(
  */
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args);
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args);
 
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.

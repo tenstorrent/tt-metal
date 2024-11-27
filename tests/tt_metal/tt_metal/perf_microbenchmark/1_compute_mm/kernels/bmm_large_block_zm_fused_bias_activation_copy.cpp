@@ -94,15 +94,15 @@ void MAIN {
 
     constexpr uint32_t out_block_w = out_subblock_w*in1_num_subblocks;
 
-    constexpr uint32_t in0_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in1_cb_id = tt::CB::c_in1;
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
-    constexpr uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
+    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_24;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
     #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = tt::CB::c_in3;
+    constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;

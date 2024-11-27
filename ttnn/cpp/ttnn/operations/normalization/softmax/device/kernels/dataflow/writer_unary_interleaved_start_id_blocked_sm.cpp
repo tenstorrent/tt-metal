@@ -59,7 +59,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
 
-    constexpr uint32_t cb_id_mask = tt::CB::c_in5;
+    constexpr uint32_t cb_id_mask = tt::CBIndex::c_5;
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
     const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
     const uint32_t val_to_pad = get_arg_val<uint32_t>(6);

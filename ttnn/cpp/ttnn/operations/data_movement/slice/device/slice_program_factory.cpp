@@ -11,6 +11,7 @@
 
 #include "slice_op.hpp"
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 
 namespace ttnn::operations::data_movement::detail {
@@ -22,8 +23,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    CoreRangeSet core_group_1,
-    CoreRangeSet core_group_2,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
@@ -277,12 +278,12 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(const Tensor
 
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-    tt::tt_metal::CircularBufferConfig(1*page_size_input, {{tt::CB::c_in0, cb_data_format}})
-        .set_page_size(tt::CB::c_in0, page_size_input);
+    tt::tt_metal::CircularBufferConfig(1*page_size_input, {{tt::CBIndex::c_0, cb_data_format}})
+        .set_page_size(tt::CBIndex::c_0, page_size_input);
 
     tt::tt_metal::CircularBufferConfig cb_dst0_config =
-    tt::tt_metal::CircularBufferConfig(2*page_size_output, {{tt::CB::c_intermed0, cb_data_format}})
-        .set_page_size(tt::CB::c_intermed0, page_size_output);
+    tt::tt_metal::CircularBufferConfig(2*page_size_output, {{tt::CBIndex::c_24, cb_data_format}})
+        .set_page_size(tt::CBIndex::c_24, page_size_output);
 
     CoreRange core({0, 0}, {0, 0});
     auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
@@ -609,7 +610,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
         .set_page_size(src0_cb_index, stick_size_padded).set_globally_allocated_address(*a.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height_unpadded * stick_size_unpadded, {{output_cb_index, dst_cb_data_format}})
         .set_page_size(output_cb_index, stick_size_unpadded).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);

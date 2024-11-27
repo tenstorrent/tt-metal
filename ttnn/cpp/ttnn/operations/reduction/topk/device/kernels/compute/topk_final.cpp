@@ -39,7 +39,7 @@ void MAIN {
     // init pack, compute and unpack
 
 
-    init_sfpu(input_cb_index);
+    init_sfpu(input_cb_index, tt::CBIndex::c_16);
     ckernel::topk_tile_init();
 
 

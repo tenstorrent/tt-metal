@@ -10,6 +10,7 @@
 //
 
 #include <cstdint>
+#include <functional>
 #include <variant>
 #include <vector>
 #include <memory>
@@ -143,6 +144,10 @@ inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_id
 }
 
 class Hal {
+
+  public:
+    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+
   private:
     tt::ARCH arch_;
     std::vector<HalCoreInfoType> core_info_;
@@ -153,6 +158,9 @@ class Hal {
     void initialize_gs();
     void initialize_wh();
     void initialize_bh();
+
+    // Functions where implementation varies by architecture
+    RelocateFunc relocate_func_;
 
   public:
     Hal();
@@ -195,6 +203,11 @@ class Hal {
     T get_base_firmware_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
     template <typename T = DeviceAddr>
     T get_binary_local_init_addr(uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
+        return relocate_func_(addr, local_init_addr);
+    }
+
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const {

@@ -433,8 +433,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                     }
                     for (const CoreCoord& core : tt::Cluster::instance().get_soc_desc(device_id).physical_ethernet_cores)
                     {
-                        const auto curr_core = device->physical_core_from_logical_core(core, CoreType::ETH);
-                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalL1MemAddrType::PROFILER);
+                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(core, HalL1MemAddrType::PROFILER);
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 core,
@@ -478,7 +477,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
 #endif
 }
 
-void SetDeviceProfilerDir(std::string output_dir){
+void SetDeviceProfilerDir(const std::string& output_dir){
 #if defined(TRACY_ENABLE)
     for (auto& device_id : tt_metal_device_profiler_map)
     {

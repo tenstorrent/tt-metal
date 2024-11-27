@@ -315,9 +315,10 @@ std::vector<LegacyShape> extract_legacy_shapes(
         std::vector<LegacyShape> legacy_shapes;
         legacy_shapes.reserve(tensor_specs.size());
         for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
-            const auto& [simple_shape, output_layout] = tensor_specs[idx];
-            TensorLayout tensor_layout = use_tensor_layout_from_tensor_spec ? output_layout : layout_provider(idx);
-            legacy_shapes.emplace_back(simple_shape.view(), tensor_layout.compute_padded_shape(simple_shape).view());
+            const auto& tensor_spec = tensor_specs[idx];
+            TensorLayout tensor_layout = use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
+            auto logical_shape = tensor_spec.logical_shape();
+            legacy_shapes.emplace_back(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view());
         }
         return legacy_shapes;
     } else {
@@ -457,10 +458,10 @@ Tensors run_with_autoformat(
 
 void launch_with_autoformat(
     std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors input_tensors,
+    const Tensors& input_tensors,
     Tensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors) {
+    const OptionalConstTensors& optional_input_tensors,
+    const OptionalTensors& optional_output_tensors) {
     // Mark each output tensor as having dynamic storage (can be on host or device, depending
     // on autoformat behaviour). Multi device tensors do not support dynamic storage.
     for (auto& output_tensor : output_tensors) {

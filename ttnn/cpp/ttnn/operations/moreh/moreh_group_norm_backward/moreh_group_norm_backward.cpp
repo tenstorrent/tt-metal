@@ -7,6 +7,8 @@
 #include "device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     const Tensor& output_grad,
@@ -15,10 +17,10 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     const Tensor& rstd,
     const uint32_t num_groups,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> input_grad,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& input_grad,
+    const std::optional<const Tensor>& gamma_grad,
+    const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
@@ -70,10 +72,10 @@ OptionalTensors MorehGroupNormBackward::create_async_optional_output_tensors(
     const Tensor& rstd,
     const uint32_t num_groups,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> input_grad,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& input_grad,
+    const std::optional<const Tensor>& gamma_grad,
+    const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,

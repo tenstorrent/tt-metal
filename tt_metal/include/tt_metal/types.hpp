@@ -4,28 +4,49 @@
 
 #pragma once
 
-#include "umd/device/tt_cluster_descriptor_types.h"
-#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 namespace v1 {
 
 using ProgramHandle = v0::Program;
 class DeviceHandle;
-class CommandQueue;
-class Trace;
+
+class CommandQueueHandle {
+   private:
+    explicit constexpr CommandQueueHandle(DeviceHandle device, std::uint8_t id = 0) : device{device}, id{id} {}
+
+    DeviceHandle device;
+    std::uint8_t id;
+
+    friend CommandQueueHandle GetCommandQueue(DeviceHandle device, std::uint8_t id);
+    friend DeviceHandle GetDevice(CommandQueueHandle cq);
+    friend std::uint8_t GetId(CommandQueueHandle cq);
+};
+
+class TraceHandle {
+   public:
+    explicit constexpr operator std::uint32_t() const noexcept { return id; }
+
+   private:
+    explicit constexpr TraceHandle(CommandQueueHandle cq, std::uint32_t id) noexcept : cq{cq}, id{id} {}
+
+    CommandQueueHandle cq;
+    std::uint32_t id;
+
+    friend TraceHandle BeginTraceCapture(CommandQueueHandle cq);
+    friend CommandQueueHandle GetCommandQueue(TraceHandle trace);
+};
 
 class KernelHandle {
    public:
-    explicit constexpr KernelHandle(tt_metal::KernelHandle kernel_id) noexcept : kernel_id{kernel_id} {}
+    explicit constexpr KernelHandle(tt_metal::KernelHandle id) noexcept : id{id} {}
 
-    explicit constexpr operator tt_metal::KernelHandle() const noexcept { return kernel_id; }
+    explicit constexpr operator tt_metal::KernelHandle() const noexcept { return id; }
 
    private:
-    tt_metal::KernelHandle kernel_id;
+    tt_metal::KernelHandle id;
 };
 
 class CircularBufferHandle {
@@ -53,11 +74,23 @@ class BufferHandle {
     std::shared_ptr<v0::Buffer> buffer_ptr;
 };
 
-// Not likely going to be opaque, but pending review of
-// completion of the prototype of the runtime args.
-class Event;
-class RuntimeArgs;
-class RuntimeArgsData;
+class EventHandle {
+   public:
+    explicit EventHandle();
+    explicit EventHandle(const std::shared_ptr<v0::Event> &event_ptr) noexcept : event_ptr{event_ptr} {}
+    explicit EventHandle(std::shared_ptr<v0::Event> &&event_ptr) noexcept :
+        event_ptr{static_cast<std::shared_ptr<v0::Event> &&>(event_ptr)} {}
+
+    explicit operator const std::shared_ptr<v0::Event> &() const noexcept { return event_ptr; }
+
+    v0::Event &operator*() const noexcept { return *event_ptr.get(); }
+    v0::Event *operator->() const noexcept { return event_ptr.get(); }
+
+   private:
+    std::shared_ptr<v0::Event> event_ptr;
+};
+
+using RuntimeArgs = tt::stl::Span<const std::uint32_t>;
 
 }  // namespace v1
 }  // namespace tt::tt_metal

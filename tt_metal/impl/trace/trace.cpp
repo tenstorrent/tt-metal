@@ -5,15 +5,14 @@
 #include "impl/trace/trace.hpp"
 
 #include <memory>
-#include <string>
 
-#include "dispatch/device_command.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/trace.hpp"
 
 namespace {
 // Labels to make the code more readable
@@ -70,7 +69,7 @@ std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
     );
 }
 
-void Trace::initialize_buffer(CommandQueue& cq, std::shared_ptr<TraceBuffer> trace_buffer) {
+void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer) {
     std::vector<uint32_t>& trace_data = trace_buffer->desc->data;
     uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(
@@ -106,6 +105,33 @@ void Trace::validate_instance(const TraceBuffer& trace_buffer) {
         log_info(LogMetalTrace, "Trace buffer observed: {}", backdoor_data);
     }
     // add more checks
+}
+
+v1::CommandQueueHandle v1::GetCommandQueue(TraceHandle trace) { return trace.cq; }
+
+v1::TraceHandle v1::BeginTraceCapture(CommandQueueHandle cq) {
+    const auto tid = v0::BeginTraceCapture(GetDevice(cq), GetId(cq));
+    return v1::TraceHandle{cq, tid};
+}
+
+void v1::EndTraceCapture(TraceHandle trace) {
+    const auto cq = GetCommandQueue(trace);
+    v0::EndTraceCapture(GetDevice(cq), GetId(cq), static_cast<std::uint32_t>(trace));
+}
+
+void v1::ReplayTrace(TraceHandle trace, bool blocking) {
+    const auto cq = GetCommandQueue(trace);
+    v0::ReplayTrace(GetDevice(cq), GetId(cq), static_cast<std::uint32_t>(trace), blocking);
+}
+
+void v1::ReleaseTrace(TraceHandle trace) {
+    const auto cq = GetCommandQueue(trace);
+    v0::ReleaseTrace(GetDevice(cq), static_cast<std::uint32_t>(trace));
+}
+
+void v1::EnqueueTrace(TraceHandle trace, bool blocking) {
+    const auto cq = GetCommandQueue(trace);
+    v0::EnqueueTrace(GetDevice(cq)->command_queue(GetId(cq)), static_cast<std::uint32_t>(trace), blocking);
 }
 
 }  // namespace tt::tt_metal

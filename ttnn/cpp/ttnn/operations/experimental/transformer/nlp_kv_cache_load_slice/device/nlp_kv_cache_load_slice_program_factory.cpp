@@ -9,6 +9,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
@@ -75,7 +77,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t num_input_tiles = num_tiles_per_core;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})

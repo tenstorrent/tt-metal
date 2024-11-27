@@ -15,6 +15,7 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::upsample {
 using namespace tt;
@@ -76,7 +77,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
 
     // input data is in a sharded CB
-    uint32_t in_cb_id = CB::c_in0;
+    uint32_t in_cb_id = CBIndex::c_0;
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
     uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
@@ -88,7 +89,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // output sharded CB with upsampled data
-    uint32_t out_cb_id = CB::c_out0;
+    uint32_t out_cb_id = CBIndex::c_16;
     uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
     uint32_t out_cb_pagesize = aligned_output_stick_nbytes;
     uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;

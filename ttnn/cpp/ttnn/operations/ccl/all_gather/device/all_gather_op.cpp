@@ -152,6 +152,7 @@ std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vecto
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
+    auto tile = input_tensor.get_tensor_spec().tile();
     if(this->output_mem_config.is_sharded()) {
         return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
@@ -159,10 +160,10 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config,
-            input_tensor.get_tile()
+            tile
             )};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, input_tensor.get_tile());
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
     }
 }
 
@@ -174,7 +175,7 @@ namespace operations {
 namespace ccl {
 
 Tensor all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const ttnn::ccl::Topology topology) {
+    const Tensor& input_tensor, const int32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const ttnn::ccl::Topology topology) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
@@ -185,9 +186,16 @@ Tensor all_gather(
     if (num_devices == 2){
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
+
+    int32_t rank = input_tensor.get_logical_shape().rank();
+
+    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    TT_FATAL(gather_dim >= -rank && gather_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
+
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology](
+        [gather_dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -195,7 +203,7 @@ Tensor all_gather(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, gather_dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
                 {input_tensor});
         },
         {input_tensor},
@@ -205,7 +213,7 @@ Tensor all_gather(
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const uint32_t dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
@@ -218,10 +226,16 @@ Tensor all_gather(
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 
+    int32_t rank = input_tensor.get_logical_shape().rank();
+
+    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    TT_FATAL(gather_dim >= -rank && gather_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
+
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     operation::launch_op(
-        [dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
+        [gather_dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -249,7 +263,7 @@ Tensor all_gather(
 
             return operation::run(
                 ttnn::AllGather{
-                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), topology},
+                    gather_dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), topology},
                 {input_device_tensor});
         },
         {input_tensor},

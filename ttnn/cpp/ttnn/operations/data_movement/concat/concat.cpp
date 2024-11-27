@@ -18,6 +18,7 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 #include <ranges>
+#include <utility>
 
 // toggle this to enable debug prints
 constexpr bool debug_concat = false;
@@ -109,8 +110,8 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, const MemoryC
                         TT_FATAL(input_tensor.get_layout() == ttnn::TILE_LAYOUT, "ttnn.concat: expected all input tensors to be in tile layout");
                         auto untilized_tensor = ttnn::untilize(input_tensor);
                         // untilized, so now we have a padded rm tensor
-                        untilized_tensor.set_shape(ttnn::Shape {input_tensor.get_logical_shape().view(),
-                                                                untilized_tensor.get_padded_shape().view()});
+                        untilized_tensor = ttnn::reshape(untilized_tensor,
+                            ttnn::Shape {input_tensor.get_logical_shape().view(), untilized_tensor.get_padded_shape().view()});
                         return untilized_tensor;
                     }
                 );
@@ -231,7 +232,7 @@ ttnn::Tensor ConcatOperation::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
     int dim,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::Tensor> optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
     unsigned int groups) {
     TT_FATAL(input_tensors.size() > 0, "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
@@ -299,9 +300,9 @@ ttnn::Tensor ConcatOperation::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
     int dim,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::Tensor> optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
     unsigned int groups) {
-    return invoke(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor, groups);
+    return invoke(DefaultQueueId, input_tensors, dim, memory_config, std::move(optional_output_tensor), groups);
 }
 
 }  // namespace data_movement

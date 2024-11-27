@@ -122,7 +122,7 @@ Tensor halo_op(const Tensor& input_tensor,
                 bool remote_read,
                 bool transpose_mcast,
                 uint32_t reshard_num_cores_nhw,
-                MemoryConfig output_memory_config,
+                const MemoryConfig& output_memory_config,
                 bool is_out_tiled) {
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Only height, width or block sharded tensors are supported.");

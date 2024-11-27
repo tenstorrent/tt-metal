@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t block_h                         = get_compile_time_arg_val(3);
 
 
-    constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // [E[x], E[X^2]] global to all cores
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15; // [E[x], E[X^2]] global to all cores
 
     #ifdef RMSNORM
     constexpr uint32_t stats_tiles = 1;

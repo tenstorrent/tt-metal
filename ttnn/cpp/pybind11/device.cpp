@@ -15,6 +15,8 @@
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
+using namespace tt::tt_metal;
+
 namespace py = pybind11;
 
 namespace {
@@ -162,7 +164,7 @@ void device_module(py::module& m_device) {
         py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
+        [](const std::vector<int>& device_ids, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
             return tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
         },
         R"doc(

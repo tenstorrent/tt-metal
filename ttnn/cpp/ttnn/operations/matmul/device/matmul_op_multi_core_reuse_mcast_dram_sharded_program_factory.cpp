@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <utility>
 
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -420,7 +421,7 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
 
 operation::ProgramWithCallbacks create_program_dram_sharded(
     tt::tt_metal::Device* device,
-    CoreRangeSet all_storage_cores,
+    const CoreRangeSet& all_storage_cores,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -572,7 +573,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     uint32_t num_worker_cores = num_dram_banks;
-    uint32_t num_mcast_cores = num_worker_cores;
 
     // move conflict coord from mcast receiver to mcast sender
     std::vector<CoreCoord> all_storage_cores_vec = corerange_to_cores(all_storage_cores);
@@ -634,6 +634,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+
+    uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
@@ -853,7 +855,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in2_CB_size / in0_single_tile_size,
         in2_CB_size);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
@@ -1254,7 +1256,7 @@ namespace matmul {
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1266,12 +1268,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     bool skip_in0_mcast,
     bool skip_write_back) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
-    auto in0_tile = a.get_tile();
-    auto in1_tile = b.get_tile();
+    auto in0_tile = a.get_tensor_spec().tile();
+    auto in1_tile = b.get_tensor_spec().tile();
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
-    auto in0_tile_shape = a.get_tile().get_tile_shape();
-    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1296,8 +1298,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
 
-    uint32_t in0_single_tile_size = a.get_tile().get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = b.get_tile().get_tile_size(in1_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
@@ -1349,14 +1351,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         in0_block_w,
         per_core_M,
         per_core_N,
-        fused_activation,
+        std::move(fused_activation),
         in0_buffer,
         in1_buffer,
         bias_buffer,
         out_buffer,
         in0_tile,
         in1_tile,
-        bias.has_value() ? bias->get_tile() : output_tile,
+        bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,
@@ -1371,7 +1373,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1391,7 +1393,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
         in0_block_w,
         per_core_M,
         per_core_N,
-        fused_activation,
+        std::move(fused_activation),
         untilize_out,
         skip_compute,
         skip_in0_mcast,

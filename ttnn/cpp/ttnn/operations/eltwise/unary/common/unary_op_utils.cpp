@@ -7,6 +7,8 @@
 #include "tt_metal/common/assert.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::unary::utils {
 
 namespace {
@@ -352,7 +354,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
 std::map<string, string> get_defines_impl(
     UnaryOpType op_type,
     const std::vector<float>& params,
-    std::string idst,
+    const std::string& idst,
     std::string init_def,
     std::string func_def) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst);

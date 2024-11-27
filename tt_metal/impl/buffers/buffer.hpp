@@ -231,6 +231,7 @@ class Buffer final {
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
+    DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS

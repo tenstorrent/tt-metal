@@ -17,7 +17,6 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0, "Error");
-    TT_FATAL(((this->output_tensor_end[-1] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -35,8 +34,6 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             // What else?
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-            // Minor host code changes required to remove this restriction
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
                 TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i], "Error");
             }

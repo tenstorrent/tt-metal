@@ -126,7 +126,7 @@ void generate_receiver_worker_kernels(
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode
 ) {
     // Just want a dummy DF
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     tt::DataFormat df = page_size == 1024 ? tt::DataFormat::Bfp8 :
                         page_size == 2048 ? tt::DataFormat::Float16 :
                                                          tt::DataFormat::Float32;
@@ -248,7 +248,7 @@ void generate_sender_worker_kernels(
         (uint32_t)device->ethernet_core_from_logical_core(edm_core).y,
         num_buffers_per_edm_channel
     };
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     log_info(tt::LogTest, "\tSenderWriter CT Args");
     for (auto const& arg : sender_worker_writer_compile_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
@@ -616,7 +616,7 @@ bool RunWriteBWTest(
     // tt::tt_metal::detail::DumpDeviceProfileResults(sender_device);
     log_info(tt::LogTest, "Reading back outputs");
 
-    auto is_output_correct = [&all_zeros, &inputs](std::shared_ptr<Buffer> output_buffer) {
+    auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<Buffer>& output_buffer) {
         constexpr bool debug_mode = false;
         std::vector<uint32_t> readback_data_vec;  // init to 0 data for easier debug
         readback_data_vec.reserve(all_zeros.size());

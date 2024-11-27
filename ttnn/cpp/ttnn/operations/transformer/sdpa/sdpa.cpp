@@ -4,9 +4,13 @@
 
 #include "sdpa.hpp"
 
+#include <utility>
+
 #include "device/sdpa_op.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer {
 
@@ -15,7 +19,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     const ttnn::Tensor &input_tensor_q,
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
-    std::optional<ttnn::Tensor> attn_mask,
+    const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
     const std::optional<MemoryConfig> &memory_config,
@@ -44,7 +48,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     const ttnn::Tensor &input_tensor_q,
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
-    std::optional<ttnn::Tensor> attn_mask,
+    const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
     const std::optional<MemoryConfig> &memory_config,
@@ -55,7 +59,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        attn_mask,
+        std::move(attn_mask),
         is_causal,
         scale,
         memory_config,

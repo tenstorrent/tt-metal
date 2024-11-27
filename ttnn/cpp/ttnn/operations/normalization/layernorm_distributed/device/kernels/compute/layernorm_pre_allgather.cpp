@@ -31,12 +31,12 @@ void MAIN {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CB::c_in0;
-    constexpr uint32_t cb_reduce = tt::CB::c_in1;
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_out = tt::CB::c_out0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_x2 = tt::CB::c_intermed0; // x**2
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_24; // x**2
 
     cb_wait_front(cb_reduce, 1); // comes from the reader
 

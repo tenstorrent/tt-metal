@@ -19,19 +19,19 @@ using namespace tt;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const uint32_t act_cb = CB::c_in0;
-const uint32_t weight_cb = CB::c_in1;
-const uint32_t bias_cb = CB::c_in2;
-const uint32_t sharded_act_cb = CB::c_in3;
-const uint32_t cb_for_reader_indices = CB::c_in4;
-const uint32_t cb_for_l1_array = CB::c_in5;
-const uint32_t act_cb_row_major_bfloat16 = CB::c_in6;
-const uint32_t act_cb_second_reader = CB::c_in7;
-const uint32_t matmul_partials_cb = CB::c_intermed0;
-const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
-const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
-const uint32_t out0_cb = CB::c_out0;
-const uint32_t temp_sum_cb = CB::c_intermed3;
+const uint32_t act_cb = CBIndex::c_0;
+const uint32_t weight_cb = CBIndex::c_1;
+const uint32_t bias_cb = CBIndex::c_2;
+const uint32_t sharded_act_cb = CBIndex::c_3;
+const uint32_t cb_for_reader_indices = CBIndex::c_4;
+const uint32_t cb_for_l1_array = CBIndex::c_5;
+const uint32_t act_cb_row_major_bfloat16 = CBIndex::c_6;
+const uint32_t act_cb_second_reader = CBIndex::c_7;
+const uint32_t matmul_partials_cb = CBIndex::c_24;
+const uint32_t tilize_mode_tilized_act_cb = CBIndex::c_25;
+const uint32_t untilize_mode_reblock_cb = CBIndex::c_26;
+const uint32_t out0_cb = CBIndex::c_16;
+const uint32_t temp_sum_cb = CBIndex::c_27;
 }
 }
 
@@ -42,8 +42,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const std::optional<const Tensor>& conv_reader_indices,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -345,8 +345,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const std::optional<const Tensor>& conv_reader_indices,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -1677,8 +1677,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     const Tensor& a,
     const Tensor& b,
-    std::optional<const Tensor> bias,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const std::optional<const Tensor>& bias,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,

@@ -54,8 +54,8 @@ void kernel_main() {
     #endif
 
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_pad = tt::CB::c_in1;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_pad = tt::CBIndex::c_1;
 
     #define stick_size_is_pow2 get_compile_time_arg_val(19) == 1
     #if (stick_size_is_pow2)

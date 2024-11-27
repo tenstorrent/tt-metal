@@ -10,6 +10,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/experimental/paged_cache/device/paged_update_cache_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::paged_cache::detail {
 
 using namespace tt::constants;
@@ -25,7 +27,7 @@ bool enable_fp32_dest(
     return fp32_dest_acc_en;
 }
 
-operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config, const bool share_cache) {
+operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t>& update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config, const bool share_cache) {
     Program program{};
 
     tt_metal::Device *device = input_tensor.device();
@@ -113,14 +115,14 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     uint32_t num_interm_tiles = 2 * Wt; // double buffered
     uint32_t num_output_tiles = B * Wt;
 
-    const tt::CB src0_cb_index = CB::c_in0;
-    const tt::CB src1_cb_index = CB::c_in1;
-    const tt::CB cb_index_id = CB::c_in2;
-    const tt::CB cb_pagetable_id = CB::c_in3;
-    const tt::CB intermed0_cb_index = CB::c_intermed0;
-    const tt::CB intermed1_cb_index = CB::c_intermed1;
-    const tt::CB intermed2_cb_index = CB::c_intermed2;
-    const tt::CB output_cb_index = CB::c_out0;
+    const tt::CBIndex src0_cb_index = CBIndex::c_0;
+    const tt::CBIndex src1_cb_index = CBIndex::c_1;
+    const tt::CBIndex cb_index_id = CBIndex::c_2;
+    const tt::CBIndex cb_pagetable_id = CBIndex::c_3;
+    const tt::CBIndex intermed0_cb_index = CBIndex::c_24;
+    const tt::CBIndex intermed1_cb_index = CBIndex::c_25;
+    const tt::CBIndex intermed2_cb_index = CBIndex::c_26;
+    const tt::CBIndex output_cb_index = CBIndex::c_16;
 
     create_cb(src0_cb_index, program, all_cores, cache_single_tile_size, num_cache_tiles, cache_cb_data_format);
     auto [_, cb_src1] = create_cb(src1_cb_index, program, all_cores, input_single_tile_size, num_input_tiles, input_cb_data_format, in1_buffer_address);
