@@ -11,12 +11,11 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 
-using std::vector;
 using namespace tt;
 using json = nlohmann::json;
 
-int main(int argc, char **argv) {
 
+int main(int argc, char **argv) {
     constexpr uint32_t default_tx_x = 0;
     constexpr uint32_t default_tx_y = 0;
     constexpr uint32_t default_rx_x = 0;
@@ -1102,10 +1101,10 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        vector<vector<uint32_t>> tx_results;
-        vector<vector<uint32_t>> tx_results_r;
-        vector<vector<uint32_t>> rx_results;
-        vector<vector<uint32_t>> rx_results_r;
+        std::vector<std::vector<uint32_t>> tx_results;
+        std::vector<std::vector<uint32_t>> tx_results_r;
+        std::vector<std::vector<uint32_t>> rx_results;
+        std::vector<std::vector<uint32_t>> rx_results_r;
 
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             tx_results.push_back(
@@ -1138,25 +1137,25 @@ int main(int argc, char **argv) {
             pass &= (rx_results_r[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
 
-        vector<uint32_t> mux_results =
+        std::vector<uint32_t> mux_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), mux_phys_core, test_results_addr, test_results_size);
         log_info(LogTest, "MUX status = {}", packet_queue_test_status_to_string(mux_results[PQ_TEST_STATUS_INDEX]));
         pass &= (mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
-        vector<uint32_t> mux_results_r =
+        std::vector<uint32_t> mux_results_r =
             tt::llrt::read_hex_vec_from_core(
                 device_r->id(), mux_phys_core_r, test_results_addr, test_results_size);
         log_info(LogTest, "R MUX status = {}", packet_queue_test_status_to_string(mux_results_r[PQ_TEST_STATUS_INDEX]));
         pass &= (mux_results_r[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
-        vector<uint32_t> demux_results =
+        std::vector<uint32_t> demux_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), demux_phys_core, test_results_addr, test_results_size);
         log_info(LogTest, "DEMUX status = {}", packet_queue_test_status_to_string(demux_results[PQ_TEST_STATUS_INDEX]));
         pass &= (demux_results[0] == PACKET_QUEUE_TEST_PASS);
 
-        vector<uint32_t> demux_results_r =
+        std::vector<uint32_t> demux_results_r =
             tt::llrt::read_hex_vec_from_core(
                 device_r->id(), demux_phys_core_r, test_results_addr, test_results_size);
         log_info(LogTest, "R DEMUX status = {}", packet_queue_test_status_to_string(demux_results_r[PQ_TEST_STATUS_INDEX]));

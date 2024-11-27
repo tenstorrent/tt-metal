@@ -18,12 +18,8 @@ constexpr uint32_t queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t queue_size_words = get_compile_time_arg_val(3);
 constexpr uint32_t queue_size_bytes = queue_size_words * PACKET_WORD_SIZE_BYTES;
 
-static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
-
 constexpr uint32_t remote_rx_queue_start_addr_words = get_compile_time_arg_val(4);
 constexpr uint32_t remote_rx_queue_size_words = get_compile_time_arg_val(5);
-
-static_assert(is_power_of_2(remote_rx_queue_size_words), "remote_rx_queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_rx_x = get_compile_time_arg_val(6);
 constexpr uint32_t remote_rx_y = get_compile_time_arg_val(7);
