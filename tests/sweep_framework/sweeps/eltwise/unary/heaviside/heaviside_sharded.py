@@ -56,12 +56,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_spec"]
     )
     y, x = core_grid_size
-
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
+    input_layout, dtype = test_vector["input_layout"], test_vector["input_a_dtype"]
 
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "Row Major layout and bfloat8_b are not supported"
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat8_b:
+        return True, "bfloat8_b is supported only on tiled layout"
 
     if not tensor_hw_as_shard_shape:
         if sharding_strategy == ttnn.ShardStrategy.BLOCK:
@@ -121,7 +121,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                 True,
                 "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
             )
-
+        if input_layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[-1] % input_shape[-2] != 0):
+            return True, "Physical size <width, height> must be a multuple of page size <1, width>"
     return False, None
 
 
