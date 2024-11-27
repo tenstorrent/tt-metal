@@ -114,7 +114,6 @@ class Device {
     CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
 
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
-    CoreCoord translated_worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
@@ -127,6 +126,7 @@ class Device {
 
     // Ethernet API
     CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const;
+    CoreCoord translated_ethernet_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord &physical_core) const;
 
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;

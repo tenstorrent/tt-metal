@@ -203,8 +203,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
     return FabricEriscDatamoverBuilder(
         ethernet_core,
-        device->ethernet_core_from_logical_core(ethernet_core).x,
-        device->ethernet_core_from_logical_core(ethernet_core).y,
+        device->translated_ethernet_core_from_logical_core(ethernet_core).x,
+        device->translated_ethernet_core_from_logical_core(ethernet_core).y,
         local_chip_id,
         peer_chip_id,
 

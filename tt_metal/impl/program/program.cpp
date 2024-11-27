@@ -1448,12 +1448,12 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
             TT_FATAL(not on_dispatch_core, "Illegal kernel placement for {}, Kernels cannot be placed on dispatch cores!", kernel->name());
         }
     };
-
+    std::mutex mtx;
     for (auto & kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             validate_kernel_placement(kernel);
             launch_build_step(
-                [kernel, device, this] {
+                [kernel, device, this, &mtx] {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
@@ -1462,6 +1462,10 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
                     auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key(), device->get_device_kernel_defines_hash());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
+                    if (device->id() == 0) {
+                        std::scoped_lock<std::mutex> lock(mtx);
+                        std::cout << "Running kernel: " << kernel_path_suffix << std::endl;
+                    }
                     build_options.set_name(kernel_path_suffix);
                     bool cache_hit = true;
                     bool path_exists = std::filesystem::exists(build_options.path);

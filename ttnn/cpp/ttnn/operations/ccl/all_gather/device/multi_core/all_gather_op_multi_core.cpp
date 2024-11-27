@@ -901,8 +901,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 if (sender_enabled) {
                     std::vector<ccl::WorkerXY> sender_worker_coords;
                     sender_worker_coords.push_back(ttnn::ccl::WorkerXY(
-                        device->worker_core_from_logical_core(sender_worker_cores.at(b)).x,
-                        device->worker_core_from_logical_core(sender_worker_cores.at(b)).y));
+                        device->translated_worker_core_from_logical_core(sender_worker_cores.at(b)).x,
+                        device->translated_worker_core_from_logical_core(sender_worker_cores.at(b)).y));
                     auto& sender_edm_builder = is_buffer_in_clockwise_direction(b)
                                                    ? clockwise_edm_builders.at(i)
                                                    : counter_clockwise_edm_builders.at(i);
@@ -930,8 +930,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 if (receiver_enabled) {
                     std::vector<ccl::WorkerXY> receiver_worker_coords;
                     receiver_worker_coords.push_back(ttnn::ccl::WorkerXY(
-                        device->worker_core_from_logical_core(receiver_worker_cores.at(b)).x,
-                        device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
+                        device->translated_worker_core_from_logical_core(receiver_worker_cores.at(b)).x,
+                        device->translated_worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
                     auto& receiver_edm_builder = is_buffer_in_clockwise_direction(b)
                                                      ? counter_clockwise_edm_builders.at(i)
                                                      : clockwise_edm_builders.at(i);
@@ -1054,8 +1054,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(tensor_slicer.col_offset),
                             static_cast<uint32_t>(tensor_slicer.num_rows),
                             static_cast<uint32_t>(tensor_slicer.num_cols),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
+                            static_cast<uint32_t>(device->translated_ethernet_core_from_logical_core(worker_eth_sender_core).x),
+                            static_cast<uint32_t>(device->translated_ethernet_core_from_logical_core(worker_eth_sender_core).y),
                             static_cast<bool>(fuse_op && direction == 1)};
 
                         if (is_sharded) {
@@ -1082,11 +1082,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(
                             tt::LogOp,
                             "\tethernet_core_x: {}",
-                            device->ethernet_core_from_logical_core(worker_eth_sender_core).x);
+                            device->translated_ethernet_core_from_logical_core(worker_eth_sender_core).x);
                         log_trace(
                             tt::LogOp,
                             "\tethernet_core_y: {}",
-                            device->ethernet_core_from_logical_core(worker_eth_sender_core).y);
+                            device->translated_ethernet_core_from_logical_core(worker_eth_sender_core).y);
 
                         if (fuse_op && direction == 1) {
                             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
@@ -1158,8 +1158,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
                             static_cast<uint32_t>(pages_per_chunk),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).x),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y),
+                            static_cast<uint32_t>(device->translated_ethernet_core_from_logical_core(worker_eth_receiver_core).x),
+                            static_cast<uint32_t>(device->translated_ethernet_core_from_logical_core(worker_eth_receiver_core).y),
                             static_cast<uint32_t>(receiver_eth_sem_addrs.at(b)),
                         };
 
@@ -1172,11 +1172,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(
                             tt::LogOp,
                             "\tethernet_core_x: {}",
-                            device->ethernet_core_from_logical_core(worker_eth_receiver_core).x);
+                            device->translated_ethernet_core_from_logical_core(worker_eth_receiver_core).x);
                         log_trace(
                             tt::LogOp,
                             "\tethernet_core_y: {}",
-                            device->ethernet_core_from_logical_core(worker_eth_receiver_core).y);
+                            device->translated_ethernet_core_from_logical_core(worker_eth_receiver_core).y);
                         log_trace(tt::LogOp, "\treceiver_eth_sem_addrs: {}", receiver_eth_sem_addrs.at(b));
                         return worker_reader_receiver_rt_args;
                     };
@@ -1193,7 +1193,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         uint32_t sender_core_x = -1, sender_core_y = -1;
                         if (sender_enabled) {
                             auto worker_sender_reader =
-                                device->worker_core_from_logical_core(sender_worker_cores.at(b));
+                                device->translated_worker_core_from_logical_core(sender_worker_cores.at(b));
                             sender_core_x = worker_sender_reader.x;
                             sender_core_y = worker_sender_reader.y;
                         }

@@ -107,7 +107,7 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+        this->buffer.device()->translated_coords_from_logical_coords(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
         this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
         padded_page_size * this->pages_to_read,
@@ -247,7 +247,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
     const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+        this->buffer.device()->translated_coords_from_logical_coords(this->core, this->buffer.core_type());
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
         flush_prefetch,
@@ -1726,7 +1726,7 @@ void EnqueueRecordEventCommand::process() {
             dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
         }
 
-        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
+        CoreCoord dispatch_physical_core = this->device->translated_coords_from_logical_coords(dispatch_location, core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
             .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_physical_core)};
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};

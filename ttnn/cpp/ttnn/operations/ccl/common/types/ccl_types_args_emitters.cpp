@@ -95,11 +95,11 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
     std::vector<uint32_t> logical_to_noc_row_map;
     std::vector<uint32_t> logical_to_noc_col_map;
     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
+        CoreCoord noc_core = d->translated_coords_from_logical_coords(CoreCoord(0, y), CoreType::WORKER);
         logical_to_noc_row_map.push_back(noc_core.y);
     }
     for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
+        CoreCoord noc_core = d->translated_coords_from_logical_coords(CoreCoord(x, 0), CoreType::WORKER);
         logical_to_noc_col_map.push_back(noc_core.x);
     }
 

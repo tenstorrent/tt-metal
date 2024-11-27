@@ -16,7 +16,7 @@
 
 // NOC logging enabled independently of watcher, need to include it here because it hooks into DEBUG_SANITIZE_NOC_*
 #include "noc_logging.h"
-
+#include "dprint.h"
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
@@ -47,8 +47,8 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
     for (uint32_t idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         uint8_t core_x = core_info->non_worker_cores[idx].x;
         uint8_t core_y = core_info->non_worker_cores[idx].y;
-        if (x == NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)core_x) &&
-            y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)core_y)) {
+        if (x == NOC_0_X(0, core_info->noc_size_x, (uint32_t) core_x) &&
+            y == NOC_0_Y(0, core_info->noc_size_y, (uint32_t) core_y)) {
             return core_info->non_worker_cores[idx].type;
         }
     }
@@ -69,17 +69,17 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
     }
 
     if (noc_id == 0) {
-        if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)1) &&
-            x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
-            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)1) &&
-            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
+        if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) 0) &&
+            x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) core_info->noc_size_x - 1) &&
+            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) 0) &&
+            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) core_info->noc_size_y - 1)) {
             return AddressableCoreType::TENSIX;
         }
     } else {
-        if (x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)1) &&
-            x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
-            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)1) &&
-            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
+        if (x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) 0) &&
+            x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) core_info->noc_size_x - 1) &&
+            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) 0) &&
+            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) core_info->noc_size_y - 1)) {
             return AddressableCoreType::TENSIX;
         }
     }
@@ -218,7 +218,7 @@ uint32_t debug_sanitize_noc_addr(
     }
     uint64_t noc_local_addr = NOC_LOCAL_ADDR(noc_addr);
     AddressableCoreType core_type = get_core_type(noc_id, x, y);
-
+    DPRINT << "Checking Core: " << +x << " " << +y << ENDL();
     // Extra check for multicast
     if (multicast) {
         uint8_t x_end = (uint8_t)NOC_MCAST_ADDR_END_X(noc_addr);

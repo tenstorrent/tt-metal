@@ -90,7 +90,7 @@ static void add_worker_config_to_edm_builders(
 
         std::vector<ttnn::ccl::WorkerXY> sender_worker_coords;
         std::vector<ttnn::ccl::WorkerXY> receiver_worker_coords;
-        auto const& worker_noc_coords = device->worker_core_from_logical_core(worker_attrs.location_logical);
+        auto const& worker_noc_coords = device->translated_worker_core_from_logical_core(worker_attrs.location_logical);
         sender_worker_coords.push_back(ttnn::ccl::WorkerXY(worker_noc_coords.x, worker_noc_coords.y));
         receiver_worker_coords.push_back(ttnn::ccl::WorkerXY(worker_noc_coords.x, worker_noc_coords.y));
 
@@ -285,6 +285,7 @@ static void set_reduce_scatter_worker_rt(
     std::size_t num_edm_channels,
     std::size_t edm_num_buffers_per_channel,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
+    std::cout << "Running reduce scatter" << std::endl;
     bool is_in_clockwise_direction = worker_attributes.direction == Direction::CLOCKWISE;
     const std::size_t global_worker_index = get_global_worker_id(worker_attributes, num_edm_channels);
 
@@ -293,8 +294,8 @@ static void set_reduce_scatter_worker_rt(
                                             ? topology_config.eth_receiver_cores.at(worker_attributes.link)
                                             : topology_config.eth_sender_cores.at(worker_attributes.link);
         ttnn::ccl::WorkerXY receiver_edm_noc_coord = ttnn::ccl::WorkerXY(
-            device->ethernet_core_from_logical_core(receiver_edm).x,
-            device->ethernet_core_from_logical_core(receiver_edm).y);
+            device->translated_ethernet_core_from_logical_core(receiver_edm).x,
+            device->translated_ethernet_core_from_logical_core(receiver_edm).y);
         const uint32_t edm_core_semaphore_address =
             edm_interface_addresses.worker_receiver_edm_semaphore_addresses.at(global_worker_index);
         const uint32_t edm_core_buffer_address =
@@ -325,8 +326,8 @@ static void set_reduce_scatter_worker_rt(
                                        ? topology_config.eth_sender_cores.at(worker_attributes.link)
                                        : topology_config.eth_receiver_cores.at(worker_attributes.link);
             edm_noc_coord = ttnn::ccl::WorkerXY(
-                device->ethernet_core_from_logical_core(sender_edm).x,
-                device->ethernet_core_from_logical_core(sender_edm).y);
+                device->translated_ethernet_core_from_logical_core(sender_edm).x,
+                device->translated_ethernet_core_from_logical_core(sender_edm).y);
             TT_ASSERT(edm_noc_coord.y == 0 || edm_noc_coord.y == 6);
             edm_core_semaphore_address =
                 edm_interface_addresses.worker_sender_edm_semaphore_addresses.at(global_worker_index);

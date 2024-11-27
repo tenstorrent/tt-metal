@@ -456,7 +456,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     log_debug("packer_l1_acc: {}", packer_l1_acc);
     log_debug("M: {}, K: {}, N: {}", M, K, N);
     log_debug("per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
-
+    std::cout << "Running sharded dram MM" << std::endl;
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
@@ -646,8 +646,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
         (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device->translated_worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
 
     bool in0_is_dram = false;
     bool in1_is_dram = true;
@@ -952,10 +952,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         return a.x < b.x;
     });
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->translated_worker_core_from_logical_core(core).x);
     }
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->translated_worker_core_from_logical_core(core).y);
     }
 
     uint32_t sender_id = 0;

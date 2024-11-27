@@ -950,7 +950,7 @@ re_run_command:
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
-            DPRINT << "cmd_write\n";
+            DPRINT << "cmd_write_linear\n";
             process_write(block_noc_writes_to_clear, block_next_start_addr);
             WAYPOINT("DWD");
             break;

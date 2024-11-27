@@ -219,10 +219,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            in0_mcast_noc_x.push_back(device->translated_worker_core_from_logical_core({core_idx_x, 0}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            in0_mcast_noc_y.push_back(device->translated_worker_core_from_logical_core({0, core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -241,8 +241,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device->translated_worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -1063,8 +1063,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device->translated_worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->translated_worker_core_from_logical_core(bottom_right_core);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

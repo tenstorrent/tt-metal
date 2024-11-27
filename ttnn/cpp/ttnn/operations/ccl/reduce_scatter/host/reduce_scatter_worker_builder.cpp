@@ -356,7 +356,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_rt_a
             TT_ASSERT(receiver_worker_partial_ready_semaphore_id.has_value());
             auto associated_worker_core = worker_attrs.associated_worker_core_logical;
             TT_ASSERT(associated_worker_core.has_value());
-            auto const& worker_core_xy = this->device->worker_core_from_logical_core(associated_worker_core.value());
+            auto const& worker_core_xy = this->device->translated_worker_core_from_logical_core(associated_worker_core.value());
 
             args.push_back(static_cast<uint32_t>(worker_core_xy.x));
             args.push_back(static_cast<uint32_t>(worker_core_xy.y));

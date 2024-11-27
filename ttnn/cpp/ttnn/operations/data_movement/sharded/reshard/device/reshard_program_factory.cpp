@@ -340,11 +340,18 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
-    tt::tt_metal::KernelHandle kernel_id_0 =
-        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index}));
+    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
+        program,
+        kernel_name,
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
 
-    tt::tt_metal::KernelHandle kernel_id_1 =
-        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index}));
+    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
+        program,
+        kernel_name,
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -358,7 +365,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
     auto bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
     uint32_t bank_offset = device->bank_offset(remote_buffer_type, bank_id);
-    auto remote_core = device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t local_units_left = num_units;
@@ -381,17 +387,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                         bank_id =
                             device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
                         bank_offset = device->bank_offset(remote_buffer_type, bank_id);
-                        remote_core =
-                            device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
-                    auto remote_core =
-                        device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
+                    bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
                     kernel_args.insert(
                         kernel_args.end(),
-                        {static_cast<uint32_t>(remote_core.x),
-                         static_cast<uint32_t>(remote_core.y),
-                         (remote_units_per_shard - remote_core_units_rem) * unit_size + bank_offset,
+                        {bank_id,
+                         (remote_units_per_shard - remote_core_units_rem) * unit_size,
                          units_to_transfer * unit_size});
                     local_units_per_core -= units_to_transfer;
                     local_units_to_transfer -= units_to_transfer;
@@ -480,11 +482,11 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
     for (uint32_t i = 0; i < grid.x; i++) {
-        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(i, 0), input_core_type);
+        auto physical_input_core = device->translated_coords_from_logical_coords(CoreCoord(i, 0), input_core_type);
         physical_core_coords.push_back(physical_input_core.x);
     }
     for (uint32_t i = 0; i < grid.y; i++) {
-        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(0, i), input_core_type);
+        auto physical_input_core = device->translated_coords_from_logical_coords(CoreCoord(0, i), input_core_type);
         physical_core_coords.push_back(physical_input_core.y);
     }
 

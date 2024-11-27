@@ -185,20 +185,20 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         }
 
         if (transpose_mcast) {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({0, start_core_y}).y;
+            in0_mcast_receiver_grid_diff_coord_start = device->translated_worker_core_from_logical_core({0, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({0, start_core_y + num_blocks_x - 1}).y;
+                device->translated_worker_core_from_logical_core({0, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(device->translated_worker_core_from_logical_core({0, core_idx_y}).y);
             }
         } else {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({start_core_x, 0}).x;
+            in0_mcast_receiver_grid_diff_coord_start = device->translated_worker_core_from_logical_core({start_core_x, 0}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, 0}).x;
+                device->translated_worker_core_from_logical_core({start_core_x + num_blocks_x - 1, 0}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(device->translated_worker_core_from_logical_core({core_idx_x, 0}).x);
             }
         }
 
@@ -893,12 +893,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+        auto left_core_physical = device->translated_worker_core_from_logical_core(left_core);
+        auto left_core_plus_one_physical = device->translated_worker_core_from_logical_core(left_core_plus_one);
+        auto right_core_physical = device->translated_worker_core_from_logical_core(right_core);
+        auto top_core_physical = device->translated_worker_core_from_logical_core(top_core);
+        auto top_core_plus_one_physical = device->translated_worker_core_from_logical_core(top_core_plus_one);
+        auto bottom_core_physical = device->translated_worker_core_from_logical_core(bottom_core);
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
@@ -931,7 +931,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             uint32_t in0_mcast_receiver_grid_same_coord;
             std::vector<uint32_t> mm_in0_sender_args;
             if (transpose_mcast) {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
+                in0_mcast_receiver_grid_same_coord = device->translated_worker_core_from_logical_core(core).x;
                 mm_in0_sender_args.push_back(core.y);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
@@ -940,7 +940,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
+                in0_mcast_receiver_grid_same_coord = device->translated_worker_core_from_logical_core(core).y;
                 mm_in0_sender_args.push_back(core.x);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
