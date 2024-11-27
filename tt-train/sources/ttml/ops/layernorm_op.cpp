@@ -110,7 +110,7 @@ autograd::TensorPtr layernorm(
     auto output = ttnn::add(ttnn::multiply(normalized_tensor, gamma->get_value()), beta->get_value());
     auto out = autograd::create_tensor(output);
 
-    autograd::GradFunction grad = [tensor, out, mean, rstd, normalized_tensor, variance, gamma, beta, eps]() {
+    autograd::GradFunction grad = [tensor, out, normalized_tensor, gamma, beta, rstd]() {
         auto dout = out->get_grad();
         auto dbeta = ttnn::moreh_sum(
             dout,
@@ -130,63 +130,38 @@ autograd::TensorPtr layernorm(
 
         auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
 
-        // dvariance = np.sum(dx_norm * (x - mean) * -0.5 * (variance + epsilon) ** (-1.5), axis=-1, keepdims=True)
-        // dx_norm * (x - mean) * -0.5 * (variance + epsilon) ** (-1.5)
-        auto x_sub_mean = ttnn::subtract(tensor->get_value(), mean);
-        auto x_sub_mean_half = ttnn::multiply(x_sub_mean, -0.5F);
-        auto x_variance_1_5 = ttnn::power(ttnn::add(variance, eps), -1.5F);
-        auto dvariance_before_reduce =
-            ttnn::multiply(dtensor_normalized, ttnn::multiply(x_sub_mean_half, x_variance_1_5));
+        // dtensor = dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True)
 
-        auto dvariance = ttnn::moreh_sum(
-            dvariance_before_reduce,
-            /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output */ std::nullopt,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+        // dnorm.mean(-1, keepdim=True)
+        auto dnorm_shape = dtensor_normalized.get_shape();
+        auto shape = core::create_shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
+        auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
 
-        // dmean =
-        //      np.sum(dx_norm * -1 / np.sqrt(variance + epsilon), axis=1, keepdims=True) +
-        //      dvariance * np.mean(-2 * (x - mean), axis=1, keepdims=True)
-
-        // np.sum(dx_norm * -1 / np.sqrt(variance + epsilon), axis=1, keepdims=True)
-        auto dmean_p0 = ttnn::multiply(ttnn::neg(dtensor_normalized), ttnn::rsqrt(ttnn::add(variance, eps)));
-        dmean_p0 = ttnn::moreh_sum(
-            dmean_p0,
+        ttnn::moreh_mean(
+            dtensor_normalized,
             /* dim */ 3,
             /* keep_dim */ true,
-            /* output */ std::nullopt,
+            /* divisor */ std::nullopt,
+            /* output */ dnorm_mean,
             /* output_mem_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-        // dvariance * np.mean(-2 * (x - mean), axis=1, keepdims=True)
-        auto x_sub_mean_mult_neg2 = ttnn::multiply(x_sub_mean, -2);
-        auto before_reduction_shape = x_sub_mean_mult_neg2.get_shape();
-        auto shape =
-            core::create_shape({before_reduction_shape[0], before_reduction_shape[1], before_reduction_shape[2], 1});
-        auto x_sub_mean_mult_neg2_reduced =
-            core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
+        // dnorm.mean(-1, keepdim=True)
+        auto dnorm_norm = ttnn::multiply(dtensor_normalized, normalized_tensor);
+        auto dnorm_norm_mean = core::zeros_like(dnorm_mean);
         ttnn::moreh_mean(
-            tensor->get_value(),
-            3,  // last dimension
-            true,
-            std::nullopt,
-            x_sub_mean_mult_neg2_reduced,
-            std::nullopt,
-            /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+            dnorm_norm,
+            /* dim */ 3,
+            /* keep_dim */ true,
+            /* divisor */ std::nullopt,
+            /* output */ dnorm_norm_mean,
+            /* output_mem_config */ std::nullopt,
+            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-        auto dmean_p1 = ttnn::multiply(dvariance, x_sub_mean_mult_neg2_reduced);
-        auto dmean = ttnn::add(dmean_p0, dmean_p1);
-
-        // dx = dx_norm / np.sqrt(variance + epsilon) + dvariance * 2 * (x - mean) / H + dmean / H
-        auto dtensor_p0 = ttnn::multiply(dtensor_normalized, ttnn::rsqrt(ttnn::add(variance, eps)));
-        auto dtensor_p1 = ttnn::multiply(dvariance, ttnn::multiply(x_sub_mean, 2));
-        dtensor_p1 = ttnn::add(dtensor_p1, dmean);
-
-        auto tensor_shape = tensor->get_value().get_shape();
-        dtensor_p1 = ttnn::multiply(dtensor_p1, 1.F / static_cast<float>(tensor_shape[3]));
-        auto dtensor = ttnn::add(dtensor_p0, dtensor_p1);
+        // norm * (dnorm * norm).mean(-1, keepdim=True)
+        auto norm_dnorm_norm_mean = ttnn::multiply(normalized_tensor, dnorm_norm_mean);
+        auto dtensor = ttnn::subtract(ttnn::subtract(dtensor_normalized, dnorm_mean), norm_dnorm_norm_mean);
+        dtensor = ttnn::multiply(dtensor, rstd);
 
         tensor->add_grad(dtensor);
         gamma->add_grad(dgamma);
