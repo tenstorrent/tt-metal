@@ -10,12 +10,10 @@
 #include "kernels/traffic_gen_test.hpp"
 #include "utils.hpp"
 
-using std::vector;
 using namespace tt;
 
 
 int main(int argc, char **argv) {
-
     bool pass = true;
     try {
         constexpr uint32_t default_tx_x = 0;
@@ -30,11 +28,17 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
-        uint32_t default_test_result_buf_addr = l1_unreserved_base;
+
+        uint32_t tx_input_scratch_buffer_addr = l1_unreserved_base;
+        uint32_t tx_output_scratch_buffer_addr = l1_unreserved_base + packet_queue_scratch_buffer_size;
+
+        uint32_t rx_input_scratch_buffer_addr = tx_output_scratch_buffer_addr + packet_queue_scratch_buffer_size;
+
+        uint32_t default_test_result_buf_addr = rx_input_scratch_buffer_addr + packet_queue_scratch_buffer_size;
         constexpr uint32_t default_test_result_buf_size = 1024;
-        uint32_t default_tx_queue_start_addr = l1_unreserved_base + default_test_result_buf_size;
+        uint32_t default_tx_queue_start_addr = default_test_result_buf_addr + default_test_result_buf_size;
         constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
-        uint32_t default_rx_queue_start_addr = l1_unreserved_base + 0x2000;
+        uint32_t default_rx_queue_start_addr = default_tx_queue_start_addr + default_tx_queue_size_bytes;
         constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
 
         constexpr uint32_t default_timeout_mcycles = 1000;
@@ -131,6 +135,9 @@ int main(int argc, char **argv) {
                 tx_pkt_dest_size_choice, // 19: pkt_dest_size_choice
                 tx_data_sent_per_iter_low, // 20: data_sent_per_iter_low
                 tx_data_sent_per_iter_high, // 21: data_sent_per_iter_high
+                tx_input_scratch_buffer_addr,  // 22: traffic_gen_input_scratch_buffer_addr
+                tx_output_scratch_buffer_addr, // 23: traffic_gen_output_scratch_buffer_addr
+                rx_input_scratch_buffer_addr,  // 24: traffic_gen_output_remote_scratch_buffer_addr
             };
 
         std::vector<uint32_t> traffic_gen_rx_compile_args =
@@ -154,6 +161,8 @@ int main(int argc, char **argv) {
                 0xbb, // 16: dest_endpoint_start_id
                 timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
                 rx_disable_header_check, // 18: disable_header_check
+                rx_input_scratch_buffer_addr,  // 19: traffic_gen_input_scratch_buffer_addr
+                tx_output_scratch_buffer_addr, // 20: traffic_gen_input_remote_scratch_buffer_addr
             };
 
         std::map<string, string> common_defines = {
@@ -195,11 +204,11 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        vector<uint32_t> tx_results =
+        std::vector<uint32_t> tx_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), phys_traffic_gen_tx_core, test_result_buf_addr, test_result_buf_size);
 
-        vector<uint32_t> rx_results =
+        std::vector<uint32_t> rx_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), phys_traffic_gen_rx_core, test_result_buf_addr, test_result_buf_size);
 

@@ -10,6 +10,7 @@ constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
 constexpr uint32_t MAX_SWITCH_FAN_OUT = 4;
 constexpr uint32_t MAX_TUNNEL_LANES = 10;
+constexpr uint32_t VC_PACKET_ROUTER_LANES = 4;
 
 constexpr uint32_t MAX_SRC_ENDPOINTS = 32;
 constexpr uint32_t MAX_DEST_ENDPOINTS = 32;

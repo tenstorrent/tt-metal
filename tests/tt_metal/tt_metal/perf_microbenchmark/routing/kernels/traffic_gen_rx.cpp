@@ -51,6 +51,13 @@ constexpr uint32_t timeout_cycles = get_compile_time_arg_val(17);
 
 constexpr uint32_t disable_header_check = get_compile_time_arg_val(18);
 
+// Inputs - Update remote rptr
+constexpr uint32_t traffic_gen_input_scratch_buffer_addr = get_compile_time_arg_val(19);
+constexpr uint32_t traffic_gen_input_remote_scratch_buffer_addr = get_compile_time_arg_val(20);
+
+// Outputs
+// None. This is a receiver to check data for testing purposes
+
 // predicts size and payload of packets from each destination, should have
 // the same random seed as the corresponding traffic_gen_tx
 input_queue_rnd_state_t src_rnd_state[num_src_endpoints];
@@ -74,7 +81,9 @@ void kernel_main() {
 
     input_queue->init(input_queue_id, queue_start_addr_words, queue_size_words,
                       remote_tx_x, remote_tx_y, remote_tx_queue_id,
-                      rx_rptr_update_network_type);
+                      rx_rptr_update_network_type,
+                      traffic_gen_input_scratch_buffer_addr,
+                      traffic_gen_input_remote_scratch_buffer_addr);
 
     if (!wait_all_src_dest_ready(input_queue, 1, NULL, 0, timeout_cycles)) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;

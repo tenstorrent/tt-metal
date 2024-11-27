@@ -68,6 +68,14 @@ packet_output_queue_state_t output_queue;
 constexpr packet_input_queue_state_t* input_queue_ptr = &input_queue;
 constexpr packet_output_queue_state_t* output_queue_ptr = &output_queue;
 
+// Inputs
+constexpr uint32_t traffic_gen_input_scratch_buffer_addr = get_compile_time_arg_val(22);
+constexpr uint32_t traffic_gen_input_mock_remote_scratch_buffer_addr = get_compile_time_arg_val(23);
+
+// Outputs - Update remote wptr
+constexpr uint32_t traffic_gen_output_scratch_buffer_addr = get_compile_time_arg_val(24);
+constexpr uint32_t traffic_gen_output_remote_scratch_buffer_addr = get_compile_time_arg_val(25);
+
 // input_queue_rnd_state_t input_queue_state;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 
@@ -151,7 +159,9 @@ void kernel_main() {
         0,
         0,
         0,
-        DispatchRemoteNetworkType::NONE);
+        DispatchRemoteNetworkType::NONE,
+        traffic_gen_input_scratch_buffer_addr,
+        traffic_gen_input_mock_remote_scratch_buffer_addr);
 
     output_queue_ptr->init(
         output_queue_id,
@@ -162,7 +172,9 @@ void kernel_main() {
         remote_rx_queue_id,
         tx_network_type,
         input_queue_ptr,
-        1);
+        1, // num_input_queues (one... which is the input from this traffic generator itself)
+        traffic_gen_output_scratch_buffer_addr,
+        traffic_gen_output_remote_scratch_buffer_addr);
 
     if (!wait_all_src_dest_ready(NULL, 0, output_queue_ptr, 1, timeout_cycles)) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
