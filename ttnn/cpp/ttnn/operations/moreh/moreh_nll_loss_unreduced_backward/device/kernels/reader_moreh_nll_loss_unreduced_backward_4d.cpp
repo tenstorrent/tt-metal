@@ -83,7 +83,7 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t idx = h * TILE_WIDTH + w; // target and input_grad idx
+                uint32_t idx = h * TILE_WIDTH + w;  // target and input_grad idx
 
                 int32_t target_val = target_l1_ptr[idx];
 

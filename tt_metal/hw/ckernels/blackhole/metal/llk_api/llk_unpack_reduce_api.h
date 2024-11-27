@@ -16,7 +16,7 @@ template <
     bool is_fp32_dest_acc_en = false,
     StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_reduce_hw_configure(
-    const llk_unpack_reduce_params_t *unpack_reduce_params, const float const_mult) {
+    const llk_unpack_reduce_params_t* unpack_reduce_params, const float const_mult) {
     constexpr bool within_face_16x16_transpose = (ReduceDim::REDUCE_ROW == dim);
 
     const std::uint32_t unpA_operand_id = get_operand_id(unpack_reduce_params->unpA_operand);

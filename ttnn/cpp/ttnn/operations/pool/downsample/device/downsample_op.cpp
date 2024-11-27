@@ -13,7 +13,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::downsample{
+namespace ttnn::operations::downsample {
 
 void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
@@ -25,14 +25,13 @@ void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Error");
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor_a.memory_config().memory_layout);
 }
 
-
-
-std::vector<tt::tt_metal::LegacyShape> Downsample::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Downsample::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.get_legacy_shape()[0] == 1 && input_tensor_a.get_legacy_shape()[1] == 1);
     uint32_t input_height = input_tensor_a.get_legacy_shape()[2];
@@ -76,17 +75,10 @@ operation::ProgramWithCallbacks Downsample::create_program(
 }
 
 Tensor downsample(
-              const ttnn::Tensor& input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> dtype) {
-        auto dtype_ = dtype.has_value() ? dtype.value() : input_tensor_a.get_dtype();
-        auto output_tensors = operation::run(Downsample{downsample_params, dtype_}, {input_tensor_a});
-        return output_tensors.at(0);
+    const ttnn::Tensor& input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> dtype) {
+    auto dtype_ = dtype.has_value() ? dtype.value() : input_tensor_a.get_dtype();
+    auto output_tensors = operation::run(Downsample{downsample_params, dtype_}, {input_tensor_a});
+    return output_tensors.at(0);
 }
 
-
-
-
-
-
-
-
-}  //name space ttnn::operations::data_movement
+}  // namespace ttnn::operations::downsample

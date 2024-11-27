@@ -17,13 +17,13 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 /*
-* 1. Host creates two vectors of data.
-* 2. Device eltwise adds them together.
-* 3. Intermediate result read back to host.
-* 4. Create another vector and send vectors to input DRAMs again.
-* 5. Device eltwise muls them together.
-* 6. Read result back and compare to golden.
-* */
+ * 1. Host creates two vectors of data.
+ * 2. Device eltwise adds them together.
+ * 3. Intermediate result read back to host.
+ * 4. Create another vector and send vectors to input DRAMs again.
+ * 5. Device eltwise muls them together.
+ * 6. Read result back and compare to golden.
+ * */
 
 /*
  * We need to copy the types of the compute kernel arguments to use them host-
@@ -35,14 +35,23 @@ struct BinaryOpType {
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type){
+std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
     std::map<string, string> defines;
     // TODO(AP): remove duplication
     string op_name, op_binary_type;
     switch (op_type) {
-        case BinaryOpType::ADD: op_name = "add_tiles"; op_binary_type = "EltwiseBinaryType::ELWADD"; break;
-        case BinaryOpType::SUB: op_name = "sub_tiles"; op_binary_type = "EltwiseBinaryType::ELWSUB"; break;
-        case BinaryOpType::MUL: op_name = "mul_tiles"; op_binary_type = "EltwiseBinaryType::ELWMUL"; break;
+        case BinaryOpType::ADD:
+            op_name = "add_tiles";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
+            break;
+        case BinaryOpType::SUB:
+            op_name = "sub_tiles";
+            op_binary_type = "EltwiseBinaryType::ELWSUB";
+            break;
+        case BinaryOpType::MUL:
+            op_name = "mul_tiles";
+            op_binary_type = "EltwiseBinaryType::ELWMUL";
+            break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
@@ -50,7 +59,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
     return defines;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
@@ -59,16 +68,14 @@ int main(int argc, char **argv) {
 
     try {
         /*
-        * Silicon accelerator setup
-        */
+         * Silicon accelerator setup
+         */
         constexpr int device_id = 0;
-        Device *device =
-            CreateDevice(device_id);
-
+        Device* device = CreateDevice(device_id);
 
         /*
-        * Setup program to execute along with its buffers and kernels to use
-        */
+         * Setup program to execute along with its buffers and kernels to use
+         */
         CommandQueue& cq = device->command_queue();
 
         Program program = CreateProgram();
@@ -77,14 +84,14 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t single_tile_size = 2 * 1024;
         constexpr uint32_t num_tiles = 64;
-        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        constexpr uint32_t dram_buffer_size =
+            single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         tt_metal::InterleavedBufferConfig dram_config{
-                    .device= device,
-                    .size = dram_buffer_size,
-                    .page_size = dram_buffer_size,
-                    .buffer_type = tt_metal::BufferType::DRAM
-        };
+            .device = device,
+            .size = dram_buffer_size,
+            .page_size = dram_buffer_size,
+            .buffer_type = tt_metal::BufferType::DRAM};
 
         std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
         std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
@@ -96,16 +103,22 @@ int main(int argc, char **argv) {
          */
         constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
         constexpr uint32_t num_input_tiles = 2;
-        CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
+        CircularBufferConfig cb_src0_config =
+            CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_size);
         CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-        CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
+        CircularBufferConfig cb_src1_config =
+            CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src1_cb_index, single_tile_size);
         CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
+        CircularBufferConfig cb_output_config =
+            CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(output_cb_index, single_tile_size);
         CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         /*
@@ -127,8 +140,7 @@ int main(int argc, char **argv) {
         /*
          * Set the parameters that the compute kernel will use.
          */
-        std::vector<uint32_t> compute_kernel_args = {
-        };
+        std::vector<uint32_t> compute_kernel_args = {};
 
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
@@ -146,9 +158,7 @@ int main(int argc, char **argv) {
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args,
-                .defines = get_defines(BinaryOpType::ADD)
-            }
-        );
+                .defines = get_defines(BinaryOpType::ADD)});
 
         /*
          * Create source data and write to DRAM.
@@ -167,46 +177,30 @@ int main(int argc, char **argv) {
          * Configure program and runtime kernel arguments, then execute.
          */
 
-
         SetRuntimeArgs(
             program,
             binary_reader_kernel_id,
             core,
-            {
-                src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
-                num_tiles,
-                src1_dram_buffer->address(),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
-                num_tiles,
-                0
-            }
-        );
+            {src0_dram_buffer->address(),
+             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+             num_tiles,
+             src1_dram_buffer->address(),
+             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+             num_tiles,
+             0});
 
-        SetRuntimeArgs(
-            program,
-            eltwise_binary_kernel_id,
-            core,
-            {
-                num_tiles, 1
-            }
-        );
+        SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {num_tiles, 1});
 
         SetRuntimeArgs(
             program,
             unary_writer_kernel_id,
             core,
-            {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-                num_tiles
-            }
-        );
-
-
+            {dst_dram_buffer->address(),
+             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+             num_tiles});
 
         EnqueueProgram(cq, program, false);
         Finish(cq);
@@ -254,9 +248,7 @@ int main(int argc, char **argv) {
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args,
-                .defines = get_defines(BinaryOpType::MUL)
-            }
-        );
+                .defines = get_defines(BinaryOpType::MUL)});
 
         /*
          * Send new input data.
@@ -275,40 +267,26 @@ int main(int argc, char **argv) {
             program_mul,
             binary_reader_kernel_id,
             core,
-            {
-                src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
-                num_tiles,
-                src1_dram_buffer->address(),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
-                num_tiles,
-                0
-            }
-        );
+            {src0_dram_buffer->address(),
+             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+             num_tiles,
+             src1_dram_buffer->address(),
+             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+             num_tiles,
+             0});
 
-        SetRuntimeArgs(
-            program_mul,
-            eltwise_binary_kernel_id,
-            core,
-            {
-                num_tiles, 1
-            }
-        );
+        SetRuntimeArgs(program_mul, eltwise_binary_kernel_id, core, {num_tiles, 1});
 
         SetRuntimeArgs(
             program_mul,
             unary_writer_kernel_id,
             core,
-            {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-                num_tiles
-            }
-        );
-
+            {dst_dram_buffer->address(),
+             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+             num_tiles});
 
         /*
          * Execute.
@@ -323,10 +301,9 @@ int main(int argc, char **argv) {
          */
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-        auto transform_to_golden = [](const bfloat16 &a) {
-            return bfloat16((a.to_float() + val_to_add) * val_to_mul);
-        };
-        std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
+        auto transform_to_golden = [](const bfloat16& a) { return bfloat16((a.to_float() + val_to_add) * val_to_mul); };
+        std::vector<uint32_t> golden_vec =
+            pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
         constexpr float abs_tolerance = 0.01f;
         constexpr float rel_tolerance = 0.001f;
@@ -338,7 +315,7 @@ int main(int argc, char **argv) {
 
         pass &= CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         tt::log_error(tt::LogTest, "Test failed with exception!");
         tt::log_error(tt::LogTest, "{}", e.what());
 

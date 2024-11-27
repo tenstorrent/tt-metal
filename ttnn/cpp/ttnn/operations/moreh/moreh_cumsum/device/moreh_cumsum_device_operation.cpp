@@ -69,8 +69,7 @@ MorehCumsumDeviceOperation::tensor_return_value_t MorehCumsumDeviceOperation::cr
     }
 
     auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    return create_device_tensor(
-        output_shape, input.dtype(), input.layout(), input.device());
+    return create_device_tensor(output_shape, input.dtype(), input.layout(), input.device());
 }
 
 std::tuple<MorehCumsumDeviceOperation::operation_attributes_t, MorehCumsumDeviceOperation::tensor_args_t>

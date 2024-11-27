@@ -11,7 +11,7 @@ namespace tt::stl {
 
 template <typename T, std::size_t Alignment = alignof(T)>
 class aligned_allocator {
-   public:
+public:
     static_assert(Alignment >= alignof(T), "Alignment must be at least as strict as alignof(T)");
 
     constexpr static std::align_val_t alignment{Alignment};

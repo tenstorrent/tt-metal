@@ -35,7 +35,6 @@ struct ExecuteScaleMaskSoftmax {
 };
 
 struct ExecuteSoftmaxInPlace {
-
     // softmax_in_place
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -45,7 +44,6 @@ struct ExecuteSoftmaxInPlace {
 };
 
 struct ExecuteScaleMaskSoftmaxInPlace {
-
     // scale_mask_softmax_in_place
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -58,7 +56,6 @@ struct ExecuteScaleMaskSoftmaxInPlace {
 };
 
 struct ExecuteScaleCausalMaskHWSoftmaxInPlace {
-
     // scale_causal_mask_hw_dims_softmax_in_place
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,

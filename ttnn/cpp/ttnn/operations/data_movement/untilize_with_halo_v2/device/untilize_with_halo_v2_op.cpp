@@ -25,8 +25,9 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) cons
     }
     TT_FATAL(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
-        "Unsupported memory layout {}.", input_tensor.memory_config().memory_layout);
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported memory layout {}.",
+        input_tensor.memory_config().memory_layout);
     TT_FATAL(input_tensor.shard_spec().has_value(), "Error");
 }
 

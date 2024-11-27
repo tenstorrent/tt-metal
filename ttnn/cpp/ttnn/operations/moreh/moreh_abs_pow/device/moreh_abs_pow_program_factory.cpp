@@ -8,10 +8,10 @@
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation::MorehAbsPowFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output) {
-    const auto &input = tensor_args.input;
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input = tensor_args.input;
     const auto p = operation_attributes.p;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -153,7 +153,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
         const std::vector<uint32_t> reader_runtime_args{
             input.buffer()->address(),
             static_cast<uint32_t>(is_dram(input)),
-            *reinterpret_cast<uint32_t *>(&decimal),
+            *reinterpret_cast<uint32_t*>(&decimal),
             num_units_per_core,
             Wt,
             tile_offset,
@@ -177,27 +177,27 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
 }
 
 void MorehAbsPowOperation::MorehAbsPowFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output) {
-    auto &program = cached_program.program;
-    auto &reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
-    auto &writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
-    auto &num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    auto &num_cores_y = cached_program.shared_variables.num_cores_y;
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    auto& reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
+    auto& writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
+    auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
     for (uint32_t icore = 0; icore < num_cores_to_be_used; icore++) {
         CoreCoord core = {icore / num_cores_y, icore % num_cores_y};
         // readers
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
             runtime_args[0] = tensor_args.input.buffer()->address();
         }
 
         // writer
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
             runtime_args[0] = output.buffer()->address();
         }
     }

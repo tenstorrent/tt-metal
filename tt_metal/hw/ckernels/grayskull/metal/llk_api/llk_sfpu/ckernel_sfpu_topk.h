@@ -16,29 +16,25 @@ namespace sfpu {
 
 // calculate_bitonic_topk_phases_steps is unused for Grayskull
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_bitonic_topk_phases_steps()
-{
+inline void calculate_bitonic_topk_phases_steps() {
     _bitonic_topk_phases_steps<APPROXIMATION_MODE, ITERATIONS>(0, 0, 0, 0, 0);
 }
 
 // calculate_bitonic_topk_merge is unused for Grayskull
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_bitonic_topk_merge()
-{
+inline void calculate_bitonic_topk_merge() {
     _bitonic_topk_merge<APPROXIMATION_MODE, ITERATIONS>(0, 0);
 }
 
 // calculate_bitonic_topk_rebuild is unused for Grayskull
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_bitonic_topk_rebuild()
-{
+inline void calculate_bitonic_topk_rebuild() {
     _bitonic_topk_rebuild<APPROXIMATION_MODE, ITERATIONS>(0, 0, 0, 0, 0);
 }
 
 // topk_init is unused for Grayskull
 template <bool APPROXIMATION_MODE>
-inline void topk_init()
-{
+inline void topk_init() {
     _init_topk();
 }
 

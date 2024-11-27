@@ -17,10 +17,7 @@ namespace ttnn::operations::unary::program {
 using namespace tt::constants;
 
 UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -36,7 +33,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::Device *device = input.device();
+    tt::tt_metal::Device* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -91,7 +88,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -145,7 +142,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         num_tiles_written += num_tiles_per_core;
     }
 
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
+    return cached_program_t{
+        std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void UnaryProgramFactory::override_runtime_arguments(
@@ -153,7 +151,6 @@ void UnaryProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
@@ -169,12 +166,12 @@ void UnaryProgramFactory::override_runtime_arguments(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     }

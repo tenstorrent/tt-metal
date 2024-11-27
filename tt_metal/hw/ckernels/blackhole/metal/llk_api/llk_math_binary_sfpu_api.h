@@ -32,7 +32,12 @@ inline void llk_math_eltwise_binary_sfpu(
 
 template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_init(
-    const uint param0 = 0, const uint param1 = 0, const uint param2 = 0, const uint param3 = 0, const uint param4 = 0, const uint param5 = 0) {
+    const uint param0 = 0,
+    const uint param1 = 0,
+    const uint param2 = 0,
+    const uint param3 = 0,
+    const uint param4 = 0,
+    const uint param5 = 0) {
     _llk_math_eltwise_binary_sfpu_init_<sfpu_op, APPROXIMATE>(param0, param1, param2, param3, param4, param5);
 }
 
