@@ -83,7 +83,7 @@ def test_llama_attention_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=max_seq_len)
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -134,7 +134,7 @@ def test_llama_attention_inference(
         paged_attention_config=paged_attention_config,
     )
 
-    pt_attention_input = (torch.rand(batch_size, seq_len, model_args.dim) * 2) - 1
+    pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_inputs_ttnn_prefill(
         tt_attention_input,
@@ -152,14 +152,14 @@ def test_llama_attention_inference(
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         0, :, :, : model_args.dim
     ].view(
-        batch_size, seq_len, -1
+        batch_size, max_seq_len, -1
     )  # [ batch_size, seq, dim]
 
-    positions = torch.LongTensor(range(seq_len))
+    positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
         model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
     )[positions]
-    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+    attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
     reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 

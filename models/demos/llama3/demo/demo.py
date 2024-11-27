@@ -803,7 +803,7 @@ def run_llama3_demo(
     ids=[
         "general-1_batch",
         "general-2_batch",
-        "instructs-1_batch",
+        "instruct-1_batch",
         "instruct-2_batch",
         "instruct-long-performance",
         "instruct-long-accuracy",
@@ -832,11 +832,11 @@ def run_llama3_demo(
     "paged_attention",
     (
         True,
-        # False
+        # False,
     ),
     ids=(
         "paged_attention",
-        # "default_attention"
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(  # TODO Substitute these values for a proper vLLM integration
