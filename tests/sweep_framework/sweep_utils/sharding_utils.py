@@ -8,14 +8,16 @@ import random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
-def gen_sharded_spec_unary(num_shapes, y, x, max_tensor_size=4 * 1024 * 1024):
+def gen_sharded_spec_unary(
+    num_shapes, y, x, max_tensor_size=4 * 1024 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]
+):
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
     spec_list = []
 
     for sharding_strategy, shard_orientation, rank, layout in itertools.product(
-        sharding_strategy_list, shard_orientation_list, [4, 3, 2], ["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]
+        sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts
     ):
         if sharding_strategy == "tensor_wh":
             tensor_hw_as_shard_shape = True
@@ -57,11 +59,8 @@ def gen_sharded_spec_unary(num_shapes, y, x, max_tensor_size=4 * 1024 * 1024):
                 min_shard_size_y = 32 * y
                 min_shard_size_x = 32 * x
 
-                input_shape = random.choice(
-                    _gen_reshape_args_from_volume(
-                        max_tensor_size // (min_shard_size_x * min_shard_size_y), step=1, out_dims=rank
-                    )
-                )
+                rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y))
+                input_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank))
                 input_shape = list(input_shape["reshape_dims"])
                 input_shape[-1] *= min_shard_size_y
                 input_shape[-2] *= min_shard_size_x

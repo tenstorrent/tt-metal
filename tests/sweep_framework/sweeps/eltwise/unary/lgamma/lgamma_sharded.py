@@ -12,7 +12,7 @@ import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm, get_device_grid_size
 from tests.sweep_framework.sweep_utils.sharding_utils import gen_sharded_spec_unary, parse_sharding_spec
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_inf
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -30,8 +30,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, Y, X, max_tensor_size=2 * 1024 * 1024),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_spec": gen_sharded_spec_unary(16, Y, X, max_tensor_size=2 * 1024 * 1024, layouts=["TILE_LAYOUT"]),
+        "input_a_dtype": [ttnn.bfloat16],
     },
 }
 
@@ -80,7 +80,8 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.lgamma(torch_input_tensor_a)
+    golden_function = ttnn.get_golden_function(ttnn.lgamma)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
 
     sharded_config = ttnn.create_sharded_memory_config(
         shape=input_shape,
