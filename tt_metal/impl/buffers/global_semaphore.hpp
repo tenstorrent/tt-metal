@@ -19,37 +19,37 @@ class Buffer;
 class Device;
 
 class GlobalSemaphore {
-   public:
+public:
     GlobalSemaphore(
-        Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
     GlobalSemaphore(
-        Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
-    GlobalSemaphore(const GlobalSemaphore &) = default;
-    GlobalSemaphore &operator=(const GlobalSemaphore &) = default;
+    GlobalSemaphore(const GlobalSemaphore&) = default;
+    GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
 
-    GlobalSemaphore(GlobalSemaphore &&) noexcept = default;
-    GlobalSemaphore &operator=(GlobalSemaphore &&) noexcept = default;
+    GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
+    GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
 
     static std::unique_ptr<GlobalSemaphore> create(
-        Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
     static std::unique_ptr<GlobalSemaphore> create(
-        Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
     DeviceAddr address() const;
 
     void reset_semaphore_value();
 
-   private:
+private:
     void setup_buffer(BufferType buffer_type);
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     std::shared_ptr<Buffer> buffer_;
     std::vector<uint32_t> host_buffer_;
-    Device *device_;
+    Device* device_;
     CoreRangeSet cores_;
     uint32_t initial_value_ = 0;
 };

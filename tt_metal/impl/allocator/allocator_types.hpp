@@ -15,7 +15,7 @@ namespace tt::tt_metal {
 // Fwd declares
 struct Allocator;
 namespace allocator {
-    class BankManager;
+class BankManager;
 }
 
 // Setup what each core-type is
@@ -46,7 +46,8 @@ struct AllocatorConfig {
     std::unordered_map<CoreCoord, AllocCoreType> core_type_from_noc_coord_table = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_x = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
-    BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
+    BankMapping l1_bank_remap =
+        {};  // for remapping which l1 bank points to which bank if we assume normal row-major assignment
     CoreRangeSet compute_grid = {};
     uint32_t alignment = 0;
     bool disable_interleaved = false;
@@ -62,12 +63,13 @@ enum class MemoryAllocator {
 namespace allocator {
 
 struct InitAndAllocFuncs {
-    std::function<void(Allocator &, const AllocatorConfig &)> init;
-    std::function<uint64_t(const AllocatorConfig &, BankManager &, uint64_t, uint64_t, bool, std::optional<uint32_t> )> alloc;
+    std::function<void(Allocator&, const AllocatorConfig&)> init;
+    std::function<uint64_t(const AllocatorConfig&, BankManager&, uint64_t, uint64_t, bool, std::optional<uint32_t>)>
+        alloc;
 };
 
-// Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme
-// is for a given storage substrate
+// Holds callback functions required by allocators that specify how to initialize the bank managers and what the
+// allocation scheme is for a given storage substrate
 struct AllocDescriptor {
     InitAndAllocFuncs dram;
     InitAndAllocFuncs l1;
@@ -78,9 +80,10 @@ struct Statistics {
     size_t total_allocated_bytes = 0;
     size_t total_free_bytes = 0;
     size_t largest_free_block_bytes = 0;
-    std::vector<uint32_t> largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
+    std::vector<uint32_t>
+        largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
 };
 
-}
+}  // namespace allocator
 
-}
+}  // namespace tt::tt_metal

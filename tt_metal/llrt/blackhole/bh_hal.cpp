@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "core_config.h" // ProgrammableCoreType
+#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 
@@ -13,9 +13,11 @@
 #include "blackhole/bh_hal.hpp"
 
 // Reserved DRAM addresses
-// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
+// committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+constexpr static std::uint32_t DRAM_BARRIER_SIZE =
+    ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 namespace tt {
 
@@ -23,8 +25,10 @@ namespace tt_metal {
 
 void Hal::initialize_bh() {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
-    static_assert(static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
-    static_assert(static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
@@ -56,8 +60,6 @@ void Hal::initialize_bh() {
         // No relocation needed
         return addr;
     };
-
-
 }
 
 }  // namespace tt_metal

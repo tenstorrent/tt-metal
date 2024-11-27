@@ -6,7 +6,7 @@
 
 #include "types.hpp"
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
 
 //==================================================
@@ -59,6 +59,5 @@ void ReleaseTrace(TraceHandle trace);
  */
 void EnqueueTrace(TraceHandle trace, bool blocking);
 
-
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal
