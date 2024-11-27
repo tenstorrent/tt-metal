@@ -71,8 +71,8 @@ inline std::vector<Device*> get_workers_from_device(OptionalAnyDevice device) {
 
 }  // namespace detail
 
-template <typename T, std::size_t rank=4>
-Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device){
+template <typename T, std::size_t rank = 4>
+Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device) {
     using namespace tt::constants;
     static_assert(rank >= 2, "Rank must be at least 2 when creating a tensor with TILE_LAYOUT");
     std::array<std::uint32_t, rank> intended_shape = {};
