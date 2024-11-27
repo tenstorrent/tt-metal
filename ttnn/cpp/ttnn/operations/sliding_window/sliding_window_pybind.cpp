@@ -17,8 +17,7 @@ void py_bind_sliding_window(py::module& module) {
             py::kw_only(),
             py::arg("grid"),
             py::arg("shard_scheme"),
-            py::arg("shard_orientation")
-        )
+            py::arg("shard_orientation"))
         .def_readwrite("grid", &ParallelConfig::grid)
         .def_readwrite("shard_scheme", &ParallelConfig::shard_scheme)
         .def_readwrite("shard_orientation", &ParallelConfig::shard_orientation);

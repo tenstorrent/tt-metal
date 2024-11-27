@@ -25,9 +25,11 @@ std::vector<Tensor> AddcmulBackwardOperation::invoke(
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(
+        ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(
+        ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
@@ -43,16 +45,23 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
-    Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
+    Tensor grad_a = ttnn::multiply(
+        ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
     grad_tensor.emplace_back(where(
         ttnn::eqz(tensor2, output_mem_config),
         where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
         grad_a,
         output_mem_config));
     Tensor tmp = ttnn::multiply(
-        ttnn::multiply(ttnn::neg(grad, output_mem_config), value, std::nullopt, output_mem_config), tensor1, std::nullopt, output_mem_config);
-    Tensor grad_b =
-        ttnn::multiply(tmp, ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(ttnn::neg(grad, output_mem_config), value, std::nullopt, output_mem_config),
+        tensor1,
+        std::nullopt,
+        output_mem_config);
+    Tensor grad_b = ttnn::multiply(
+        tmp,
+        ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_tensor.emplace_back(where(
         ttnn::eqz(tensor2, output_mem_config),
         where(ttnn::eqz(grad, output_mem_config), t_nan, -t_inf, output_mem_config),
@@ -73,7 +82,7 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     OptionalTensor other_grad) {
     std::vector<OptionalTensor> result;
     if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
+        if (input_grad.has_value()) {
             where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
         } else {
             input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
@@ -83,7 +92,7 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
         result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
+        if (other_grad.has_value()) {
             where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
         } else {
             other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
@@ -97,19 +106,28 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
 std::vector<Tensor> LerpBackwardOperation::invoke(
-    const Tensor& grad, const Tensor& input, const Tensor& end, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& end,
+    const Tensor& weight,
+    const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result_1 = ttnn::multiply(grad, ttnn::rsub(weight, 1.0, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_1);
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_2);
-    Tensor zero = ttnn::multiply(grad, ttnn::subtract(end, input, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor zero = ttnn::multiply(
+        grad, ttnn::subtract(end, input, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero);
     return grad_tensor;
 }
 
 std::vector<Tensor> LerpBackwardOperation::invoke(
-    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& end,
+    float weight,
+    const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float sub_scalar = 1.0f - weight;
     Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);
@@ -119,5 +137,4 @@ std::vector<Tensor> LerpBackwardOperation::invoke(
     return grad_tensor;
 }
 
-
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::operations::ternary_backward

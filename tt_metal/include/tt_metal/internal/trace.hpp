@@ -6,13 +6,12 @@
 
 #include "types.hpp"
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
 
 //==================================================
 //                  INTERNAL TRACE OPERATIONS
 //==================================================
 
-
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal

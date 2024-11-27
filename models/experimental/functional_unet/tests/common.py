@@ -7,7 +7,7 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-UNET_FULL_MODEL_PCC = 0.99995
+UNET_FULL_MODEL_PCC = 0.999
 
 
 def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:

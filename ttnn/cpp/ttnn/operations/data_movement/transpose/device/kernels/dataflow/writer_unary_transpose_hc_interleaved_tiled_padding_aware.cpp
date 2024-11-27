@@ -6,13 +6,12 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-
     // Retrieve arguments
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
-    uint32_t start_tile_idx  = get_arg_val<uint32_t>(1);
-    uint32_t end_tile_idx  = get_arg_val<uint32_t>(2);
-    uint32_t start_padding_tile_idx  = get_arg_val<uint32_t>(3);
-    uint32_t end_padding_tile_idx  = get_arg_val<uint32_t>(4);
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t start_tile_idx = get_arg_val<uint32_t>(1);
+    uint32_t end_tile_idx = get_arg_val<uint32_t>(2);
+    uint32_t start_padding_tile_idx = get_arg_val<uint32_t>(3);
+    uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
 
     // Compile-time constants
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
@@ -47,10 +46,7 @@ void kernel_main() {
     const auto input_data_format = get_dataformat(cb_id_out0);
 
     const InterleavedAddrGenFast<dst_is_dram, TILE_HW> s = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_bytes,
-        .data_format = input_data_format
-    };
+        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = input_data_format};
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
@@ -166,7 +162,7 @@ void kernel_main() {
 
         constexpr uint32_t c_t = C_t - 1;
         constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
-        constexpr uint8_t face_c_start = C_in_tile/ FACE_HEIGHT;
+        constexpr uint8_t face_c_start = C_in_tile / FACE_HEIGHT;
 
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to (n, h, w_t)
@@ -186,7 +182,6 @@ void kernel_main() {
                 uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
 
                 for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
-
                     // Offset to the start of the current face along the width of the tile
                     uint32_t face_w_offset = face_w * face_height_width;
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {

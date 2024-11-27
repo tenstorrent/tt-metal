@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_bitwise_xor.h"
@@ -13,8 +12,6 @@
 #else
 #define MATH(x)
 #endif
-
-
 
 namespace ckernel {
 
@@ -26,10 +23,12 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     | | param0          | The value the output is if the input
+ * is greater than 0                     | uint32_t |                                                       | True     |
  */
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_bitwise_xor<APPROX>(idst, param0)));
@@ -40,5 +39,4 @@ ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void bitwise_xor_tile_init() { MATH((llk_math_eltwise_unary_sfpu_bitwise_xor_init<APPROX>())); }
 
-
-} // namespace ckernel
+}  // namespace ckernel

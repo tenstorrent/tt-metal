@@ -9,7 +9,7 @@
 #define DATUMS_PER_ROW 16
 
 // FIXME: ARCH_NAME specific include
-#include "tensix_types.h" // DEST_REGISTER_FULL_SIZE
+#include "tensix_types.h"  // DEST_REGISTER_FULL_SIZE
 
 namespace ttnn {
 
@@ -21,7 +21,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_fp32_acc,
     bool default_l1_acc,
     bool default_dst_full_sync_en) {
-
     DeviceComputeKernelConfig defaultConfig;
     if (device_kernel_config.has_value()) {
         auto compute_kernel_config = device_kernel_config.value();
@@ -38,7 +37,9 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
                         .math_approx_mode = math_approx_mode,
                         .dst_full_sync_en = dst_full_sync_en};
                 } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
+                    TT_ASSERT(
+                        ttnn::device::is_wormhole_or_blackhole(arch),
+                        "kernel config is not for wormhole_b0 or blackhole");
                     MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
                     bool math_approx_mode = compute_kernel_config.math_approx_mode;
                     bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -111,7 +112,6 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
-
     MathFidelity math_fidelity;
     bool math_approx_mode;
     bool fp32_dest_acc_en;
@@ -129,7 +129,8 @@ std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
                 packer_l1_acc = false;
                 dst_full_sync_en = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
+                TT_ASSERT(
+                    ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -144,8 +145,8 @@ std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     return std::make_tuple(math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en);
 }
 
-uint32_t get_dest_reg_count(const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape) {
-
+uint32_t get_dest_reg_count(
+    const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape) {
     uint32_t tile_height;
     uint32_t tile_width;
     if (tile_shape.has_value()) {

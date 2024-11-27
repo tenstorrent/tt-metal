@@ -30,12 +30,7 @@ template <
     int ITERATIONS = 4,
     bool IS_INT_SFPU_EN = false /*not used*/>
 inline void llk_math_calculate_sfpu(
-    uint param0 = 0,
-    uint param1 = 0,
-    uint param2 = 0,
-    uint param3 = 0,
-    uint param4 = 0,
-    uint param5 = 0) {
+    uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
     if constexpr (operation == SfpuType::exp_with_base) {
         constexpr bool zero_negative = true;
         _calculate_exponential_<APPROXIMATION_MODE, zero_negative, true, ITERATIONS>(ITERATIONS, param0);
@@ -60,11 +55,10 @@ inline void llk_math_calculate_sfpu(
     } else if constexpr (operation == SfpuType::max) {
         _calculate_max_<APPROXIMATION_MODE, ITERATIONS>();
     }
-    //erf, erfc are dispatched directly.
-
+    // erf, erfc are dispatched directly.
 }
 
-template <SfpuType sfpu_op, bool APPROXIMATE, bool IS_INT_SFPU_EN=false>
+template <SfpuType sfpu_op, bool APPROXIMATE, bool IS_INT_SFPU_EN = false>
 inline void llk_math_eltwise_unary_sfpu(
     uint dst_index,
     int vector_mode = (int)VectorMode::RC,
@@ -74,14 +68,14 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param3 = 0,
     uint param4 = 0,
     uint param5 = 0) {
-
     _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
     if (vector_mode == (int)VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration
         const int ITERATIONS = 1;
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {
-            llk_math_calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS>(param0, param1, param2, param3, param4, param5);
+            llk_math_calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS>(
+                param0, param1, param2, param3, param4, param5);
             // Move to the next face
             _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
@@ -105,7 +99,6 @@ inline void llk_math_eltwise_unary_sfpu(
         }
     }
     math::clear_dst_reg_addr();
-
 }
 
 }  // namespace ckernel

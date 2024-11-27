@@ -21,7 +21,7 @@ struct RotaryEmbeddingOperation {
         const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
-}  // namespace operations::transformer
+}  // namespace operations::experimental::transformer
 
 namespace experimental {
 

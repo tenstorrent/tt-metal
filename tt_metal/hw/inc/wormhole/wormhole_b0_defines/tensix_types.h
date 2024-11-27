@@ -136,10 +136,10 @@ struct TileHeader {
     }
 
     std::size_t size() const { return 16; }
-    const void *data() const { return this; }
+    const void* data() const { return this; }
     typedef std::uint8_t value_type;
 
-    bool operator!=(const TileHeader &rhs) const {
+    bool operator!=(const TileHeader& rhs) const {
         bool result =
             tile_size_16B != rhs.tile_size_16B || tile_id != rhs.tile_id || metadata_size_16B != rhs.metadata_size_16B;
         return result;
@@ -151,7 +151,7 @@ struct TileHeader {
 union TileHeader_u {
     uint32_t val[4];
     TileHeader header;
-    TileHeader_u(){};
+    TileHeader_u() {};
 };
 
 static_assert(sizeof(TileHeader) == 16, "TileHeader must be 16B");
@@ -276,8 +276,9 @@ struct io_queue_pointers_t {
     inline std::uint32_t get_buffer_end() const volatile { return base_addr + (buffer_size_16B << 4); }
 
     inline void increment_rd_pointer() volatile {
-        if (!valid())
+        if (!valid()) {
             return;
+        }
         std::uint32_t new_rdptr = rdptr + (data_size_16B << 4);
         if ((new_rdptr & ~WRAP_MASK) >= get_buffer_end()) {
             if (wrap_bit(new_rdptr)) {
@@ -292,8 +293,9 @@ struct io_queue_pointers_t {
     inline bool wrap_bit(std::uint32_t ptr) volatile { return (ptr & WRAP_MASK) != 0; }
 
     inline void increment_wr_pointer() volatile {
-        if (wrptr == INVALID_IO_QUEUE_POINTER)
+        if (wrptr == INVALID_IO_QUEUE_POINTER) {
             return;
+        }
         std::uint32_t new_wrptr = wrptr + (data_size_16B << 4);
         if ((new_wrptr & ~WRAP_MASK) >= get_buffer_end()) {
             if (wrap_bit(new_wrptr)) {

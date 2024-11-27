@@ -12,10 +12,7 @@ namespace operations {
 namespace kv_cache {
 
 struct ExecuteFillCache {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& cache,
-        const ttnn::Tensor& input,
-        const uint32_t batch_index);
+    static ttnn::Tensor invoke(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index);
 };
 
 struct ExecuteUpdateCache {
@@ -38,9 +35,7 @@ struct UpdateCacheOperation {
 
 struct FillCacheOperation {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& cache_tensor,
-        const ttnn::Tensor& input_tensor,
-        const uint32_t batch_idx);
+        const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, const uint32_t batch_idx);
 };
 
 }  // namespace kv_cache
@@ -53,7 +48,9 @@ constexpr auto update_cache_for_token_ = ttnn::register_operation_with_auto_laun
     "ttnn::kv_cache::update_cache_for_token_",
     ttnn::operations::kv_cache::ExecuteUpdateCache>();
 
-constexpr auto update_cache = ttnn::register_operation<"ttnn::update_cache", ttnn::operations::kv_cache::UpdateCacheOperation>();
-constexpr auto fill_cache = ttnn::register_operation<"ttnn::fill_cache", ttnn::operations::kv_cache::FillCacheOperation>();
+constexpr auto update_cache =
+    ttnn::register_operation<"ttnn::update_cache", ttnn::operations::kv_cache::UpdateCacheOperation>();
+constexpr auto fill_cache =
+    ttnn::register_operation<"ttnn::fill_cache", ttnn::operations::kv_cache::FillCacheOperation>();
 
 }  // namespace ttnn

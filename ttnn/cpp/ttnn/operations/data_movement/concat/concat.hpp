@@ -9,13 +9,11 @@
 
 #include <ranges>
 
-
 namespace ttnn {
 namespace operations {
 namespace data_movement {
 
 struct ConcatOperation {
-
     // Wrapper for TTDNN
     static ttnn::Tensor invoke(
         uint8_t queue_id,

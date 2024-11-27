@@ -60,10 +60,11 @@ struct FillOnesRMOperation {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace fill_rm
+}  // namespace data_movement
 }  // namespace operations
 
 constexpr auto fill_rm = ttnn::register_operation<"ttnn::fill_rm", ttnn::operations::data_movement::FillRMOperation>();
-constexpr auto fill_ones_rm = ttnn::register_operation<"ttnn::fill_ones_rm", ttnn::operations::data_movement::FillOnesRMOperation>();
+constexpr auto fill_ones_rm =
+    ttnn::register_operation<"ttnn::fill_ones_rm", ttnn::operations::data_movement::FillOnesRMOperation>();
 
 }  // namespace ttnn

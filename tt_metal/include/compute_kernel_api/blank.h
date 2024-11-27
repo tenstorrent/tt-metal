@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
- #pragma once
+#pragma once
 
- #ifdef TRISC_MATH
- #define MAIN math_main()
- #endif
+#ifdef TRISC_MATH
+#define MAIN math_main()
+#endif
 
- #ifdef TRISC_PACK
- #define MAIN pack_main()
- #endif
+#ifdef TRISC_PACK
+#define MAIN pack_main()
+#endif
 
- #ifdef TRISC_UNPACK
- #define MAIN unpack_main()
- #endif
+#ifdef TRISC_UNPACK
+#define MAIN unpack_main()
+#endif

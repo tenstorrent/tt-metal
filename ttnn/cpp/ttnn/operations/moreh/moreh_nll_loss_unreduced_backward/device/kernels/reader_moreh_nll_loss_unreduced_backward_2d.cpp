@@ -84,10 +84,10 @@ void kernel_main() {
                 uint32_t n = nt * TILE_HEIGHT + h;
                 uint32_t c = ct * TILE_WIDTH + w;
 
-                uint32_t target_tilized_idx = get_tilized_idx(0, h); // target(0, n)
+                uint32_t target_tilized_idx = get_tilized_idx(0, h);  // target(0, n)
                 int32_t target_val = target_l1_ptr[target_tilized_idx];
 
-                uint32_t input_grad_idx = get_tilized_idx(h, w); // input_grad(n, c)
+                uint32_t input_grad_idx = get_tilized_idx(h, w);  // input_grad(n, c)
 
                 uint16_t input_grad_val;
 
