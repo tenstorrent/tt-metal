@@ -107,7 +107,8 @@ struct OptimizedConvNew {
             enable_subblock_padding(enable_subblock_padding),
             use_non_tile_height(use_non_tile_height) {}
 
-    uint32_t estimate_L1_usage();
+    std::pair<uint32_t,uint32_t> estimate_L1_usage(DataType input_dtype, DataType weights_dtype, DataType output_dtype, DataType accum_dtype, bool enable_bias) const;
+
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;

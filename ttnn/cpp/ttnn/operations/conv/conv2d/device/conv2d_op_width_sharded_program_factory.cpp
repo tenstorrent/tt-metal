@@ -433,8 +433,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     if (has_bias) {
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
-        bias_ntiles =
-            bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+        bias_ntiles = weight_block_w_ntiles;
         bias_in_dram = bias_buffer->buffer_type() == BufferType::DRAM;
     }
 
@@ -681,10 +680,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
 
     // Local L1 to store temp vars
+    //Used for act_mcast_sender_semaphore_valid_addr_ptr
     CircularBufferConfig cb_for_l1_array_config =
         CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
             .set_page_size(cb_for_l1_array, 32 * 2);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
+    log_debug(LogOp, "CB for L1 Array CB: {}, npages: {}, pagesize: {}", cb_for_l1_array, 1, 32 * 2);
 
     CircularBufferConfig cb_sharded_act_config =
         CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
