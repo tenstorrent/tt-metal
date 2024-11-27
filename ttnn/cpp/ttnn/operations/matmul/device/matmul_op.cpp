@@ -1042,10 +1042,10 @@ Tensor matmul(
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
     const uint8_t queue_id,
-    std::vector<std::optional<Tensor>> optional_output_tensors) {
+    std::optional<Tensor> optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    const bool opt_output_empty = optional_output_tensors.empty();
+    const bool opt_output_empty = !optional_output_tensor.has_value();
 
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
@@ -1076,7 +1076,7 @@ Tensor matmul(
         {input_tensor_a, input_tensor_b},
         output_tensors,
         optional_input_tensors,
-        optional_output_tensors);
+        {optional_output_tensor});
     return output_tensors.at(0);
 }
 
