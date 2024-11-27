@@ -773,8 +773,7 @@ int main(int argc, char **argv) {
                     out.close();
                 }
                 // Determine if it passes performance goal
-                if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
-                && tx_skip_pkt_content_gen
+                if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && tx_skip_pkt_content_gen
                 // && !check_txrx_timeout
                 && rx_disable_data_check
                 && rx_disable_header_check
