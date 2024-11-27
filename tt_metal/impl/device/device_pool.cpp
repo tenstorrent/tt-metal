@@ -184,11 +184,11 @@ void DevicePool::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
