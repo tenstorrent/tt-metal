@@ -8,9 +8,11 @@
 
 namespace tt {
 
-const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {
+const core_descriptor_t& get_core_descriptor_config(
+    chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {
     // {arch : {product : {num hardware command queues : config}}}
-    static std::unordered_map<ARCH, std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>>> config_by_arch;
+    static std::unordered_map<ARCH, std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>>>
+        config_by_arch;
     // TODO: is there a better way to do this?
     static CoreType previous_dispatch_core_type;
     if (previous_dispatch_core_type != dispatch_core_type) {
@@ -33,20 +35,24 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     std::string product_name = get_product_name(arch, num_harvested_rows);
     if (tt::Cluster::instance().is_galaxy_cluster()) {
         if (tt::Cluster::instance().get_board_type(device_id) == BoardType::N150) {
-            //some Galaxy machines are setup with N150s that have 0 harvested rows.
-            //get_product_name ( ) returns those chips as galaxy. Override that to nebula_x1.
+            // some Galaxy machines are setup with N150s that have 0 harvested rows.
+            // get_product_name ( ) returns those chips as galaxy. Override that to nebula_x1.
             product_name = "nebula_x1";
         } else {
-            TT_ASSERT(tt::Cluster::instance().get_board_type(device_id) == BoardType::GALAXY, "Invalid Board Type in Galaxy Cluster. Only GALAXY and N150 are supported.");
+            TT_ASSERT(
+                tt::Cluster::instance().get_board_type(device_id) == BoardType::GALAXY,
+                "Invalid Board Type in Galaxy Cluster. Only GALAXY and N150 are supported.");
         }
     }
 
-    if (config_by_arch.count(arch) and config_by_arch.at(arch).count(product_name) and config_by_arch.at(arch).at(product_name).count(num_hw_cqs)) {
+    if (config_by_arch.count(arch) and config_by_arch.at(arch).count(product_name) and
+        config_by_arch.at(arch).at(product_name).count(num_hw_cqs)) {
         return config_by_arch.at(arch).at(product_name).at(num_hw_cqs);
     }
 
-    std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>> &config_by_product = config_by_arch[arch];
-    std::unordered_map<uint8_t, core_descriptor_t> &config_by_num_cqs = config_by_product[product_name];
+    std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>>& config_by_product =
+        config_by_arch[arch];
+    std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs = config_by_product[product_name];
 
     YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_type));
     YAML::Node desc_yaml = core_descriptor_yaml[product_name][std::to_string(num_hw_cqs)];
@@ -67,7 +73,7 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     if (not storage_cores.empty()) {
         try {
             storage_core_bank_size = desc_yaml["storage_core_bank_size"].as<uint32_t>();
-        } catch (std::runtime_error &ex) {
+        } catch (std::runtime_error& ex) {
             TT_THROW(
                 "Core descriptor yaml for {} needs to specify storage_core_bank_size since there are {} storage cores!",
                 get_string_lowercase(arch),
@@ -86,13 +92,12 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
     CoreCoord compute_grid_size(
         (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
-        (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1
-    );
+        (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
 
     std::vector<RelativeCoreCoord> compute_cores;
     for (auto x = 0; x < compute_grid_size.x; x++) {
         for (auto y = 0; y < compute_grid_size.y; y++) {
-            const RelativeCoreCoord relative_coord{.x=x, .y=y};
+            const RelativeCoreCoord relative_coord{.x = x, .y = y};
             compute_cores.push_back(relative_coord);
         }
     }
@@ -124,7 +129,8 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     return config_by_arch.at(arch).at(product_name).at(num_hw_cqs);
 }
 
-const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(chip_id_t chip, uint8_t num_hw_cqs, CoreType dispatch_core_type) {
+const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
+    chip_id_t chip, uint8_t num_hw_cqs, CoreType dispatch_core_type) {
     // Get logical compute grid dimensions and num workers
     static std::unordered_map<uint32_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
     // Unique hash generated based on the config that's being queried
@@ -134,15 +140,17 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(chip_id_t
         std::size_t tensix_num_worker_cols = worker_grid.x;
         std::size_t tensix_num_worker_rows = worker_grid.y;
         uint32_t tensix_num_worker_cores = tensix_num_worker_cols * tensix_num_worker_rows;
-        const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
+        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(chip);
         // Get physical compute grid range based on SOC Desc and Logical Coords
-        CoreCoord tensix_worker_start_phys = soc_desc.get_physical_core_from_logical_core(CoreCoord(0, 0), CoreType::WORKER); // Logical Worker Coords start at 0,0
-        CoreCoord tensix_worker_end_phys = soc_desc.get_physical_core_from_logical_core(CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1), CoreType::WORKER);
+        CoreCoord tensix_worker_start_phys = soc_desc.get_physical_core_from_logical_core(
+            CoreCoord(0, 0), CoreType::WORKER);  // Logical Worker Coords start at 0,0
+        CoreCoord tensix_worker_end_phys = soc_desc.get_physical_core_from_logical_core(
+            CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1), CoreType::WORKER);
         CoreRange tensix_worker_physical_grid = CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
-        physical_grid_config_cache.insert({config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});
+        physical_grid_config_cache.insert(
+            {config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});
     }
     return physical_grid_config_cache.at(config_hash);
-
 }
 
-} // namespace tt
+}  // namespace tt

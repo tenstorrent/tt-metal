@@ -6,13 +6,12 @@
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 
-
 /*************************************************************************
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
+inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t* unpack_AB_params) {
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
     // In0 -> unpB
@@ -82,7 +81,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
     const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces = partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const uint32_t unpB_num_faces =
+        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -108,7 +108,7 @@ inline void llk_unpack_AB_matmul(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
@@ -117,8 +117,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandA_id);  // In0/InA -> srcB - unused in lower API
 
     // TODO: remove partial_face flag, as this is easily to be confused with the partial face flag in math kernel
-    const bool partial_face_a = get_operand_partial_face(operandB_id); // In1/InB -> srcA
-    const bool partial_face_b = get_operand_partial_face(operandA_id); // In0/InA -> srcB`
+    const bool partial_face_a = get_operand_partial_face(operandB_id);  // In1/InB -> srcA
+    const bool partial_face_b = get_operand_partial_face(operandA_id);  // In0/InA -> srcB`
 
     std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
     std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;

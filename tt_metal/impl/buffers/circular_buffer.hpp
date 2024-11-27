@@ -12,18 +12,18 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class CircularBuffer {
-   public:
-    CircularBuffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+public:
+    CircularBuffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
 
     const CBHandle id() const { return id_; }
 
-    const CoreRangeSet &core_ranges() const { return core_ranges_; }
+    const CoreRangeSet& core_ranges() const { return core_ranges_; }
 
-    const CircularBufferConfig &config() const { return config_; }
+    const CircularBufferConfig& config() const { return config_; }
 
-    CircularBufferConfig &config() { return config_; }
+    CircularBufferConfig& config() { return config_; }
 
-    const std::unordered_set<uint32_t> &buffer_indices() const { return buffer_indices_; }
+    const std::unordered_set<uint32_t>& buffer_indices() const { return buffer_indices_; }
 
     uint32_t page_size(uint32_t buffer_index) const;
 
@@ -39,17 +39,15 @@ class CircularBuffer {
 
     uint32_t address() const;
 
-    bool is_on_logical_corerange(const CoreRange &logical_cr) const;
+    bool is_on_logical_corerange(const CoreRange& logical_cr) const;
 
-    bool is_on_logical_core(const CoreCoord &logical_core) const;
+    bool is_on_logical_core(const CoreCoord& logical_core) const;
 
     void assign_global_address();
 
-    void set_locally_allocated_address(uint32_t address) {
-        this->locally_allocated_address_ = address;
-    }
+    void set_locally_allocated_address(uint32_t address) { this->locally_allocated_address_ = address; }
 
-   private:
+private:
     bool uses_buffer_index(uint32_t buffer_index) const;
 
     void invalidate_locally_allocated_address();

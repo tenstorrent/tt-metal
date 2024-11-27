@@ -14,7 +14,7 @@ using ProgramHandle = v0::Program;
 class DeviceHandle;
 
 class CommandQueueHandle {
-   private:
+private:
     explicit constexpr CommandQueueHandle(DeviceHandle device, std::uint8_t id = 0) : device{device}, id{id} {}
 
     DeviceHandle device;
@@ -26,10 +26,10 @@ class CommandQueueHandle {
 };
 
 class TraceHandle {
-   public:
+public:
     explicit constexpr operator std::uint32_t() const noexcept { return id; }
 
-   private:
+private:
     explicit constexpr TraceHandle(CommandQueueHandle cq, std::uint32_t id) noexcept : cq{cq}, id{id} {}
 
     CommandQueueHandle cq;
@@ -40,53 +40,53 @@ class TraceHandle {
 };
 
 class KernelHandle {
-   public:
+public:
     explicit constexpr KernelHandle(tt_metal::KernelHandle id) noexcept : id{id} {}
 
     explicit constexpr operator tt_metal::KernelHandle() const noexcept { return id; }
 
-   private:
+private:
     tt_metal::KernelHandle id;
 };
 
 class CircularBufferHandle {
-   public:
+public:
     explicit constexpr CircularBufferHandle(v0::CBHandle cb_id) noexcept : cb_id{cb_id} {}
 
     explicit constexpr operator v0::CBHandle() const noexcept { return cb_id; }
 
-   private:
+private:
     v0::CBHandle cb_id;
 };
 
 class BufferHandle {
-   public:
-    explicit BufferHandle(const std::shared_ptr<v0::Buffer> &buffer_ptr) noexcept : buffer_ptr{buffer_ptr} {}
-    explicit BufferHandle(std::shared_ptr<v0::Buffer> &&buffer_ptr) noexcept :
-        buffer_ptr{static_cast<std::shared_ptr<v0::Buffer> &&>(buffer_ptr)} {}
+public:
+    explicit BufferHandle(const std::shared_ptr<v0::Buffer>& buffer_ptr) noexcept : buffer_ptr{buffer_ptr} {}
+    explicit BufferHandle(std::shared_ptr<v0::Buffer>&& buffer_ptr) noexcept :
+        buffer_ptr{static_cast<std::shared_ptr<v0::Buffer>&&>(buffer_ptr)} {}
 
-    explicit operator const std::shared_ptr<v0::Buffer> &() const noexcept { return buffer_ptr; }
+    explicit operator const std::shared_ptr<v0::Buffer>&() const noexcept { return buffer_ptr; }
 
-    v0::Buffer &operator*() const noexcept { return *buffer_ptr.get(); }
-    v0::Buffer *operator->() const noexcept { return buffer_ptr.get(); }
+    v0::Buffer& operator*() const noexcept { return *buffer_ptr.get(); }
+    v0::Buffer* operator->() const noexcept { return buffer_ptr.get(); }
 
-   private:
+private:
     std::shared_ptr<v0::Buffer> buffer_ptr;
 };
 
 class EventHandle {
-   public:
+public:
     explicit EventHandle();
-    explicit EventHandle(const std::shared_ptr<v0::Event> &event_ptr) noexcept : event_ptr{event_ptr} {}
-    explicit EventHandle(std::shared_ptr<v0::Event> &&event_ptr) noexcept :
-        event_ptr{static_cast<std::shared_ptr<v0::Event> &&>(event_ptr)} {}
+    explicit EventHandle(const std::shared_ptr<v0::Event>& event_ptr) noexcept : event_ptr{event_ptr} {}
+    explicit EventHandle(std::shared_ptr<v0::Event>&& event_ptr) noexcept :
+        event_ptr{static_cast<std::shared_ptr<v0::Event>&&>(event_ptr)} {}
 
-    explicit operator const std::shared_ptr<v0::Event> &() const noexcept { return event_ptr; }
+    explicit operator const std::shared_ptr<v0::Event>&() const noexcept { return event_ptr; }
 
-    v0::Event &operator*() const noexcept { return *event_ptr.get(); }
-    v0::Event *operator->() const noexcept { return event_ptr.get(); }
+    v0::Event& operator*() const noexcept { return *event_ptr.get(); }
+    v0::Event* operator->() const noexcept { return event_ptr.get(); }
 
-   private:
+private:
     std::shared_ptr<v0::Event> event_ptr;
 };
 

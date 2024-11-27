@@ -12,7 +12,7 @@
 
 template <bool is_fp32_dest_acc_en = false /*not used*/, StochRndType stoch_rnd_mode = StochRndType::None /*not used*/>
 inline void llk_unpack_AB_hw_configure(
-    const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0 /*not used*/) {
+    const llk_unpack_AB_params_t* unpack_AB_params, const int within_face_16x16_transpose = 0 /*not used*/) {
     // In0 -> unpA
     // In1 -> unpB
     const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
@@ -27,7 +27,9 @@ inline void llk_unpack_AB_hw_configure(
 
 template <bool is_fp32_dest_acc_en = false /*not used*/, StochRndType stoch_rnd_mode = StochRndType::None /*not used*/>
 inline void llk_unpack_AB_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0 /*not used*/) {
+    const std::uint32_t unpA_operand,
+    const std::uint32_t unpB_operand,
+    const int within_face_16x16_transpose = 0 /*not used*/) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
 
     llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_params, within_face_16x16_transpose);
@@ -38,7 +40,7 @@ inline void llk_unpack_AB_mop_config(const bool transpose_of_faces = false, cons
     _llk_unpack_AB_mop_config_<BType>();
 }
 
-//Params only used for WHB0
+// Params only used for WHB0
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA /*not used*/,
@@ -48,7 +50,7 @@ inline void llk_unpack_AB_init(
     _llk_unpack_AB_init_<BType>(transpose, acc_to_dest);
 }
 
-//Only need func for wormhole_b0 due to unpack src A transpose
+// Only need func for wormhole_b0 due to unpack src A transpose
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_reduce_init(
     const std::uint32_t operandA /*not used*/,

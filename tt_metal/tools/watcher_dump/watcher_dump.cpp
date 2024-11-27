@@ -36,29 +36,32 @@ void dump_data(
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
-    if (dump_cqs)
+    if (dump_cqs) {
         cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
-    if (dump_watcher)
+    }
+    if (dump_watcher) {
         cout << "Dumping Watcher Log into: " << watcher_get_log_file_name() << endl;
+    }
 
     // Only look at user-specified devices
-    vector<Device *> devices;
+    vector<Device*> devices;
     for (unsigned id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
-        Device* device = tt::tt_metal::CreateDeviceMinimal(id, num_hw_cqs, eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER);
+        Device* device = tt::tt_metal::CreateDeviceMinimal(
+            id, num_hw_cqs, eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER);
         devices.push_back(device);
         if (dump_cqs) {
-            std::unique_ptr<SystemMemoryManager> sysmem_manager =
-                std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
+            std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
         // Watcher attach wthout watcher init - to avoid clearing mailboxes.
-        if (dump_watcher)
+        if (dump_watcher) {
             watcher_attach(device);
+        }
     }
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
@@ -68,8 +71,9 @@ void dump_data(
     }
 
     // Dump noc data if requested
-    if (dump_noc_xfers)
+    if (dump_noc_xfers) {
         DumpNocData(devices);
+    }
 }
 
 void print_usage(const char* exec_name) {
@@ -100,7 +104,8 @@ int main(int argc, char* argv[]) {
     }
 
     // Go through user args, handle accordingly.
-    bool dump_watcher = false, dump_cqs = false, dump_cqs_raw_data = false, dump_noc_xfers = false, eth_dispatch = false;
+    bool dump_watcher = false, dump_cqs = false, dump_cqs_raw_data = false, dump_noc_xfers = false,
+         eth_dispatch = false;
     int num_hw_cqs = 1;
     for (int idx = 1; idx < argc; idx++) {
         string s(argv[idx]);
@@ -110,8 +115,9 @@ int main(int argc, char* argv[]) {
         } else if ((s.rfind("-d=", 0) == 0) || (s.rfind("--devices=", 0) == 0)) {
             string list = s.substr(s.find("=") + 1);
             // "all" is acceptable, and the same as the default.
-            if (list == "all")
+            if (list == "all") {
                 continue;
+            }
 
             // Otherwise, parse comma-separated list.
             device_ids.clear();

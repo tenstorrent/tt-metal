@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_right_shift.h"
@@ -13,8 +12,6 @@
 #else
 #define MATH(x)
 #endif
-
-
 
 namespace ckernel {
 
@@ -42,5 +39,4 @@ ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void right_shift_tile_init() { MATH((llk_math_eltwise_unary_sfpu_right_shift_init<APPROX>())); }
 
-
-} // namespace ckernel
+}  // namespace ckernel

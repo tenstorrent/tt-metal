@@ -62,8 +62,9 @@ inline void set_process_priority(int requested_priority) {
     // Get priority for calling process
     int process_priority = getpriority(PRIO_PROCESS, 0);
     log_debug(tt::LogMetal, "Initial Process Priority: {}", process_priority);
-    if (process_priority == requested_priority)
+    if (process_priority == requested_priority) {
         return;
+    }
     // Set priority for calling process to user specified value
     int rc = setpriority(PRIO_PROCESS, 0, requested_priority);
     if (rc) {
@@ -76,7 +77,7 @@ class WorkExecutor {
     // device. Commands are pushed to the worker queue and picked up + executed asyncrhonously. Higher level functions
     // that have access to the device handle can queue up tasks asynchronously. In synchronous/pass through mode, we
     // bypass the queue and tasks are executed immediately after being pushed.
-   public:
+public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
     WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
@@ -87,7 +88,7 @@ class WorkExecutor {
         managed_device_id = std::move(other.managed_device_id);
     }
 
-    WorkExecutor& operator=(WorkExecutor &&other) {
+    WorkExecutor& operator=(WorkExecutor&& other) {
         if (this != &other) {
             worker_state = std::move(other.worker_state);
             managed_device_id = std::move(other.managed_device_id);
@@ -128,8 +129,9 @@ class WorkExecutor {
             }
             if (this->worker_state == WorkerState::TERMINATE) {
                 // Terminate signal set, and queue is empty - worker exits
-                if (this->worker_queue.empty())
+                if (this->worker_queue.empty()) {
                     break;
+                }
             }
             ZoneScopedN("PopWork");
             // Queue non-empty: run command
@@ -140,10 +142,10 @@ class WorkExecutor {
 
     inline bool use_passthrough() const {
         return std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() ||
-            this->worker_state != WorkerState::RUNNING;
+               this->worker_state != WorkerState::RUNNING;
     }
 
-    template<typename F>
+    template <typename F>
     inline void push_work(F&& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
         if (use_passthrough()) {
@@ -210,7 +212,7 @@ class WorkExecutor {
 
     inline std::thread::id get_worker_thread_id() const { return this->worker_queue.worker_thread_id; }
 
-   private:
+private:
     std::thread worker_thread;
     WorkerState worker_state;
     int cpu_core_for_worker;

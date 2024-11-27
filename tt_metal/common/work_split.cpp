@@ -33,7 +33,7 @@ uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_si
 }
 
 std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
-    const uint32_t &num_tiles, const uint32_t &num_cores_max, bool request_even) {
+    const uint32_t& num_tiles, const uint32_t& num_cores_max, bool request_even) {
     uint32_t num_cores = 1;
     for (int i = 2; i <= num_cores_max; i++) {
         if ((num_tiles % i) == 0) {
@@ -44,16 +44,18 @@ std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
         num_cores = num_cores - num_cores % 2;
     }
     uint32_t per_core_tiles_dim = num_tiles / num_cores;
-    if (num_tiles % num_cores != 0)
+    if (num_tiles % num_cores != 0) {
         per_core_tiles_dim++;
+    }
     return {num_cores, per_core_tiles_dim};
 }
 
 int find_max_divisor(uint32_t val, uint32_t start_max_div) {
     int result = 1;
     for (int find_divisor = start_max_div; find_divisor >= 1; find_divisor--) {
-        if (find_divisor == 7 || find_divisor == 5)
+        if (find_divisor == 7 || find_divisor == 5) {
             continue;
+        }
         if (val % find_divisor == 0) {
             result = find_divisor;
             break;
@@ -166,8 +168,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     } else {
         // Group of cores that do more work
         core_group_1 = num_cores_to_corerangeset(units_to_divide % target_num_cores, grid_size, row_wise);
-        const auto &last_block_group_1 = (*core_group_1.ranges().rbegin());
-        const auto &last_block_all_cores = (*all_cores.ranges().rbegin());
+        const auto& last_block_group_1 = (*core_group_1.ranges().rbegin());
+        const auto& last_block_all_cores = (*all_cores.ranges().rbegin());
         if (row_wise) {
             // Case where only the last row is divided between core group 1 and 2
             if (last_block_group_1.end_coord.y == last_block_all_cores.end_coord.y &&

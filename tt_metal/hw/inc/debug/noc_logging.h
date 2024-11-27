@@ -9,11 +9,13 @@
 #if defined(NOC_LOGGING_ENABLED) && !defined(SKIP_NOC_LOGGING)
 void log_noc_xfer(uint32_t len) {
     // Hijack print buffer for noc logging data.
-    volatile tt_l1_ptr uint32_t *buf_ptr =
-        (volatile tt_l1_ptr uint32_t *)(reinterpret_cast<DebugPrintMemLayout *>(get_debug_print_buffer())->data);
+    volatile tt_l1_ptr uint32_t* buf_ptr =
+        (volatile tt_l1_ptr uint32_t*)(reinterpret_cast<DebugPrintMemLayout*>(get_debug_print_buffer())->data);
 
     int highest_bit_position = 0;
-    while (len >>= 1) highest_bit_position++;
+    while (len >>= 1) {
+        highest_bit_position++;
+    }
 
     buf_ptr[highest_bit_position]++;
 }

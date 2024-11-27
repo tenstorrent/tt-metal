@@ -8,24 +8,23 @@
 
 template <class T>
 class TSQueue {
-    public:
-        TSQueue();
-        TSQueue(uint32_t capacity);
+public:
+    TSQueue();
+    TSQueue(uint32_t capacity);
 
-        void push(T e);
-        T peek();
-        void pop();
+    void push(T e);
+    T peek();
+    void pop();
 
-        size_t size();
-        std::queue<T> q;
-        std::condition_variable empty_condition;
-        std::condition_variable full_condition;
-        uint32_t capacity;
+    size_t size();
+    std::queue<T> q;
+    std::condition_variable empty_condition;
+    std::condition_variable full_condition;
+    uint32_t capacity;
 
-    private:
-        std::mutex m;
+private:
+    std::mutex m;
 };
-
 
 template <class T>
 TSQueue<T>::TSQueue(uint32_t capacity) {
@@ -41,7 +40,6 @@ TSQueue<T>::TSQueue() {
 
 template <class T>
 void TSQueue<T>::push(T t) {
-
     std::unique_lock<std::mutex> lock(this->m);
 
     this->full_condition.wait(lock, [this]() { return this->q.size() < this->capacity; });
@@ -75,4 +73,6 @@ void TSQueue<T>::pop() {
 }
 
 template <class T>
-size_t TSQueue<T>::size() { return this->q.size(); }
+size_t TSQueue<T>::size() {
+    return this->q.size();
+}

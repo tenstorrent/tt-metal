@@ -30,7 +30,7 @@ namespace tt::stl {
 
 template <typename T, size_t INDEX_BITS>
 struct Key {
-   private:
+private:
     static_assert(INDEX_BITS < sizeof(T) * CHAR_BIT, "Index bits must be less than the size of the value type");
     static constexpr size_t VERSION_BITS = sizeof(T) * CHAR_BIT - INDEX_BITS;
 
@@ -45,7 +45,7 @@ struct Key {
     template <typename KeyT, typename U>
     friend class SlotMap;
 
-   public:
+public:
     using value_type = T;
     static constexpr T max_index = (T(1) << INDEX_BITS) - 1;
 
@@ -75,14 +75,14 @@ struct Key {
 
 template <typename KeyT, typename T>
 class SlotMap {
-   public:
+public:
     using index_type = KeyT::value_type;
     using version_type = KeyT::value_type;
     using value_type = T;
 
-   private:
+private:
     class Slot {
-       public:
+    public:
         // Even for vacant, odd for occupied.
         version_type version;
 
@@ -135,7 +135,7 @@ class SlotMap {
         = default;
     };
 
-   private:
+private:
     static constexpr index_type max_index = KeyT::max_index;
     static constexpr index_type invalid_index = std::numeric_limits<index_type>::max();
     std::vector<Slot> slots;
@@ -146,7 +146,7 @@ class SlotMap {
     // Number of occupied slots.
     uint32_t num_elems;
 
-   public:
+public:
     /**
      * @brief Constructs a SlotMap with an optional initial capacity.
      * @param capacity The initial capacity of the SlotMap.
@@ -240,7 +240,7 @@ class SlotMap {
      * @param new_capacity The new capacity to the SlotMap.
      */
     void reserve(size_t new_capacity) {
-        TT_FATAL(new_capacity <= max_index ,"SlotMap capacity out of bounds");
+        TT_FATAL(new_capacity <= max_index, "SlotMap capacity out of bounds");
 
         // Technically this can reserve more than max_index, but it's not a problem,
         // since we still check the index bounds when inserting.
@@ -277,7 +277,7 @@ class SlotMap {
     }
 
     class iterator {
-       public:
+    public:
         using iterator_category = std::forward_iterator_tag;
         using value_type = T;
         using difference_type = std::ptrdiff_t;
@@ -310,13 +310,13 @@ class SlotMap {
         bool operator==(const iterator& other) const { return index_ == other.index_; }
         bool operator!=(const iterator& other) const { return index_ != other.index_; }
 
-       private:
+    private:
         SlotMap* smap_;
         size_t index_;
     };
 
     class const_iterator {
-       public:
+    public:
         using iterator_category = std::forward_iterator_tag;
         using value_type = const T;
         using difference_type = std::ptrdiff_t;
@@ -349,7 +349,7 @@ class SlotMap {
         bool operator==(const const_iterator& other) const { return index_ == other.index_; }
         bool operator!=(const const_iterator& other) const { return index_ != other.index_; }
 
-       private:
+    private:
         const SlotMap* smap_;
         size_t index_;
     };
@@ -361,7 +361,7 @@ class SlotMap {
     const_iterator cbegin() const { return const_iterator(this, 0); }
     const_iterator cend() const { return const_iterator(this, slots.size()); }
 
-   private:
+private:
     void remove_unchecked(uint32_t idx) {
         // Remove value from the slot before overwriting union.
         auto& slot = slots[idx];

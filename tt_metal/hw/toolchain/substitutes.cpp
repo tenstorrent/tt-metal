@@ -10,10 +10,12 @@ using namespace std;
 extern "C" int atexit(void (*f)(void)) { return 0; }
 
 extern "C" void exit(int ec) {
-    while (1) { asm volatile ("" ::: "memory"); }
+    while (1) {
+        asm volatile("" ::: "memory");
+    }
 }
 
-extern "C" void wzerorange(uint32_t *start, uint32_t *end) {
+extern "C" void wzerorange(uint32_t* start, uint32_t* end) {
     // manually unrolled 4 times.
     start += 4;
 #pragma GCC unroll 0
@@ -31,6 +33,7 @@ extern "C" void wzerorange(uint32_t *start, uint32_t *end) {
         start += 2;
     }
     start -= 1;
-    if (__builtin_expect(start <= end, true))
+    if (__builtin_expect(start <= end, true)) {
         start[-1] = 0;
+    }
 }

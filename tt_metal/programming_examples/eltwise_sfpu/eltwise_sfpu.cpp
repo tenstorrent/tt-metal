@@ -10,12 +10,12 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 /*
-* 1. Host creates one vector of data.
-* 2. Device eltwise performs a unary SFPU operation on the data.
-* 3. Read result back and compare to golden.
-* */
+ * 1. Host creates one vector of data.
+ * 2. Device eltwise performs a unary SFPU operation on the data.
+ * 3. Read result back and compare to golden.
+ * */
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
@@ -24,16 +24,14 @@ int main(int argc, char **argv) {
 
     try {
         /*
-        * Silicon accelerator setup
-        */
+         * Silicon accelerator setup
+         */
         constexpr int device_id = 0;
-        Device *device =
-            CreateDevice(device_id);
-
+        Device* device = CreateDevice(device_id);
 
         /*
-        * Setup program to execute along with its buffers and kernels to use
-        */
+         * Setup program to execute along with its buffers and kernels to use
+         */
         CommandQueue& cq = device->command_queue();
 
         Program program = CreateProgram();
@@ -45,11 +43,10 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
         tt_metal::InterleavedBufferConfig dram_config{
-                    .device= device,
-                    .size = dram_buffer_size,
-                    .page_size = dram_buffer_size,
-                    .buffer_type = tt_metal::BufferType::DRAM
-        };
+            .device = device,
+            .size = dram_buffer_size,
+            .page_size = dram_buffer_size,
+            .buffer_type = tt_metal::BufferType::DRAM};
 
         std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
         const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
@@ -63,12 +60,16 @@ int main(int argc, char **argv) {
          */
         constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
         constexpr uint32_t num_input_tiles = 2;
-        CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
+        CircularBufferConfig cb_src0_config =
+            CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_size);
         CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
+        CircularBufferConfig cb_output_config =
+            CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(output_cb_index, single_tile_size);
         CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         /*
@@ -90,10 +91,7 @@ int main(int argc, char **argv) {
         /*
          * Set the parameters that the compute kernel will use.
          */
-        std::vector<uint32_t> compute_kernel_args = {
-            num_tiles,
-            1
-        };
+        std::vector<uint32_t> compute_kernel_args = {num_tiles, 1};
 
         constexpr bool math_approx_mode = false;
 
@@ -102,9 +100,7 @@ int main(int argc, char **argv) {
          * compute kernel.
          */
         const std::map<std::string, std::string> sfpu_defines = {
-            {"SFPU_OP_EXP_INCLUDE", "1"},
-            {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}
-        };
+            {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
 
         KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
             program,
@@ -114,8 +110,7 @@ int main(int argc, char **argv) {
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args,
                 .defines = sfpu_defines,
-            }
-        );
+            });
 
         /*
          * Create source data and write to DRAM.
@@ -137,20 +132,16 @@ int main(int argc, char **argv) {
                 static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
                 static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
                 num_tiles,
-            }
-        );
+            });
 
         SetRuntimeArgs(
             program,
             unary_writer_kernel_id,
             core,
-            {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-                num_tiles
-            }
-        );
+            {dst_dram_buffer->address(),
+             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
+             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+             num_tiles});
 
         EnqueueProgram(cq, program, false);
         Finish(cq);
@@ -162,10 +153,9 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> result_vec;
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-        auto transform_to_golden = [](const bfloat16 &a) {
-            return bfloat16(std::exp(a.to_float()));
-        };
-        std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
+        auto transform_to_golden = [](const bfloat16& a) { return bfloat16(std::exp(a.to_float())); };
+        std::vector<uint32_t> golden_vec =
+            pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
         constexpr float abs_tolerance = 0.02f;
         constexpr float rel_tolerance = 0.02f;
@@ -177,7 +167,7 @@ int main(int argc, char **argv) {
 
         pass &= CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         tt::log_error(tt::LogTest, "Test failed with exception!");
         tt::log_error(tt::LogTest, "{}", e.what());
 

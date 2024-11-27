@@ -16,21 +16,15 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_floor()
-{
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+inline void calculate_floor() {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat result = dst_reg[0];
         vFloat v = result;
-        vInt tmp = float_to_int16(result, 0); //TODO: Replace float_to_int16 to float_to_int32 once it is available
+        vInt tmp = float_to_int16(result, 0);  // TODO: Replace float_to_int16 to float_to_int32 once it is available
         result = int32_to_float(tmp, 0);
-        v_if (result > v){
-            result = result - 1;
-        }
+        v_if(result > v) { result = result - 1; }
         v_endif;
-        v_if (v <= SHRT_MIN || v >= SHRT_MAX){
-            result = v;
-        }
+        v_if(v <= SHRT_MIN || v >= SHRT_MAX) { result = v; }
         v_endif;
         dst_reg[0] = result;
         dst_reg++;

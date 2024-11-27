@@ -37,7 +37,6 @@ void MAIN {
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-
         cb_wait_front(cb_inp0, per_core_block_size);
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
@@ -56,9 +55,9 @@ void MAIN {
 #ifdef DST_ACCUM_MODE
 // The following define is needed if mul_tiles/_init is used
 #ifdef MUL_TILES_WITH_DST_ACCUM
-    ELTWISE_OP_INIT(cb_inp0, cb_inp1);
+        ELTWISE_OP_INIT(cb_inp0, cb_inp1);
 #else
-    ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
+        ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
 #endif
 #endif
 

@@ -44,10 +44,12 @@ constexpr std::string_view long_name() {
     std::string_view struct_name("struct ");
     std::string_view class_name("class ");
 
-    if (raw_name.substr(0, struct_name.size()) == struct_name)
+    if (raw_name.substr(0, struct_name.size()) == struct_name) {
         raw_name.remove_prefix(struct_name.size());
-    if (raw_name.substr(0, class_name.size()) == class_name)
+    }
+    if (raw_name.substr(0, class_name.size()) == class_name) {
         raw_name.remove_prefix(class_name.size());
+    }
 
     while (!raw_name.empty() && raw_name.back() == ' ') {
         raw_name.remove_suffix(1);

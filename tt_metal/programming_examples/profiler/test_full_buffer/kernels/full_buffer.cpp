@@ -5,13 +5,11 @@
 #include <cstdint>
 
 void kernel_main() {
-    for (int i = 0; i < LOOP_COUNT; i ++)
-    {
+    for (int i = 0; i < LOOP_COUNT; i++) {
         DeviceZoneScopedN("TEST-FULL");
-//Max unroll size
+// Max unroll size
 #pragma GCC unroll 65534
-        for (int j = 0 ; j < LOOP_SIZE; j++)
-        {
+        for (int j = 0; j < LOOP_SIZE; j++) {
             asm("nop");
         }
     }

@@ -14,7 +14,7 @@
     Should only contain relevant configuration for SOC
 */
 struct metal_SocDescriptor : public tt_SocDescriptor {
-   public:
+public:
     std::vector<CoreCoord> preferred_worker_dram_core;  // per channel preferred worker endpoint
     std::vector<CoreCoord> preferred_eth_dram_core;     // per channel preferred eth endpoint
     std::vector<size_t> dram_address_offsets;           // starting address offset
@@ -38,7 +38,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
     std::map<int, CoreCoord> chan_to_logical_eth_core_map;
 
-    metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType &board_type);
+    metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType& board_type);
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_channel(int dram_chan) const;
@@ -52,29 +52,28 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     const std::vector<CoreCoord>& get_logical_ethernet_cores() const;
     const std::vector<CoreCoord>& get_physical_ethernet_cores() const;
 
-    int get_dram_channel_from_logical_core(const CoreCoord &logical_coord) const;
+    int get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const;
 
-    CoreCoord get_physical_ethernet_core_from_logical(const CoreCoord &logical_coord) const;
-    CoreCoord get_logical_ethernet_core_from_physical(const CoreCoord &physical_coord) const;
-    CoreCoord get_physical_tensix_core_from_logical(const CoreCoord &logical_coord) const;
-    CoreCoord get_physical_dram_core_from_logical(const CoreCoord &logical_coord) const;
-    CoreCoord get_physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const;
+    CoreCoord get_physical_ethernet_core_from_logical(const CoreCoord& logical_coord) const;
+    CoreCoord get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const;
+    CoreCoord get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const;
+    CoreCoord get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const;
+    CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const;
 
     CoreCoord get_dram_grid_size() const;
 
     tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const;
 
-
     // Number of cores per DRAM bank ceiled to nearest integer
     int profiler_ceiled_core_count_perf_dram_bank = 0;
     std::map<CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
 
-   private:
+private:
     void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
     // This is temporary until virtual coordinates are enabled because BH chips on
     //  different cards use different physical PCIe NoC endpoints
-    void update_pcie_cores(const BoardType &board_type);
+    void update_pcie_cores(const BoardType& board_type);
 };

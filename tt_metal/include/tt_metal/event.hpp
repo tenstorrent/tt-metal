@@ -10,7 +10,7 @@
 //                  EVENT MANAGEMENT
 //==================================================
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
 
 /**
@@ -44,14 +44,12 @@ void EventSynchronize(const EventHandle& event);
  */
 bool EventQuery(const EventHandle& event);
 
-
 /**
  * @brief Synchronizes the device with the host by waiting for all operations to complete.
  *
  * @param device device to synchronize.
  */
 void DeviceSynchronize(DeviceHandle device);
-
 
 /**
  * @brief Synchronizes the command queue with the host by waiting for all operations to complete.
@@ -60,6 +58,5 @@ void DeviceSynchronize(DeviceHandle device);
  */
 void CommandQueueSynchronize(CommandQueueHandle cq);
 
-
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal

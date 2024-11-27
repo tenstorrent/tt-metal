@@ -25,11 +25,11 @@
 #include "dev_mem_map.h"
 
 #if defined(COMPILE_FOR_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
 #else
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
 #endif
 
@@ -71,8 +71,8 @@ enum dispatch_core_processor_classes {
 };
 
 enum dispatch_core_processor_masks {
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0     = 1 << DISPATCH_CLASS_TENSIX_DM0,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1     = 1 << DISPATCH_CLASS_TENSIX_DM1,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 = 1 << DISPATCH_CLASS_TENSIX_DM0,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 = 1 << DISPATCH_CLASS_TENSIX_DM1,
     DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
 
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
@@ -110,7 +110,7 @@ struct kernel_config_msg_t {
 
     volatile uint16_t host_assigned_id;
 
-    volatile uint8_t mode;                   // dispatch mode host/dev
+    volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
     volatile uint8_t max_cb_index;
@@ -123,7 +123,7 @@ struct go_msg_t {
     volatile uint8_t dispatch_message_offset;
     volatile uint8_t master_x;
     volatile uint8_t master_y;
-    volatile uint8_t signal; // INIT, GO, DONE, RESET_RD_PTR
+    volatile uint8_t signal;  // INIT, GO, DONE, RESET_RD_PTR
 } __attribute__((packed));
 
 struct launch_msg_t {  // must be cacheline aligned
@@ -170,14 +170,14 @@ struct debug_insert_delays_msg_t {
 
 enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
-    DebugSanitizeNocOK                    = 2,
-    DebugSanitizeNocAddrUnderflow         = 3,
-    DebugSanitizeNocAddrOverflow          = 4,
-    DebugSanitizeNocAddrZeroLength        = 5,
-    DebugSanitizeNocTargetInvalidXY       = 6,
-    DebugSanitizeNocMulticastNonWorker    = 7,
+    DebugSanitizeNocOK = 2,
+    DebugSanitizeNocAddrUnderflow = 3,
+    DebugSanitizeNocAddrOverflow = 4,
+    DebugSanitizeNocAddrZeroLength = 5,
+    DebugSanitizeNocTargetInvalidXY = 6,
+    DebugSanitizeNocMulticastNonWorker = 7,
     DebugSanitizeNocMulticastInvalidRange = 8,
-    DebugSanitizeNocAlignment             = 9,
+    DebugSanitizeNocAlignment = 9,
 };
 
 struct debug_assert_msg_t {
@@ -252,16 +252,15 @@ struct watcher_msg_t {
 
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
-    uint32_t pad; // to 1024 bytes
+    uint32_t pad;  // to 1024 bytes
 };
-
 
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #ifdef ARCH_BLACKHOLE
 static constexpr uint32_t PROFILER_RISC_COUNT = 1;
 #else
@@ -298,7 +297,6 @@ struct core_info_msg_t {
     volatile uint8_t noc_size_y;
     volatile uint8_t pad[29];
 };
-
 
 constexpr uint32_t launch_msg_buffer_num_entries = 4;
 struct mailboxes_t {

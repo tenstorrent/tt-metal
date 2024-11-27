@@ -17,11 +17,11 @@
 #endif
 
 // Macros for printing circular buffer internals
-#define CB_RD_PTR(id) (cb_interface[id].fifo_rd_ptr<<4) // only valid in unpacker thread
-#define CB_RD_LIM(id) ((cb_interface[id].fifo_limit_plus_1-1)<<4)
-#define CB_RD_SZ(id) (cb_interface[id].fifo_size<<4)
+#define CB_RD_PTR(id) (cb_interface[id].fifo_rd_ptr << 4)  // only valid in unpacker thread
+#define CB_RD_LIM(id) ((cb_interface[id].fifo_limit_plus_1 - 1) << 4)
+#define CB_RD_SZ(id) (cb_interface[id].fifo_size << 4)
 
-#define CB_WR_PTR(id) (cb_interface[id].fifo_wr_ptr<<4) // only valid in packer thread
+#define CB_WR_PTR(id) (cb_interface[id].fifo_wr_ptr << 4)  // only valid in packer thread
 #define CB_PAGE_COUNT(id) (cb_interface[id].fifo_num_pages)
 #define CB_PAGE_SIZE(id) (cb_interface[id].fifo_page_size << 4)
 
@@ -56,11 +56,11 @@ typedef struct {
 
 #if defined(DEBUG_PRINT_ENABLED)
 // Helper function to get a single datum, whose indexing depends on DataFormat
-inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t *data, uint32_t idx) {
+inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* data, uint32_t idx) {
     uint32_t adjusted_idx = 0;
     uint32_t bit_offset = 0;
     uint32_t mask = 0;
-    switch(data_format) {
+    switch (data_format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
             adjusted_idx = idx / 4;
@@ -86,9 +86,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t *dat
 
 inline tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    uint8_t cb,
-    dprint_tslice_cb_t cb_type,
-    dprint_tslice_ptr_t ptr_type
+    uint8_t cb, dprint_tslice_cb_t cb_type, dprint_tslice_ptr_t ptr_type
 #else
     uint8_t cb
 #endif
@@ -127,12 +125,12 @@ inline tile_info_t get_tile_info(
     info.face_dim_c = info.tile_dim_r * info.tile_dim_c / info.num_faces / info.face_dim_r;
     return info;
 }
-#endif // defined(DEBUG_PRINT_ENABLED)
+#endif  // defined(DEBUG_PRINT_ENABLED)
 
 // Specialization of TileSliceHostDev, with device-side implementation
-template <int MAX_BYTES=32*2>
+template <int MAX_BYTES = 32 * 2>
 struct TileSlice : TileSliceHostDev<MAX_BYTES> {
-    static inline uint32_t get_tilized_index(tile_info_t &tile_info, uint32_t h, uint32_t w) {
+    static inline uint32_t get_tilized_index(tile_info_t& tile_info, uint32_t h, uint32_t w) {
         uint32_t row_in_face = h % tile_info.face_dim_r;
         uint32_t col_in_face = w % tile_info.face_dim_c;
         uint32_t face_idx_r = h / tile_info.face_dim_r;
@@ -142,7 +140,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         return face_idx * tile_info.face_dim_r * tile_info.face_dim_c + row_in_face * tile_info.face_dim_c +
                col_in_face;
     }
-    static inline uint32_t get_exponent_index(tile_info_t &tile_info, uint32_t h, uint32_t w) {
+    static inline uint32_t get_exponent_index(tile_info_t& tile_info, uint32_t h, uint32_t w) {
         uint32_t row_in_face = h % tile_info.face_dim_r;
         uint32_t col_in_face = w % tile_info.face_dim_c;
         uint32_t face_idx_r = h / tile_info.face_dim_r;
@@ -185,8 +183,8 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         this->slice_range = slice_range;
         this->cb_id = cb;
         this->endl_rows = endl_rows;
-        this->data_count = 0; // Computed as we parse the data
-                              // CB pointer and DataFormat depend on RISC
+        this->data_count = 0;  // Computed as we parse the data
+                               // CB pointer and DataFormat depend on RISC
         this->return_code = DPrintOK;
 
         // DataFormat, rd/wr pointer, and Tile size all depend on RISC + in/out
@@ -201,7 +199,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         // If the data format is unsupported or corrupted, don't continue
         if (!is_supported_format(static_cast<DataFormat>(this->data_format))) {
             this->return_code = DPrintErrorUnsupportedFormat;
-            return; // Unsupported type, return
+            return;  // Unsupported type, return
         }
 
         // Move the pointer to the tile at index requested by user
@@ -212,11 +210,11 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         // Check for unprintable data, and return error as necessary
         if (this->cb_ptr < L1_UNRESERVED_BASE || this->cb_ptr >= MEM_L1_SIZE) {
             this->return_code = DPrintErrorBadPointer;
-            return; // bad tile pointer, return
+            return;  // bad tile pointer, return
         }
 
         // Stride through the data in the CB and place in print data buffer
-        volatile tt_l1_ptr uint8_t *cb_data = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(this->cb_ptr);
+        volatile tt_l1_ptr uint8_t* cb_data = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(this->cb_ptr);
         bool max_count_exceeded = false;
         uint32_t byte_idx = 0;
         for (uint32_t h = slice_range.h0; h < slice_range.h1; h += slice_range.hs) {
@@ -237,7 +235,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
                     }
                 } else {
                     uint32_t i = (print_untilized) ? TileSlice::get_tilized_index(tile_info, h, w)
-                                                          : w + h * tile_info.tile_dim_r;
+                                                   : w + h * tile_info.tile_dim_r;
                     for (uint32_t offset = 0; offset < bytes_per_datum; offset++) {
                         this->data[byte_idx++] = cb_data[i * bytes_per_datum + offset];
                         // If we've gone over the maximum data points to print, break
@@ -247,20 +245,28 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
                         }
                     }
                 }
-                if (max_count_exceeded)
+                if (max_count_exceeded) {
                     break;
+                }
                 this->data_count++;
             }
-            if (max_count_exceeded)
+            if (max_count_exceeded) {
                 break;
+            }
         }
-#endif // DEBUG_PRINT_ENABLED
+#endif  // DEBUG_PRINT_ENABLED
     }
 } ATTR_PACK;
 
 using TSLICE = TileSlice<64>;
 
-template<> uint8_t DebugPrintTypeToId<TileSlice<64>>()  { return DPrintTILESLICE; } // TODO(AP): can we use SFINAE here?
-template<> uint8_t DebugPrintTypeToId<TileSlice<128>>()  { return DPrintTILESLICE; } // TODO(AP): can we use SFINAE here?
+template <>
+uint8_t DebugPrintTypeToId<TileSlice<64>>() {
+    return DPrintTILESLICE;
+}  // TODO(AP): can we use SFINAE here?
+template <>
+uint8_t DebugPrintTypeToId<TileSlice<128>>() {
+    return DPrintTILESLICE;
+}  // TODO(AP): can we use SFINAE here?
 
 template DebugPrinter operator<< <TSLICE>(DebugPrinter, TSLICE val);

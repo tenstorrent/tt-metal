@@ -8,10 +8,9 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char **argv) {
-
+int main(int argc, char** argv) {
     /* Silicon accelerator setup */
-    Device *device = CreateDevice(0);
+    Device* device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();
@@ -20,11 +19,7 @@ int main(int argc, char **argv) {
 
     constexpr uint32_t single_tile_size = 2 * 1024;
     InterleavedBufferConfig dram_config{
-                .device= device,
-                .size = single_tile_size,
-                .page_size = single_tile_size,
-                .buffer_type = BufferType::DRAM
-    };
+        .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
 
     std::shared_ptr<Buffer> src0_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<Buffer> src1_dram_buffer = CreateBuffer(dram_config);
@@ -49,11 +44,15 @@ int main(int argc, char **argv) {
 
     /* Use L1 circular buffers to set input buffers */
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_src1_config = CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
+    CircularBufferConfig cb_src1_config =
+        CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src1_cb_index, single_tile_size);
     CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     /* Specify data movement kernel for reading/writing data to/from DRAM */
@@ -64,7 +63,10 @@ int main(int argc, char **argv) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(program, binary_reader_kernel_id, core,
+    SetRuntimeArgs(
+        program,
+        binary_reader_kernel_id,
+        core,
         {
             src0_dram_buffer->address(),
             src1_dram_buffer->address(),
@@ -75,8 +77,7 @@ int main(int argc, char **argv) {
             src1_dram_noc_y,
             dst_dram_noc_x,
             dst_dram_noc_y,
-        }
-    );
+        });
 
     EnqueueProgram(cq, program, false);
     Finish(cq);

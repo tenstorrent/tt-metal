@@ -15,22 +15,17 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_silu()
-{
+inline void calculate_silu() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
-        v_if ( val < 0.0f ) {
-            val = -val;
-        }
+        v_if(val < 0.0f) { val = -val; }
         v_endif;
 
-	    vFloat result = sigmoid_piecewise_linear_positive(val);
+        vFloat result = sigmoid_piecewise_linear_positive(val);
 
-	    val = dst_reg[0];
-        v_if ( val < 0.0f ) {
-            result = 1.0f - result;
-        }
+        val = dst_reg[0];
+        v_if(val < 0.0f) { result = 1.0f - result; }
         v_endif;
         result = val * result;
         dst_reg[0] = result;

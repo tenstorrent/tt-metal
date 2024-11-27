@@ -8,7 +8,7 @@
 #include <numeric>
 #include <vector>
 
-#include "core_config.h" // ProgrammableCoreType
+#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
@@ -18,23 +18,24 @@
 #include "hal_asserts.hpp"
 
 // FIXME: Eventually this file will be gone
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // L1_KERNEL_CONFIG_BASE
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
 
-#include "tt_soc_descriptor.h" // CoreType
+#include "tt_soc_descriptor.h"  // CoreType
 
-#define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
 // Reserved DRAM addresses
-// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
+// committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+constexpr static std::uint32_t DRAM_BARRIER_SIZE =
+    ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 namespace tt {
 
 namespace tt_metal {
 
 void Hal::initialize_gs() {
-
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
 
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
@@ -49,10 +50,12 @@ void Hal::initialize_gs() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] = ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_MAILBOX_ADDRESS_HOST(go_message);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
+        GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -64,7 +67,8 @@ void Hal::initialize_gs() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] = MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
@@ -79,46 +83,38 @@ void Hal::initialize_gs() {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;
                     local_init = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                }
-                break;
+                } break;
                 case 1: {
                     fw_base = MEM_NCRISC_FIRMWARE_BASE;
                     local_init = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                }
-                break;
+                } break;
                 case 2: {
                     switch (processor_type_idx) {
                         case 0: {
                             fw_base = MEM_TRISC0_FIRMWARE_BASE;
                             local_init = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH;
-                        }
-                        break;
+                        } break;
                         case 1: {
                             fw_base = MEM_TRISC1_FIRMWARE_BASE;
                             local_init = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH;
-                        }
-                        break;
+                        } break;
                         case 2: {
                             fw_base = MEM_TRISC2_FIRMWARE_BASE;
                             local_init = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH;
-                        }
-                        break;
+                        } break;
                     }
-                }
-                break;
-                default:
-                    TT_THROW("Unexpected processor class {} for Blackhole Tensix", processor_class_idx);
+                } break;
+                default: TT_THROW("Unexpected processor class {} for Blackhole Tensix", processor_class_idx);
             }
 
-            processor_types[processor_type_idx] = HalJitBuildConfig{
-                .fw_base_addr = fw_base,
-                .local_init_addr = local_init
-            };
+            processor_types[processor_type_idx] =
+                HalJitBuildConfig{.fw_base_addr = fw_base, .local_init_addr = local_init};
         }
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true});
+    this->core_info_.push_back(
+        {HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true});
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -134,8 +130,7 @@ void Hal::initialize_gs() {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-        }
-        else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+        } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
             // Move addresses in the NCRISC memory range to l1 (copied by kernel)
             return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
         }

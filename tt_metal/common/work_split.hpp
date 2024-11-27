@@ -23,7 +23,7 @@ uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_si
 // Set the largest number of cores less than the number of tiles
 // Returns the number of cores as well as the number of tiles per core
 std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
-    const uint32_t &num_tiles, const uint32_t &num_cores_max, bool request_even = false);
+    const uint32_t& num_tiles, const uint32_t& num_cores_max, bool request_even = false);
 
 // Finds the maximum divisor (excluding 5 or 7) of val starting at start_max_div and below
 int find_max_divisor(uint32_t val, uint32_t start_max_div);

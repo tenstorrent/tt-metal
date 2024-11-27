@@ -18,10 +18,10 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Trace {
-   private:
+private:
     static std::atomic<uint32_t> global_trace_id;
 
-   public:
+public:
     Trace() = delete;
 
     static uint32_t next_id();

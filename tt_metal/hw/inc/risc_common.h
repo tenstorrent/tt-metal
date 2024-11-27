@@ -60,8 +60,9 @@ inline __attribute__((always_inline)) uint32_t dram_io_empty(uint32_t rd_ptr, ui
 
 inline __attribute__((always_inline)) uint32_t
 dram_io_local_empty(uint32_t local_rd_ptr, uint32_t rd_ptr, uint32_t wr_ptr) {
-    if (rd_ptr == wr_ptr)
+    if (rd_ptr == wr_ptr) {
         return true;
+    }
 
     uint32_t case1 = rd_ptr < wr_ptr && (local_rd_ptr < rd_ptr || local_rd_ptr >= wr_ptr);
     uint32_t case2 = rd_ptr > wr_ptr && wr_ptr <= local_rd_ptr && local_rd_ptr < rd_ptr;
@@ -116,16 +117,17 @@ inline void deassert_all_reset() { WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV
 inline void assert_just_ncrisc_reset() { WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NCRISC); }
 
 inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
-    if (special_b == TILE_WORD_8_BIT)
+    if (special_b == TILE_WORD_8_BIT) {
         return a * TILE_WORD_8_BIT;
-    else if (special_b == TILE_WORD_16_BIT)
+    } else if (special_b == TILE_WORD_16_BIT) {
         return a * TILE_WORD_16_BIT;
-    else if (special_b == TILE_WORD_4_BIT)
+    } else if (special_b == TILE_WORD_4_BIT) {
         return a * TILE_WORD_4_BIT;
-    else if (special_b == TILE_WORD_2_BIT)
+    } else if (special_b == TILE_WORD_2_BIT) {
         return a * TILE_WORD_2_BIT;
-    else if (special_b == TILE_WORD_32_BIT)
+    } else if (special_b == TILE_WORD_32_BIT) {
         return a * TILE_WORD_32_BIT;
+    }
 
     while (true);
     return 0;
@@ -162,7 +164,8 @@ inline void riscv_wait(uint32_t cycles) {
 }
 
 // Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). If cache is enabled, the entire L1 is cached (no MMU).
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). If cache is enabled, the entire L1 is cached (no
+// MMU).
 //  Writing an address on one core and reading it from another core only requires the reader to invalidate.
 //  Need to invalidate any address written by noc that may have been previously read
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
@@ -193,11 +196,11 @@ inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
 // Flush i$ on ethernet riscs
 inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
-    // Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
-    //  between FW end and Kernel start.
-    // This works because risc tries to prefetch 1 cache line.
-    // The 32B still get cached but they are never executed
-    #pragma GCC unroll 2048
+// Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
+//  between FW end and Kernel start.
+// This works because risc tries to prefetch 1 cache line.
+// The 32B still get cached but they are never executed
+#pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
         asm("nop");
     }

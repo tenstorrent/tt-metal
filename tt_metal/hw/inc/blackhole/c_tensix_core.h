@@ -16,55 +16,56 @@
 #include "tensix_functions.h"
 
 class c_tensix_core {
-   public:
+public:
     static const bool is_emulated = false;
 
     static vptr_uint instrn_buf_base(uint32_t thread_id) {
         const uint32_t addr[] = {INSTRN_BUF_BASE, INSTRN1_BUF_BASE, INSTRN2_BUF_BASE};
-        return reinterpret_cast<uint32_t *>(addr[thread_id]);
+        return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
     static vptr_pc_buf pc_buf_base(uint32_t thread_id) {
         const uint32_t addr[] = {PC_BUF_BASE, PC1_BUF_BASE, PC2_BUF_BASE};
-        return reinterpret_cast<uint32_t *>(addr[thread_id]);
+        return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
-    static vptr_uint regfile_base() { return reinterpret_cast<uint32_t *>(REGFILE_BASE); }
+    static vptr_uint regfile_base() { return reinterpret_cast<uint32_t*>(REGFILE_BASE); }
     static vptr_uint cfg_regs_base(uint state_id = 0) {
-        if (state_id == 0)
-            return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE);
+        if (state_id == 0) {
+            return reinterpret_cast<uint32_t*>(TENSIX_CFG_BASE);
+        }
 
-        return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 4 * 4);
+        return reinterpret_cast<uint32_t*>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 4 * 4);
     }
     static vptr_mailbox mailbox_base(uint32_t thread_id) {
         const uint32_t addr[] = {TENSIX_MAILBOX1_BASE, TENSIX_MAILBOX2_BASE, TENSIX_MAILBOX3_BASE};
-        return reinterpret_cast<uint32_t *>(addr[thread_id]);
+        return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
-    static volatile uint32_t &test_mailbox() {
+    static volatile uint32_t& test_mailbox() {
         extern volatile std::uint32_t TEST_MAILBOX;
         return TEST_MAILBOX;
     }
 
-    static volatile uint64_t *wall_clock_mailbox() {
+    static volatile uint64_t* wall_clock_mailbox() {
         extern volatile std::uint64_t WALL_CLOCK_MAILBOX[];
         return WALL_CLOCK_MAILBOX;
     }
 
-    static volatile uint32_t *debug_mailbox() {
+    static volatile uint32_t* debug_mailbox() {
         extern volatile std::uint32_t DEBUG_MAILBOX[];
         return DEBUG_MAILBOX;
     }
 
-    static volatile uint32_t &cq_mailbox() {
+    static volatile uint32_t& cq_mailbox() {
         extern volatile std::uint32_t CQ_MAILBOX;
         return CQ_MAILBOX;
     }
 
     static void set_cq_mailbox(std::uint32_t value) {
-        auto &cq_mb = cq_mailbox();
+        auto& cq_mb = cq_mailbox();
         cq_mb = value;
     }
 
-    static volatile uint32_t *get_io_queue_pointer_base(uint32_t base_addr, uint32_t id) {
-        return reinterpret_cast<volatile uint32_t *>(base_addr) + (id << 2) + id;
+    static volatile uint32_t* get_io_queue_pointer_base(uint32_t base_addr, uint32_t id) {
+        return reinterpret_cast<volatile uint32_t*>(base_addr) + (id << 2) + id;
     }
 
     // These are used to track dynamic allocation/deallocations for perf analysis. They don't do anything by default,
@@ -147,12 +148,12 @@ class c_tensix_core {
     static uint64_t read_wall_clock();
     static uint32_t read_wall_clock_l();
 
-    static atomic_rwptr<uint> &fifo_wptr(uint *addr);
-    static atomic_rwptr<uint> &fifo_rdptr(uint *addr);
-    static atomic_rwptr<uint> &fifo_endptr(uint *addr);
-    static atomic_rwptr<uint> &fifo_wptr(uint addr);
-    static atomic_rwptr<uint> &fifo_rdptr(uint addr);
-    static atomic_rwptr<uint> &fifo_endptr(uint addr);
+    static atomic_rwptr<uint>& fifo_wptr(uint* addr);
+    static atomic_rwptr<uint>& fifo_rdptr(uint* addr);
+    static atomic_rwptr<uint>& fifo_endptr(uint* addr);
+    static atomic_rwptr<uint>& fifo_wptr(uint addr);
+    static atomic_rwptr<uint>& fifo_rdptr(uint addr);
+    static atomic_rwptr<uint>& fifo_endptr(uint addr);
 
     template <class T, std::enable_if_t<std::is_pointer<T>::value, int> = 0>
     static T l1_cast(uint32_t l1_offset) {
@@ -160,7 +161,7 @@ class c_tensix_core {
     }
 
     template <class T>
-    static std::uint32_t l1_cast(T *l1_pointer) {
+    static std::uint32_t l1_cast(T* l1_pointer) {
         return reinterpret_cast<uint32_t>(l1_pointer);
     }
 
@@ -219,8 +220,8 @@ class c_tensix_core {
 
     static inline void check_l1_address_range(std::uint32_t byte_addr, std::size_t length);
 
-   private:
-    static inline volatile uint32_t *noc_stream_registers(uint32_t stream_id);
+private:
+    static inline volatile uint32_t* noc_stream_registers(uint32_t stream_id);
 };
 
 /*inline void c_tensix_core::ex_set_stride_prepacked(cnt_id_t cntset_ind, uint chan_ind, uint xy_stride, uint zw_stride,
@@ -322,7 +323,7 @@ inline uint c_tensix_core::wait(int cycles) {
     int count = 0;
     uint bla = 0;
 
-    volatile uint *mailbox = mailbox_base(0);
+    volatile uint* mailbox = mailbox_base(0);
     while (count < cycles) {
         bla = mailbox[0];
         count++;
@@ -330,17 +331,17 @@ inline uint c_tensix_core::wait(int cycles) {
     return bla;
 }
 
-inline atomic_rwptr<uint> &c_tensix_core::fifo_wptr(uint *addr) { return make_atomic_rwptr(addr - 3); }
+inline atomic_rwptr<uint>& c_tensix_core::fifo_wptr(uint* addr) { return make_atomic_rwptr(addr - 3); }
 
-inline atomic_rwptr<uint> &c_tensix_core::fifo_rdptr(uint *addr) { return make_atomic_rwptr(addr - 4); }
+inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint* addr) { return make_atomic_rwptr(addr - 4); }
 
-inline atomic_rwptr<uint> &c_tensix_core::fifo_endptr(uint *addr) { return make_atomic_rwptr(addr - 1); }
+inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint* addr) { return make_atomic_rwptr(addr - 1); }
 
-inline atomic_rwptr<uint> &c_tensix_core::fifo_wptr(uint addr) { return fifo_wptr(l1_cast<uint *>(addr)); }
+inline atomic_rwptr<uint>& c_tensix_core::fifo_wptr(uint addr) { return fifo_wptr(l1_cast<uint*>(addr)); }
 
-inline atomic_rwptr<uint> &c_tensix_core::fifo_rdptr(uint addr) { return fifo_rdptr(l1_cast<uint *>(addr)); }
+inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint addr) { return fifo_rdptr(l1_cast<uint*>(addr)); }
 
-inline atomic_rwptr<uint> &c_tensix_core::fifo_endptr(uint addr) { return fifo_endptr(l1_cast<uint *>(addr)); }
+inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint addr) { return fifo_endptr(l1_cast<uint*>(addr)); }
 
 // NOC API
 // MM July 19 2022: In a desperate bid to fix copmiler errors, I just

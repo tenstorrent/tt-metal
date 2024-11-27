@@ -70,7 +70,7 @@ struct unique_any final {
         return *reinterpret_cast<const T*>(&type_erased_storage);
     }
 
-   private:
+private:
     alignas(ALIGNMENT) void* pointer = nullptr;
     alignas(ALIGNMENT) storage_t type_erased_storage;
 

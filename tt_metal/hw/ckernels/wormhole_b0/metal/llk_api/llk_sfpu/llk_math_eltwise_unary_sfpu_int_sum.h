@@ -10,10 +10,7 @@
 
 namespace ckernel {
 
-enum SumIntDim{
-    SUM_COL = 0,
-    SUM_ROW
-};
+enum SumIntDim { SUM_COL = 0, SUM_ROW };
 
 // New LLK SFPU APIs
 
@@ -34,13 +31,10 @@ inline void llk_math_eltwise_unary_sfpu_sum_int(uint dst_index, SumIntDim sum_in
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_add_int(uint dst_index, uint dst_offset, int iterations, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_sfpu_add_int(
+    uint dst_index, uint dst_offset, int iterations, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::add_int<APPROXIMATE, 8>,
-        dst_index,
-        vector_mode,
-        dst_offset
-        );
+        ckernel::sfpu::add_int<APPROXIMATE, 8>, dst_index, vector_mode, dst_offset);
 }
 
-}
+}  // namespace ckernel

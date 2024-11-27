@@ -6,9 +6,7 @@
 
 namespace tt::tt_metal {
 
-bool GraphTracker::is_enabled() const {
-    return (not processors.empty());
-}
+bool GraphTracker::is_enabled() const { return (not processors.empty()); }
 
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
     processors.push_back(new_processor);
@@ -45,7 +43,8 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
     }
 }
 
-void GraphTracker::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
+void GraphTracker::track_allocate_cb(
+    const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
     if (processors.empty()) {
         return;
     }
@@ -74,15 +73,17 @@ void GraphTracker::track_program(Program* program) {
 }
 
 bool GraphTracker::hook_allocate(const Buffer* buffer) {
-    if (hook == nullptr)
+    if (hook == nullptr) {
         return false;
+    }
 
     return hook->hook_allocate(buffer);
 }
 
 bool GraphTracker::hook_deallocate(Buffer* buffer) {
-    if (hook == nullptr)
+    if (hook == nullptr) {
         return false;
+    }
     return hook->hook_deallocate(buffer);
 }
 
@@ -93,21 +94,15 @@ bool GraphTracker::hook_program(tt::tt_metal::Program* program) {
     return hook->hook_program(program);
 }
 
-const std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::get_processors() const {
-    return processors;
-}
+const std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::get_processors() const { return processors; }
 
-const std::shared_ptr<IGraphHooks>& GraphTracker::get_hook() const {
-    return hook;
-}
+const std::shared_ptr<IGraphHooks>& GraphTracker::get_hook() const { return hook; }
 
 void GraphTracker::clear() {
     processors.clear();
     hook = nullptr;
 }
 
-void GraphTracker::clear_hook() {
-    hook = nullptr;
-}
+void GraphTracker::clear_hook() { hook = nullptr; }
 
-}
+}  // namespace tt::tt_metal

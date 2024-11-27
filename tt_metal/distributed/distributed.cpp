@@ -4,6 +4,4 @@
 
 #include "tt_metal/distributed/distributed.hpp"
 
-namespace tt::tt_metal::distributed {
-
-} // namespace tt::tt_metal::distributed
+namespace tt::tt_metal::distributed {}  // namespace tt::tt_metal::distributed

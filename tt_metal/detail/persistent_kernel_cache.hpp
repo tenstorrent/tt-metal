@@ -6,10 +6,11 @@
 
 #include <atomic>
 
-namespace tt::tt_metal::detail{
+namespace tt::tt_metal::detail {
 
 /**
- * Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
+ * Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if
+ * the output binary path exists.
  *
  * Return value: void
  */
@@ -22,4 +23,4 @@ void EnablePersistentKernelCache();
  */
 void DisablePersistentKernelCache();
 
-}
+}  // namespace tt::tt_metal::detail

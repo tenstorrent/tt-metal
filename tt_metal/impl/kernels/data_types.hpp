@@ -29,4 +29,4 @@ enum Eth : uint8_t {
     IDLE = 2,
 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

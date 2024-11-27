@@ -22,20 +22,24 @@ static const float FRAC_1_PI = 0.31830987f;
 
 static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
     const vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
-    const vFloat y = ((((((((((((2.1457846f
-        * r + 2.815174f)
-        * r - 3.9035487f)
-        * r - 5.2096696f)
-        * r + 3.658698f)
-        * r + 4.9457364f)
-        * r - 0.7137798f)
-        * r - 1.0665413f)
-        * r + 1.1057009f)
-        * r + 1.462757f)
-        * r + 1.4643353f)
-        * r + 1.8716435f)
-        * r + 2.514385f)
-        * r + 3.0097759f;
+    const vFloat y =
+        ((((((((((((2.1457846f * r + 2.815174f) * r - 3.9035487f) * r - 5.2096696f) * r + 3.658698f) * r + 4.9457364f) *
+                   r -
+               0.7137798f) *
+                  r -
+              1.0665413f) *
+                 r +
+             1.1057009f) *
+                r +
+            1.462757f) *
+               r +
+           1.4643353f) *
+              r +
+          1.8716435f) *
+             r +
+         2.514385f) *
+            r +
+        3.0097759f;
     return setsgn(y, x);
 }
 
@@ -46,16 +50,10 @@ template <>
 sfpi_inline vFloat sfpu_tan<true>(vFloat x) {
     const vFloat xx = x * x;
 
-    v_if (sfpi::abs(x) <= 1.0f) {
-        x *= (((0.07407404f
-            * xx - 0.0031158808f)
-            * xx + 0.1559396f)
-            * xx + 0.33035427)
-            * xx + 1.0000609f;
+    v_if(sfpi::abs(x) <= 1.0f) {
+        x *= (((0.07407404f * xx - 0.0031158808f) * xx + 0.1559396f) * xx + 0.33035427) * xx + 1.0000609f;
     }
-    v_else {
-        x = sfpu_tan_large(x);
-    }
+    v_else { x = sfpu_tan_large(x); }
     v_endif;
 
     return x;
@@ -65,19 +63,15 @@ template <>
 sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
     const vFloat xx = x * x;
 
-    v_if (sfpi::abs(x) <= 1.0f) {
-        x *= ((((((0.010222361f
-            * xx - 0.015764693f)
-            * xx + 0.02789032f)
-            * xx + 0.012122508f)
-            * xx + 0.05659461f)
-            * xx + 0.1329926f)
-            * xx + 0.33334994f)
-            * xx + 0.9999999f;
+    v_if(sfpi::abs(x) <= 1.0f) {
+        x *= ((((((0.010222361f * xx - 0.015764693f) * xx + 0.02789032f) * xx + 0.012122508f) * xx + 0.05659461f) * xx +
+               0.1329926f) *
+                  xx +
+              0.33334994f) *
+                 xx +
+             0.9999999f;
     }
-    v_else {
-        x = sfpu_tan_large(x);
-    }
+    v_else { x = sfpu_tan_large(x); }
     v_endif;
 
     return x;
@@ -86,8 +80,7 @@ sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_tangent() {
     // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
         v -= int32_to_float(float_to_int16(v, 0), 0);
         dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
@@ -102,20 +95,15 @@ template <>
 sfpi_inline vFloat sfpu_sinpi<true>(vFloat x) {
     vFloat xx = x * x;
 
-    return x * ((0x1.29cf02p+1f
-        * xx - 0x1.4954d4p+2f)
-        * xx + 0x1.92149p+1f);
+    return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
 }
 
 template <>
 sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
     vFloat xx = x * x;
 
-    return x * ((((0x1.406628p-4f
-        * xx - 0x9.93f86p-4f)
-        * xx + 0x2.8cd64p+0f)
-        * xx - 0x5.2aef6p+0f)
-        * xx + 0x3.243f6cp+0f);
+    return x *
+           ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -127,9 +115,7 @@ inline void calculate_sine() {
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
-        v_if (whole_v & 1) {
-            v = -v;
-        }
+        v_if(whole_v & 1) { v = -v; }
         v_endif;
         dst_reg[0] = v;
         dst_reg++;
@@ -145,9 +131,7 @@ inline void calculate_cosine() {
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
-        v_if (whole_v & 1) {
-            v = -v;
-        }
+        v_if(whole_v & 1) { v = -v; }
         v_endif;
         dst_reg[0] = v;
         dst_reg++;
