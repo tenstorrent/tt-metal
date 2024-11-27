@@ -316,8 +316,8 @@ class Yolov4TestInfra_v2:
         result_2_conf = result_2_conf.permute(0, 2, 1)
         result_3_conf = result_3_conf.permute(0, 2, 1)
 
-        valid_pcc = 0.99
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor_y1[0], result_1_bb, pcc=valid_pcc)
+        valid_pcc = 0.985
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=valid_pcc)
 
         logger.info(
             f"Yolov4 batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"

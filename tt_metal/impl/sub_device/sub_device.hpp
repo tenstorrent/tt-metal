@@ -16,7 +16,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class SubDevice {
-   public:
+public:
     SubDevice(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
     SubDevice(tt::stl::Span<const CoreRangeSet> cores);
     SubDevice(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
@@ -32,7 +32,7 @@ class SubDevice {
     const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores() const;
     const CoreRangeSet& cores(HalProgrammableCoreType core_type) const;
 
-   private:
+private:
     void validate() const;
 
     // These are logical coords from the original device grid

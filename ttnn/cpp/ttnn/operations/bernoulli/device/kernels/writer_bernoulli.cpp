@@ -32,9 +32,9 @@ void kernel_main() {
         uint32_t intermed_cb_read_ptr = get_read_ptr(intermed_cb_id);
         uint32_t in_cb_read_ptr = get_read_ptr(in_cb_id);
 
-        auto in_cb_addr = reinterpret_cast<uint8_t *>(in_cb_read_ptr);
-        auto intermed_cb_addr = reinterpret_cast<float *>(intermed_cb_read_ptr);
-        auto intermed1_cb_addr = reinterpret_cast<uint8_t *>(intermed1_cb_write_ptr);
+        auto in_cb_addr = reinterpret_cast<uint8_t*>(in_cb_read_ptr);
+        auto intermed_cb_addr = reinterpret_cast<float*>(intermed_cb_read_ptr);
+        auto intermed1_cb_addr = reinterpret_cast<uint8_t*>(intermed1_cb_write_ptr);
 
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
@@ -42,13 +42,13 @@ void kernel_main() {
 
                 float input = 0;
 #ifdef INPUT_DTYPE_FLOAT32
-                input = *reinterpret_cast<float *>(in_cb_addr);
+                input = *reinterpret_cast<float*>(in_cb_addr);
                 in_cb_addr += 4;
 #endif
 #ifdef INPUT_DTYPE_BFLOAT16  // cast: uint16 => uint32 => float and write to input variable.
-                uint16_t *in_u16_ptr = reinterpret_cast<uint16_t *>(in_cb_addr);
+                uint16_t* in_u16_ptr = reinterpret_cast<uint16_t*>(in_cb_addr);
                 uint32_t u32 = static_cast<uint32_t>(*in_u16_ptr) << 16;
-                float *f_ptr = reinterpret_cast<float *>(&u32);
+                float* f_ptr = reinterpret_cast<float*>(&u32);
                 input = *f_ptr;
                 in_cb_addr += 2;
 #endif
@@ -58,12 +58,12 @@ void kernel_main() {
                 }
 
 #ifdef OUTPUT_DTYPE_FLOAT32
-                *(float *)intermed1_cb_addr = output;
+                *(float*)intermed1_cb_addr = output;
                 intermed1_cb_addr += 4;
 #endif
 #ifdef OUTPUT_DTYPE_BFLOAT16
-                uint16_t *out_u16_ptr = reinterpret_cast<uint16_t *>(&output) + 1;
-                *(uint16_t *)intermed1_cb_addr = *out_u16_ptr;
+                uint16_t* out_u16_ptr = reinterpret_cast<uint16_t*>(&output) + 1;
+                *(uint16_t*)intermed1_cb_addr = *out_u16_ptr;
                 intermed1_cb_addr += 2;
 #endif
                 intermed_cb_addr += 1;

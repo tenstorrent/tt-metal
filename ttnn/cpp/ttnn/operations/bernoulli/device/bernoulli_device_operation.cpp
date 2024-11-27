@@ -47,9 +47,14 @@ void BernoulliDeviceOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-BernoulliDeviceOperation::shape_return_value_t BernoulliDeviceOperation::compute_output_shapes(
+BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_logical_shape();
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+
+    auto output_shape = tensor_args.input.get_logical_shape();
+    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
 BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
@@ -58,13 +63,7 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
         return tensor_args.output.value();
     }
 
-    auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    return create_device_tensor(
-        output_shapes,
-        operation_attributes.dtype,
-        Layout::TILE,
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<BernoulliDeviceOperation::operation_attributes_t, BernoulliDeviceOperation::tensor_args_t>

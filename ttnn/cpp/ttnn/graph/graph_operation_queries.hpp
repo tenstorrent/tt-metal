@@ -42,4 +42,4 @@ auto query_output_info(Callable&& callable) {
     return graph::extract_output_info(json_trace);
 }
 
-} // namespace ttnn::graph
+}  // namespace ttnn::graph

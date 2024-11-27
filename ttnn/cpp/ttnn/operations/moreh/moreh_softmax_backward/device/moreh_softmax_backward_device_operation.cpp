@@ -103,8 +103,9 @@ MorehSoftmaxBackwardOperation::shape_return_value_t MorehSoftmaxBackwardOperatio
 MorehSoftmaxBackwardOperation::tensor_return_value_t MorehSoftmaxBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_grad_tensor = tensor_args.input_grad_tensor;
-    if (input_grad_tensor.has_value())
+    if (input_grad_tensor.has_value()) {
         return input_grad_tensor.value();
+    }
 
     const auto& output_tensor = tensor_args.output_tensor;
     const auto& input_grad_shape = output_tensor.get_shape();

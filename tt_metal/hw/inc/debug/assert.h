@@ -10,7 +10,7 @@
 
 void assert_and_hang(uint32_t line_num) {
     // Write the line number into the memory mailbox for host to read.
-    debug_assert_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
+    debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
         v->tripped = DebugAssertTripped;
@@ -21,7 +21,7 @@ void assert_and_hang(uint32_t line_num) {
 #if defined(COMPILE_FOR_ERISC)
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
-    tt_l1_ptr go_msg_t *go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_message);
+    tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_message);
     go_message_ptr->signal = RUN_MSG_DONE;
 
     // This exits to base FW
@@ -29,15 +29,21 @@ void assert_and_hang(uint32_t line_num) {
     erisc_exit();
 #endif
 
-    while(1) { ; }
+    while (1) {
+        ;
+    }
 }
 
 // The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
 // without {}s.
-#define ASSERT(condition) do{ if (not (condition)) assert_and_hang(__LINE__); } while(0)
+#define ASSERT(condition)              \
+    do {                               \
+        if (not(condition))            \
+            assert_and_hang(__LINE__); \
+    } while (0)
 
-#else // !WATCHER_ENABLED
+#else  // !WATCHER_ENABLED
 
 #define ASSERT(condition)
 
-#endif // WATCHER_ENABLED
+#endif  // WATCHER_ENABLED

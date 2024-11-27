@@ -120,10 +120,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (fp32_dest_acc_en) {
         data_movement_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
+    const auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

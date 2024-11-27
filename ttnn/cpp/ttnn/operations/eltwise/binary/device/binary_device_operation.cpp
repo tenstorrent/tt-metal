@@ -152,11 +152,17 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     TT_FATAL(width_a == width_b || width_a == 1 || width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
 }
 
-BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto input_shape_a = tensor_args.input_tensor_a.shape();
+BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& output_tensor = tensor_args.output_tensor;
+    if (output_tensor.has_value()) {
+        return output_tensor->get_tensor_spec();
+    }
+
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto input_shape_a = input_tensor_a.logical_shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->shape() : ttnn::Shape{1, 1};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::SimpleShape{};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -181,24 +187,9 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
                 output_shape[i + larger_rank] = dim_a + dim_b - 1;
             }
         }
-        return output_shape;
+        return ttnn::SimpleShape(output_shape);
     };
-
-    const auto logical_shape_a = input_shape_a.logical_shape();
-    const auto logical_shape_b = input_shape_b.logical_shape();
-    return ttnn::SimpleShape(compute_broadcasted_output(logical_shape_a, logical_shape_b));
-}
-
-BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& output_tensor = tensor_args.output_tensor;
-
-    if (output_tensor.has_value()) {
-        return output_tensor.value();
-    }
+    auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
     if (std::holds_alternative<ElementWiseMultiCore>(program_factory)) {
@@ -214,8 +205,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
             }
             auto memory_config = operation_attributes.memory_config;
             memory_config.shard_spec = shard_spec;
-            return create_device_tensor(
-                output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config);
+            return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     } else {
         if (operation_attributes.memory_config.is_sharded()) {
@@ -226,16 +216,18 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
             }
             auto memory_config = operation_attributes.memory_config;
             memory_config.shard_spec = shard_spec;
-            return create_device_tensor(
-                output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config);
+            return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     }
-    return create_device_tensor(
-        output_shape,
-        operation_attributes.dtype,
-        Layout::TILE,
-        input_tensor_a.device(),
-        operation_attributes.memory_config);
+    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+}
+
+BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return *tensor_args.output_tensor;
+    }
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
 tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(

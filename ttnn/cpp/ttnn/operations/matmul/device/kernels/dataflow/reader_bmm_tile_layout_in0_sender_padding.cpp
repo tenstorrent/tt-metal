@@ -8,9 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
-
 void kernel_main() {
-
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -122,10 +120,7 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     if constexpr (fuse_op) {
                         fused_op_receiver.update_current_block_start_tile_id(
-                            block,
-                            in0_tensor_current_inner_dim_block_start_tile_id,
-                            in0_tensor_start_tile_id
-                        );
+                            block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
                     }
 #ifndef IN0_SHARDED
                     // Operand 0
@@ -133,7 +128,8 @@ void kernel_main() {
                     uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
 #ifndef SKIP_MCAST
-                    uint32_t in0_start_address = l1_write_addr_in0;  // copy start address of block, to be used for mcasting
+                    uint32_t in0_start_address =
+                        l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 #endif
 
                     // Copy in0 block into CB, as the default kernel
@@ -178,8 +174,9 @@ void kernel_main() {
 #endif
 
 #ifndef SKIP_MCAST
-                    // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its value
-                    // should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next block
+                    // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e.
+                    // its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for
+                    // the next block
                     noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
                     noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
@@ -188,10 +185,16 @@ void kernel_main() {
 
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_async_write_multicast(
-                        in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true, true);
+                        in0_start_address,
+                        in0_multicast_data_addr,
+                        in0_block_size_bytes,
+                        in0_mcast_num_cores,
+                        true,
+                        true);
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
-                    // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
+                    // same cmd_buf Also, this only works because we are setting VCs statically (using
+                    // NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
                     // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
                     // latency which means data could be changed before write is issued.
@@ -201,9 +204,7 @@ void kernel_main() {
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_semaphore_set_multicast(
-                        in0_mcast_receiver_semaphore_addr,
-                        in0_mcast_receiver_semaphore_noc_addr,
-                        in0_mcast_num_cores);
+                        in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
 #endif
 
 #ifndef IN0_SHARDED

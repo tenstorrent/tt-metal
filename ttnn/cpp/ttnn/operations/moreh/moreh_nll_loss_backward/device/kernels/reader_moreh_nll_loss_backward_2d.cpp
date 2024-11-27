@@ -71,7 +71,6 @@ void kernel_main() {
 
     read_tile(cb_output_grad, addrg_output_grad, 0);
 
-
     uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     uint32_t end_id = start_id + num_tiles_per_core;
@@ -95,10 +94,10 @@ void kernel_main() {
                 uint32_t n = nt * TILE_HEIGHT + h;
                 uint32_t c = ct * TILE_WIDTH + w;
 
-                uint32_t target_tilized_idx = get_tilized_idx(0, h); // 0, n
+                uint32_t target_tilized_idx = get_tilized_idx(0, h);  // 0, n
                 int32_t target_val = target_l1_ptr[target_tilized_idx];
 
-                uint32_t tmp_weight_tilized_idx = get_tilized_idx(h, w); // n, c
+                uint32_t tmp_weight_tilized_idx = get_tilized_idx(h, w);  // n, c
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
 #if defined(WEIGHT)

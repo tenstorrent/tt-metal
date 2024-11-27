@@ -13,7 +13,7 @@ inline namespace v0 {
 class Device;
 
 struct Event {
-    Device *device = nullptr;
+    Device* device = nullptr;
     uint32_t cq_id = -1;
     uint32_t event_id = -1;
     std::atomic<bool> ready = false;  // Event is ready for use.
