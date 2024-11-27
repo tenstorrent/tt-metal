@@ -153,6 +153,8 @@ from ttnn.types import (
 from ttnn.device import (
     Device,
     DispatchCoreType,
+    DispatchCoreAxis,
+    DispatchCoreConfig,
     open_device,
     close_device,
     enable_program_cache,

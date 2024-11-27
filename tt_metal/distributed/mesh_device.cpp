@@ -163,7 +163,7 @@ std::vector<Device*> SystemMesh::map_mesh_device(
     size_t num_command_queues,
     size_t l1_small_size,
     size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config) {
 
     auto [requested_num_rows, requested_num_cols] = mesh_device->shape();
@@ -180,7 +180,7 @@ std::vector<Device*> SystemMesh::map_mesh_device(
         config.physical_device_ids;
 
     this->opened_devices[mesh_device->get_mesh_id()] = tt::tt_metal::detail::CreateDevices(
-        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
     std::vector<Device*> mapped_devices;
     for (auto physical_device_id : physical_device_ids) {
@@ -229,10 +229,10 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type)
+    const DispatchCoreConfig &dispatch_core_config)
 {
     auto mesh_device = std::make_shared<MeshDevice>(config.mesh_shape, config.mesh_type);
-    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, config);
+    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
 
     return mesh_device;
 }
@@ -289,7 +289,7 @@ void MeshDevice::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config)
 {
     auto [num_rows, num_cols] = this->shape();
@@ -302,7 +302,7 @@ void MeshDevice::initialize(
 
     auto& instance = SystemMesh::instance();
     this->devices = instance.map_mesh_device(
-        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_type, config);
+        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_config, config);
     this->primary_view = std::make_shared<MeshDeviceView>(*this);
 }
 

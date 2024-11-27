@@ -94,7 +94,7 @@ public:
         size_t num_command_queues,
         size_t l1_small_size,
         size_t trace_region_size,
-        DispatchCoreType dispatch_core_type,
+        const DispatchCoreConfig& dispatch_core_config,
         const MeshDeviceConfig& config);
 
     // Unmap MeshDevice, releasing the associated physical devices.
@@ -117,7 +117,7 @@ private:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t num_command_queues,
-        DispatchCoreType dispatch_core_type,
+        const DispatchCoreConfig& dispatch_core_config,
         const MeshDeviceConfig& config);
 
 public:
@@ -177,7 +177,7 @@ public:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
-        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

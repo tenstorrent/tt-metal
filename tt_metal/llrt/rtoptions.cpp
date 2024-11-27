@@ -119,7 +119,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
-        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
+        this->dispatch_core_config.set_dispatch_core_type(tt_metal::DispatchCoreType::ETH);
     }
 
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {

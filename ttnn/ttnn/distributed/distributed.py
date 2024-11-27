@@ -138,7 +138,7 @@ def open_mesh_device(
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
-    dispatch_core_type: int = DispatchCoreType.WORKER,
+    dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
     offset: Tuple[int, int] = (0, 0),
     physical_device_ids: List[int] = [],
     mesh_type: "MeshType" = MeshType.RowMajor,
@@ -164,7 +164,7 @@ def open_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
-        dispatch_core_type=dispatch_core_type,
+        dispatch_core_config=dispatch_core_config,
         offset=offset,
         physical_device_ids=physical_device_ids,
         mesh_type=mesh_type,
@@ -187,7 +187,7 @@ def create_mesh_device(
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
-    dispatch_core_type: int = DispatchCoreType.WORKER,
+    dispatch_core_config: ttnn._ttnn.device.DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
 ):
     """
     create_mesh_device(mesh_shape: ttnn.MeshShape, device_ids: List[int]) -> ttnn.MeshDevice
@@ -200,7 +200,7 @@ def create_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
-        dispatch_core_type=dispatch_core_type,
+        dispatch_core_type=dispatch_core_config,
     )
     try:
         yield mesh_device

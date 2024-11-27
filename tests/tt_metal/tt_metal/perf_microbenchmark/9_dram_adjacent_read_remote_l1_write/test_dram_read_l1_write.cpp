@@ -54,10 +54,8 @@ using std::chrono::microseconds;
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
-
-
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -65,7 +63,13 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-void get_max_page_size_and_num_pages(uint32_t num_tiles_w, uint32_t num_tiles_h, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages, uint32_t& num_pages_w_per_receiver) {
+void get_max_page_size_and_num_pages(
+    uint32_t num_tiles_w,
+    uint32_t num_tiles_h,
+    uint32_t tile_size,
+    uint32_t& page_size,
+    uint32_t& num_pages,
+    uint32_t& num_pages_w_per_receiver) {
     uint64_t half_row_bytes = static_cast<uint64_t>(num_tiles_w / 2) * tile_size;
     TT_ASSERT(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
 
@@ -80,21 +84,21 @@ void get_max_page_size_and_num_pages(uint32_t num_tiles_w, uint32_t num_tiles_h,
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::Device *device,
-    const CoreRangeSet &all_dram_reader_cores,
-    const CoreRangeSet &all_l1_receiver_cores,
-    const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format,
+    tt_metal::Device* device,
+    const CoreRangeSet& all_dram_reader_cores,
+    const CoreRangeSet& all_l1_receiver_cores,
+    const uint32_t& single_tile_size,
+    const tt::DataFormat& tile_format,
     uint32_t num_tiles_cb,
     uint32_t num_tiles_per_core,
     uint32_t k,
     uint32_t n,
     uint32_t num_blocks,
     uint32_t num_banks,
-    std::vector<CoreCoord>all_dram_reader_cores_ordered,
-    std::vector<CoreCoord>all_l1_writer_cores_ordered,
+    std::vector<CoreCoord> all_dram_reader_cores_ordered,
+    std::vector<CoreCoord> all_l1_writer_cores_ordered,
     uint32_t bank_start_id,
-    const uint32_t &input_buffer_addr) {
+    const uint32_t& input_buffer_addr) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t start_tile_id = 0;
@@ -111,7 +115,11 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     get_max_page_size_and_num_pages(block_w, block_h, single_tile_size, page_size, num_pages, num_pages_w_per_receiver);
 
     log_info("Input block size: {}x{}, num_blocks: {}", block_h, block_w, num_blocks);
-    log_info("Pages set up as page_size: {}, num_pages: {}, num_pages_w_per_receiver: {}", page_size, num_pages, num_pages_w_per_receiver);
+    log_info(
+        "Pages set up as page_size: {}, num_pages: {}, num_pages_w_per_receiver: {}",
+        page_size,
+        num_pages,
+        num_pages_w_per_receiver);
 
     uint32_t reader_cb_addr = device->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig reader_cb_config =
@@ -120,14 +128,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     auto reader_cb = tt_metal::CreateCircularBuffer(program, all_dram_reader_cores, reader_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) input_buffer_addr,
-        (std::uint32_t) start_tile_id,
-        (std::uint32_t) num_blocks,
-        (std::uint32_t) num_pages,
-        (std::uint32_t) block_num_tiles,
-        (std::uint32_t) page_size,
-        (std::uint32_t) tt_metal::NOC::RISCV_0_default
-    };
+        (std::uint32_t)input_buffer_addr,
+        (std::uint32_t)start_tile_id,
+        (std::uint32_t)num_blocks,
+        (std::uint32_t)num_pages,
+        (std::uint32_t)block_num_tiles,
+        (std::uint32_t)page_size,
+        (std::uint32_t)tt_metal::NOC::RISCV_0_default};
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -140,13 +147,12 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) num_blocks,
-        (std::uint32_t) num_pages_w_per_receiver,
-        (std::uint32_t) block_h,
-        (std::uint32_t) block_num_tiles,
-        (std::uint32_t) page_size,
-        (std::uint32_t) tt_metal::NOC::RISCV_0_default
-    };
+        (std::uint32_t)num_blocks,
+        (std::uint32_t)num_pages_w_per_receiver,
+        (std::uint32_t)block_h,
+        (std::uint32_t)block_num_tiles,
+        (std::uint32_t)page_size,
+        (std::uint32_t)tt_metal::NOC::RISCV_0_default};
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
@@ -159,45 +165,44 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> bank_ids;
-    for (int i=0; i < all_dram_reader_cores_ordered.size(); i++) {
+    for (int i = 0; i < all_dram_reader_cores_ordered.size(); i++) {
         auto core = all_dram_reader_cores_ordered[i];
         uint32_t bank_id = i + bank_start_id;
         uint32_t vc = bank_id & 0x1;
 
         bank_ids.push_back(bank_id);
 
-        for (int j=0; j<i; ++j) {
+        for (int j = 0; j < i; ++j) {
             auto core_ = all_dram_reader_cores_ordered[j];
 
-            if (core_.y == core.y and ((bank_id & 0x1) == (bank_ids[j] & 0x1))) { // same vc and same row
+            if (core_.y == core.y and ((bank_id & 0x1) == (bank_ids[j] & 0x1))) {  // same vc and same row
                 vc = (vc + 1) & 0x1;
                 break;
             }
         }
 
-        const std::array reader_rt_args = {
-            (std::uint32_t) bank_id,
-            (std::uint32_t) vc
-        };
+        const std::array reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
 
         log_info("core: {}, vc: {}", core, vc);
 
         tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
 
-        auto writer_core1 = all_l1_writer_cores_ordered[i*2];
+        auto writer_core1 = all_l1_writer_cores_ordered[i * 2];
         auto writer_core_phy1 = device->worker_core_from_logical_core(writer_core1);
-        auto writer_core2 = all_l1_writer_cores_ordered[(i*2)+1];
+        auto writer_core2 = all_l1_writer_cores_ordered[(i * 2) + 1];
         auto writer_core_phy2 = device->worker_core_from_logical_core(writer_core2);
 
+        log_info("writer_core_phy1: {}", writer_core_phy1);
+        log_info("writer_core_phy2: {}", writer_core_phy2);
+
         const std::array writer_rt_args = {
-            (std::uint32_t) (vc + 2) & 0x3,
+            (std::uint32_t)(vc + 2) & 0x3,
             // First L1 receiver core coordinates
-            (std::uint32_t) writer_core_phy1.x,
-            (std::uint32_t) writer_core_phy1.y,
+            (std::uint32_t)writer_core_phy1.x,
+            (std::uint32_t)writer_core_phy1.y,
             // Second L1 receiver core coordinates
-            (std::uint32_t) writer_core_phy2.x,
-            (std::uint32_t) writer_core_phy2.y
-        };
+            (std::uint32_t)writer_core_phy2.x,
+            (std::uint32_t)writer_core_phy2.y};
 
         tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
     }
@@ -213,8 +218,7 @@ bool validate_data(
     uint32_t block_w,
     uint32_t datums_per_tile,
     uint32_t num_banks,
-    uint32_t input_start_index_for_core)
-{
+    uint32_t input_start_index_for_core) {
     for (uint32_t r = 0; r < block_h; ++r) {
         for (uint32_t c = 0; c < block_w_per_receiver; ++c) {
             uint32_t one_row_bytes = block_w * datums_per_tile * num_banks;
@@ -236,13 +240,12 @@ bool validate_data(
     return true;
 }
 
-
 bool validation(
-    tt_metal::Device *device,
-    tt_metal::Buffer &input_buffer,
-    std::vector<uint32_t> &input_vec,
+    tt_metal::Device* device,
+    tt_metal::Buffer& input_buffer,
+    std::vector<uint32_t>& input_vec,
     uint32_t num_cores,
-    std::vector<CoreCoord> &all_cores,
+    std::vector<CoreCoord>& all_cores,
     uint32_t num_tiles_per_core,
     uint32_t cb_addr,
     uint32_t single_tile_size,
@@ -250,54 +253,71 @@ bool validation(
     uint32_t df,
     uint32_t num_banks,
     uint32_t num_blocks,
-    uint32_t block_h, // block_h per core
-    uint32_t block_w, // block_w per core
+    uint32_t block_h,  // block_h per core
+    uint32_t block_w,  // block_w per core
     uint32_t block_w_per_receiver,
-    uint32_t datums_per_tile) { // 32x32
+    uint32_t datums_per_tile) {  // 32x32
 
     uint32_t core_id = 0;
     uint32_t num_datum_per_block = block_h * block_w * num_cores * datums_per_tile;
     uint32_t last_block_offset = (num_blocks - 1) * num_datum_per_block;
-    uint32_t tiles_per_core = block_h * block_w_per_receiver; // Num slices=tiles per core to verify
-    for (auto core: all_cores | std::views::take(num_cores*2)) {
-
-        uint32_t dram_bank_id = core_id / 2; // A pair of two cores share a dram bank
+    uint32_t tiles_per_core = block_h * block_w_per_receiver;  // Num slices=tiles per core to verify
+    for (auto core : all_cores | std::views::take(num_cores * 2)) {
+        uint32_t dram_bank_id = core_id / 2;  // A pair of two cores share a dram bank
         uint32_t tile_stride_over_dram_banks = dram_bank_id * datums_per_tile;
         uint32_t is_second_core = core_id % 2;
-         // Second core in a dram bank pair has an offset of half a block from that dram bank
+        // Second core in a dram bank pair has an offset of half a block from that dram bank
         uint32_t receiver_core_pair_offset = is_second_core * datums_per_tile * block_w_per_receiver * num_banks;
-        uint32_t input_start_index_for_core = last_block_offset + tile_stride_over_dram_banks + receiver_core_pair_offset;
+        uint32_t input_start_index_for_core =
+            last_block_offset + tile_stride_over_dram_banks + receiver_core_pair_offset;
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromDeviceL1(
-            device, core, cb_addr, num_tiles_cb / 2 * single_tile_size, result_vec);
+        tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, num_tiles_cb / 2 * single_tile_size, result_vec);
 
-        if (df == 0) { // BFP4
+        if (df == 0) {  // BFP4
             auto result_bfp4 = unpack_bfp4_tiles_into_float_vec(result_vec, true, true);
             auto input_bfp4 = unpack_bfp4_tiles_into_float_vec(input_vec, true, true);
             if (!validate_data<float>(
-                result_bfp4, input_bfp4, block_h, block_w_per_receiver, block_w,
-                datums_per_tile, num_banks, input_start_index_for_core)) {
+                    result_bfp4,
+                    input_bfp4,
+                    block_h,
+                    block_w_per_receiver,
+                    block_w,
+                    datums_per_tile,
+                    num_banks,
+                    input_start_index_for_core)) {
                 return false;
             }
-        } else if (df == 1) { // BFP8
+        } else if (df == 1) {  // BFP8
             auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result_vec, true, true);
             auto input_bfp8 = unpack_bfp8_tiles_into_float_vec(input_vec, true, true);
             if (!validate_data<float>(
-                result_bfp8, input_bfp8, block_h, block_w_per_receiver, block_w,
-                datums_per_tile, num_banks, input_start_index_for_core)) {
+                    result_bfp8,
+                    input_bfp8,
+                    block_h,
+                    block_w_per_receiver,
+                    block_w,
+                    datums_per_tile,
+                    num_banks,
+                    input_start_index_for_core)) {
                 return false;
             }
-        } else if (df == 2) { // BFLOAT16
+        } else if (df == 2) {  // BFLOAT16
             auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
             if (!validate_data<bfloat16>(
-                result_bf16, input_bf16, block_h, block_w_per_receiver, block_w,
-                datums_per_tile, num_banks, input_start_index_for_core)) {
+                    result_bf16,
+                    input_bf16,
+                    block_h,
+                    block_w_per_receiver,
+                    block_w,
+                    datums_per_tile,
+                    num_banks,
+                    input_start_index_for_core)) {
                 return false;
             }
         }
-        core_id ++;
+        core_id++;
     }
     log_info("Validation passed.");
     return true;
@@ -316,10 +336,8 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
     return dram_bandwidth_gb_per_sec;
 }
 
-
 void get_dram_reader_core_coords_blackhole(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
     uint32_t full_grid_size_x = soc_d.grid_size.x;
 
@@ -376,7 +394,8 @@ void get_dram_reader_core_coords_blackhole(
         auto x = coord.x;
 
         // if row is harvested, move core down by 1
-        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and x < (full_grid_size_x - 1)) {
+        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and
+               x < (full_grid_size_x - 1)) {
             x += 1;
         }
 
@@ -403,10 +422,11 @@ void get_dram_reader_core_coords_blackhole(
     all_cores_ordered = adj_core_logical_realloc;
 }
 
-
 void get_l1_writer_core_coords_blackhole(
-    tt_metal::Device* device, std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
+    tt_metal::Device* device,
+    std::vector<CoreCoord>& all_dram_reader_cores,
+    CoreRangeSet& all_cores,
+    std::vector<CoreCoord>& all_cores_ordered) {
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
     uint32_t full_grid_size_x = soc_d.grid_size.x;
 
@@ -459,7 +479,8 @@ void get_l1_writer_core_coords_blackhole(
         auto x = coord.x;
 
         // if row is harvested, move core down by 1
-        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and x < (full_grid_size_x - 1)) {
+        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and
+               x < (full_grid_size_x - 1)) {
             x += 1;
         }
 
@@ -488,7 +509,6 @@ void get_l1_writer_core_coords_blackhole(
 
 void get_dram_reader_core_coords_grayskull(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
     uint32_t full_grid_size_y = soc_d.grid_size.y;
 
@@ -545,7 +565,8 @@ void get_dram_reader_core_coords_grayskull(
         auto y = coord.y;
 
         // if row is harvested, move core down by 1
-        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and y < (full_grid_size_y - 1)) {
+        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and
+               y < (full_grid_size_y - 1)) {
             y += 1;
         }
 
@@ -573,8 +594,10 @@ void get_dram_reader_core_coords_grayskull(
 }
 
 void get_l1_writer_core_coords_grayskull(
-    tt_metal::Device* device, std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
+    tt_metal::Device* device,
+    std::vector<CoreCoord>& all_dram_reader_cores,
+    CoreRangeSet& all_cores,
+    std::vector<CoreCoord>& all_cores_ordered) {
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
     uint32_t full_grid_size_y = soc_d.grid_size.y;
 
@@ -627,7 +650,8 @@ void get_l1_writer_core_coords_grayskull(
         auto y = coord.y;
 
         // if row is harvested, move core down by 1
-        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and y < (full_grid_size_y - 1)) {
+        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and
+               y < (full_grid_size_y - 1)) {
             y += 1;
         }
 
@@ -656,7 +680,6 @@ void get_l1_writer_core_coords_grayskull(
 
 void get_dram_reader_core_coords_wormhole_b0(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
     // get all the logical coord
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -665,13 +688,15 @@ void get_dram_reader_core_coords_wormhole_b0(
     // get dram banks and coords
     uint32_t num_banks = device->num_dram_channels();
     uint32_t max_bank_id = num_banks - 1;
-    std::vector<CoreCoord> dram_coord_phy; dram_coord_phy.reserve(num_banks);
+    std::vector<CoreCoord> dram_coord_phy;
+    dram_coord_phy.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
         dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
     }
 
     // get worker logical coords
-    std::vector<CoreCoord> all_worker_cores_logical; all_worker_cores_logical.reserve(num_cores_x * num_cores_y);
+    std::vector<CoreCoord> all_worker_cores_logical;
+    all_worker_cores_logical.reserve(num_cores_x * num_cores_y);
     for (int i = 0; i < num_cores_x; ++i) {
         for (int j = 0; j < num_cores_y; ++j) {
             all_worker_cores_logical.push_back(CoreCoord(i, j));
@@ -679,7 +704,8 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // get the ajacent cores of DRAM banks
-    std::vector<CoreCoord> adj_core_physical; adj_core_physical.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_physical;
+    adj_core_physical.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
         auto dram_core = dram_coord_phy[i];
         uint32_t adj_core_x = dram_core.x + 1;
@@ -688,7 +714,8 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // find the logical coord from physical coord
-    std::vector<CoreCoord> adj_core_logical; adj_core_logical.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_logical;
+    adj_core_logical.reserve(num_banks);
     for (int i = 0; i < adj_core_physical.size(); ++i) {
         for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
             auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
@@ -707,10 +734,11 @@ void get_dram_reader_core_coords_wormhole_b0(
     all_cores_ordered = adj_core_logical;
 }
 
-
 void get_l1_writer_core_coords_wormhole_b0(
-    tt_metal::Device* device, std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
+    tt_metal::Device* device,
+    std::vector<CoreCoord>& all_dram_reader_cores,
+    CoreRangeSet& all_cores,
+    std::vector<CoreCoord>& all_cores_ordered) {
     // get all the logical coord
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -757,7 +785,7 @@ void get_l1_writer_core_coords_wormhole_b0(
     all_cores_ordered = adj_core_logical_realloc;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         log_error("Test not supported w/ slow dispatch, exiting");
     }
@@ -782,11 +810,10 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
         try {
-            std::tie(k, input_args) =
-                test_args::get_command_option_uint64_and_remaining_args(input_args, "--k", 8192);
+            std::tie(k, input_args) = test_args::get_command_option_uint64_and_remaining_args(input_args, "--k", 8192);
 
             std::tie(n, input_args) =
-                test_args::get_command_option_uint64_and_remaining_args(input_args, "--n", 12*128);
+                test_args::get_command_option_uint64_and_remaining_args(input_args, "--n", 12 * 128);
 
             std::tie(num_blocks, input_args) =
                 test_args::get_command_option_uint64_and_remaining_args(input_args, "--num-blocks", 8);
@@ -810,7 +837,7 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--bank-start-id", 0);
 
             test_args::validate_remaining_args(input_args);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
             TT_ASSERT(false);
         }
@@ -835,13 +862,13 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         uint32_t input_size = 0;
         tt::DataFormat tile_format = tt::DataFormat::Bfp8_b;
-        if (df == 0) { // BFP4
-            input_size = k * n * (512+64) / 1024;
+        if (df == 0) {  // BFP4
+            input_size = k * n * (512 + 64) / 1024;
             tile_format = tt::DataFormat::Bfp4_b;
-        } else if (df == 1) { // BFP8
+        } else if (df == 1) {  // BFP8
             input_size = k * n * 1088 / 1024;
             tile_format = tt::DataFormat::Bfp8_b;
-        } else if (df == 2) { // BFLOAT16
+        } else if (df == 2) {  // BFLOAT16
             input_size = k * n * 2;
             tile_format = tt::DataFormat::Float16_b;
         } else {
@@ -868,13 +895,27 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::DispatchCoreConfig dispatch_core_config;
+        if (tt::tt_metal::get_platform_architecture() == tt::ARCH::GRAYSKULL) {
+            dispatch_core_config =
+                tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
+        } else {
+            dispatch_core_config =
+                tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::COL};
+        }
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id, 1, 0, 0, dispatch_core_config);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
+
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        tt::log_debug("device x : {}", num_cores_x);
+        tt::log_debug("device y : {}", num_cores_y);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
-        uint32_t num_cores = num_banks; // number of DRAM banks
+        uint32_t num_cores = num_banks;  // number of DRAM banks
 
         CoreRangeSet all_dram_reader_cores;
         std::vector<CoreCoord> all_dram_reader_cores_ordered;
@@ -882,25 +923,28 @@ int main(int argc, char **argv) {
         std::vector<CoreCoord> all_l1_writer_cores_ordered;
         if (device->arch() == tt::ARCH::BLACKHOLE) {
             get_dram_reader_core_coords_blackhole(device, all_dram_reader_cores, all_dram_reader_cores_ordered);
-            get_l1_writer_core_coords_blackhole(device, all_dram_reader_cores_ordered, all_l1_receiver_cores, all_l1_writer_cores_ordered);
+            get_l1_writer_core_coords_blackhole(
+                device, all_dram_reader_cores_ordered, all_l1_receiver_cores, all_l1_writer_cores_ordered);
         } else if (device->arch() == tt::ARCH::WORMHOLE_B0) {
             get_dram_reader_core_coords_wormhole_b0(device, all_dram_reader_cores, all_dram_reader_cores_ordered);
-            get_l1_writer_core_coords_wormhole_b0(device, all_dram_reader_cores_ordered, all_l1_receiver_cores, all_l1_writer_cores_ordered);
+            get_l1_writer_core_coords_wormhole_b0(
+                device, all_dram_reader_cores_ordered, all_l1_receiver_cores, all_l1_writer_cores_ordered);
         } else {
             get_dram_reader_core_coords_grayskull(device, all_dram_reader_cores, all_dram_reader_cores_ordered);
-            get_l1_writer_core_coords_grayskull(device, all_dram_reader_cores_ordered, all_l1_receiver_cores, all_l1_writer_cores_ordered);
+            get_l1_writer_core_coords_grayskull(
+                device, all_dram_reader_cores_ordered, all_l1_receiver_cores, all_l1_writer_cores_ordered);
         }
 
         uint32_t num_tiles_per_core = num_tiles / num_cores;
         uint32_t num_tiles_cb = num_tiles_per_core / num_blocks;
 
         log_info("all_dram_reader_cores");
-        for (auto core: all_dram_reader_cores_ordered) {
+        for (auto core : all_dram_reader_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
             log_info("logical core: {}, physical core: {}", core, phys_core);
         }
         log_info("all_l1_writer_cores");
-        for (auto core: all_l1_writer_cores_ordered) {
+        for (auto core : all_l1_writer_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
             log_info("logical core: {}, physical core: {}", core, phys_core);
         }
@@ -921,14 +965,11 @@ int main(int argc, char **argv) {
 
         std::vector<uint32_t> input_vec;
         if (tile_format == tt::DataFormat::Bfp4_b) {
-            input_vec = create_random_vector_of_bfp4(
-                input_size, false, 100, 1234);
+            input_vec = create_random_vector_of_bfp4(input_size, false, 100, 1234);
         } else if (tile_format == tt::DataFormat::Bfp8_b) {
-            input_vec = create_random_vector_of_bfp8(
-                input_size, false, 100, 1234);
+            input_vec = create_random_vector_of_bfp8(input_size, false, 100, 1234);
         } else {
-            input_vec = create_random_vector_of_bfloat16(
-                input_size, 100, 1234);
+            input_vec = create_random_vector_of_bfloat16(input_size, 100, 1234);
         }
 
         auto input_buffer = tt_metal::Buffer::create(
@@ -937,7 +978,22 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, kernel, output_cb_addr] = create_program(device, all_dram_reader_cores, all_l1_receiver_cores, single_tile_size, tile_format, num_tiles_cb, num_tiles_per_core, k, n, num_blocks, num_banks, all_dram_reader_cores_ordered, all_l1_writer_cores_ordered, bank_start_id, input_buffer->address());
+        auto [program, kernel, output_cb_addr] = create_program(
+            device,
+            all_dram_reader_cores,
+            all_l1_receiver_cores,
+            single_tile_size,
+            tile_format,
+            num_tiles_cb,
+            num_tiles_per_core,
+            k,
+            n,
+            num_blocks,
+            num_banks,
+            all_dram_reader_cores_ordered,
+            all_l1_writer_cores_ordered,
+            bank_start_id,
+            input_buffer->address());
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Copy Input To DRAM or L1
@@ -992,7 +1048,7 @@ int main(int argc, char **argv) {
         }
 
         pass &= tt_metal::CloseDevice(device);
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

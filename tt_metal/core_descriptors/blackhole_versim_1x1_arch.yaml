@@ -6,13 +6,14 @@
 #     core descriptor config
 
 blackhole:
-  1:
-    compute_with_storage_grid_range:
-      start: [0, 0]
-      end: [0, 0]
+  col:
+    1:
+      compute_with_storage_grid_range:
+        start: [0, 0]
+        end: [0, 0]
 
-    storage_cores:
-      []
+      storage_cores:
+        []
 
-    dispatch_cores:
-      []
+      dispatch_cores:
+        []
