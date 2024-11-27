@@ -45,37 +45,21 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
     uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
-    uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
-    tt_metal::InterleavedBufferConfig l1_config {
+    uint32_t delay_cycles = clk_mhz * 2000000;  // 2 seconds
+    tt_metal::InterleavedBufferConfig l1_config{
         .device = device,
         .size = sizeof(uint32_t),
         .page_size = sizeof(uint32_t),
-        .buffer_type = tt_metal::BufferType::L1
-    };
+        .buffer_type = tt_metal::BufferType::L1};
     auto l1_buffer = CreateBuffer(l1_config);
 
     // Write runtime args
-    const std::vector<uint32_t> args = { delay_cycles, l1_buffer->address() };
+    const std::vector<uint32_t> args = {delay_cycles, l1_buffer->address()};
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            SetRuntimeArgs(
-                program,
-                brisc_kid,
-                CoreCoord{x, y},
-                args
-            );
-            SetRuntimeArgs(
-                program,
-                ncrisc_kid,
-                CoreCoord{x, y},
-                args
-            );
-            SetRuntimeArgs(
-                program,
-                trisc_kid,
-                CoreCoord{x, y},
-                args
-            );
+            SetRuntimeArgs(program, brisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program, ncrisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program, trisc_kid, CoreCoord{x, y}, args);
         }
     }
     // Also run on ethernet cores if they're present
@@ -83,8 +67,9 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     bool has_idle_eth_cores = !device->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
-    if (!fixture->IsSlowDispatch())
+    if (!fixture->IsSlowDispatch()) {
         has_idle_eth_cores = false;
+    }
 
     if (has_eth_cores) {
         KernelHandle erisc_kid;
@@ -112,30 +97,26 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
             eth_core_ranges,
-            tt_metal::EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
 
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             SetRuntimeArgs(program, ierisc_kid, core, args);
         }
     }
 
-
     // Run the program in a new thread, we'll have to update gate values in this thread.
     fixture->RunProgram(device, program);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
-    auto check_core = [&](const CoreCoord &logical_core, const CoreCoord &phys_core, bool is_eth_core, bool is_active) {
+    auto check_core = [&](const CoreCoord& logical_core, const CoreCoord& phys_core, bool is_eth_core, bool is_active) {
         vector<string> expected_waypoints;
         string expected;
         // Need to update the expected strings based on each core.
         // for (string waypoint : {"AAAA", "BBBB", "CCCC"}) { // Stripped this down since the wait function is flaky
         for (string waypoint : {"AAAA"}) {
             if (is_eth_core) {
-                // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
+                // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one
+                // device.
                 string k_id_s;
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch | tensix kernels
@@ -146,35 +127,42 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                 }
                 expected = fmt::format(
                     "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* k_id:{}",
-                    device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
+                    device->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    phys_core.x,
+                    phys_core.y,
                     waypoint,
-                    k_id_s
-                );
+                    k_id_s);
             } else {
-                // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
+                // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one
+                // device.
                 string k_id_s;
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch
                     int k_id = 1 + 2;
-                    string k_id_s = fmt::format("{}|{}|{}", k_id, k_id+1, k_id+2);
+                    string k_id_s = fmt::format("{}|{}|{}", k_id, k_id + 1, k_id + 2);
                 } else {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} worker core(x={:2},y={:2}) phys(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
-                    device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
-                    waypoint, waypoint, waypoint, waypoint, waypoint,
-                    k_id_s
-                );
+                    "Device {} worker core(x={:2},y={:2}) phys(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** smsg:**** "
+                    "k_ids:{}",
+                    device->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    phys_core.x,
+                    phys_core.y,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    k_id_s);
             }
             expected_waypoints.push_back(expected);
         }
-        EXPECT_TRUE(
-            FileContainsAllStringsInOrder(
-                fixture->log_file_name,
-                expected_waypoints
-            )
-        );
+        EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, expected_waypoints));
     };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
@@ -196,8 +184,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         }
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
     for (Device* device : this->devices_) {

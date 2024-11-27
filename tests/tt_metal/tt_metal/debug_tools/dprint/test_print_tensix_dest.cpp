@@ -64,7 +64,8 @@ static CBHandle create_circular_buffer(
 }
 
 // Creates a DRAM interleaved buffer configuration
-static tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(tt_metal::Device* device, size_t byte_size) {
+static tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(
+    tt_metal::Device* device, size_t byte_size) {
     return {.device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 }
 
@@ -72,9 +73,8 @@ constexpr uint32_t DEFAULT_INPUT_CB_INDEX = 0;
 constexpr uint32_t DEFAULT_OUTPUT_CB_INDEX = 16;
 
 // Prepares the reader kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_reader(tt_metal::Device* device,
-                                 tt_metal::Program& program,
-                                 const DestPrintTestConfig& config) {
+static DramBuffer prepare_reader(
+    tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
     // Create input DRAM buffer
     auto input_dram_buffer =
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_input_buffer_size()));
@@ -101,7 +101,8 @@ static DramBuffer prepare_reader(tt_metal::Device* device,
 }
 
 // Prepares the writer kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
+static DramBuffer prepare_writer(
+    tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
     // Create output DRAM buffer
     auto output_dram_buffer =
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_output_buffer_size()));
@@ -142,13 +143,15 @@ static KernelHandle prepare_compute(tt_metal::Program& program, const DestPrintT
 
 // Generates input data based on the test configuration
 static std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) {
-    if (config.data_format == tt::DataFormat::Float16_b)
+    if (config.data_format == tt::DataFormat::Float16_b) {
         return tt::test_utils::generate_packed_increment_vector<uint32_t, bfloat16>(
             0.0f, config.get_num_elements(), 0.03125f, -1.1875f);
+    }
 
-    if (config.data_format == tt::DataFormat::Float32)
+    if (config.data_format == tt::DataFormat::Float32) {
         return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::df::float32>(
             0.0f, config.get_num_elements());
+    }
 
     ADD_FAILURE() << "Data format (" << config.data_format << ") not implemented!";
     return {};

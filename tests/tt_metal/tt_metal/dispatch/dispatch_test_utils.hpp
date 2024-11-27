@@ -23,20 +23,21 @@ inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_
     return src;
 }
 
-inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(tt::tt_metal::Device* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
+inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(
+    tt::tt_metal::Device* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;
     auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
 
-    std::vector<uint32_t> src = create_random_vector_of_bfloat16(
-      buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> src =
+        create_random_vector_of_bfloat16(buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     EnqueueWriteBuffer(cq, *buffer, src, false);
     return std::make_pair(std::move(buffer), src);
 }
 
-inline bool does_device_have_active_eth_cores(const Device *device) {
+inline bool does_device_have_active_eth_cores(const Device* device) {
     return !(device->get_active_ethernet_cores(true).empty());
 }
 
@@ -68,8 +69,9 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const bool force_max_size = false, const uint32_t unique_base = 0, const uint32_t common_base = 100) {
     uint32_t num_rt_args_unique = rand() % (tt::tt_metal::max_runtime_args + 1);
-    uint32_t num_rt_args_common =
-        num_rt_args_unique < tt::tt_metal::max_runtime_args ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1) : 0;
+    uint32_t num_rt_args_common = num_rt_args_unique < tt::tt_metal::max_runtime_args
+                                      ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1)
+                                      : 0;
 
     if (force_max_size) {
         if (rand() % 2) {

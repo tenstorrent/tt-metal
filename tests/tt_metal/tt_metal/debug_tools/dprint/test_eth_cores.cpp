@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Test Debug Print: ERISC
+    R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
@@ -50,36 +50,22 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
 
         // Create the kernel
         // TODO: When #6424 is fixed combine these kernels again.
-        KernelHandle erisc_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
-            core,
-            config);
+        KernelHandle erisc_kernel_id =
+            CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp", core, config);
 
         // Run the program
-        log_info(
-            tt::LogTest,
-            "Running print test on eth core {}:({},{})",
-            device->id(),
-            core.x,
-            core.y
-        );
+        log_info(tt::LogTest, "Running print test on eth core {}:({},{})", device->id(), core.x, core.y);
         fixture->RunProgram(device, program);
 
         // Check the print log against golden output.
-        EXPECT_TRUE(
-            FilesMatchesString(
-                DPrintFixture::dprint_file_name,
-                golden_output
-            )
-        );
+        EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 
         // Clear the log file for the next core's test
         tt::DPrintServerClearLogFile();
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
     for (Device* device : this->devices_) {
@@ -89,11 +75,8 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, Device *device){
-                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
-            },
-            device
-        );
+            [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
+            device);
     }
 }
 TEST_F(DPrintFixture, IdleEthTestPrint) {
@@ -108,10 +91,7 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, Device *device){
-                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false);
-            },
-            device
-        );
+            [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false); },
+            device);
     }
 }

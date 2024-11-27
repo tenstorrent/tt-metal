@@ -21,7 +21,7 @@ std::string get_string_lowercase(tt::ARCH arch) {
     }
 }
 
-}
+}  // namespace
 
 namespace tt {
 namespace test_utils {
@@ -38,8 +38,7 @@ inline std::string get_env_arch_name() {
 }
 
 inline std::string get_umd_arch_name() {
-
-    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
+    if (std::getenv("TT_METAL_SIMULATOR_EN")) {
         return get_env_arch_name();
     }
 
@@ -57,9 +56,7 @@ inline std::string get_umd_arch_name() {
     }
 
     return get_string_lowercase(arch);
-
 }
-
 
 }  // namespace test_utils
 }  // namespace tt

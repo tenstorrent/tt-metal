@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Test Debug Print: Data0
+    R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
@@ -44,16 +44,15 @@ SLICE:
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
-    constexpr CoreCoord core = {0, 0}; // Print on first core only
+    constexpr CoreCoord core = {0, 0};  // Print on first core only
     Program program = Program();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(
-        buffer_size,
-        {{src0_cb_index, tt::DataFormat::Float16_b}}
-    ).set_page_size(src0_cb_index, buffer_size);
+    constexpr uint32_t buffer_size = 32 * 32 * sizeof(bfloat16);
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(buffer_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, buffer_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // This kernel is enough to fill up the print buffer, even though the device is not being
@@ -62,8 +61,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program
     fixture->RunProgram(device, program);
@@ -74,8 +72,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     EXPECT_TRUE(OpenFile(file_name, log_file, std::fstream::in));
     EXPECT_TRUE(log_file.peek() == std::ifstream::traits_type::eof());
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintDisableDevicesFixture, TensixTestPrintMuteDevice) {
     for (Device* device : this->devices_) {

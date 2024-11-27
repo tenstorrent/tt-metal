@@ -10,9 +10,8 @@ using std::vector;
 
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
-static void test_sems_across_core_types(DispatchFixture *fixture,
-                                        vector<tt::tt_metal::v1::DeviceHandle>& devices,
-                                        bool active_eth) {
+static void test_sems_across_core_types(
+    DispatchFixture* fixture, vector<tt::tt_metal::v1::DeviceHandle>& devices, bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;
     constexpr uint32_t tensix_sem_init_val = 102;
@@ -24,12 +23,13 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
         compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::IDLE_ETH));
     }
 
-    for (Device *device : devices) {
-        if (not device->is_mmio_capable()) continue;
+    for (Device* device : devices) {
+        if (not device->is_mmio_capable()) {
+            continue;
+        }
 
-        const auto &eth_cores = active_eth ?
-            device->get_active_ethernet_cores() :
-            device->get_inactive_ethernet_cores();
+        const auto& eth_cores =
+            active_eth ? device->get_active_ethernet_cores() : device->get_inactive_ethernet_cores();
         if (eth_cores.size() > 0) {
             Program program = CreateProgram();
 
@@ -40,7 +40,7 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_across_core_types.cpp",
                 eth_core,
-                tt::tt_metal::EthernetConfig {
+                tt::tt_metal::EthernetConfig{
                     .eth_mode = active_eth ? Eth::RECEIVER : Eth::IDLE,
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
@@ -53,7 +53,7 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_across_core_types.cpp",
                 tensix_core,
-                DataMovementConfig {
+                DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                     .compile_args = compile_args,
@@ -65,14 +65,14 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
-                0, // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
+                0,  // dummy so eth/tensix are different sizes w/ different offsets
             };
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
@@ -90,54 +90,53 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
 }
 
 TEST_F(DispatchFixture, EthTestBlank) {
-
-    Device *device = devices_[0];
+    Device* device = devices_[0];
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
-    const auto &eth_cores = this->slow_dispatch_ ?
-        device->get_inactive_ethernet_cores() :
-        device->get_active_ethernet_cores();
+    const auto& eth_cores =
+        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
         CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", eth_core,
-            tt::tt_metal::EthernetConfig {
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            eth_core,
+            tt::tt_metal::EthernetConfig{
                 .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
-            }
-        );
+            });
 
         this->RunProgram(device, program);
     }
 }
 
 TEST_F(DispatchFixture, TensixTestInitLocalMemory) {
-
     // This test will hang/assert if there is a failure
 
-    Device *device = devices_[0];
+    Device* device = devices_[0];
     CoreCoord core = {0, 0};
     Program program;
 
     CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
+        core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
+        core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
-        ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core, ComputeConfig{});
 
     this->RunProgram(device, program);
 }
 
 TEST_F(DispatchFixture, EthTestInitLocalMemory) {
-
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
@@ -145,31 +144,27 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
         return;
     }
 
-    Device *device = devices_[0];
+    Device* device = devices_[0];
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
-    const auto &eth_cores = this->slow_dispatch_ ?
-        device->get_inactive_ethernet_cores() :
-        device->get_active_ethernet_cores();
+    const auto& eth_cores =
+        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
         CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
-            program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", eth_core,
-            tt::tt_metal::EthernetConfig {
-                .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER
-            }
-        );
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
+            eth_core,
+            tt::tt_metal::EthernetConfig{.eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER});
 
         this->RunProgram(device, program);
     }
 }
 
-TEST_F(DispatchFixture, TensixActiveEthTestSemaphores) {
-    test_sems_across_core_types(this, this->devices_, true);
-}
+TEST_F(DispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
 
 TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
@@ -182,13 +177,10 @@ TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
 TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
-
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
-        {intermediate_cb, tt::DataFormat::Float16_b},
-        {out_cb, tt::DataFormat::Float16_b}
-    };
+        {intermediate_cb, tt::DataFormat::Float16_b}, {out_cb, tt::DataFormat::Float16_b}};
     uint32_t num_bytes_for_df = 2;
     uint32_t single_tile_size = num_bytes_for_df * 1024;
     uint32_t num_tiles = 2;
@@ -196,11 +188,11 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;
         CoreCoord core_coord;
-        for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             if (eth_core.x < worker_grid_size.x && eth_core.y < worker_grid_size.y) {
                 core_coord = eth_core;
                 found_overlapping_core = true;
@@ -215,20 +207,26 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
         Program program;
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
-            .set_page_size(intermediate_cb, single_tile_size)
-            .set_page_size(out_cb, single_tile_size);
+                                             .set_page_size(intermediate_cb, single_tile_size)
+                                             .set_page_size(out_cb, single_tile_size);
         auto cb = CreateCircularBuffer(program, core_coord, cb_config);
 
         CreateKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", core_coord,
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            core_coord,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         CreateKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", core_coord,
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            core_coord,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         CreateKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", core_coord,
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            core_coord,
             EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = NOC::NOC_0});
 
         this->RunProgram(device, program);
@@ -236,8 +234,11 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         vector<uint32_t> cb_config_vector;
 
         tt::tt_metal::detail::ReadFromDeviceL1(
-            device, core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
+            device,
+            core_coord,
+            program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+            cb_config_buffer_size,
+            cb_config_vector);
 
         // ETH core doesn't have CB
         EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);

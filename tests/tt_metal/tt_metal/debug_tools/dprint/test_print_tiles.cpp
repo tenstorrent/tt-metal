@@ -34,13 +34,13 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     } else if (data_format == tt::DataFormat::Bfp8_b) {
         std::vector<float> float_vec(elements_in_tile);
         for (int i = 0; i < float_vec.size(); i++) {
-            float_vec[i] = 0.012345 * i * (i % 32 == 0? -1 : 1);
+            float_vec[i] = 0.012345 * i * (i % 32 == 0 ? -1 : 1);
         }
         u32_vec = pack_fp32_vec_as_bfp8_tiles(float_vec, true, false);
     } else if (data_format == tt::DataFormat::Bfp4_b) {
         std::vector<float> float_vec(elements_in_tile);
         for (int i = 0; i < float_vec.size(); i++) {
-            float_vec[i] = 0.012345 * i * (i % 16 == 0? -1 : 1);
+            float_vec[i] = 0.012345 * i * (i % 16 == 0 ? -1 : 1);
         }
         u32_vec = pack_fp32_vec_as_bfp4_tiles(float_vec, true, false);
     } else {
@@ -48,16 +48,16 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     return u32_vec;
 }
 
-static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
+static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
     string data = "";
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 0]),
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 8]),
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 16]),
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 24]));
+                *reinterpret_cast<float*>(&input_tile[col * 32 + 0]),
+                *reinterpret_cast<float*>(&input_tile[col * 32 + 8]),
+                *reinterpret_cast<float*>(&input_tile[col * 32 + 16]),
+                *reinterpret_cast<float*>(&input_tile[col * 32 + 24]));
         }
     } else if (data_format == tt::DataFormat::Float16_b) {
         std::vector<bfloat16> fp16b_vec = unpack_uint32_vec_into_bfloat16_vec(input_tile);
@@ -74,31 +74,32 @@ static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint3
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 0]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 8]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 16]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 24]));
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 0]),
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 8]),
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 16]),
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 24]));
         }
     } else if (data_format == tt::DataFormat::Bfp4_b) {
         std::vector<float> float_vec = unpack_bfp4_tiles_into_float_vec(input_tile, true, false);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 0]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 8]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 16]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 24]));
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 0]),
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 8]),
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 16]),
+                *reinterpret_cast<float*>(&float_vec[col * 32 + 24]));
         }
     } else {
     }
     return data;
 }
 
-static string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
+static string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
     string data = GenerateExpectedData(data_format, input_tile);
     string expected = fmt::format("Print tile from Data0:{}", data);
     expected += fmt::format("\nPrint tile from Unpack:{}", data);
-    expected += fmt::format("\nPrint tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...");
+    expected += fmt::format(
+        "\nPrint tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...");
     expected += fmt::format("\nPrint tile from Pack:{}", data);
     expected += fmt::format("\nPrint tile from Data1:{}", data);
     return expected;
@@ -111,8 +112,8 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
 
     // Create an input CB with the right data format
     uint32_t tile_size = detail::TileSize(data_format);
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
-                                              .set_page_size(CBIndex::c_0, tile_size);
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}}).set_page_size(CBIndex::c_0, tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // Dram buffer to send data to, device will read it out of here to print
@@ -127,20 +128,17 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
         program,
         llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
         llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
         llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        ComputeConfig{}
-    );
+        ComputeConfig{});
 
     // BRISC kernel needs dram info via rtargs
     tt_metal::SetRuntimeArgs(
@@ -172,12 +170,7 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
     // Check against expected prints
     string expected = GenerateGoldenOutput(data_format, u32_vec);
     // log_info("Expected output:\n{}", expected);
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            expected
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, expected));
 }
 
 TEST_F(DPrintFixture, TestPrintTilesFloat32) {
@@ -189,7 +182,8 @@ TEST_F(DPrintFixture, TestPrintTilesFloat32) {
 TEST_F(DPrintFixture, TestPrintTilesFloat16_b) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Float16_b); }, device);
+            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Float16_b); },
+            device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesBfp4_b) {

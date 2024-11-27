@@ -18,7 +18,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Test Debug Print: Data0
+    R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
@@ -139,22 +139,18 @@ Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b))";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
-    constexpr CoreCoord core = {0, 0}; // Print on first core only
+    constexpr CoreCoord core = {0, 0};  // Print on first core only
     Program program = Program();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
-    constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(
-        buffer_size,
-        {{CBIndex::c_0, tt::DataFormat::Float16_b}}
-    ).set_page_size(CBIndex::c_0, buffer_size);
+    constexpr uint32_t buffer_size = 32 * 32 * sizeof(bfloat16);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(buffer_size, {{CBIndex::c_0, tt::DataFormat::Float16_b}})
+                                              .set_page_size(CBIndex::c_0, buffer_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // A CB with an unsupported data format
-    CircularBufferConfig cb_src1_config = CircularBufferConfig(
-        buffer_size,
-        {{CBIndex::c_1, tt::DataFormat::Bfp2_b}}
-    ).set_page_size(CBIndex::c_1, buffer_size);
+    CircularBufferConfig cb_src1_config = CircularBufferConfig(buffer_size, {{CBIndex::c_1, tt::DataFormat::Bfp2_b}})
+                                              .set_page_size(CBIndex::c_1, buffer_size);
     CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     // Three different kernels to mirror typical usage and some previously
@@ -163,34 +159,26 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         program,
         llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
         llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
         llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
-        ComputeConfig{}
-    );
+        ComputeConfig{});
 
     // Run the program
     fixture->RunProgram(device, program);
 
     // Check that the expected print messages are in the log file
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintFromAllHarts) {
     for (Device* device : this->devices_) {

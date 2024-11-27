@@ -42,7 +42,7 @@ void kernel_main() {
     for (uint32_t i = num_unique_rt_args; i < num_unique_rt_args + num_sems; i++) {
         const uint32_t sem_id = get_arg_val<uint32_t>(i);
         const uint32_t actual_sem_val =
-            *(reinterpret_cast<volatile tt_l1_ptr uint32_t *>(get_semaphore<sem_core_type>(sem_id)));
+            *(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<sem_core_type>(sem_id)));
         if (expected_sem_val != actual_sem_val) {
             DPRINT << "Actual semaphore value: " << actual_sem_val << " Expected semaphore value: " << expected_sem_val
                    << ENDL();

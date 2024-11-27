@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(TestConstCharStrNC{0,0}
+    R"(TestConstCharStrNC{0,0}
    2
 0.1235
 0.1200
@@ -243,41 +243,21 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     uint32_t multi_core = 1;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            const std::vector<uint32_t> brisc_rt_args = {
-                x, y, multi_core, 15
-            };
-            SetRuntimeArgs(
-                program,
-                brisc_kernel_id,
-                CoreCoord{x, y},
-                brisc_rt_args
-            );
-            const std::vector<uint32_t> ncrisc_rt_args = {
-                x, y, (uint32_t) xy_end.x+1, multi_core, 4, 2, 10
-            };
-            SetRuntimeArgs(
-                program,
-                ncrisc_kernel_id,
-                CoreCoord{x, y},
-                ncrisc_rt_args
-            );
+            const std::vector<uint32_t> brisc_rt_args = {x, y, multi_core, 15};
+            SetRuntimeArgs(program, brisc_kernel_id, CoreCoord{x, y}, brisc_rt_args);
+            const std::vector<uint32_t> ncrisc_rt_args = {x, y, (uint32_t)xy_end.x + 1, multi_core, 4, 2, 10};
+            SetRuntimeArgs(program, ncrisc_kernel_id, CoreCoord{x, y}, ncrisc_rt_args);
         }
     }
-
 
     // Run the program
     fixture->RunProgram(device, program);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintRaiseWait) {
     for (Device* device : this->devices_) {

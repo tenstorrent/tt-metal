@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Printing int from arg: 0
+    R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
@@ -25,22 +25,16 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     Program program = Program();
 
     // This tests prints only on a single core
-    constexpr CoreCoord core = {0, 0}; // Print on first core only
+    constexpr CoreCoord core = {0, 0};  // Print on first core only
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_one_int.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // A lambda to run the program w/ a given test number (used in the printing).
     auto run_program = [&](uint32_t test_number) {
-        SetRuntimeArgs(
-            program,
-            brisc_print_kernel_id,
-            core,
-            {test_number}
-        );
+        SetRuntimeArgs(program, brisc_print_kernel_id, core, {test_number});
         fixture->RunProgram(device, program);
     };
 
@@ -56,15 +50,10 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     run_program(2);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintMuting) {
     for (Device* device : this->devices_) {

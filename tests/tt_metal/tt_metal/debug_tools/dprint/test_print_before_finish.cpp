@@ -26,16 +26,11 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
     uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
-    uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
+    uint32_t delay_cycles = clk_mhz * 2000000;  // 2 seconds
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            const std::vector<uint32_t> args = { delay_cycles, x, y };
-            SetRuntimeArgs(
-                program,
-                brisc_print_kernel_id,
-                CoreCoord{x, y},
-                args
-            );
+            const std::vector<uint32_t> args = {delay_cycles, x, y};
+            SetRuntimeArgs(program, brisc_print_kernel_id, CoreCoord{x, y}, args);
         }
     }
     fixture->RunProgram(device, program);
@@ -50,12 +45,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
             expected_output.push_back(fmt::format("({},{}) After wait...", x, y));
         }
     }
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            DPrintFixture::dprint_file_name,
-            expected_output
-        )
-    );
+    EXPECT_TRUE(FileContainsAllStrings(DPrintFixture::dprint_file_name, expected_output));
 }
 
 TEST_F(DPrintFixture, TensixTestPrintFinish) {

@@ -12,7 +12,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
+static void RunTest(WatcherFixture* fixture, Device* device, riscv_id_t riscv_type) {
     // Set up program
     Program program = Program();
 
@@ -41,17 +41,14 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
     string risc;
-    switch(riscv_type) {
+    switch (riscv_type) {
         case DebugBrisc:
             assert_kernel = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
                 DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default
-                }
-            );
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
             risc = "brisc";
             break;
         case DebugNCrisc:
@@ -60,10 +57,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
                 DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default
-                }
-            );
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
             risc = "ncrisc";
             break;
         case DebugTrisc0:
@@ -71,10 +65,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC0", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC0", "1"}}});
             risc = "trisc0";
             break;
         case DebugTrisc1:
@@ -82,10 +73,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC1", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC1", "1"}}});
             risc = "trisc1";
             break;
         case DebugTrisc2:
@@ -93,10 +81,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC2", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC2", "1"}}});
             risc = "trisc2";
             break;
         case DebugErisc:
@@ -104,10 +89,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
         case DebugIErisc:
@@ -115,20 +97,14 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
-        default:
-            log_info("Unsupported risc type: {}, skipping test...", riscv_type);
-            GTEST_SKIP();
+        default: log_info("Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
     }
 
     // Write runtime args that should not trip an assert.
-    const std::vector<uint32_t> safe_args = { 3, 4 };
+    const std::vector<uint32_t> safe_args = {3, 4};
     SetRuntimeArgs(program, assert_kernel, logical_core, safe_args);
 
     // Run the kernel, don't expect an issue here.
@@ -137,15 +113,16 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
-    const std::vector<uint32_t> unsafe_args = { 3, 3 };
+    const std::vector<uint32_t> unsafe_args = {3, 3};
     SetRuntimeArgs(program, assert_kernel, logical_core, unsafe_args);
 
     // Run the kerel, expect an exit due to the assert.
     try {
         log_info(LogTest, "Running args that should assert...");
         fixture->RunProgram(device, program);
-    } catch (std::runtime_error &e) {
-        string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
+    } catch (std::runtime_error& e) {
+        string expected =
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
         expected += tt::watcher_get_log_file_name();
         const string error = string(e.what());
         log_info(LogTest, "Caught exception (one is expected in this test)");
@@ -161,13 +138,16 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
         "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
         device->id(),
         (riscv_type == DebugErisc) ? "ethnet" : "worker",
-        logical_core.x, logical_core.y,
-        phys_core.x, phys_core.y,
+        logical_core.x,
+        logical_core.y,
+        phys_core.x,
+        phys_core.y,
         risc,
         line_num,
-        kernel
-    );
-    expected += " Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
+        kernel);
+    expected +=
+        " Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
+        "from a different file.";
 
     log_info(LogTest, "Expected error: {}", expected);
     std::string exception = "";
@@ -177,68 +157,62 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     log_info(LogTest, "Reported error: {}", exception);
     EXPECT_TRUE(expected == get_watcher_exception_message());
 }
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 TEST_F(WatcherFixture, TensixTestWatcherAssertBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
 
     // Only run on device 0 because this test takes the watcher server down.
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugBrisc); }, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherAssertNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugNCrisc); }, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugTrisc0); }, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugTrisc1); }, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugTrisc2); }, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, ActiveEthTestWatcherAssertErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugErisc); }, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, IdleEthTestWatcherAssertIErisc) {
@@ -247,10 +221,9 @@ TEST_F(WatcherFixture, IdleEthTestWatcherAssertIErisc) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugIErisc);},
-        this->devices_[0]
-    );
+        [](WatcherFixture* fixture, Device* device) { RunTest(fixture, device, DebugIErisc); }, this->devices_[0]);
 }
