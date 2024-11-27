@@ -24,6 +24,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
 #include "umd/device/tt_silicon_driver_common.hpp"
+#include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"
 
@@ -69,7 +70,6 @@ constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
 /**
  * \private
  */
-extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
@@ -83,9 +83,6 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 #define EXCLUDE_START_Y_OFFSET 14
 #define EXCLUDE_START_X_OFFSET 8
 #define DYNAMIC_NOC_DIRECTION(noc, direction) (noc == 1 ? 1 - direction : direction)
-
-FORCE_INLINE
-uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 namespace interleaved_addr_gen {
 
@@ -302,19 +299,19 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
  */
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
-    uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
     volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
     pages_received_ptr[0] += num_pages;
 
-    cb_interface[operand].fifo_wr_ptr += num_words;
+    get_local_cb_interface(operand).fifo_wr_ptr += num_words;
 
     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
     // producer always writes into contiguous memory, it cannot wrap
-    ASSERT(cb_interface[operand].fifo_wr_ptr <= cb_interface[operand].fifo_limit);
-    if (cb_interface[operand].fifo_wr_ptr == cb_interface[operand].fifo_limit) {
+    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_wr_ptr == get_local_cb_interface(operand).fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        cb_interface[operand].fifo_wr_ptr -= cb_interface[operand].fifo_size;
+        get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
     }
 }
 
@@ -346,16 +343,16 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
-    uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
-    cb_interface[operand].fifo_rd_ptr += num_words;
+    get_local_cb_interface(operand).fifo_rd_ptr += num_words;
 
     // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
     // consumer always reads from contiguous memory, it cannot wrap
-    ASSERT(cb_interface[operand].fifo_rd_ptr <= cb_interface[operand].fifo_limit);
-    if (cb_interface[operand].fifo_rd_ptr == cb_interface[operand].fifo_limit) {
+    ASSERT(get_local_cb_interface(operand).fifo_rd_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_rd_ptr == get_local_cb_interface(operand).fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        cb_interface[operand].fifo_rd_ptr -= cb_interface[operand].fifo_size;
+        get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
     }
 }
 
@@ -406,7 +403,7 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
 FORCE_INLINE
 uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
-    uint32_t wr_ptr_bytes = cb_interface[operand].fifo_wr_ptr << 4;
+    uint32_t wr_ptr_bytes = get_local_cb_interface(operand).fifo_wr_ptr << 4;
     return wr_ptr_bytes;
 }
 
@@ -425,7 +422,7 @@ uint32_t get_write_ptr(uint32_t operand) {
 FORCE_INLINE
 uint32_t get_read_ptr(uint32_t operand) {
     // return byte address (fifo_rd_ptr is 16B address)
-    uint32_t rd_ptr_bytes = cb_interface[operand].fifo_rd_ptr << 4;
+    uint32_t rd_ptr_bytes = get_local_cb_interface(operand).fifo_rd_ptr << 4;
     return rd_ptr_bytes;
 }
 
@@ -471,7 +468,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
     // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
     volatile uint32_t local_mem_barrier = pages_acked;
 #endif
-    uint16_t free_space_pages_wrap = cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
+    uint16_t free_space_pages_wrap = get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
     return num_pages <= static_cast<int32_t>(free_space_pages_wrap);
 }
 
@@ -510,7 +507,8 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
         volatile uint32_t local_mem_barrier = pages_acked;
 #endif
-        uint16_t free_space_pages_wrap = cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
+        uint16_t free_space_pages_wrap =
+            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");

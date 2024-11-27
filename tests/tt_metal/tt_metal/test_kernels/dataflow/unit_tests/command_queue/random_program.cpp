@@ -43,9 +43,9 @@ void kernel_main() {
                                               .kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
             uint32_t tt_l1_ptr* cb_l1_base =
                 (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                      mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.cb_offset);
+                                      mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.local_cb_offset);
             uint32_t cb_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_base + i * 4)[3];
-            uint32_t expected = ((i + 1) * page_size) >> 4;
+            uint32_t expected = ((i + 1) * page_size) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             if (cb_val != expected) {
                 DPRINT << "Problem with CB idx: " << i << " Expected: " << expected << " Got: " << cb_val << ENDL();
                 while (true);  // Purposefully hang the kernel if CBs did not arrive correctly

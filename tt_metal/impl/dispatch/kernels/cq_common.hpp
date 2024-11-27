@@ -11,6 +11,24 @@
 #include "debug/ring_buffer.h"
 #include "cq_helpers.hpp"
 
+// The command queue read interface controls reads from the issue region, host owns the issue region write interface
+// Commands and data to send to device are pushed into the issue region
+struct CQReadInterface {
+    uint32_t issue_fifo_size;
+    uint32_t issue_fifo_limit;  // range is inclusive of the limit
+    uint32_t issue_fifo_rd_ptr;
+    uint32_t issue_fifo_rd_toggle;
+};
+
+// The command queue write interface controls writes to the completion region, host owns the completion region read
+// interface Data requests from device and event states are written to the completion region
+struct CQWriteInterface {
+    uint32_t completion_fifo_size;
+    uint32_t completion_fifo_limit;  // range is inclusive of the limit
+    uint32_t completion_fifo_wr_ptr;
+    uint32_t completion_fifo_wr_toggle;
+};
+
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
 FORCE_INLINE

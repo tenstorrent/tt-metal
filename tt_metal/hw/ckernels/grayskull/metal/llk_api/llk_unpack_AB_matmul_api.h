@@ -67,8 +67,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
-    std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t unpA_src_format = (std::uint32_t)unpack_src_format[operandA_id];
     std::uint32_t unpB_src_format = (std::uint32_t)unpack_src_format[operandB_id];
 

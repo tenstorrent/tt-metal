@@ -16,9 +16,10 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
-
 #include "kernel_includes.hpp"
-
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#include "circular_buffer_init.h"
+#endif
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -27,26 +28,30 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
 void kernel_launch(uint32_t kernel_base_addr) {
-
-  DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < KERNEL_RUN_TIME);
 #endif
 #else
-  extern uint32_t __kernel_init_local_l1_base[];
-  extern uint32_t __fw_export_end_text[];
-  do_crt1((
-      uint32_t tt_l1_ptr *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
+    extern uint32_t __kernel_init_local_l1_base[];
+    extern uint32_t __fw_export_end_text[];
+    do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
+                                  (uint32_t)__fw_export_end_text));
 
-  if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-      noc_local_state_init(NOC_INDEX);
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        noc_local_state_init(NOC_INDEX);
     } else {
         noc_local_state_init(NOC_0);
         noc_local_state_init(NOC_1);
     }
-
+#ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+    ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#endif
     kernel_main();
+#ifdef UPDATE_REMOTE_CB_CONFIGS_IN_L1
+    UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#endif
 #endif
 }

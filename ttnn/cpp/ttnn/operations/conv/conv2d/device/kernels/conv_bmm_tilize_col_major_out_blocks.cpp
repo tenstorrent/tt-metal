@@ -164,8 +164,8 @@ void MAIN {
             PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 #endif
 
-            UNPACK(const uint32_t partials_cb_read_ptr = cb_interface[matmul_partials_cb].fifo_rd_ptr);
-            PACK(const uint32_t partials_cb_write_ptr = cb_interface[matmul_partials_cb].fifo_wr_ptr);
+            UNPACK(const uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr);
+            PACK(const uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr);
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
 #ifdef WIDTH_SHARDED
@@ -332,8 +332,8 @@ void MAIN {
                     cb_wait_front(matmul_partials_cb, out_block_num_tiles);
                     cb_pop_front(matmul_partials_cb, out_block_num_tiles);
                     if constexpr (spill) {
-                        UNPACK(cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr);
-                        PACK(cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr);
+                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                     }
                 }
                 // never reload when with bias, bias uses interm buffer
@@ -344,8 +344,8 @@ void MAIN {
                     cb_wait_front(matmul_partials_cb, out_block_num_tiles);
                     cb_pop_front(matmul_partials_cb, out_block_num_tiles);
                     if constexpr (spill) {
-                        UNPACK(cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr);
-                        PACK(cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr);
+                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                     }
                 }
                 if (in0_block_w_i == in0_num_blocks_w - 2) {
@@ -358,15 +358,15 @@ void MAIN {
 
 #ifdef FUSE_BIAS
                     if (!last_out) {
-                        UNPACK(cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr);
-                        PACK(cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr);
+                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                     }
 #else
                     if (!last_out) {
-                        UNPACK(cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr);
+                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
                     }
                     if (in0_block_w_i < in0_num_blocks_w - 2) {
-                        PACK(cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr);
+                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                     }
 #endif
                 }
@@ -376,7 +376,7 @@ void MAIN {
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id) {
-                UNPACK(cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr);
+                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
             }
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU

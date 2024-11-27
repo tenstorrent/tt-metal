@@ -41,7 +41,7 @@ bool test_cb_config_written_to_core(
                         cb_config_vector);
 
                     for (const auto& [buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
-                        auto base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                        auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                         pass &= (golden_cb_config.at(0) == cb_config_vector.at(base_index));      // address
                         pass &= (golden_cb_config.at(1) == cb_config_vector.at(base_index + 1));  // size
                         pass &= (golden_cb_config.at(2) == cb_config_vector.at(base_index + 2));  // num pages

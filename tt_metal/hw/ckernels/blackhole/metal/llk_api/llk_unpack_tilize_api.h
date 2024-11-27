@@ -81,7 +81,8 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
 
-    std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    std::uint32_t base_address =
+        get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
     WAYPOINT("UPTW");
     _llk_unpack_tilize_(
@@ -224,12 +225,14 @@ inline void llk_unpack_tilizeA_B(
     //But currently ops do not populate that array correctly
     const std::uint32_t face_r_dim = unpA_face_r_dim;
 
-    const std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    const std::uint32_t base_address_a =
+        get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpack_src_format[operandA_id], tile_index_a) << 1;
     const std::uint32_t address_a = base_address_a + offset_address_a;
 
-    const std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
-    const std::uint32_t offset_address_b = tile_index_b * cb_interface[operandB_id].fifo_page_size;
+    const std::uint32_t base_address_b =
+        get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    const std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     const std::uint32_t address_b = base_address_b + offset_address_b;
 
     const std::uint32_t block_c_dim = block_ct_dim * ((num_faces==1) ? FACE_C_DIM: TILE_C_DIM) * face_r_dim;

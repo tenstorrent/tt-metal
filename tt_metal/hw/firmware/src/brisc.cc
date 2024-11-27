@@ -22,6 +22,7 @@
 #include "risc_attribs.h"
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
+#include "circular_buffer_init.h"
 #include "dataflow_api.h"
 #include "dev_mem_map.h"
 
@@ -439,24 +440,35 @@ int main() {
             }
             prev_noc_mode = noc_mode;
 
-            uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                launch_msg_address->kernel_config.cb_offset);
-            setup_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
+            uint32_t tt_l1_ptr* cb_l1_base =
+                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+            setup_local_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
             finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-                setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, launch_msg_address->kernel_config.max_cb_index, true, true, false);
+                uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
+                setup_local_cb_read_write_interfaces(
+                    cb_l1_base, num_cbs_to_early_init, end_cb_index, true, true, false);
+
+                cb_l1_base =
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
+                end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
+                experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
             } else {
-                // This was not initialized in the kernel
-                if (noc_mode == DM_DEDICATED_NOC) {
-                    noc_local_state_init(noc_index);
+                // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
+                // So have brisc setup remote cb interfaces even when brisc is not in use
+                if (launch_msg_address->kernel_config.enables) {
+                    cb_l1_base =
+                        (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
+                    uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
+                    experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
                 }
             }
             WAYPOINT("D");
