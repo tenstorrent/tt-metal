@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace {
 
-uint32_t find_greatest_common_page_size(std::vector<uint32_t> &stick_sizes, uint32_t alignment) {
+uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
     TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
     uint32_t page_size = align(stick_sizes[0], alignment);
     for (size_t idx = 1; idx < stick_sizes.size(); idx++) {
@@ -31,7 +31,7 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t> &stick_sizes, uint
 namespace ttnn::operations::data_movement::detail {
 
 tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups) {
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
     TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
     TT_FATAL(groups == 1 || dim == 3, "Sharded concat RM only supports groups > 1 when dim=3");
 
@@ -42,7 +42,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device *device = output.device();
+    tt_metal::Device* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -139,11 +139,11 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
         tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
     auto override_runtime_arguments_callback = [num_input_tensors, cb_input, cb_output](
-                                                   const void *operation,
-                                                   Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             UpdateDynamicCircularBufferAddress(program, cb_input[input_id], *input_tensors[input_id].buffer());
         }
@@ -164,12 +164,12 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 // rows are placed at column 0 but sequential rows in the output. The address gap between neighbor input rows is still
 // the output width (which is equal to the input width).
 tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     TT_FATAL(dim == 2 || dim == 3, "Sharded concat only supports dim=2 or 3");
     const bool is_height_concat = dim == 2;
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::Device *device = output.device();
+    tt_metal::Device* device = output.device();
 
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
@@ -188,7 +188,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         std::vector<uint32_t> all_stick_sizes;
         all_stick_sizes.push_back(output.shard_spec().value().shape[1]);
         std::transform(
-            input_tensors.begin(), input_tensors.end(), std::back_inserter(all_stick_sizes), [](const Tensor &tensor) {
+            input_tensors.begin(), input_tensors.end(), std::back_inserter(all_stick_sizes), [](const Tensor& tensor) {
                 return tensor.element_size() * tensor.shard_spec().value().shape[1];
             });
         page_size = find_greatest_common_page_size(all_stick_sizes, alignment);
@@ -271,11 +271,11 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, runtime_args_1);
 
     auto override_runtime_arguments_callback = [num_input_tensors, cb_dst_id, cb_inputs, cb_output](
-                                                   const void *operation,
-                                                   Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             UpdateDynamicCircularBufferAddress(program, cb_inputs[input_id], *input_tensors[input_id].buffer());
         }
@@ -285,10 +285,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
 }
 
 tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device *device = output.device();
+    tt_metal::Device* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -377,11 +377,11 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &,
-            const std::vector<Tensor> &output_tensors) {
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
             bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
             auto dst_buffer = output_tensors.at(0).buffer();
             auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
@@ -419,7 +419,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 }
 
 tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups) {
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
     if (output.is_sharded()) {
         if (input_tensors.size() == 2) {
             // TODO(jerrysky3): Keep the unrolled two tensor concat tensor for now but it only supports height-sharded
@@ -441,10 +441,10 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
 }
 
 tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output) {
+    const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device *device = output.device();
+    tt_metal::Device* device = output.device();
 
     const tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
@@ -470,7 +470,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     uint32_t num_input_tensors = input_tensors.size();
 
-    tt_metal::Buffer *dst_buffer = output.buffer();
+    tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
@@ -595,7 +595,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
-        const CoreCoord &core = cores[i];
+        const CoreCoord& core = cores[i];
         uint32_t num_pages_per_core = 0;
         if (i < g1_num_cores) {
             num_pages_per_core = num_tiles_per_core_group_1;
@@ -642,9 +642,9 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         std::vector<uint32_t> src_addrs(input_buffers.size());
         for (uint32_t i = 0; i < input_buffers.size(); ++i) {
             src_addrs[i] = input_buffers[i]->address();
@@ -652,14 +652,14 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
         auto dst_buffer = output_buffers.at(0);
 
-        for (const auto &core : cores) {
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.data() + 3);
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
         }

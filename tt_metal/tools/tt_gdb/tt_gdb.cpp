@@ -17,7 +17,6 @@
 
 using json = nlohmann::json;
 
-
 namespace tt_gdb {
 
 // Globals
@@ -35,7 +34,7 @@ const std::map<string, uint32_t> thread_type_to_sp_pointer_addr = {
     {"trisc0", TRISC0_SP},
     {"trisc1", TRISC1_SP},
     {"trisc2", TRISC2_SP},
-    {"brisc",  BRISC_SP},
+    {"brisc", BRISC_SP},
 };
 
 const std::map<string, uint32_t> thread_type_to_bp_addr = {
@@ -43,55 +42,51 @@ const std::map<string, uint32_t> thread_type_to_bp_addr = {
     {"trisc0", TRISC0_BREAKPOINT},
     {"trisc1", TRISC1_BREAKPOINT},
     {"trisc2", TRISC2_BREAKPOINT},
-    {"brisc",  BRISC_BREAKPOINT},
+    {"brisc", BRISC_BREAKPOINT},
 };
 
 // Regex matching
 bool is_print_command(string input) {
     // The complex part '[a-z]+[a-z0-9_]*' just matches a string that starts with a letter and then
     // has any combination of letters, integers, and underscores
-    std::regex self_regex("[ ]*p[ ]+[a-z_]+[a-z0-9_]*[ ]*",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex self_regex(
+        "[ ]*p[ ]+[a-z_]+[a-z0-9_]*[ ]*", std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
 
 bool is_continue_command(string input) {
-    std::regex self_regex("[ ]*c[ ]*",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex self_regex("[ ]*c[ ]*", std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
 
 bool is_quit_command(string input) {
-    std::regex self_regex("[ ]*q[ ]*",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex self_regex("[ ]*q[ ]*", std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
 
 bool is_exit_tt_gdb_context_command(string input) {
-    std::regex self_regex("[ ]*e[ ]*",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex self_regex("[ ]*e[ ]*", std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
 
 bool is_help_command(string input) {
-    std::regex self_regex("[ ]*h[ ]*|[ ]*help[ ]*",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex self_regex("[ ]*h[ ]*|[ ]*help[ ]*", std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
 
 bool is_help_documentation_command(string input) {
-    std::regex self_regex("[ ]*h[ ]+[a-z]+|[ ]*help[ ]+[a-z]+",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex self_regex(
+        "[ ]*h[ ]+[a-z]+|[ ]*help[ ]+[a-z]+", std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
 
 // Debugger apis
-inline void prompt(string &input) {
+inline void prompt(string& input) {
     std::cout << "(tt_gdb) ";
     std::getline(std::cin, input);
 }
 
-inline string get_second_token(string &input) {
+inline string get_second_token(string& input) {
     /*
         Given an input of the form "<SPACE>*<TOKEN><SPACE>*<TOKEN>", gets the second token
     */
@@ -118,7 +113,8 @@ inline string get_second_token(string &input) {
 }
 
 void print_cmd(uint32_t chip_id, CoreCoord core, string variable, string thread_type, string op) {
-    string debug_file_path = tt::get_kernel_compile_outpath(chip_id) + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
+    string debug_file_path =
+        tt::get_kernel_compile_outpath(chip_id) + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
     const string cmd = "python3 tt_metal/tools/tt_gdb/pydwarf2.py " + thread_type + " " + op;
     int ret = system(cmd.c_str());
 
@@ -128,7 +124,6 @@ void print_cmd(uint32_t chip_id, CoreCoord core, string variable, string thread_
         return;
     }
     std::ifstream debug_file(debug_file_path, std::ifstream::binary);
-
 
     json debug_data = json::parse(debug_file);
 
@@ -145,7 +140,7 @@ void print_cmd(uint32_t chip_id, CoreCoord core, string variable, string thread_
 
     try {
         variable_offset = variable_offset_info[variable];
-    } catch (std::invalid_argument& e){
+    } catch (std::invalid_argument& e) {
         std::cout << "Could not find variable" << std::endl;
         return;
     } catch (std::exception& e) {
@@ -157,16 +152,18 @@ void print_cmd(uint32_t chip_id, CoreCoord core, string variable, string thread_
 
     uint32_t sp_pointer = tt::llrt::read_hex_vec_from_core(chip_id, core, debug_addr, sizeof(uint32_t)).at(0);
 
-    uint32_t val = tt::llrt::read_hex_vec_from_core(chip_id, core, sp_pointer + offset_from_frame_pointer + variable_offset, sizeof(uint32_t)).at(0);
+    uint32_t val = tt::llrt::read_hex_vec_from_core(
+                       chip_id, core, sp_pointer + offset_from_frame_pointer + variable_offset, sizeof(uint32_t))
+                       .at(0);
     std::cout << val << std::endl;
 }
 
 void continue_cmd(uint32_t chip_id, CoreCoord core, string thread_type) {
-
     const std::vector<uint32_t> breakpoint_flag = {0};
 
     tt::llrt::write_hex_vec_to_core(chip_id, core, breakpoint_flag, thread_type_to_bp_addr.at(thread_type));
-    // std::cout << "Continue command issued for core " << core.x << ", " << core.y << " for thread " << thread_type << std::endl;
+    // std::cout << "Continue command issued for core " << core.x << ", " << core.y << " for thread " << thread_type <<
+    // std::endl;
 }
 
 void quit_cmd() {
@@ -202,14 +199,11 @@ inline void help_documentation() {
     std::cout << "\tWith a command name as argument, print help about that command." << std::endl;
 }
 
-inline void display_documentation(string input) {
-    documentation_map.at(input)();
-}
+inline void display_documentation(string input) { documentation_map.at(input)(); }
 
 void nicely_display_commands() {
-
     int num_printed = 0;
-    for (const auto &kv_pair: documentation_map) {
+    for (const auto& kv_pair : documentation_map) {
         string cmd = kv_pair.first;
         std::cout << cmd;
         std::cout << std::setw(9 - cmd.size());
@@ -238,15 +232,15 @@ string disaggregate_python_core_map_info(const PythonCoreMapInfo& info) {
 
     ss << "--cores_with_breakpoint ";
 
-    for (CoreCoord core: info.breakpoint_cores) {
+    for (CoreCoord core : info.breakpoint_cores) {
         ss << std::to_string(core.y) << "-" << std::to_string(core.x) << " ";
     }
 
     ss << "--breakpoint_lines ";
-    for (map<string, int> calling_risc_to_breakpoint_line: info.breakpoint_lines) {
+    for (map<string, int> calling_risc_to_breakpoint_line : info.breakpoint_lines) {
         ss << "'{";
         int idx = 0;
-        for (const auto& [calling_risc, breakpoint_line]: calling_risc_to_breakpoint_line) {
+        for (const auto& [calling_risc, breakpoint_line] : calling_risc_to_breakpoint_line) {
             idx++;
 
             if (idx < calling_risc_to_breakpoint_line.size()) {
@@ -260,7 +254,7 @@ string disaggregate_python_core_map_info(const PythonCoreMapInfo& info) {
 
     ss << "--ops ";
 
-    for (string op: info.op_names) {
+    for (string op : info.op_names) {
         ss << op << " ";
     }
 
@@ -269,13 +263,12 @@ string disaggregate_python_core_map_info(const PythonCoreMapInfo& info) {
     }
 
     ss << "--start_index " << info.current_core.x << " " << info.current_core.y << " ";
-    ss << "--current_risc " << info.current_risc << " " ;
+    ss << "--current_risc " << info.current_risc << " ";
 
     return ss.str();
 }
 
-
-void breakpoint_subroutine(int chip_id, const CoreCoord &core, string thread_type, string op) {
+void breakpoint_subroutine(int chip_id, const CoreCoord& core, string thread_type, string op) {
     auto run_cmd = [&chip_id, &core, &thread_type, &op](string input) {
         bool exit = false;
 
@@ -325,20 +318,18 @@ void launch_core_map(PythonCoreMapInfo info) {
 }
 
 void tt_gdb_(int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
-
     const vector<std::tuple<string, uint32_t, uint32_t>> breakpoint_addresses = {
         std::tuple("ncrisc", NCRISC_BREAKPOINT, NCRISC_BP_LNUM),
         std::tuple("trisc0", TRISC0_BREAKPOINT, TRISC0_BP_LNUM),
         std::tuple("trisc1", TRISC1_BREAKPOINT, TRISC1_BP_LNUM),
         std::tuple("trisc2", TRISC2_BREAKPOINT, TRISC2_BP_LNUM),
-        std::tuple("brisc",  BRISC_BREAKPOINT,  BRISC_BP_LNUM)
-    };
+        std::tuple("brisc", BRISC_BREAKPOINT, BRISC_BP_LNUM)};
 
     std::filesystem::remove("core_debug_info.json");
 
-    // This program loops indefinitely, however should be launched as a detached thread so that its resources are freed after the main thread terminates
+    // This program loops indefinitely, however should be launched as a detached thread so that its resources are freed
+    // after the main thread terminates
     while (true) {
-
         vector<CoreCoord> breakpoint_cores;
         vector<map<string, int>> breakpoint_lines;
         std::ifstream core_debug_info("core_debug_info.json", std::ifstream::binary);
@@ -356,16 +347,18 @@ void tt_gdb_(int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
             current_risc = debug_data["current_risc"];
         }
 
-        for (const auto &core: cores) {
-
+        for (const auto& core : cores) {
             bool at_least_one_breakpoint = false;
             map<string, int> breakpoint_lines_for_core;
-            for (const auto& [calling_risc, breakpoint_address, breakpoint_line_address]: breakpoint_addresses) {
-                uint32_t breakpoint_flag = tt::llrt::read_hex_vec_from_core(chip_id, core, breakpoint_address, sizeof(uint32_t)).at(0);
+            for (const auto& [calling_risc, breakpoint_address, breakpoint_line_address] : breakpoint_addresses) {
+                uint32_t breakpoint_flag =
+                    tt::llrt::read_hex_vec_from_core(chip_id, core, breakpoint_address, sizeof(uint32_t)).at(0);
                 at_least_one_breakpoint |= (breakpoint_flag == 1);
 
                 if (breakpoint_flag == 1) {
-                    uint32_t breakpoint_line = tt::llrt::read_hex_vec_from_core(chip_id, core, breakpoint_line_address, sizeof(uint32_t)).at(0);
+                    uint32_t breakpoint_line =
+                        tt::llrt::read_hex_vec_from_core(chip_id, core, breakpoint_line_address, sizeof(uint32_t))
+                            .at(0);
                     breakpoint_lines_for_core.emplace(calling_risc, breakpoint_line);
                 }
             }
@@ -378,17 +371,17 @@ void tt_gdb_(int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
 
         // Render python UI
         if (not breakpoint_cores.empty()) {
-            TT_ASSERT(not breakpoint_lines.empty(), "If breakpoint_cores is not empty, breakpoint_lines cannot be either");
-            PythonCoreMapInfo info = {
-                // This info is provided by C++
-                breakpoint_cores,
-                breakpoint_lines,
-                ops,
+            TT_ASSERT(
+                not breakpoint_lines.empty(), "If breakpoint_cores is not empty, breakpoint_lines cannot be either");
+            PythonCoreMapInfo info = {// This info is provided by C++
+                                      breakpoint_cores,
+                                      breakpoint_lines,
+                                      ops,
 
-                // This info is state received from python from last exit
-                current_core,
-                reenter,
-                current_risc
+                                      // This info is state received from python from last exit
+                                      current_core,
+                                      reenter,
+                                      current_risc
 
             };
             launch_core_map(info);
@@ -409,8 +402,7 @@ void tt_gdb_(int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
                     debug_data["current_core_y"],
                 },
                 debug_data["current_risc"],
-                debug_data["op"]
-            );
+                debug_data["op"]);
         }
 
         sleep(2);
@@ -418,13 +410,14 @@ void tt_gdb_(int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
 }
 
 void tt_gdb(int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops) {
-    // Makes this thread completely independent from the rest of execution. Once the main thread finishes, the debugger's resources are freed
+    // Makes this thread completely independent from the rest of execution. Once the main thread finishes, the
+    // debugger's resources are freed
 
     std::thread debug_server(tt_gdb_, chip_id, worker_cores, ops);
     debug_server.detach();
 }
 
-} // end namespace tt_gdb
+}  // end namespace tt_gdb
 
 namespace tt {
 namespace tt_metal {
@@ -432,12 +425,12 @@ namespace tt_metal {
 void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops) {
     vector<CoreCoord> worker_cores;
 
-    for (const auto& logical_core: logical_cores) {
+    for (const auto& logical_core : logical_cores) {
         worker_cores.push_back(device->worker_core_from_logical_core(logical_core));
     }
 
     tt_gdb::tt_gdb(chip_id, worker_cores, ops);
 }
 
-} // end namespace tt_metal
-} // end namespace tt
+}  // end namespace tt_metal
+}  // end namespace tt

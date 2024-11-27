@@ -61,9 +61,17 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+                return self(
+                    queue_id,
+                    ttnn::Shape{tt::tt_metal::LegacyShape{shape}},
+                    fill_value,
+                    dtype,
+                    layout,
+                    device,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("shape"),
             py::arg("fill_value"),
@@ -81,9 +89,17 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+                return self(
+                    queue_id,
+                    ttnn::Shape{tt::tt_metal::LegacyShape{shape}},
+                    fill_value,
+                    dtype,
+                    layout,
+                    device,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("shape"),
             py::arg("fill_value"),
@@ -96,7 +112,11 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 }
 
 template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string, const std::string& info_doc = "") {
+void bind_full_operation_with_hard_coded_value(
+    py::module& module,
+    const creation_operation_t& operation,
+    const std::string& value_string,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor with the specified shape and fills it with the value of {1}.
@@ -190,7 +210,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
             },
@@ -210,7 +230,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
             },
@@ -225,7 +245,11 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 }
 
 template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string, const std::string& info_doc = "") {
+void bind_full_like_operation_with_hard_coded_value(
+    py::module& module,
+    const creation_operation_t& operation,
+    const std::string& value_string,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the value of {1}. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
@@ -269,7 +293,7 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
             },
@@ -440,8 +464,11 @@ void bind_empty_like_operation(py::module& module) {
 
 void py_module(py::module& module) {
     detail::bind_full_operation(module, ttnn::full);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros, "0.0",
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_full_operation_with_hard_coded_value(
+        module,
+        ttnn::zeros,
+        "0.0",
+        R"doc(Supported dtypes, layouts, and ranks:
 
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -452,8 +479,11 @@ void py_module(py::module& module) {
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones, "1.0");
 
     detail::bind_full_like_operation(module, ttnn::full_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like, "0.0",
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_full_like_operation_with_hard_coded_value(
+        module,
+        ttnn::zeros_like,
+        "0.0",
+        R"doc(Supported dtypes, layouts, and ranks:
 
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -464,8 +494,9 @@ void py_module(py::module& module) {
 
     detail::bind_arange_operation(module, ttnn::arange);
 
-    detail::bind_empty_operation(module,
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_empty_operation(
+        module,
+        R"doc(Supported dtypes, layouts, and ranks:
 
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |

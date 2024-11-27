@@ -32,28 +32,35 @@ namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     uint8_t queue_id,
-    const ttnn::Tensor &input_tensor_q,
-    const ttnn::Tensor &input_tensor_k,
-    const ttnn::Tensor &input_tensor_v,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
     const bool is_causal,
-    const std::optional<const Tensor> attn_mask,
-    const std::vector<uint32_t> cur_pos,
-    const std::optional<const Tensor> cur_pos_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::vector<uint32_t>& cur_pos,
+    const std::optional<const Tensor>& cur_pos_tensor,
     std::optional<float> scale,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                    ? input_tensor_q.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.get_logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;
         // assert chunk size must be power of 2 and multiple of 32
-        TT_FATAL((k_chunk_size & (k_chunk_size - 1)) == 0, "User provided k_chunk_size must be power of 2, got: {}", k_chunk_size);
+        TT_FATAL(
+            (k_chunk_size & (k_chunk_size - 1)) == 0,
+            "User provided k_chunk_size must be power of 2, got: {}",
+            k_chunk_size);
         TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
     } else {
-        TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}", k_chunk_size);
+        TT_FATAL(
+            k_chunk_size % 32 == 0,
+            "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}",
+            k_chunk_size);
     }
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
@@ -78,15 +85,15 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
 }
 
 ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
-    const ttnn::Tensor &input_tensor_q,
-    const ttnn::Tensor &input_tensor_k,
-    const ttnn::Tensor &input_tensor_v,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
     const bool is_causal,
-    const std::optional<const Tensor> attn_mask,
-    const std::vector<uint32_t> cur_pos,
-    const std::optional<const Tensor> cur_pos_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::vector<uint32_t>& cur_pos,
+    const std::optional<const Tensor>& cur_pos_tensor,
     std::optional<float> scale,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     return invoke(
@@ -104,31 +111,37 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
         compute_kernel_config);
 }
 
-
 ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     uint8_t queue_id,
-    const ttnn::Tensor &input_tensor_q,
-    const ttnn::Tensor &input_tensor_k,
-    const ttnn::Tensor &input_tensor_v,
-    const ttnn::Tensor &page_table_tensor,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
     const bool is_causal,
-    const std::optional<const Tensor> attn_mask,
-    const std::optional<const Tensor> &cur_pos_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& cur_pos_tensor,
     std::optional<float> scale,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                    ? input_tensor_q.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.get_logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;
         // assert chunk size must be power of 2 and multiple of 32
-        TT_FATAL((k_chunk_size & (k_chunk_size - 1)) == 0, "User provided k_chunk_size must be power of 2, got: {}", k_chunk_size);
+        TT_FATAL(
+            (k_chunk_size & (k_chunk_size - 1)) == 0,
+            "User provided k_chunk_size must be power of 2, got: {}",
+            k_chunk_size);
         TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
     } else {
-        TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}", k_chunk_size);
+        TT_FATAL(
+            k_chunk_size % 32 == 0,
+            "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}",
+            k_chunk_size);
     }
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
@@ -153,15 +166,15 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
 }
 
 ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
-    const ttnn::Tensor &input_tensor_q,
-    const ttnn::Tensor &input_tensor_k,
-    const ttnn::Tensor &input_tensor_v,
-    const ttnn::Tensor &page_table_tensor,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
     const bool is_causal,
-    const std::optional<const Tensor> attn_mask,
-    const std::optional<const Tensor> &cur_pos_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& cur_pos_tensor,
     std::optional<float> scale,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     return invoke(

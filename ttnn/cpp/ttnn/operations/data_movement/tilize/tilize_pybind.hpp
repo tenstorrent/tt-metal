@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_tilize(py::module &module) {
+void bind_tilize(py::module& module) {
     auto doc =
         R"doc(
             Changes data layout of input tensor to TILE.
@@ -42,9 +42,9 @@ void bind_tilize(py::module &module) {
         ttnn::tilize,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const std::optional<MemoryConfig> &memory_config,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
                uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },

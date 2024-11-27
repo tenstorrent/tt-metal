@@ -522,17 +522,17 @@ DeviceAddr ShardSpecBuffer::size() const {
 
 v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
 
-void v1::DeallocateBuffer(BufferHandle buffer) { v0::DeallocateBuffer(*buffer); }
+void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
 
-void v1::WriteToBuffer(BufferHandle buffer, stl::Span<const std::byte> host_buffer) {
+void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
     detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});
 }
 
-void v1::ReadFromBuffer(BufferHandle buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
+void v1::ReadFromBuffer(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
     detail::ReadFromBuffer(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), shard_order);
 }
 
-void v1::ReadFromShard(BufferHandle buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
+void v1::ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
     detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), core_id);
 }
 

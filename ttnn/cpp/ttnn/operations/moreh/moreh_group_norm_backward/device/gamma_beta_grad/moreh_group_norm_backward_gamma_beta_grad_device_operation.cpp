@@ -139,8 +139,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::invoke(
     const Tensor& rstd,
     const uint32_t num_groups,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad,
+    const std::optional<const Tensor>& gamma_grad,
+    const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

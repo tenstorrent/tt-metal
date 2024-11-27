@@ -147,7 +147,14 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "CreateDevice",
-        [](int device_id, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) { return tt::tt_metal::CreateDevice(device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type); },
+        [](int device_id,
+           uint8_t num_command_queues,
+           size_t l1_small_size,
+           size_t trace_region_size,
+           tt::tt_metal::DispatchCoreType dispatch_core_type) {
+            return tt::tt_metal::CreateDevice(
+                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+        },
         R"doc(
         Creates an instance of TT device.
 
@@ -164,8 +171,13 @@ void device_module(py::module& m_device) {
         py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
-            return tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+        [](const std::vector<int>& device_ids,
+           uint8_t num_command_queues,
+           size_t l1_small_size,
+           size_t trace_region_size,
+           tt::tt_metal::DispatchCoreType dispatch_core_type) {
+            return tt::tt_metal::detail::CreateDevices(
+                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
         },
         R"doc(
         Creates an instance of TT device.
@@ -212,7 +224,9 @@ void device_module(py::module& m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
-    m_device.def("SetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice,
+    m_device.def(
+        "SetDefaultDevice",
+        &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice,
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
@@ -228,7 +242,9 @@ void device_module(py::module& m_device) {
                 >>> ttnn.SetDefaultDevice(device)
         )doc");
 
-    m_device.def("GetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice,
+    m_device.def(
+        "GetDefaultDevice",
+        &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice,
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
@@ -305,11 +321,12 @@ void device_module(py::module& m_device) {
     m_device.def(
         "pad_to_tile_shape",
         [](const std::array<uint32_t, 4>& unpadded_shape,
-        bool pad_c = false,
-        bool pad_n = false,
-        bool pad_h = true,
-        bool pad_w = true) -> tt::tt_metal::LegacyShape {
-            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
+           bool pad_c = false,
+           bool pad_n = false,
+           bool pad_h = true,
+           bool pad_w = true) -> tt::tt_metal::LegacyShape {
+            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                unpadded_shape, pad_c, pad_n, pad_h, pad_w);
         },
         py::arg("unpadded_shape"),
         py::arg("pad_c") = false,
@@ -340,29 +357,29 @@ void device_module(py::module& m_device) {
     m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
         Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
     )doc");
-        m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
+    m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
-        m_device.def("EnableCompilationReports", &tt::tt_metal::detail::EnableCompilationReports, R"doc(
+    m_device.def("EnableCompilationReports", &tt::tt_metal::detail::EnableCompilationReports, R"doc(
         Enables tt-metal to generate reports of compilation statistics
     )doc");
-        m_device.def("DisableCompilationReports", &tt::tt_metal::detail::DisableCompilationReports, R"doc(
+    m_device.def("DisableCompilationReports", &tt::tt_metal::detail::DisableCompilationReports, R"doc(
         Disables generation of compilation statistics reports in tt-metal
     )doc");
 
-        m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
+    m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
     )doc");
-        m_device.def("DisableMemoryReports", &tt::tt_metal::detail::DisableMemoryReports, R"doc(
+    m_device.def("DisableMemoryReports", &tt::tt_metal::detail::DisableMemoryReports, R"doc(
         Disables generation of memory allocation statistics reports in tt-metal
     )doc");
 
-        m_device.def(
-            "DumpDeviceMemoryState",
-            &tt::tt_metal::detail::DumpDeviceMemoryState,
-            py::arg().noconvert(),
-            py::arg("prefix").noconvert() = std::string(""),
-            R"doc(
+    m_device.def(
+        "DumpDeviceMemoryState",
+        &tt::tt_metal::detail::DumpDeviceMemoryState,
+        py::arg().noconvert(),
+        py::arg("prefix").noconvert() = std::string(""),
+        R"doc(
         Generates reports to dump device memory state. Three reports are generated:
         - `<prefix>l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free L1 block and size of largest L1 buffer that can be interleaved across available free L1 blocks
         - `<prefix>memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and L1 bank
@@ -376,16 +393,16 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-        m_device.def(
-            "synchronize_device",
-            [](Device* device, const std::optional<uint8_t> cq_id) {
-                // Send finish command to issue queue through worker thread
-                // Worker thread will stall until the device is flushed.
-                device->push_work([device, cq_id]() mutable { Synchronize(device, cq_id); });
-                // Main thread stalls until worker is complete (full device and worker queue flush).
-                device->synchronize();
-            },
-            R"doc(
+    m_device.def(
+        "synchronize_device",
+        [](Device* device, const std::optional<uint8_t> cq_id) {
+            // Send finish command to issue queue through worker thread
+            // Worker thread will stall until the device is flushed.
+            device->push_work([device, cq_id]() mutable { Synchronize(device, cq_id); });
+            // Main thread stalls until worker is complete (full device and worker queue flush).
+            device->synchronize();
+        },
+        R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
                 otherwise operations for all command queues are waited on.
@@ -403,14 +420,14 @@ void device_module(py::module& m_device) {
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
             )doc",
-            py::arg("device"),
-            py::arg("cq_id") = std::nullopt);
-        m_device.def("SetLazyCommandQueueMode", &tt::tt_metal::detail::SetLazyCommandQueueMode, R"doc(
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt);
+    m_device.def("SetLazyCommandQueueMode", &tt::tt_metal::detail::SetLazyCommandQueueMode, R"doc(
         If set to true, the host does not notify the device that there are commands available other than
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
-        m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
+    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
@@ -421,8 +438,8 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-        m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
-        m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
+    m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
+    m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
 }
 
 void py_device_module(py::module& module) {

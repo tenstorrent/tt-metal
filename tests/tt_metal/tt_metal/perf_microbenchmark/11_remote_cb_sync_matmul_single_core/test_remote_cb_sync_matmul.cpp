@@ -107,10 +107,10 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
     uint32_t num_receivers,
     uint32_t num_layers,
     uint32_t cb_padding,
-    std::shared_ptr<tt::tt_metal::Buffer> in0_buffer,
-    std::shared_ptr<tt::tt_metal::Buffer> in1_buffer,
-    std::shared_ptr<tt::tt_metal::Buffer> in1_l1_buffer,
-    std::shared_ptr<tt::tt_metal::Buffer> output_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in0_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in1_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& in1_l1_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& output_buffer,
     bool use_sub_devices
     ) {
 
@@ -455,15 +455,15 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 }
 
 bool validation_bfp8_b(
-    tt::deprecated::Tensor<float> in0_tensor,
-    tt::deprecated::Tensor<float> in1_tensor,
+    const tt::deprecated::Tensor<float>& in0_tensor,
+    const tt::deprecated::Tensor<float>& in1_tensor,
     const tt::DataFormat &data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t mt,
     uint32_t kt,
     uint32_t nt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
     uint32_t num_receivers
 ) {
     bool pass = true;
@@ -506,15 +506,15 @@ bool validation_bfp8_b(
 
 
 bool validation_fp16(
-    tt::deprecated::Tensor<bfloat16> in0_tensor,
-    tt::deprecated::Tensor<bfloat16> in1_tensor,
+    const tt::deprecated::Tensor<bfloat16>& in0_tensor,
+    const tt::deprecated::Tensor<bfloat16>& in1_tensor,
     const tt::DataFormat &data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t mt,
     uint32_t kt,
     uint32_t nt,
-    std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
     uint32_t num_receivers
 ) {
     bool pass = true;
@@ -557,7 +557,7 @@ bool validation_fp16(
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt_metal::Device* device,
-    vector<uint32_t> input_vec,
+    const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
     BufferType buffer_type,

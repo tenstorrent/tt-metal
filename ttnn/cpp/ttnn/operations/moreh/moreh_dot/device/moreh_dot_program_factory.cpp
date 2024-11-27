@@ -71,15 +71,12 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
         (std::uint32_t)is_dram(src1_buffer),
         *reinterpret_cast<uint32_t*>(&scaler)};
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)CBIndex::c_16, (std::uint32_t)is_dram(dst_buffer)};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16, (std::uint32_t)is_dram(dst_buffer)};
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;

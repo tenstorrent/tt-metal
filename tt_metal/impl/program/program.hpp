@@ -38,10 +38,10 @@ namespace detail{
     class Program_;
 
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
+    KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
-    void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+    void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
 
     class Internal_;
 }
@@ -160,7 +160,7 @@ class Program {
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
+    friend KernelHandle detail::AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
@@ -169,7 +169,7 @@ class Program {
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+    friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();

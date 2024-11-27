@@ -4,11 +4,8 @@
 
 #pragma once
 
-
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 union Converter {
     float f;
@@ -20,5 +17,5 @@ union Converter {
     }
 };
 
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel

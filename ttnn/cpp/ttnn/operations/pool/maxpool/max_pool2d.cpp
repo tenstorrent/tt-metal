@@ -22,7 +22,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                            std::array<uint32_t, 2> stride,
                            std::array<uint32_t, 2> padding,
                            std::array<uint32_t, 2> dilation,
-                           const std::optional<const MemoryConfig> memory_config,
+                           const std::optional<const MemoryConfig>& memory_config,
                            const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
@@ -55,15 +55,16 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
             shard_layout = applied_shard_scheme.value();
         }
         parallel_config = conv::conv2d::determine_parallel_config(
-                                            shard_layout,
-                                            batch_size,
-                                            channels,
-                                            output_shape[1],
-                                            output_shape[2],
-                                            channels,
-                                            input_tensor.device()->compute_with_storage_grid_size(),
-                                            ShardOrientation::ROW_MAJOR,
-                                            false);
+            shard_layout,
+            batch_size,
+            channels,
+            output_shape[1],
+            output_shape[2],
+            channels,
+            input_tensor.device()->compute_with_storage_grid_size(),
+            ShardOrientation::ROW_MAJOR,
+            false,
+            false);
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::conv2d::get_num_cores_channels_from_parallel_config(parallel_config);
         auto sharded_mem_config = conv::conv2d::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);

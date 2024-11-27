@@ -21,7 +21,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string reduction,
+    const std::string& reduction,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -65,11 +65,11 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_1, 1, tt::DataFormat::Int32},                          // target
             {CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? 1 : 0)},   // weight
             {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},  // divisor
-            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},             // tmp_weight to reduce
-            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},             // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},             // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},             // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},             // tmp3
+            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                  // tmp_weight to reduce
+            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                  // tmp_input to reduce
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // tmp1
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // tmp2
+            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                  // tmp3
             {CBIndex::c_16, 1},                                                // output
         });
 
@@ -81,8 +81,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
     };
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(output))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -199,7 +198,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string reduction,
+    const std::string& reduction,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
@@ -244,11 +243,11 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_1, 1, tt::DataFormat::Int32},                          // target
             {CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? 1 : 0)},   // weight
             {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},  // divisor
-            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},             // tmp_weight to reduce
-            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},             // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},             // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},             // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},             // tmp3
+            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                  // tmp_weight to reduce
+            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                  // tmp_input to reduce
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // tmp1
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // tmp2
+            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                  // tmp3
             {CBIndex::c_16, 1},                                                // output
         });
 
@@ -260,8 +259,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
     };
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(output))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -380,7 +378,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string reduction,
+    const std::string& reduction,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -433,11 +431,11 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_1, 1, tt::DataFormat::Int32},                                       // target
             {CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
             {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
-            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                          // tmp_weight to reduce
-            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                          // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                          // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                          // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                          // tmp3
+            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                               // tmp_weight to reduce
+            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                               // tmp_input to reduce
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp1
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                               // tmp2
+            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                               // tmp3
             {CBIndex::c_16, 1},                                                             // output
         });
 
@@ -449,8 +447,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
     };
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(output))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;

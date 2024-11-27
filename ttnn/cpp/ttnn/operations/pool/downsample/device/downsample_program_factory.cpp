@@ -17,11 +17,10 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-
 namespace ttnn::operations::downsample::detail {
 
 std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
-    CoreRangeSet all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
+    const CoreRangeSet& all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
     TT_ASSERT(
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -34,12 +33,12 @@ std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
     auto first_core_range = *all_cores.ranges().begin();
     uint32_t num_cores_height_sliced =
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? num_cores : first_core_range.end_coord.x + 1;
-    uint32_t num_cores_width_sliced = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED
-                                          ? 1
-                                          : first_core_range.end_coord.y + 1;  // width is not sliced when height sharded
+    uint32_t num_cores_width_sliced =
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED
+            ? 1
+            : first_core_range.end_coord.y + 1;  // width is not sliced when height sharded
     return {num_cores_height_sliced, num_cores_width_sliced};
 }
-
 
 struct DownsampleReadPatternParams {
     uint32_t top_partial_middle_aligned_row_width;
@@ -54,7 +53,6 @@ struct DownsampleReadPatternParams {
     uint32_t bottom_partial_left_aligned_row_width;
     uint32_t skip_bottom_partial_left_aligned_row;
 };
-
 
 struct ImgTrackingVars {
     uint32_t img_h = 0;
@@ -339,10 +337,9 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
         .skip_bottom_partial_left_aligned_row = skip_bottom_partial_left_aligned_row};
 }
 
-
 operation::ProgramWithCallbacks downsample_single_core(
     const Tensor& a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
-              tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -490,7 +487,8 @@ operation::ProgramWithCallbacks downsample_single_core(
         tt::tt_metal::CircularBufferConfig(
             reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(reader_pattern_array_cb_index, 4);
-    auto reader_pattern_array_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
+    auto reader_pattern_array_cb =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -524,7 +522,8 @@ operation::ProgramWithCallbacks downsample_single_core(
             num_tiles_untilize_downsampled_cb * untilized_single_tile_size,
             {{untilize_downsampled_cb_index, untilized_cb_data_format}})
             .set_page_size(untilize_downsampled_cb_index, untilized_single_tile_size);
-    auto untilize_downsampled_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
+    auto untilize_downsampled_cb =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -541,7 +540,8 @@ operation::ProgramWithCallbacks downsample_single_core(
             {{final_tilize_output_cb_index, output_cb_data_format}})
             .set_page_size(final_tilize_output_cb_index, output_single_tile_size);
     final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(*output.buffer());
-    auto final_tilize_output_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
+    auto final_tilize_output_cb =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -844,7 +844,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             num_input_tiles_in_row,
             num_output_tiles,
 
-            (uint32_t) false};
+            (uint32_t)false};
 
         tt::tt_metal::SetRuntimeArgs(program, downsample_writer_kernel_id, core, writer_kernel_args);
         prev_core = core;

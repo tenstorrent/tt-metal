@@ -44,14 +44,14 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
     std::unordered_set<uint32_t>& free_cores,
     uint32_t num_devices,
     bool use_separate_procs) {
-
     int core_assigned_to_device_worker_thread = 0;
     int core_assigned_to_device_completion_queue_reader = 0;
     uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     // Get NUMA node that the current device is mapped to through UMD
     int numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(mmio_controlled_device_id);
 
-    if (numa_available() != -1 and cpu_cores_per_numa_node.find(numa_node_for_device) != cpu_cores_per_numa_node.end()) {
+    if (numa_available() != -1 and
+        cpu_cores_per_numa_node.find(numa_node_for_device) != cpu_cores_per_numa_node.end()) {
         // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
         const auto& cpu_core_for_numa_node = cpu_cores_per_numa_node.at(numa_node_for_device);
         int num_cores_in_numa_node = cpu_core_for_numa_node.size();
@@ -72,7 +72,8 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
             mmio_controlled_device_id);
         core_assigned_to_device_worker_thread = mmio_controlled_device_id % num_online_processors;
         if (use_separate_procs) {
-            core_assigned_to_device_completion_queue_reader = (mmio_controlled_device_id + num_devices) % num_online_processors;
+            core_assigned_to_device_completion_queue_reader =
+                (mmio_controlled_device_id + num_devices) % num_online_processors;
         } else {
             core_assigned_to_device_completion_queue_reader = core_assigned_to_device_worker_thread;
         }
@@ -95,13 +96,19 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
     constexpr uint32_t max_num_procs_per_device = 2;
     // When using multiple command queues, assign separate CPU cores to worker and completion queue reader threads,
     // if enough processors exist on host. Atleast one core is given to the main thread.
-    bool separate_procs_for_worker_and_reader = (num_hw_cqs > 1) && (max_num_procs_per_device * device_ids.size() <= num_online_processors - 1);
+    bool separate_procs_for_worker_and_reader =
+        (num_hw_cqs > 1) && (max_num_procs_per_device * device_ids.size() <= num_online_processors - 1);
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map = {};
     if (use_numa_node_based_thread_binding) {
         auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
         for (const auto& device_id : device_ids) {
-            auto [worker_thread_core, completion_queue_reader_core] = device_cpu_allocator::get_cpu_cores_for_dispatch_threads(
-                                                                    device_id, cpu_cores_per_numa_node, free_cores, device_ids.size(), separate_procs_for_worker_and_reader);
+            auto [worker_thread_core, completion_queue_reader_core] =
+                device_cpu_allocator::get_cpu_cores_for_dispatch_threads(
+                    device_id,
+                    cpu_cores_per_numa_node,
+                    free_cores,
+                    device_ids.size(),
+                    separate_procs_for_worker_and_reader);
             worker_thread_to_cpu_core_map.insert({device_id, worker_thread_core});
             completion_queue_reader_to_cpu_core_map.insert({device_id, completion_queue_reader_core});
         }
@@ -154,19 +161,16 @@ void DevicePool::init_profiler_devices() const {
         }
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
         detail::InitDeviceProfiler(dev);
-        log_info(
-            tt::LogMetal,
-            "Profiler started on device {}",
-            mmio_device_id);
+        log_info(tt::LogMetal, "Profiler started on device {}", mmio_device_id);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_info(
-                            tt::LogMetal,
-                            "Starting profiler on device {}",
-                            this->devices[mmio_controlled_device_id].get()->id());
+                        tt::LogMetal,
+                        "Starting profiler on device {}",
+                        this->devices[mmio_controlled_device_id].get()->id());
                     detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
                 }
             }
@@ -176,7 +180,7 @@ void DevicePool::init_profiler_devices() const {
 }
 
 void DevicePool::initialize(
-    std::vector<chip_id_t> device_ids,
+    const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -199,7 +203,7 @@ void DevicePool::initialize(
     // (un)registering worker threads, can only be called in the creation thread
     _inst->device_pool_creation_thread_id = std::this_thread::get_id();
 
-     // Never skip for TG Cluster
+    // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
     for (const auto& device_id : device_ids) {
         TT_FATAL(
@@ -210,7 +214,7 @@ void DevicePool::initialize(
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         skip &= (device_id == mmio_device_id);
     }
-     _inst->skip_remote_devices = skip;
+    _inst->skip_remote_devices = skip;
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
@@ -247,8 +251,9 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
     watcher_attach(dev);
 
     // Set up HW command queues on device for FD
-    if (using_fast_dispatch)
+    if (using_fast_dispatch) {
         dev->init_command_queue_device();
+    }
 }
 
 void DevicePool::activate_device(chip_id_t id) {
@@ -265,8 +270,15 @@ void DevicePool::activate_device(chip_id_t id) {
         log_debug(tt::LogMetal, "DevicePool new device {}", id);
         int worker_core_thread_core = this->worker_thread_to_cpu_core_map.at(id);
         int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map.at(id);
-        auto dev =
-            new Device(id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, worker_core_thread_core, completion_queue_reader_core);
+        auto dev = new Device(
+            id,
+            this->num_hw_cqs,
+            this->l1_small_size,
+            this->trace_region_size,
+            this->l1_bank_remap,
+            false,
+            worker_core_thread_core,
+            completion_queue_reader_core);
         dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(dev->build_key())) {
             dev->build_firmware();
@@ -301,7 +313,7 @@ bool DevicePool::is_device_active(chip_id_t id) const {
     }
 }
 
-void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
+void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -326,12 +338,19 @@ void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
 }
 
 void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std::thread::id worker_thread_id) {
-    TT_FATAL(std::this_thread::get_id() == this->device_pool_creation_thread_id, "Worker threads can only be registered in the thread where the Device(s) were created");
+    TT_FATAL(
+        std::this_thread::get_id() == this->device_pool_creation_thread_id,
+        "Worker threads can only be registered in the thread where the Device(s) were created");
     auto worker_thread_handle = this->device_to_worker_thread_id.find(device);
     if (worker_thread_handle != this->device_to_worker_thread_id.end()) {
-        TT_FATAL(worker_thread_handle->second == worker_thread_id, "Cannot register more than one worker thread per device.");;
+        TT_FATAL(
+            worker_thread_handle->second == worker_thread_id,
+            "Cannot register more than one worker thread per device.");
+        ;
     } else {
-        TT_FATAL(this->worker_thread_ids.find(worker_thread_id) == this->worker_thread_ids.end(), "Cannot register a single worker thread on multiple devices");
+        TT_FATAL(
+            this->worker_thread_ids.find(worker_thread_id) == this->worker_thread_ids.end(),
+            "Cannot register a single worker thread on multiple devices");
     }
 
     this->device_to_worker_thread_id.insert({device, worker_thread_id});
@@ -339,7 +358,9 @@ void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std:
 }
 
 void DevicePool::unregister_worker_thread_for_device(v1::DeviceHandle device) {
-    TT_FATAL(std::this_thread::get_id() == this->device_pool_creation_thread_id, "Worker threads can only be unregistered in the thread where the Device(s) were created");
+    TT_FATAL(
+        std::this_thread::get_id() == this->device_pool_creation_thread_id,
+        "Worker threads can only be unregistered in the thread where the Device(s) were created");
     auto worker_thread_handle = this->device_to_worker_thread_id.find(device);
     if (worker_thread_handle != this->device_to_worker_thread_id.end()) {
         this->worker_thread_ids.erase(worker_thread_handle->second);
@@ -347,9 +368,7 @@ void DevicePool::unregister_worker_thread_for_device(v1::DeviceHandle device) {
     }
 }
 
-const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const {
-    return this->worker_thread_ids;
-}
+const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
 
 void DevicePool::init_firmware_on_active_devices() const {
     for (const auto& handle : this->get_all_active_devices()) {
@@ -399,8 +418,12 @@ DevicePool::DevicePool() {
         all_device_ids.emplace_back((chip_id_t)i);
     }
     std::unordered_set<uint32_t> free_cores = {};
-    this->worker_thread_to_cpu_core_map =
-        device_cpu_allocator::get_device_id_to_core_map(all_device_ids, free_cores, use_numa_node_based_thread_binding, num_hw_cqs, this->completion_queue_reader_to_cpu_core_map);
+    this->worker_thread_to_cpu_core_map = device_cpu_allocator::get_device_id_to_core_map(
+        all_device_ids,
+        free_cores,
+        use_numa_node_based_thread_binding,
+        num_hw_cqs,
+        this->completion_queue_reader_to_cpu_core_map);
     if (use_numa_node_based_thread_binding) {
         // Bind main thread to cores not being used by workers
         device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
@@ -448,40 +471,39 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
-    for (const auto &dev : devices) {
-        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+    for (const auto& dev : devices) {
+        const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_devices_to_close.find(mmio_device_id) != mmio_devices_to_close.end()) {
             continue;
         }
         auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
         auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
-        //iterate over all tunnels origination from this mmio device
+        // iterate over all tunnels origination from this mmio device
         for (auto t : tunnels_from_mmio) {
-            //iterate over all tunneled devices (tunnel stops) in this tunnel
+            // iterate over all tunneled devices (tunnel stops) in this tunnel
             for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
-                  if (this->is_device_active(t[ts])) {
-                      devices_to_close.push_back(t[ts]);
-                  }
+                if (this->is_device_active(t[ts])) {
+                    devices_to_close.push_back(t[ts]);
+                }
             }
         }
         devices_to_close.push_back(mmio_device_id);
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
-
     // Global Sync across all devices that are being closed
     // We need to ensure that commands sent to each device have been completed
     // before closing any device + modifying routing info.
     // If this is not done, non-blocking CCLs followed by a close will hang, since
     // the main thread will modify device state while the CCL is running on device.
-    for (const auto &dev_id : devices_to_close) {
+    for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        dev->synchronize(); // Synchronize worker queue
-        Synchronize(dev); // Synchronize device
+        dev->synchronize();  // Synchronize worker queue
+        Synchronize(dev);    // Synchronize device
     }
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    for (const auto &dev_id : devices_to_close) {
+    for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         dev->close();
         // When a device is closed, its worker thread is joined. Stop tracking this
@@ -494,9 +516,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool destructor,
-            // which leads to device->close() hitting asserts. We need to move the ownership of dispatch_constants
-            // to the device, so it doesn't go out of scope before the device is closed.
+            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
+            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

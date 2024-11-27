@@ -21,47 +21,53 @@ size_t rm_element_size_bytes(DataType dtype) {
             // To store block floats in RowMajor layout, we use a fallback and store full floats instead
             return sizeof(float);
 
-        default:
-            TT_THROW("Unsupported data type!");
+        default: TT_THROW("Unsupported data type!");
     }
 }
-} // namespace CMAKE_UNIQUE_NAMESPACE
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
-PageConfig::PageConfig(const Config& config)
-    : config_(config) {
-}
+PageConfig::PageConfig(const Config& config) : config_(config) {}
 
-PageConfig::PageConfig(Layout layout)
-    : PageConfig(layout, std::nullopt) {
-}
+PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
-    if(layout == Layout::ROW_MAJOR) {
+    if (layout == Layout::ROW_MAJOR) {
         if (tile.has_value()) {
             tt::log_warning("Specifying tile shape for a row major layout is deprecated, and will be removed soon");
         }
         config_ = RowMajorPageConfig(tile.value_or(Tile()));
-    }
-    else {
+    } else {
         config_ = TilePageConfig(tile.value_or(Tile()));
     }
 }
 
 Alignment PageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
-    return std::visit([&](const auto& config) constexpr { return config.create_default_alignment(dtype, memory_config); }, config_);
+    return std::visit(
+        [&](const auto& config) constexpr { return config.create_default_alignment(dtype, memory_config); }, config_);
 }
 
-void PageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
-    std::visit([&](const auto& config) constexpr { config.validate_alignment(alignment, dtype, memory_config); }, config_);
+void PageConfig::validate_alignment(
+    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
+    std::visit(
+        [&](const auto& config) constexpr { config.validate_alignment(alignment, dtype, memory_config); }, config_);
 }
 
-Size PageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, dtype, memory_config, physical_shard_size); }, config_);
+Size PageConfig::get_page_shape(
+    const Size& physical_size,
+    DataType dtype,
+    const MemoryConfig& memory_config,
+    const std::optional<Size>& physical_shard_size) const {
+    return std::visit(
+        [&](const auto& config) constexpr {
+            return config.get_page_shape(physical_size, dtype, memory_config, physical_shard_size);
+        },
+        config_);
 }
 
 size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
+    return std::visit(
+        [&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
 }
 
 Layout PageConfig::get_layout() const {
@@ -71,15 +77,11 @@ Layout PageConfig::get_layout() const {
     return Layout::TILE;
 }
 
-
 Tile PageConfig::get_tile() const {
     return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
 }
 
-
-TilePageConfig::TilePageConfig(const Tile& tile)
- : tile_(tile) {
-}
+TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec.has_value()) {
@@ -94,15 +96,25 @@ Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryC
 void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig&) const {
     TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
-    TT_FATAL(widthAlignment % tile_.get_width() == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, tile_.get_width());
+    TT_FATAL(
+        widthAlignment % tile_.get_width() == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width "
+        "{}.",
+        alignment,
+        tile_.get_width());
     auto heightAlignment = alignment[-2];
-    TT_FATAL((heightAlignment % tile_.get_height()) == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, tile_.get_height());
+    TT_FATAL(
+        (heightAlignment % tile_.get_height()) == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of "
+        "tile height {}.",
+        alignment,
+        tile_.get_height());
 }
 
-Size TilePageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>&) const {
-    if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK && physical_size.width() != 0 && physical_size.height() != 0) {
+Size TilePageConfig::get_page_shape(
+    const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>&) const {
+    if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK && physical_size.width() != 0 &&
+        physical_size.height() != 0) {
         return physical_size;
     }
     return Size(tile_.get_height(), tile_.get_width());
@@ -114,55 +126,67 @@ size_t TilePageConfig::get_page_size_bytes(const Size& page_shape, DataType dtyp
     return size;
 }
 
-const Tile& TilePageConfig::get_tile() const {
-    return tile_;
-}
+const Tile& TilePageConfig::get_tile() const { return tile_; }
 
 RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
-{
-    uint32_t width_alignment = 1;
-    if (memory_config.shard_spec.has_value()) {
-        const auto& shard_spec = memory_config.shard_spec.value();
-        if (shard_spec.physical_shard_shape.has_value()) {
-           return Alignment(shard_spec.physical_shard_shape.value());
+    {
+        uint32_t width_alignment = 1;
+        if (memory_config.shard_spec.has_value()) {
+            const auto& shard_spec = memory_config.shard_spec.value();
+            if (shard_spec.physical_shard_shape.has_value()) {
+                return Alignment(shard_spec.physical_shard_shape.value());
+            }
+            if (shard_spec.mode == ShardMode::PHYSICAL &&
+                memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+                const auto& physical_shard_shape = shard_spec.shape;
+                const auto physical_shard_width = physical_shard_shape[1];
+                width_alignment = physical_shard_width;
+            }
         }
-        if (shard_spec.mode == ShardMode::PHYSICAL && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            const auto& physical_shard_shape = shard_spec.shape;
-            const auto physical_shard_width = physical_shard_shape[1];
-            width_alignment = physical_shard_width;
-        }
+        return Alignment({width_alignment});
     }
-    return Alignment({width_alignment});}
 }
 
-void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
+void RowMajorPageConfig::validate_alignment(
+    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
 
-    // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as width_alignment
-    if (memory_config.shard_spec.has_value() && memory_config.shard_spec.value().mode == ShardMode::PHYSICAL && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+    // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as
+    // width_alignment
+    if (memory_config.shard_spec.has_value() && memory_config.shard_spec.value().mode == ShardMode::PHYSICAL &&
+        memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& physical_shard_shape = memory_config.shard_spec.value().shape;
         const auto physical_shard_width = physical_shard_shape[1];
         TT_FATAL(
             physical_shard_width % width_alignment == 0,
-            "Alignment mismatch for sharded tensor: Expected physical shard shape {} to be aligned to {} along the width for Row Major layout.",
-            physical_shard_width, width_alignment);
+            "Alignment mismatch for sharded tensor: Expected physical shard shape {} to be aligned to {} along the "
+            "width for Row Major layout.",
+            physical_shard_width,
+            width_alignment);
     }
 }
 
-Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>& physical_shard_size) const {
+Size RowMajorPageConfig::get_page_shape(
+    const Size& physical_size,
+    DataType dtype,
+    const MemoryConfig& memory_config,
+    const std::optional<Size>& physical_shard_size) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
         return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
     }
 
-    if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
+    if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
         return physical_size;
     }
 
     if (memory_config.shard_spec.has_value() && memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(physical_shard_size.has_value(), "For width or block sharded tensors, Row Major page width comes from physical shard size so it must be provided!");
+        TT_FATAL(
+            physical_shard_size.has_value(),
+            "For width or block sharded tensors, Row Major page width comes from physical shard size so it must be "
+            "provided!");
 
         return Size(1, physical_shard_size.value().width());
     }
@@ -175,8 +199,6 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType 
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const {
-    return tile_;
-}
+const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

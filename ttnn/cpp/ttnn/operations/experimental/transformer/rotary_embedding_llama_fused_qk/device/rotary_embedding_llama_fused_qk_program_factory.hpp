@@ -14,7 +14,14 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_sharded(
-    const Tensor &q_input, const Tensor &k_input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &q_output, Tensor &k_output, ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor& q_input,
+    const Tensor& k_input,
+    const Tensor& cos,
+    const Tensor& sin,
+    const Tensor& trans_mat,
+    Tensor& q_output,
+    Tensor& k_output,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 }  // namespace tt_metal
 }  // namespace tt

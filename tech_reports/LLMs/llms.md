@@ -1,5 +1,5 @@
 # LLMs in TT-NN
-Authors: 
+Authors:
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
   - [Contents](#contents)
@@ -7,7 +7,7 @@ Authors:
   - [2. Modules](#2-modules)
     - [2.1 Embedding](#21-embedding)
     - [2.2 RoPE](#22-rope)
-    - [2.3 Norm](#23-norm) 
+    - [2.3 Norm](#23-norm)
     - [2.4 Attention](#24-attention)
     - [2.5 MLP](#25-mlp)
     - [2.6 Decoder](#26-decoder)
@@ -37,6 +37,20 @@ Authors:
         - [4.10.4.2 Large Matmuls](#41042-large-matmuls)
 
 ## 1. Overview
+This document aims to provide guidance on how to bring up high-performance multi-chip models on Tenstorrent hardware using the TT-Metal stack.
+
+It is targeted at users with previous experience on TT-Metal and shares our current best practices, tips, caveats and workarounds on model bringup.
+
+What you need:
+
+* **Access to TT hardware.** This guide is specifically for bringing models up on wormhole (WH), so whilst most of this advice applies equally to grayskull it is very WH-centric.
+* **Good grasp of PyTorch and transformers.** This document will only skim some basics. For example, this document assumes you understand what a kv-cache is and get the difference between prefill (reading tokens and generating the kv-cache entries) and decode (auto-regressively generating new tokens one at a time). Beginner tutorials will follow, for now this is to help experts get up to speed deploying LLMs on Metal.
+* **Familiarity with Metal and ttnn.** How to [install](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md), build, run examples and so on.
+
+Other useful resources:
+* The [ViT guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ViT-TTNN/vit.md) provides an excellent introduction to using Metal with transformers and if anything in this document seems unclear or intimidating you should look at that first.
+* [Building llama from scratch](https://levelup.gitconnected.com/building-llama-3-from-scratch-with-python-e0cf4dbbc306) is a good guide to LLMs in general.
+
 ## 2. Modules
 ### 2.1 Embedding
 ### 2.2 RoPE
@@ -57,7 +71,7 @@ Authors:
 ### 3.1 Generative Decoding
 ### 3.2 Prefill and Decode
   - submodules, tests
-  - how to combine prefill and decode, 
+  - how to combine prefill and decode,
   - slicing prefill to fit in L1
 ### 3.3 Multi-Device
   - device mesh
@@ -74,10 +88,10 @@ Authors:
 ### 4.3 Multiple CQs
   - how to feed back output to input and read output asyncronously
 ### 4.4 Op Configs
-  - Writing correct program configs and shard specs 
+  - Writing correct program configs and shard specs
   - Deciding how many cores to run an op on
     - Why did we use 16 cores for MLP
-  - Which matmul to use when @Colman Glagovich 
+  - Which matmul to use when @Colman Glagovich
     - 1d, 2d, dram-sharded, ...
   - Implicitly padding weights in program config for matmuls
 ### 4.5 Accuracy
@@ -97,7 +111,7 @@ Authors:
 #### 4.10.1 Error Messages
   - Running out of L1
   - Shard spec and program config mismatches
-  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument. 
+  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument.
     - You'll see an error related to op invocation where the arguments don't match
 #### 4.10.2 Shard Spec Mismatches
 #### 4.10.3 Ethernet Dispatch Cores

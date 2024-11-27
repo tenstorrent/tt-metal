@@ -32,9 +32,11 @@ int32_t get_static_tlb_index(CoreCoord target) {
         std::find(std::cbegin(tt::umd::wormhole::ETH_LOCATIONS), std::cend(tt::umd::wormhole::ETH_LOCATIONS), target) !=
         std::cend(tt::umd::wormhole::ETH_LOCATIONS);
     bool is_tensix_location =
-        std::find(std::cbegin(tt::umd::wormhole::T6_X_LOCATIONS), std::cend(tt::umd::wormhole::T6_X_LOCATIONS), target.x) !=
+        std::find(
+            std::cbegin(tt::umd::wormhole::T6_X_LOCATIONS), std::cend(tt::umd::wormhole::T6_X_LOCATIONS), target.x) !=
             std::cend(tt::umd::wormhole::T6_X_LOCATIONS) &&
-        std::find(std::cbegin(tt::umd::wormhole::T6_Y_LOCATIONS), std::cend(tt::umd::wormhole::T6_Y_LOCATIONS), target.y) !=
+        std::find(
+            std::cbegin(tt::umd::wormhole::T6_Y_LOCATIONS), std::cend(tt::umd::wormhole::T6_Y_LOCATIONS), target.y) !=
             std::cend(tt::umd::wormhole::T6_Y_LOCATIONS);
     // implementation migrated from wormhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/wormhole.py` from tensix
     // repo (t6py-wormhole-bringup branch)
@@ -104,7 +106,8 @@ int32_t get_static_tlb_index(CoreCoord target) {
         std::find(tt::umd::blackhole::DRAM_LOCATIONS.begin(), tt::umd::blackhole::DRAM_LOCATIONS.end(), target);
     if (dram_tlb_index != tt::umd::blackhole::DRAM_LOCATIONS.end()) {
         auto dram_index = dram_tlb_index - tt::umd::blackhole::DRAM_LOCATIONS.begin();
-        // We have 3 ports per DRAM channel so we divide index by 3 to map all the channels of the same core to the same TLB
+        // We have 3 ports per DRAM channel so we divide index by 3 to map all the channels of the same core to the same
+        // TLB
         return tt::umd::blackhole::TLB_BASE_INDEX_4G + (dram_index / NUM_PORTS_PER_DRAM_CHANNEL);
     }
 
@@ -129,21 +132,22 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
     return tt::umd::blackhole::DRAM_LOCATIONS[(NUM_PORTS_PER_DRAM_CHANNEL * i) + (NUM_PORTS_PER_DRAM_CHANNEL - 1)];
 }
 
-
 }  // namespace blackhole
 
-void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor &sdesc, tt_device &device_driver) {
+void configure_static_tlbs(
+    tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt_device& device_driver) {
     using get_static_tlb_index_ptr = std::int32_t (*)(tt_xy_pair);
     get_static_tlb_index_ptr get_static_tlb_index;
 
     const uint32_t dynamic_tlb_count = 16;
-    uint32_t dynamic_tlb_base_index, dynamic_tlb_16m_size, dram_channel_0_peer2peer_region_start, dram_channel_0_x, dram_channel_0_y;
+    uint32_t dynamic_tlb_base_index, dynamic_tlb_16m_size, dram_channel_0_peer2peer_region_start, dram_channel_0_x,
+        dram_channel_0_y;
 
     // Need to set these values based on arch because UMD does not expose architecture_implementation
     switch (arch) {
         case tt::ARCH::GRAYSKULL:
             get_static_tlb_index = grayskull::get_static_tlb_index;
-            dynamic_tlb_base_index = grayskull::DYNAMIC_TLB_BASE_INDEX; // not defined in grayskull_implementation.h
+            dynamic_tlb_base_index = grayskull::DYNAMIC_TLB_BASE_INDEX;  // not defined in grayskull_implementation.h
             dynamic_tlb_16m_size = tt::umd::grayskull::DYNAMIC_TLB_16M_SIZE;
             dram_channel_0_peer2peer_region_start = tt::umd::grayskull::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
             dram_channel_0_x = tt::umd::grayskull::DRAM_CHANNEL_0_X;
@@ -174,7 +178,7 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     std::int32_t address = 0;
 
     // Setup static TLBs for all worker cores
-    for (auto &core : statically_mapped_cores) {
+    for (auto& core : statically_mapped_cores) {
         auto tlb_index = get_static_tlb_index(core);
         // TODO
         // Note: see issue #10107
