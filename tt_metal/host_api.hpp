@@ -314,7 +314,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 
 // clang-format off
 /**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on the device. Interleaved buffers allow for frequent attribute access, improving performance by storing data locally. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on the device. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -327,7 +327,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
 
 // clang-format off
 /**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on the device. Interleaved buffers allow for frequent attribute access, improving performance by storing data locally. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on the device. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -341,7 +341,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, Devi
 
 // clang-format off
 /**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on the device. Interleaved buffers allow for frequent attribute access, improving performance by storing data locally. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
+*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on the device. IFor more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -355,7 +355,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubD
 
 // clang-format off
 /**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on the device. Sharded buffers use parallel processing to allow independent access to different data sets. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on the device. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -368,7 +368,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
 
 // clang-format off
 /**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on the device. Sharded buffers use parallel processing to allow independent access to different data sets. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on the device. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
 *
 *  Return value: std::shared_ptr<Buffer>
 *
@@ -382,7 +382,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
 
 // clang-format off
 /**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on the device. Sharded buffers use parallel processing to allow independent access to different data sets. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
+*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on the device. For more information about buffers visit the Tenstorrent GitHub: [Buffers info on GitHub](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/impl/buffers).
 *
 *  Return value: std::shared_ptr<Buffer>
 *
