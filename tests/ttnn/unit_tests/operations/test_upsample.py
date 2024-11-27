@@ -109,16 +109,30 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [1, 64, 132, 10],
         [1, 32, 8, 8],
         [2, 640, 32, 32],
+        # some random shapes
+        [1, 32, 5, 4],
+        [3, 32, 4, 4],
+        [5, 64, 5, 5],
+        [1, 128, 5, 8],
+        [1, 32, 5, 4],
+        [7, 64, 128, 17],
+        [3, 64, 132, 19],
     ],
 )
-@pytest.mark.parametrize("scale_h", [2])
-@pytest.mark.parametrize("scale_w", [2])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("scale_h", [2, 3])
+@pytest.mark.parametrize("scale_w", [2, 3])
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
 def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy):
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
     input = torch.rand(input_shape, dtype=torch.bfloat16)
+    # for i in range(input_shape[0]):
+    #     for j in range(input_shape[1]):
+    #         for k in range(input_shape[2]):
+    #             for l in range(input_shape[3]):
+    #                 input[i, j, k, l] = k * width + l + 1
 
     ## golden reference using torch
     scale_factor = (scale_h, scale_w)
@@ -136,15 +150,15 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     max_grid_size = (device_grid.y, device_grid.x)
     if shard_strategy == ttnn.ShardStrategy.HEIGHT:
         ## nsticks per shard should be divisible by in_w
-        max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
+        max_nshards = min(batch_size * height * width, max_grid_size[0] * max_grid_size[1])
         nshards = max_nshards
         while nshards > 0:
-            if batch_size * height % nshards == 0:
+            if batch_size * height * width % nshards == 0:
                 break
             nshards -= 1
         ncores = nshards
     elif shard_strategy == ttnn.ShardStrategy.BLOCK:
-        max_nshards_h = min(batch_size * height, max_grid_size[0])  ## height along NHW
+        max_nshards_h = min(batch_size * height * width, max_grid_size[0])  ## height along NHW
         max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C
         ## find nshards_h along NHW
         nshards_h = max_nshards_h
@@ -353,6 +367,7 @@ def test_bilinear_multi_core(
 
     ## compare the results
     torch_result = torch_result.permute(0, 2, 3, 1)
+
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
     logger.info(pcc_msg)
