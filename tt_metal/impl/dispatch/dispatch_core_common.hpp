@@ -28,7 +28,7 @@ enum DispatchWorkerType : uint32_t {
     COUNT = 13
 };
 
-enum DispatchCoreType: uint32_t {
+enum DispatchCoreType : uint32_t {
     WORKER = 0,
     ETH = 1,
 };
@@ -44,52 +44,34 @@ private:
     DispatchCoreAxis axis_;
 
     static DispatchCoreAxis get_default_axis() {
-        return (tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE)
-            ? DispatchCoreAxis::COL
-            : DispatchCoreAxis::ROW;
+        return (tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::COL
+                                                                                  : DispatchCoreAxis::ROW;
     }
 
 public:
-    DispatchCoreConfig()
-    : type_(DispatchCoreType::WORKER),
-      axis_(get_default_axis()) {}
+    DispatchCoreConfig() : type_(DispatchCoreType::WORKER), axis_(get_default_axis()) {}
 
-    DispatchCoreConfig(DispatchCoreType type)
-        : type_(type),
-          axis_(get_default_axis()) {}
+    DispatchCoreConfig(DispatchCoreType type) : type_(type), axis_(get_default_axis()) {}
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
     CoreType get_core_type() const {
         switch (type_) {
-            case DispatchCoreType::WORKER:
-                return CoreType::WORKER;
-            case DispatchCoreType::ETH:
-                return CoreType::ETH;
-            default:
-                TT_THROW("invalid dispatch core type");
+            case DispatchCoreType::WORKER: return CoreType::WORKER;
+            case DispatchCoreType::ETH: return CoreType::ETH;
+            default: TT_THROW("invalid dispatch core type");
         }
     }
 
-    DispatchCoreType get_dispatch_core_type() const {
-        return type_;
-    }
+    DispatchCoreType get_dispatch_core_type() const { return type_; }
 
-    void set_dispatch_core_type(DispatchCoreType new_type) {
-        type_ = new_type;
-    }
+    void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
 
-    DispatchCoreAxis get_dispatch_core_axis() const {
-        return axis_;
-    }
+    DispatchCoreAxis get_dispatch_core_axis() const { return axis_; }
 
-    void set_dispatch_core_axis(DispatchCoreAxis new_axis) {
-        axis_ = new_axis;
-    }
+    void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 
-    bool operator==(const DispatchCoreConfig& other) const {
-        return (type_ == other.type_) && (axis_ == other.axis_);
-    }
+    bool operator==(const DispatchCoreConfig& other) const { return (type_ == other.type_) && (axis_ == other.axis_); }
 };
 
-}   // namespace tt::tt_metal
+}  // namespace tt::tt_metal

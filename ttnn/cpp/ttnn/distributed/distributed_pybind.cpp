@@ -32,7 +32,7 @@ void py_module(py::module& module) {
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
-                        const DispatchCoreConfig &dispatch_core_config,
+                        const DispatchCoreConfig& dispatch_core_config,
                         const std::pair<size_t, size_t>& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {

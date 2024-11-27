@@ -19,7 +19,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig &dispatch_core_config,
+    const DispatchCoreConfig& dispatch_core_config,
     MeshType mesh_type,
     const std::pair<size_t, size_t>& offset,
     const std::vector<int>& physical_device_ids) {

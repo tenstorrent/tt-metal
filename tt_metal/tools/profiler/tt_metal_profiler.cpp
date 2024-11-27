@@ -328,7 +328,7 @@ void DumpDeviceProfileResults(Device* device, bool lastDump) {
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
-    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
@@ -348,12 +348,13 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
     ZoneScoped;
 
     std::scoped_lock<std::mutex> lock(device_mutex);
-    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
         auto device_num_hw_cqs = device->num_hw_cqs();
-        for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
+        for (const CoreCoord& core :
+             tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
             const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
             worker_cores.push_back(curr_core);
         }

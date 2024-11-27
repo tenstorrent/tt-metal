@@ -83,7 +83,7 @@ Device* CreateDevice(
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    const DispatchCoreConfig &dispatch_core_config = DispatchCoreConfig{},
+    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {});
 
 /**
@@ -96,7 +96,9 @@ Device* CreateDevice(
  * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 Device* CreateDeviceMinimal(
-    chip_id_t device_id, const uint8_t num_hw_cqs = 1, const DispatchCoreConfig &dispatch_core_config = DispatchCoreConfig{});
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs = 1,
+    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
 /**
  * Resets device and closes device

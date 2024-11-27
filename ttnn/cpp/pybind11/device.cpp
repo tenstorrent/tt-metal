@@ -81,15 +81,19 @@ void py_device_module_types(py::module& m_device) {
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)
         .value("ETH", tt::tt_metal::DispatchCoreType::ETH);
 
-    py::enum_<tt::tt_metal::DispatchCoreAxis>(m_device, "DispatchCoreAxis", "Enum of axis (row or col) of dispatch cores.")
+    py::enum_<tt::tt_metal::DispatchCoreAxis>(
+        m_device, "DispatchCoreAxis", "Enum of axis (row or col) of dispatch cores.")
         .value("ROW", tt::tt_metal::DispatchCoreAxis::ROW)
         .value("COL", tt::tt_metal::DispatchCoreAxis::COL);
 
-    py::class_<tt::tt_metal::DispatchCoreConfig>(m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
+    py::class_<tt::tt_metal::DispatchCoreConfig>(
+        m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
         .def(py::init<>(), "Default constructor initializing type to WORKER and axis to ROW.")
-        .def(py::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
-             "Constructor with specified dispatch core type and axis.",
-             py::arg("type"), py::arg("axis"));
+        .def(
+            py::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
+            "Constructor with specified dispatch core type and axis.",
+            py::arg("type"),
+            py::arg("axis"));
 
     py::class_<Device, std::unique_ptr<Device, py::nodelete>>(
         m_device, "Device", "Class describing a Tenstorrent accelerator device.");
@@ -161,7 +165,7 @@ void device_module(py::module& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig &dispatch_core_config) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
             return tt::tt_metal::CreateDevice(
                 device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
         },
@@ -185,7 +189,7 @@ void device_module(py::module& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig &dispatch_core_config) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
             return tt::tt_metal::detail::CreateDevices(
                 device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
         },

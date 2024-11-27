@@ -9,7 +9,7 @@
 namespace tt {
 
 const core_descriptor_t& get_core_descriptor_config(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // {arch : {product : {num hardware command queues : config}}}
     static std::unordered_map<ARCH, std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>>>
         config_by_arch;
@@ -55,7 +55,11 @@ const core_descriptor_t& get_core_descriptor_config(
     std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs = config_by_product[product_name];
 
     YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_config));
-    YAML::Node desc_yaml = core_descriptor_yaml[product_name][(dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::ROW) ? "row" : "col"][std::to_string(num_hw_cqs)];
+    YAML::Node desc_yaml =
+        core_descriptor_yaml[product_name]
+                            [(dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::ROW) ? "row"
+                                                                                                                : "col"]
+                            [std::to_string(num_hw_cqs)];
 
     // Parse the yaml into core_descriptor_t
     std::vector<RelativeCoreCoord> storage_cores;
@@ -130,11 +134,13 @@ const core_descriptor_t& get_core_descriptor_config(
 }
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
-    chip_id_t chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig &dispatch_core_config) {
+    chip_id_t chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Get logical compute grid dimensions and num workers
     static std::unordered_map<uint32_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
     // Unique hash generated based on the config that's being queried
-    uint32_t config_hash = ((uint8_t)(dispatch_core_config.get_core_type())) | ((uint8_t)(dispatch_core_config.get_dispatch_core_axis()) << 4) | (num_hw_cqs << 8) | (chip << 16);
+    uint32_t config_hash = ((uint8_t)(dispatch_core_config.get_core_type())) |
+                           ((uint8_t)(dispatch_core_config.get_dispatch_core_axis()) << 4) | (num_hw_cqs << 8) |
+                           (chip << 16);
     if (physical_grid_config_cache.find(config_hash) == physical_grid_config_cache.end()) {
         auto worker_grid = tt::get_compute_grid_size(chip, num_hw_cqs, dispatch_core_config);
         std::size_t tensix_num_worker_cols = worker_grid.x;
