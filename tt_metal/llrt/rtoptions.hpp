@@ -17,7 +17,7 @@
 
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"  // For CoreType
+#include "umd/device/tt_soc_descriptor.h"  // For CoreType
 
 namespace tt {
 

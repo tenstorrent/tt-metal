@@ -11,7 +11,7 @@
 #include <tuple>
 
 #include "gtest/gtest.h"
-#include "device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "impl/device/device.hpp"

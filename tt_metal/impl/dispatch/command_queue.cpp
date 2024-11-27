@@ -34,7 +34,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/tt_xy_pair.h"
 
 #include "llrt/hal.hpp"
 

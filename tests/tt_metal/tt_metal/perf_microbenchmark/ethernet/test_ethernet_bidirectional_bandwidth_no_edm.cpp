@@ -9,7 +9,7 @@
 #include <random>
 #include <tuple>
 
-#include "device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_backend_api_types.hpp"

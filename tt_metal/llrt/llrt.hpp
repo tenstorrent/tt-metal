@@ -13,7 +13,7 @@
 
 // clang-format off
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/tt_xy_pair.h"
 #include "llrt/tt_memory.h"
 // clang-format on
 

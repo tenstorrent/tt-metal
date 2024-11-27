@@ -20,7 +20,7 @@
 // FIXME: Eventually this file will be gone
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG
 
-#include "tt_soc_descriptor.h"  // CoreType
+#include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 

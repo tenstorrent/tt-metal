@@ -26,14 +26,14 @@
 #include "tt_metal/common/metal_soc_descriptor.h"
 #include "tt_metal/common/test_common.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "third_party/umd/device/tt_arch_types.h"
-#include "third_party/umd/device/tt_cluster_descriptor.h"
-#include "third_party/umd/device/tt_cluster_descriptor_types.h"
-#include "third_party/umd/device/cluster.h"
-#include "third_party/umd/device/tt_soc_descriptor.h"
-#include "third_party/umd/device/tt_xy_pair.h"
-#include "third_party/umd/device/xy_pair.h"
-#include "third_party/umd/device/hugepage.h"
+#include "umd/device/tt_arch_types.h"
+#include "umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/cluster.h"
+#include "umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/xy_pair.h"
+#include "umd/device/hugepage.h"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -44,7 +44,7 @@
 #include "llrt/hal.hpp"                                              // for Hal
 
 #include "third_party/tracy/public/tracy/Tracy.hpp"
-#include "third_party/umd/device/simulation/tt_simulation_device.h"
+#include "umd/device/tt_simulation_device.h"
 
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"

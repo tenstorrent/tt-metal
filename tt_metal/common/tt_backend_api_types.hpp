@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "fmt/base.h"
-#include "tt_metal/third_party/umd/device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 
 namespace tt {
 
