@@ -28,7 +28,7 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    //This function is due to embedding issue
+    //This function is due to embedding issue 15558, once the issue is fixed we want to delete it
     tt::log_warning("host_reshape is deprecated and will be removed in the near future");
     if (!ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
         return tensor.reshape(shape);
@@ -287,7 +287,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
     if(shape.logical_shape().volume() != tensor.get_logical_volume())
     {
-        //This is a completely incorrect test but it is due to issue
+        //This is a completely incorrect test but it is due to issue 15558
         return detail::host_reshape(tensor, shape);
     }
     // Catch-all
