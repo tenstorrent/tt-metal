@@ -257,6 +257,7 @@ class TorchTensor(torch.Tensor):
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
 def to_torch(
     tensor: ttnn.Tensor,
+    dtype: Optional[ttnn.DataType] = None,
     *,
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
@@ -269,6 +270,7 @@ def to_torch(
 
     Args:
         tensor (ttnn.Tensor): the input tensor.
+        dtype (ttnn.DataType, optional): the desired `ttnn` data type. Defaults to `None`.
 
     Keyword Args:
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
@@ -313,6 +315,9 @@ def to_torch(
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
+
+    if dtype is not None:
+        tensor = tensor.to(dtype=dtype)
 
     return TorchTensor(tensor)
 
