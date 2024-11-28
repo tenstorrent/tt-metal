@@ -152,7 +152,7 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id,
                 concat_db_print(true, "[DEBUG] tilized");
                 // need to reshape tilized result to logical concat output shape
                 auto reshaped = ttnn::reshape(
-                    tilized, ttnn::Shape{logical_output_shape->view(), tilized.get_padded_shape().view()});
+                    tilized, ttnn::Shape{logical_output_shape.view(), tilized.get_padded_shape().view()});
                 return reshaped;
             }
             concat_db_print(true, "[DEBUG] already tilized");
