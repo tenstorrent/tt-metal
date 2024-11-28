@@ -6,15 +6,16 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
+//#include "tt_metal/impl/dispatch/cq_commands.hpp"
+//#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 
 using std::vector;
 using namespace tt;
 using json = nlohmann::json;
 
+constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
 int main(int argc, char **argv) {
 
@@ -55,10 +56,10 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tx_skip_pkt_content_gen = 0;
     constexpr uint32_t default_check_txrx_timeout = 1;
 
-    constexpr uint32_t src_endpoint_start_id = 0xaa;
-    constexpr uint32_t dest_endpoint_start_id = 0xbb;
+    constexpr uint32_t src_endpoint_start_id = 4;
+    constexpr uint32_t dest_endpoint_start_id = 11;
 
-    constexpr uint32_t num_endpoints = 4;
+    constexpr uint32_t num_endpoints = 1;
     constexpr uint32_t num_src_endpoints = num_endpoints;
     constexpr uint32_t num_dest_endpoints = num_endpoints;
 
@@ -199,41 +200,36 @@ int main(int argc, char **argv) {
             defines["CHECK_TIMEOUT"] = "";
         }
 
-/*
         std::vector<CoreCoord> tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
             tx_phys_core.push_back(device->worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
-                    src_endpoint_start_id + i, // 0: src_endpoint_id
-                    1, // 1: num_dest_endpoints
-                    (tx_queue_start_addr >> 4), // 2: queue_start_addr_words
-                    (tx_queue_size_bytes >> 4), // 3: queue_size_words
-                    ((mux_queue_start_addr + i*mux_queue_size_bytes) >> 4), // 4: remote_rx_queue_start_addr_words
-                    (mux_queue_size_bytes >> 4), // 5: remote_rx_queue_size_words
-                    (uint32_t)mux_phys_core.x, // 6: remote_rx_x
-                    (uint32_t)mux_phys_core.y, // 7: remote_rx_y
-                    i, // 8: remote_rx_queue_id
-                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 9: tx_network_type
-                    test_results_addr, // 10: test_results_addr
-                    test_results_size, // 11: test_results_size
-                    prng_seed, // 12: prng_seed
-                    data_kb_per_tx, // 13: total_data_kb
-                    max_packet_size_words, // 14: max_packet_size_words
-                    src_endpoint_start_id, // 15: src_endpoint_start_id
-                    dest_endpoint_start_id + i, // 16: dest_endpoint_start_id
-                    timeout_mcycles * 1000 * 1000 * 4, // 17: timeout_cycles
-                    tx_skip_pkt_content_gen, // 18: skip_pkt_content_gen
-                    tx_pkt_dest_size_choice, // 19: pkt_dest_size_choice
-                    tx_data_sent_per_iter_low, // 20: data_sent_per_iter_low
-                    tx_data_sent_per_iter_high // 21: data_sent_per_iter_high
+                    (device->id() << 8) + src_endpoint_start_id + i, // 0: src_endpoint_id
+                    num_dest_endpoints, // 1: num_dest_endpoints
+                    dest_endpoint_start_id, // 2:
+                    tunneler_queue_start_addr, // 3:
+                    tx_queue_start_addr, // 4: queue_start_addr_words
+                    (tx_queue_size_bytes >> 4), // 5: queue_size_words
+                    tunneler_phys_core.x, // 6: router_x
+                    tunneler_phys_core.y, // 7: router_y
+                    test_results_addr, // 8: test_results_addr
+                    test_results_size, // 9: test_results_size
+                    prng_seed, // 10: prng_seed
+                    data_kb_per_tx, // 11: total_data_kb
+                    max_packet_size_words, // 12: max_packet_size_words
+                    timeout_mcycles * 1000 * 1000 * 4, // 13: timeout_cycles
+                    tx_skip_pkt_content_gen, // 14: skip_pkt_content_gen
+                    tx_pkt_dest_size_choice, // 15: pkt_dest_size_choice
+                    tx_data_sent_per_iter_low, // 16: data_sent_per_iter_low
+                    tx_data_sent_per_iter_high // 17: data_sent_per_iter_high
                 };
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp",
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx.cpp",
                 {core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -243,7 +239,7 @@ int main(int argc, char **argv) {
                 }
             );
         }
-
+/*
         std::vector<CoreCoord> rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
             CoreCoord core = {rx_x+i, rx_y};
@@ -346,9 +342,74 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
+        vector<vector<uint32_t>> tx_results;
+        //vector<vector<uint32_t>> rx_results;
+
+        for (uint32_t i = 0; i < num_src_endpoints; i++) {
+            tx_results.push_back(
+                tt::llrt::read_hex_vec_from_core(
+                    device->id(), tx_phys_core[i], test_results_addr, 128));
+            log_info(LogTest, "TX{} status = {}", i, packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
+            pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+        }
+/*
+        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+            rx_results.push_back(
+                tt::llrt::read_hex_vec_from_core(
+                    device_r->id(), rx_phys_core[i], test_results_addr, 128));
+            log_info(LogTest, "RX{} status = {}", i, packet_queue_test_status_to_string(rx_results[i][PQ_TEST_STATUS_INDEX]));
+            pass &= (rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+        }
+*/
+        vector<uint32_t> router_results =
+            tt::llrt::read_hex_vec_from_core(
+                device->id(), tunneler_phys_core, tunneler_test_results_addr, 128);
+        log_info(LogTest, "L Router status = {}", packet_queue_test_status_to_string(router_results[PQ_TEST_STATUS_INDEX]));
+        pass &= (router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+
+        vector<uint32_t> r_router_results =
+            tt::llrt::read_hex_vec_from_core(
+                device_r->id(), r_tunneler_phys_core, tunneler_test_results_addr, 128);
+        log_info(LogTest, "R Router status = {}", packet_queue_test_status_to_string(r_router_results[PQ_TEST_STATUS_INDEX]));
+        pass &= (r_router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
         pass &= tt_metal::CloseDevice(device);
         pass &= tt_metal::CloseDevice(device_r);
+
+        if (pass) {
+            double total_tx_bw = 0.0;
+            uint64_t total_tx_words_sent = 0;
+            uint64_t total_rx_words_checked = 0;
+            for (uint32_t i = 0; i < num_src_endpoints; i++) {
+                uint64_t tx_words_sent = get_64b_result(tx_results[i], PQ_TEST_WORD_CNT_INDEX);
+                total_tx_words_sent += tx_words_sent;
+                uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], PQ_TEST_CYCLES_INDEX);
+                double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
+                total_tx_bw += tx_bw;
+                uint64_t iter = get_64b_result(tx_results[i], PQ_TEST_ITER_INDEX);
+                //uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
+                //uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
+                //uint64_t many_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
+                //uint64_t num_packets = get_64b_result(tx_results[i], TX_TEST_IDX_NPKT);
+                //double bytes_per_pkt = static_cast<double>(tx_words_sent) * PACKET_WORD_SIZE_BYTES / static_cast<double>(num_packets);
+
+                log_info(LogTest,
+                         "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
+                         i, tx_words_sent, tx_elapsed_cycles, tx_bw);
+                //log_info(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero data sent iter = {}, few data sent iter = {}, many data sent iter = {}", i, num_packets, bytes_per_pkt, iter, zero_data_sent_iter, few_data_sent_iter, many_data_sent_iter);
+/*
+                stat[fmt::format("tx_words_sent_{}", i)] = tx_words_sent;
+                stat[fmt::format("tx_elapsed_cycles_{}", i)] = tx_elapsed_cycles;
+                stat[fmt::format("tx_bw_{}", i)] = tx_bw;
+                stat[fmt::format("tx_bytes_per_pkt_{}", i)] = bytes_per_pkt;
+                stat[fmt::format("tx_total_iter_{}", i)] = iter;
+                stat[fmt::format("tx_zero_data_sent_iter_{}", i)] = zero_data_sent_iter;
+                stat[fmt::format("tx_few_data_sent_iter_{}", i)] = few_data_sent_iter;
+                stat[fmt::format("tx_many_data_sent_iter_{}", i)] = many_data_sent_iter;
+*/
+            }
+            log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+        }
 
     } catch (const std::exception& e) {
         pass = false;

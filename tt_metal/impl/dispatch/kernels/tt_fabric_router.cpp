@@ -8,11 +8,12 @@
 // clang-format on
 
 router_state_t router_state __attribute__((aligned(16)));
-fvc_state_t fvc_state __attribute__((aligned(16))); // replicate for each fvc
-fvc_inbound_state_t fvc_inbound __attribute__((aligned(16))); // replicate for each fvc
-volatile pull_request_t pull_request __attribute__((aligned(16))); // replicate for each fvc
+fvc_consumer_state_t fvc_consumer_state __attribute__((aligned(16))); // replicate for each fvc
+fvc_producer_state_t fvc_producer_state __attribute__((aligned(16))); // replicate for each fvc
+volatile local_pull_request_t local_pull_request_temp __attribute__((aligned(16))); // replicate for each fvc
+volatile local_pull_request_t *local_pull_request = &local_pull_request_temp; // replicate for each fvc
 
-constexpr uint32_t fvc_req_buf_start = get_compile_time_arg_val(0);
+constexpr uint32_t fvc_consumer_req_buf_start = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_start = get_compile_time_arg_val(1);
 constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(2);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
@@ -36,16 +37,14 @@ constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
-tt_l1_ptr volatile chan_req_buf* fvc_req_buf = reinterpret_cast<tt_l1_ptr chan_req_buf*>(fvc_req_buf_start);
+tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf = reinterpret_cast<tt_l1_ptr chan_req_buf*>(fvc_consumer_req_buf_start);
 uint64_t xy_local_addr;
 
 #define SWITCH_THRESHOLD 16
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
-    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID);
-    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
+
+    tt_fabric_init();
 
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
@@ -53,11 +52,13 @@ void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
 
-    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_req_buf, sizeof(chan_req_buf));
+    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_consumer_req_buf, sizeof(chan_req_buf));
     router_state.sync_in = 0;
     router_state.sync_out = 0;
     write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX, (uint32_t)&router_state);
-    write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX+1, (uint32_t)&fvc_state);
+    write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX+1, (uint32_t)&fvc_consumer_state);
+    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX+1, (uint32_t)&fvc_producer_state);
+
     if (!wait_all_src_dest_ready(&router_state, timeout_cycles)) {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
@@ -67,62 +68,48 @@ void kernel_main() {
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
     uint32_t loop_count = 0;
-    fvc_state.init(fvc_data_buf_start, fvc_data_buf_size_words / 2, (uint32_t)&fvc_inbound.inbound_wrptr);
-    fvc_inbound.init(fvc_data_buf_start + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2), fvc_data_buf_size_words / 2, (uint32_t)&fvc_state.remote_rdptr);
+    fvc_consumer_state.init(fvc_data_buf_start, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
+    fvc_producer_state.init(fvc_data_buf_start + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2), fvc_data_buf_size_words / 2, (uint32_t)&fvc_consumer_state.remote_rdptr);
     while (1) {
-        if (!fvc_req_buf_is_empty(fvc_req_buf) && fvc_req_valid(fvc_req_buf)) {
+        if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
 
-            uint32_t req_index = fvc_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
-            chan_request_entry_t *req = (chan_request_entry_t *)fvc_req_buf->chan_req + req_index;
+            uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
+            chan_request_entry_t *req = (chan_request_entry_t *)fvc_consumer_req_buf->chan_req + req_index;
 
             if (req->bytes[47] & FORWARD)
             {
                 // Data is packetized.
                 pull_request_t *pull_req = &req->pull_request;
-                if (!fvc_state.sync_buf_full() && !fvc_state.sync_pending) {
-                    pull_data_to_fvc_buffer(pull_req, &fvc_state);
+                if (!fvc_consumer_state.sync_buf_full() && !fvc_consumer_state.sync_pending) {
+                    pull_data_to_fvc_buffer(pull_req, &fvc_consumer_state);
                 }
-                if (!fvc_state.sync_buf_empty()) {
+                if (!fvc_consumer_state.sync_buf_empty()) {
                     noc_async_read_barrier();
-                    if (fvc_state.pull_words_in_flight) {
+                    if (fvc_consumer_state.pull_words_in_flight) {
                         //send words cleared count to producer/sender of pull request.
                         update_pull_request_words_cleared(pull_req);
-                        fvc_state.pull_words_in_flight = 0;
+                        fvc_consumer_state.pull_words_in_flight = 0;
                     }
-                    fvc_state.forward_data_from_fvc_buffer();
+                    fvc_consumer_state.forward_data_from_fvc_buffer();
                 }
-                fvc_state.check_sync_pending();
-                if (fvc_state.packet_in_progress == 1 and fvc_state.packet_words_remaining == 0 and fvc_state.pull_words_in_flight == 0) {
-                    fvc_req_buf->rdptr.ptr++;
-                    fvc_state.packet_in_progress = 0;
+                fvc_consumer_state.check_sync_pending();
+                if (fvc_consumer_state.packet_in_progress == 1 and fvc_consumer_state.packet_words_remaining == 0 and fvc_consumer_state.pull_words_in_flight == 0) {
+                    fvc_consumer_req_buf->rdptr.ptr++;
+                    fvc_consumer_state.packet_in_progress = 0;
                 }
             }
         }
 
-        fvc_inbound.update_remote_rdptr_sent();
-        if (fvc_inbound.get_curr_packet_valid()) {
-            fvc_inbound.process_inbound_packet();
+        fvc_producer_state.update_remote_rdptr_sent();
+        if (fvc_producer_state.get_curr_packet_valid()) {
+            fvc_producer_state.process_inbound_packet();
         }
 
         loop_count++;
         if (loop_count >= 1000000) {
             break;
         }
-        if (my_chip_xy == 0x04030100) {
-            //rack 0, shelf 1, x 3, y 4
-            if (loop_count == 1000) {
-                chan_request_entry_t *req = (chan_request_entry_t *)fvc_req_buf->chan_req;
-                pull_request_t *pull_req = &req->pull_request;
-                pull_req->wr_ptr = 50;
-                pull_req->rd_ptr = 0;
-                pull_req->size = 800;
-                pull_req->buffer_size = 100;
-                pull_req->buffer_start = NOC_XY_ADDR(1, 1, 0x100000);
-                pull_req->ack_addr = NOC_XY_ADDR(1, 1, 0xffb2010c);
-                pull_req->flags = FORWARD;
-                fvc_req_buf->wrptr.ptr = 1;
-            }
-        }
+
     }
 
 
