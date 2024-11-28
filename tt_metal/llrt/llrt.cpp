@@ -64,7 +64,7 @@ ll_api::memory get_risc_binary(string const &path,
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
       if (span_type == ll_api::memory::PackSpans::PACK) {
-          uint64_t data_start = MEM_LOCAL_BASE;
+          uint64_t data_start = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::LOCAL);
           uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
               0 :
               tt::tt_metal::hal.get_base_firmware_addr(core_type_idx, processor_class_idx, processor_type_idx);
