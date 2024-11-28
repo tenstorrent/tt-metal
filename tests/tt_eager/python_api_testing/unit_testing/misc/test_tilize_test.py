@@ -10,14 +10,14 @@ from models.utility_functions import tilize
 
 
 @pytest.mark.parametrize(
-    "shape",
+    "nb, nc, nh, nw",
     (
-        [5, 2, 4, 8],
-        [5, 2, 4, 7],
+        (5, 2, 4, 8),
+        (5, 2, 4, 7),
         ## resnet shapes
-        [1, 1, 784, 2],
-        [8, 1, 2, 64],
-        [1, 1, 1, 64],
+        (1, 1, 784, 2),
+        (8, 1, 2, 64),
+        (1, 1, 1, 64),
     ),
 )
 @pytest.mark.parametrize(
@@ -27,9 +27,8 @@ from models.utility_functions import tilize
         True,
     ),
 )
-def test_run_tilize_test(shape, multicore, device):
-    shape[-1] *= 32
-    shape[-2] *= 32
+def test_run_tilize_test(nb, nc, nh, nw, multicore, device):
+    shape = [nb, nc, nh * 32, nw * 32]
 
     inp = torch.rand(*shape).bfloat16()
 
