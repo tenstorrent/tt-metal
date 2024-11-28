@@ -213,10 +213,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& matmul_signal_info);
 
 Tensor matmul(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias = std::nullopt,
-    const struct Matmul &parameters = Matmul{},
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const struct Matmul& parameters = Matmul{},
     const uint8_t queue_id = 0,
     const std::optional<Tensor> optional_output_tensor = std::nullopt);
 
