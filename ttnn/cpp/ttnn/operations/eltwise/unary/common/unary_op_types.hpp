@@ -56,6 +56,7 @@ enum class UnaryOpType {
     ISFINITE,
     ERFINV,
     I0,
+    I1,
     TAN,
     RSUB,
     RDIV,
