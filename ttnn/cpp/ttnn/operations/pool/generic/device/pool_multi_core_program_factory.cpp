@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "max_pool2d_device_op.hpp"
+#include "pool_op.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 /**

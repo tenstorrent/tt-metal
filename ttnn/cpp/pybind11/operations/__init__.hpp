@@ -38,7 +38,7 @@
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
 #include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
-#include "ttnn/operations/pool/generic/max_pool2d_pybind.hpp"
+#include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"

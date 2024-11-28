@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "max_pool2d.hpp"
+#include "generic_pools.hpp"
 
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"

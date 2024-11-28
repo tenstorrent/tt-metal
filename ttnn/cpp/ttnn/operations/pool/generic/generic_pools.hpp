@@ -10,7 +10,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
-#include "device/max_pool2d_device_op.hpp"
+#include "device/pool_op.hpp"
 
 namespace ttnn {
 namespace operations::pool {
