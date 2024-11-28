@@ -127,7 +127,7 @@ void Cluster::generate_cluster_descriptor() {
         // Passing simulator reported physical devices as logical devices.
         this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
     } else {
-        this->cluster_desc_ = tt_ClusterDescriptor::create();
+        this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
                 this->is_tg_cluster_ = true;
@@ -220,11 +220,13 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // and assert if workload uses more than available.
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)this->cluster_desc_->get_number_of_chips());
         // This will remove harvested rows from the soc descriptor
+        const bool perform_harvesting = true;
         const bool clean_system_resources = true;
         device_driver = std::make_unique<tt::umd::Cluster>(
             num_host_mem_ch_per_mmio_device,
             skip_driver_allocs,
-            clean_system_resources);
+            clean_system_resources,
+            perform_harvesting);
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
             // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
             for (const auto &[mmio_device_id, _]: this->cluster_desc_->get_chips_with_mmio()) {
