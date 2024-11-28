@@ -189,8 +189,6 @@ def from_torch(
 
     shape_with_padding = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        if len(tensor.shape) < 2:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
