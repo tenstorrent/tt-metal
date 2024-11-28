@@ -442,6 +442,7 @@ def test_bf8_support(input_shape, output_shape, device):
 
     assert_with_pcc(torch_result, output, 0.9999)
 
+
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
