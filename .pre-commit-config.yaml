@@ -27,5 +27,6 @@ repos:
   rev: v19.1.4
   hooks:
     - id: clang-format
-      entry: git clang-format
+      entry: git-clang-format
       types_or: [c++, c]
+      args: ["--style=file"]
