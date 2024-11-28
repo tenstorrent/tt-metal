@@ -86,11 +86,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* reduce_second_stage_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_second_stage_semaphore_addr);
 
-    const auto& global_reduce_sender = [&](const uint32_t cb_partial,
-                                           const uint32_t cb_external,
-                                           const uint32_t cb_ex,
-                                           const uint32_t cb_ex_global,
-                                           const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
+    const auto& global_reduce_sender = [&](
+        const uint32_t cb_partial,
+        const uint32_t cb_external,
+        const uint32_t cb_ex,
+        const uint32_t cb_ex_global,
+        const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
         // global reduce
         // wait for local data ready
         cb_wait_front(cb_partial, block_h);

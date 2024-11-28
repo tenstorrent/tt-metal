@@ -45,14 +45,20 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
         input_tensor.get_storage());
 
     if (input_dtype == DataType::BFLOAT8_B) {
-        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+        TT_ASSERT(
+            std::holds_alternative<OwnedBuffer>(buffer),
+            "Unexpected type {}",
+            tt::stl::get_active_type_name_in_variant(buffer));
         auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
         auto float_unpacked_data =
             unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
         input_dtype = DataType::FLOAT32;
     } else if (input_dtype == DataType::BFLOAT4_B) {
-        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+        TT_ASSERT(
+            std::holds_alternative<OwnedBuffer>(buffer),
+            "Unexpected type {}",
+            tt::stl::get_active_type_name_in_variant(buffer));
         auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -182,7 +188,8 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
             default: TT_THROW("Unsupported DataType: {}", input_dtype); break;
         }
     };
-    return distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype) : convert_dtype(input_tensor);
+    return distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
+                                                             : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -198,7 +205,9 @@ struct ToDtype {
         }
 
         auto row_major_input_tensor = input_tensor.to(ttnn::ROW_MAJOR_LAYOUT);
-        auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor) ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype) : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
+        auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor)
+                                       ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype)
+                                       : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);
     };
 };
