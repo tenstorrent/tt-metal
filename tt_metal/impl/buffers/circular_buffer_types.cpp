@@ -86,6 +86,11 @@ CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) 
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const Buffer& buffer) {
+    return this->set_globally_allocated_address_and_total_size(buffer, this->total_size_);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const Buffer& buffer, uint32_t total_size) {
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
     }
@@ -94,28 +99,32 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
     this->max_size_ = buffer.aligned_size_per_bank();
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
-    if (this->total_size_ > this->max_size_) {
+    if (total_size > this->max_size_) {
         TT_ASSERT(
             false,
             "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer bank "
             "size of {} B",
-            this->total_size_,
+            total_size,
             this->max_size_);
 #ifndef DEBUG
         log_warning(
             "Circular buffer size {} B exceeds allocated L1 buffer bank size of {} B. This may allow this circular "
             "buffer to write outside the allocated buffer space.",
-            this->total_size_,
+            total_size,
             this->max_size_);
-        if (this->total_size_ > this->buffer_size_) {
+        if (total_size > this->buffer_size_) {
             TT_THROW(
                 "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer "
                 "size of {} B",
-                this->total_size_,
+                total_size,
                 this->buffer_size_);
         }
 #endif
     }
+    if (total_size == 0) {
+        TT_THROW("Total size for circular buffer must be non-zero!");
+    }
+    this->total_size_ = total_size;
     return *this;
 }
 

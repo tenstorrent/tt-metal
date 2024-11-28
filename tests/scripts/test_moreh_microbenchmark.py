@@ -1005,6 +1005,8 @@ def test_dram_read_remote_cb_sync(
     elif test == "Matmul":
         if arch == "wormhole_b0":
             bw_bound = 18.0
+    if use_sub_devices:
+        pytest.xfail("Tests using sub-devices is not correctly set up for BW measurements")
     assert bw_bound <= throughput
 
 
