@@ -43,7 +43,7 @@ Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_me
 }
 
 // power - floating point exponent
-Tensor _power(
+Tensor ExecutePower::invoke(
     uint8_t queue_id,
     const Tensor& input_a,
     float exponent,
@@ -79,14 +79,51 @@ Tensor _power(
     return result;
 }
 
+// power - floating point exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input_a, exponent, output_mem_config, output_tensor);
+}
+
 // power - integer exponent
-Tensor _power(
+Tensor ExecutePower::invoke(
     uint8_t queue_id,
     const Tensor& input,
     uint32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
     return ttnn::power(queue_id, input, exponent, output_mem_config, output_tensor);
+}
+
+// power - integer exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input,
+    uint32_t exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input, exponent, output_mem_config, output_tensor);
+}
+
+// power - tensor exponent
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ttnn::power_binary(queue_id, input, exponent, std::nullopt, output_mem_config, output_tensor);
+}
+
+// power - tensor exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input, exponent, output_mem_config, output_tensor);
 }
 
 // acosh(x) = log(x + sqrt(x^2 - 1))

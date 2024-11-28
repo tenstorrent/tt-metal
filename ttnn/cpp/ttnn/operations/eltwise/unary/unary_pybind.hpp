@@ -1041,7 +1041,24 @@ void bind_power(py::module& module, const unary_operation_t& operation, const st
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
                 py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0}
+                py::arg("queue_id") = ttnn::DefaultQueueId},
+
+            // tensor exponent
+            ttnn::pybind_overload_t{
+                [](const unary_operation_t& self,
+                const Tensor& input_tensor,
+                const Tensor& exponent,
+                const std::optional<MemoryConfig>& memory_config,
+                std::optional<Tensor> output_tensor,
+                const uint8_t queue_id) -> ttnn::Tensor {
+                    return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
+                },
+                py::arg("input_tensor"),
+                py::arg("exponent"),
+                py::kw_only(),
+                py::arg("memory_config") = std::nullopt,
+                py::arg("output_tensor") = std::nullopt,
+                py::arg("queue_id") = ttnn::DefaultQueueId}
             );
 }
 
