@@ -143,7 +143,7 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
 uint32_t next_layer_block_num_tiles = next_layer_block_h * block_w;
     uint32_t next_layer_num_tile_rows_write = next_layer_block_h;
     uint32_t next_layer_receiver_block_num_tile = next_layer_block_num_tiles / num_receivers;
-
+    uint32_t a = 0;
     uint32_t next_layer_single_tile_size = single_tile_size;
     if (tile_format == tt::DataFormat::Float16_b) {
         next_layer_single_tile_size = 1088;
