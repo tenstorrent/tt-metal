@@ -58,8 +58,8 @@ int main(int argc, char **argv) {
 
         CoreCoord loader_logical_core = {0, 0};
         CoreCoord writer_logical_core = {0, 1};
-        auto loader_worker_core = device->worker_core_from_logical_core(loader_logical_core);
-        auto writer_worker_core = device->worker_core_from_logical_core(writer_logical_core);
+        auto loader_worker_core = device->translated_worker_core_from_logical_core(loader_logical_core);
+        auto writer_worker_core = device->translated_worker_core_from_logical_core(writer_logical_core);
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_input_tiles = 1024 * 1;
@@ -101,9 +101,6 @@ int main(int argc, char **argv) {
 
         // auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateKernel(
             program,
@@ -136,8 +133,7 @@ int main(int argc, char **argv) {
             producer_kernel,
             loader_logical_core,
             {dram_buffer_src_addr,
-            (uint32_t)input_dram_noc_xy.x,
-            (uint32_t)input_dram_noc_xy.y,
+            0,
             loader_buffer_address1,
             loader_buffer_address2,
             (uint32_t)writer_worker_core.x,
@@ -158,8 +154,7 @@ int main(int argc, char **argv) {
             (uint32_t)loader_worker_core.x,
             (uint32_t)loader_worker_core.y,
             dram_buffer_dst_addr,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            0,
             writer_buffer_address1,
             writer_buffer_address2,
             stream_register_address1,

@@ -13,19 +13,17 @@
  * */
 void kernel_main() {
     std::uint32_t dram_buffer_src_addr_base   = get_arg_val<uint32_t>(0);
-    std::uint32_t dram_src_noc_x              = get_arg_val<uint32_t>(1);
-    std::uint32_t dram_src_noc_y              = get_arg_val<uint32_t>(2);
+    std::uint32_t dram_src_bank_id            = get_arg_val<uint32_t>(1);
 
-    std::uint32_t dram_buffer_dst_addr_base   = get_arg_val<uint32_t>(3);
-    std::uint32_t dram_dst_noc_x              = get_arg_val<uint32_t>(4);
-    std::uint32_t dram_dst_noc_y              = get_arg_val<uint32_t>(5);
+    std::uint32_t dram_buffer_dst_addr_base   = get_arg_val<uint32_t>(2);
+    std::uint32_t dram_dst_bank_id            = get_arg_val<uint32_t>(3);
 
-    std::uint32_t dram_buffer_size            = get_arg_val<uint32_t>(6);
-    std::uint32_t num_tiles                   = get_arg_val<uint32_t>(7);
+    std::uint32_t dram_buffer_size            = get_arg_val<uint32_t>(4);
+    std::uint32_t num_tiles                   = get_arg_val<uint32_t>(5);
 
-    std::uint32_t l1_buffer_addr              = get_arg_val<uint32_t>(8);
-    std::uint32_t l1_buffer_size_tiles        = get_arg_val<uint32_t>(9);
-    std::uint32_t l1_buffer_size_bytes        = get_arg_val<uint32_t>(10);
+    std::uint32_t l1_buffer_addr              = get_arg_val<uint32_t>(6);
+    std::uint32_t l1_buffer_size_tiles        = get_arg_val<uint32_t>(7);
+    std::uint32_t l1_buffer_size_bytes        = get_arg_val<uint32_t>(8);
 
     std::uint32_t rd_wr_l1_buffer_size_tiles = l1_buffer_size_tiles / 2;
     std::uint32_t rd_wr_l1_buffer_size_bytes = l1_buffer_size_bytes / 2;
@@ -55,9 +53,9 @@ void kernel_main() {
 
     while (num_tiles_read < num_tiles) {
         // DRAM NOC src address
-        dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+        dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_src_bank_id, dram_buffer_src_addr);
         // DRAM NOC dst address
-        dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+        dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
 
         noc_async_read(
             dram_buffer_src_noc_addr,

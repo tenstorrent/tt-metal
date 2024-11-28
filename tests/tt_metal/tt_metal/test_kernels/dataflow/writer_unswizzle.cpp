@@ -6,15 +6,14 @@
 
 void kernel_main() {
     uint32_t dst_addr           = get_arg_val<uint32_t>(0);
-    uint32_t dst_noc_x          = get_arg_val<uint32_t>(1);
-    uint32_t dst_noc_y          = get_arg_val<uint32_t>(2);
-    uint32_t inner_r            = get_arg_val<uint32_t>(3);
-    uint32_t inner_c            = get_arg_val<uint32_t>(4);
-    uint32_t num_sub_blocks_m   = get_arg_val<uint32_t>(5);
-    uint32_t num_sub_blocks_n   = get_arg_val<uint32_t>(6);
-    uint32_t stride_r           = get_arg_val<uint32_t>(7);
-    uint32_t stride_subblock_r  = get_arg_val<uint32_t>(8);
-    uint32_t stride_subblock_c  = get_arg_val<uint32_t>(9);
+    uint32_t dst_bank_id        = get_arg_val<uint32_t>(1);
+    uint32_t inner_r            = get_arg_val<uint32_t>(2);
+    uint32_t inner_c            = get_arg_val<uint32_t>(3);
+    uint32_t num_sub_blocks_m   = get_arg_val<uint32_t>(4);
+    uint32_t num_sub_blocks_n   = get_arg_val<uint32_t>(5);
+    uint32_t stride_r           = get_arg_val<uint32_t>(6);
+    uint32_t stride_subblock_r  = get_arg_val<uint32_t>(7);
+    uint32_t stride_subblock_c  = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_id_out0 = 16;
 
@@ -30,7 +29,7 @@ void kernel_main() {
             for(uint32_t r = 0; r < inner_r; r++) {
                 uint32_t dram_address_c = dram_address_r;
                 for(uint32_t c = 0; c < inner_c; c++) {
-                    uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dram_address_c);
+                    uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dram_address_c);
 
                     cb_wait_front(cb_id_out0, ublock_size_tiles);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);

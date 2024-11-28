@@ -34,7 +34,7 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
             Program program = CreateProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
-            CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+            CoreCoord phys_eth_core = device->translated_coords_from_logical_coords(eth_core, CoreType::ETH);
             uint32_t eth_sem_id = CreateSemaphore(program, eth_core, eth_sem_init_val, CoreType::ETH);
             auto eth_kernel = CreateKernel(
                 program,
@@ -101,7 +101,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+        CoreCoord phys_eth_core = device->translated_coords_from_logical_coords(eth_core, CoreType::ETH);
         CreateKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", eth_core,
             tt::tt_metal::EthernetConfig {
@@ -155,7 +155,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+        CoreCoord phys_eth_core = device->translated_coords_from_logical_coords(eth_core, CoreType::ETH);
         CreateKernel(
             program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", eth_core,
             tt::tt_metal::EthernetConfig {

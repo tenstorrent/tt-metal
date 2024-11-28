@@ -249,7 +249,7 @@ create_programs(
     // reader rt
     auto dram_reader_core_coord = dram_reader_core.ranges().begin()->start_coord;
     log_info("dram_reader_core_coord: {}", dram_reader_core_coord);
-    auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
+    auto dram_reader_core_coord_physical = device->translated_worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
     std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
@@ -274,11 +274,11 @@ create_programs(
     }
     std::vector<uint32_t> writer_rt_args;
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
+        auto l1_receiver_core_coord_physical = device->translated_worker_core_from_logical_core(l1_receiver_core_coords[i]);
         writer_rt_args.push_back(l1_receiver_core_coord_physical.x);
     }
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
+        auto l1_receiver_core_coord_physical = device->translated_worker_core_from_logical_core(l1_receiver_core_coords[i]);
         writer_rt_args.push_back(l1_receiver_core_coord_physical.y);
     }
     for (uint32_t i = 0; i < num_receivers; ++i) {

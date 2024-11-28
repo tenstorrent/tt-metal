@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
                     adjacent_core_logical.y = (adjacent_core_logical.y + 1) % num_cores_r;
                 }
 
-                CoreCoord adjacent_core_noc = device->worker_core_from_logical_core(adjacent_core_logical);
+                CoreCoord adjacent_core_noc = device->translated_worker_core_from_logical_core(adjacent_core_logical);
 
                 const std::array noc_runtime_args = {
                     (uint32_t)adjacent_core_noc.x,

@@ -53,9 +53,6 @@ bool dram_single_core_db (DispatchFixture* fixture, tt_metal::Device *device){
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
     auto dram_copy_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_db.cpp",
@@ -71,11 +68,9 @@ bool dram_single_core_db (DispatchFixture* fixture, tt_metal::Device *device){
         dram_copy_kernel,
         core,
         {input_dram_buffer_addr,
-        (std::uint32_t)input_dram_noc_xy.x,
-        (std::uint32_t)input_dram_noc_xy.y,
+        (std::uint32_t)0,
         output_dram_buffer_addr,
-        (std::uint32_t)output_dram_noc_xy.x,
-        (std::uint32_t)output_dram_noc_xy.y,
+        (std::uint32_t)0,
         dram_buffer_size_bytes,
         num_tiles,
         l1_buffer_addr,
@@ -106,8 +101,6 @@ bool dram_single_core (DispatchFixture* fixture, tt_metal::Device *device, const
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
     log_debug(tt::LogVerif, "Creating kernel");
     // Create the kernel
     auto dram_kernel = tt_metal::CreateKernel(
@@ -124,11 +117,9 @@ bool dram_single_core (DispatchFixture* fixture, tt_metal::Device *device, const
             cfg.core_range,
             {cfg.l1_buffer_addr,
             input_dram_buffer_addr,
-            (std::uint32_t)input_dram_noc_xy.x,
-            (std::uint32_t)input_dram_noc_xy.y,
+            (std::uint32_t)0,
             output_dram_buffer_addr,
-            (std::uint32_t)output_dram_noc_xy.x,
-            (std::uint32_t)output_dram_noc_xy.y,
+            (std::uint32_t)0,
             cfg.dram_buffer_size});
 
     fixture->RunProgram(device, program);

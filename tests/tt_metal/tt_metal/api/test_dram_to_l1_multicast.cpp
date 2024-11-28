@@ -48,14 +48,13 @@ bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device *device, co
     auto dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_addr = dram_buffer->address();
 
-    auto dram_noc_xy = dram_buffer->noc_coordinates();
 
     CoreCoord core_start = {0, 0};
     CoreCoord grid_size = device->logical_grid_size();
     CoreCoord core_end = {core_start.x + (grid_size.x - 1), core_start.y + (grid_size.y - 1)};
-    auto core_start_physical = device->worker_core_from_logical_core(core_start);
-    auto core_end_physical = device->worker_core_from_logical_core(core_end);
-    auto core_exclude_physical = device->worker_core_from_logical_core(cfg.exclude_start);
+    auto core_start_physical = device->translated_worker_core_from_logical_core(core_start);
+    auto core_end_physical = device->translated_worker_core_from_logical_core(core_end);
+    auto core_exclude_physical = device->translated_worker_core_from_logical_core(cfg.exclude_start);
     auto num_dests = (grid_size.x * grid_size.y) - cfg.target_grid_offset;
     // calculate number of destination cores, taking exluded ones into account
     if (cfg.exclude_start.x != 0 || cfg.exclude_start.y != 0) {
@@ -65,8 +64,7 @@ bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device *device, co
     }
     std::vector<uint32_t> mcast_reader_args = {
         (std::uint32_t)dram_buffer_addr,
-        (std::uint32_t)dram_noc_xy.x,
-        (std::uint32_t)dram_noc_xy.y,
+        0,
         (std::uint32_t)dram_buffer_size,
         (std::uint32_t)local_buffer_addr,
         (std::uint32_t)dest_buffer_addr,

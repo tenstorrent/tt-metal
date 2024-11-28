@@ -398,7 +398,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
-    std::cout << "Running conv2" << std::endl;
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     tt_metal::Device* device = a.device();
@@ -701,9 +700,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // act
     uint32_t act_dram_addr = src0_dram_buffer->address();
-    auto act_dram_noc_xy = src0_dram_buffer->noc_coordinates();
-    uint32_t act_noc_x = act_dram_noc_xy.x;
-    uint32_t act_noc_y = act_dram_noc_xy.y;
 
     assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
     assert(act_block_h_ntiles % out_subblock_h_ntiles == 0);

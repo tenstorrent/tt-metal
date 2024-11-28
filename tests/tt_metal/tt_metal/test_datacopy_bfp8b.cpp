@@ -61,9 +61,6 @@ int main(int argc, char **argv) {
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 1;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
@@ -120,8 +117,7 @@ int main(int argc, char **argv) {
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
-            (std::uint32_t)dram_src_noc_xy.x,
-            (std::uint32_t)dram_src_noc_xy.y,
+            0,
             num_tiles});
 
         tt_metal::SetRuntimeArgs(
@@ -129,8 +125,7 @@ int main(int argc, char **argv) {
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
+            0,
             num_tiles});
 
 

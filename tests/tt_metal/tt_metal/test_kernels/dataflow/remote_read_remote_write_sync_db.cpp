@@ -27,15 +27,14 @@ void kernel_main() {
     std::uint32_t src_noc_x                    = get_arg_val<uint32_t>(2);
     std::uint32_t src_noc_y                    = get_arg_val<uint32_t>(3);
     std::uint32_t buffer_dst_addr              = get_arg_val<uint32_t>(4);
-    std::uint32_t dst_noc_x                    = get_arg_val<uint32_t>(5);
-    std::uint32_t dst_noc_y                    = get_arg_val<uint32_t>(6);
-    std::uint32_t local_buffer_addr1           = get_arg_val<uint32_t>(7);
-    std::uint32_t local_buffer_addr2           = get_arg_val<uint32_t>(8);
-    std::uint32_t stream_register_address1     = get_arg_val<uint32_t>(9);
-    std::uint32_t stream_register_address2     = get_arg_val<uint32_t>(10);
-    std::uint32_t num_tiles                    = get_arg_val<uint32_t>(11);
-    std::uint32_t transient_buffer_size_tiles  = get_arg_val<uint32_t>(12);
-    std::uint32_t transient_buffer_size_bytes  = get_arg_val<uint32_t>(13);
+    std::uint32_t bank_id                      = get_arg_val<uint32_t>(5);
+    std::uint32_t local_buffer_addr1           = get_arg_val<uint32_t>(6);
+    std::uint32_t local_buffer_addr2           = get_arg_val<uint32_t>(7);
+    std::uint32_t stream_register_address1     = get_arg_val<uint32_t>(8);
+    std::uint32_t stream_register_address2     = get_arg_val<uint32_t>(9);
+    std::uint32_t num_tiles                    = get_arg_val<uint32_t>(10);
+    std::uint32_t transient_buffer_size_tiles  = get_arg_val<uint32_t>(11);
+    std::uint32_t transient_buffer_size_bytes  = get_arg_val<uint32_t>(12);
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
     volatile tt_l1_ptr uint32_t* constant_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CONSTANT_REGISTER_VALUE);
@@ -58,7 +57,7 @@ void kernel_main() {
         noc_async_read_barrier();
 
         // DRAM NOC dst address
-        dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_buffer_addr);
+        dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_buffer_addr);
         noc_async_write(local_buffer_address, dst_noc_addr, transient_buffer_size_bytes);
 
         dst_buffer_addr += transient_buffer_size_bytes;

@@ -204,9 +204,9 @@ bool write_runtime_args_to_device(
             CoreCoord mcast_sender = {(std::size_t)core_x, (std::size_t) core_y};
             CoreCoord core_start = {(std::size_t)(core_x + (1 - in1_or_in0)), (std::size_t) (core_y + in1_or_in0)};
             CoreCoord core_end = {(std::size_t)(core_x + (1 - in1_or_in0) * (num_cores_c - 1)), (std::size_t) (core_y + in1_or_in0 * (num_cores_r - 1))};
-            auto mcast_sender_physical = device->worker_core_from_logical_core(mcast_sender);
-            auto core_start_physical = device->worker_core_from_logical_core(core_start);
-            auto core_end_physical = device->worker_core_from_logical_core(core_end);
+            auto mcast_sender_physical = device->translated_worker_core_from_logical_core(mcast_sender);
+            auto core_start_physical = device->translated_worker_core_from_logical_core(core_start);
+            auto core_end_physical = device->translated_worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)in0_dram_addr,                // in0_tensor_addr

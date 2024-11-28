@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
         case 2:
             {
                 src_mem = test_write ? "TO_L1" : "FROM_L1";
-                CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
+                CoreCoord w = device->translated_worker_core_from_logical_core(src_worker_g);
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
             }
@@ -231,7 +231,7 @@ int main(int argc, char **argv) {
             {
                 src_mem = "FROM_L1_TO_HOST";
                 log_info(LogTest, "Host bw test overriding page_count to 1");
-                CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
+                CoreCoord w = device->translated_worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
             {
                 src_mem = "FROM_HOST_TO_L1";
                 log_info(LogTest, "Host bw test overriding page_count to 1");
-                CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
+                CoreCoord w = device->translated_worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -251,8 +251,8 @@ int main(int argc, char **argv) {
             {
                 src_mem = "FROM_L1_TO_MCAST";
                 issue_mcast = 1;
-                CoreCoord start = device->physical_core_from_logical_core(mcast_src_workers_g.start_coord, CoreType::WORKER);
-                CoreCoord end = device->physical_core_from_logical_core(mcast_src_workers_g.end_coord, CoreType::WORKER);
+                CoreCoord start = device->translated_worker_core_from_logical_core(mcast_src_workers_g.start_coord);
+                CoreCoord end = device->translated_worker_core_from_logical_core(mcast_src_workers_g.end_coord);
                 noc_addr_x = start.x;
                 noc_addr_y = start.y;
                 mcast_noc_addr_end_x = end.x;
@@ -297,7 +297,7 @@ int main(int argc, char **argv) {
 
         std::shared_ptr<Event> sync_event = std::make_shared<Event>();
 
-        CoreCoord w = device->physical_core_from_logical_core(worker_g.start_coord, CoreType::WORKER);
+        CoreCoord w = device->translated_worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
         string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {

@@ -404,12 +404,12 @@ bool RunLoopbackTest(
 
     std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos = {
         {1,
-         sender_device->ethernet_core_from_logical_core(eth_receiver_core).x,
-         sender_device->ethernet_core_from_logical_core(eth_receiver_core).y,
+         sender_device->translated_ethernet_core_from_logical_core(eth_receiver_core).x,
+         sender_device->translated_ethernet_core_from_logical_core(eth_receiver_core).y,
          ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address},
         {0,
-         sender_device->ethernet_core_from_logical_core(eth_sender_core).x,
-         sender_device->ethernet_core_from_logical_core(eth_sender_core).y,
+         sender_device->translated_ethernet_core_from_logical_core(eth_sender_core).x,
+         sender_device->translated_ethernet_core_from_logical_core(eth_sender_core).y,
          ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address}};
 
     generate_sender_worker_kernels(

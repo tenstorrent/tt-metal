@@ -295,12 +295,12 @@ bool write_runtime_args_to_device(
             CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
             CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = device->translated_worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = device->translated_worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = device->translated_worker_core_from_logical_core(right_core);
+            auto top_core_physical = device->translated_worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = device->translated_worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = device->translated_worker_core_from_logical_core(bottom_core);
             const std::array mm_reader_args = {
                 (std::uint32_t) in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id

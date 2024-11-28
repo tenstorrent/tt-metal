@@ -1217,7 +1217,7 @@ tt_metal::Program create_program(
             int core_idx_x = output_idx_x;
             int core_idx_y = output_idx_y;
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
-            auto phy_core = device->worker_core_from_logical_core(core);
+            auto phy_core = device->translated_worker_core_from_logical_core(core);
 
             // Write runtime args to device
             std::array<uint32_t, 12> mm_in0_reader_args = {

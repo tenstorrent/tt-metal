@@ -217,8 +217,8 @@ void build_and_run_roundtrip_latency_test(
             sample_page_size,
             eth_sender_core,
             receiver_start_semaphore,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
+            device->translated_coords_from_logical_coords(init_worker_core, CoreType::WORKER).x,
+            device->translated_coords_from_logical_coords(init_worker_core, CoreType::WORKER).y,
             worker_sem0);
         std::vector<uint32_t> const& sender_eth_rt_args = get_eth_sender_rt_args(
             device,
@@ -226,15 +226,15 @@ void build_and_run_roundtrip_latency_test(
             num_samples,
             max_concurrent_samples,
             sample_page_size,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
+            device->translated_coords_from_logical_coords(init_worker_core, CoreType::WORKER).x,
+            device->translated_coords_from_logical_coords(init_worker_core, CoreType::WORKER).y,
             worker_sem1);
 
         std::vector<uint32_t> worker_init_rt_args = {
             worker_sem0,
             worker_sem1,
-            static_cast<uint32_t>(device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).x),
-            static_cast<uint32_t>(device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).y),
+            static_cast<uint32_t>(device->translated_coords_from_logical_coords(eth_receiver_core, CoreType::ETH).x),
+            static_cast<uint32_t>(device->translated_coords_from_logical_coords(eth_receiver_core, CoreType::ETH).y),
             receiver_start_semaphore
         };
 

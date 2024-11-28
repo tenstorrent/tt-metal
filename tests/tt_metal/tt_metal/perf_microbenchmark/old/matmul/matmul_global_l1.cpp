@@ -175,11 +175,11 @@ tt_metal::Program create_program_mcast_in0_in1(
   CoreCoord bottom_right_core = {(std::size_t)start_core_x + num_cores_c - 1,
                                  (std::size_t)start_core_y + num_cores_r - 1};
   auto top_left_core_physical =
-      device->worker_core_from_logical_core(top_left_core);
+      device->translated_worker_core_from_logical_core(top_left_core);
   auto top_left_core_plus_one_physical =
-      device->worker_core_from_logical_core(top_left_core_plus_one);
+      device->translated_worker_core_from_logical_core(top_left_core_plus_one);
   auto bottom_right_core_physical =
-      device->worker_core_from_logical_core(bottom_right_core);
+      device->translated_worker_core_from_logical_core(bottom_right_core);
 
   bool in0_is_dram =
       in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -593,16 +593,16 @@ tt_metal::Program create_program_mcast_in0_in1(
                                (std::size_t)start_core_y + num_cores_r - 1};
 
       auto left_core_physical =
-          device->worker_core_from_logical_core(left_core);
+          device->translated_worker_core_from_logical_core(left_core);
       auto left_core_plus_one_physical =
-          device->worker_core_from_logical_core(left_core_plus_one);
+          device->translated_worker_core_from_logical_core(left_core_plus_one);
       auto right_core_physical =
-          device->worker_core_from_logical_core(right_core);
-      auto top_core_physical = device->worker_core_from_logical_core(top_core);
+          device->translated_worker_core_from_logical_core(right_core);
+      auto top_core_physical = device->translated_worker_core_from_logical_core(top_core);
       auto top_core_plus_one_physical =
-          device->worker_core_from_logical_core(top_core_plus_one);
+          device->translated_worker_core_from_logical_core(top_core_plus_one);
       auto bottom_core_physical =
-          device->worker_core_from_logical_core(bottom_core);
+          device->translated_worker_core_from_logical_core(bottom_core);
 
       // in0 sender and in1 sender
       if (core_idx_x == 0 and core_idx_y == 0) {

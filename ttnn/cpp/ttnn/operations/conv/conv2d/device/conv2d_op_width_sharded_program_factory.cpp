@@ -406,9 +406,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     // act
     uint32_t act_dram_addr = src0_dram_buffer->address();
-    auto act_dram_noc_xy = src0_dram_buffer->noc_coordinates();
-    uint32_t act_noc_x = act_dram_noc_xy.x;
-    uint32_t act_noc_y = act_dram_noc_xy.y;
 
     TT_FATAL(
         act_block_h_ntiles % out_subblock_h_ntiles == 0,

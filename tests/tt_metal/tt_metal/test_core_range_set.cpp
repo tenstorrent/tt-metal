@@ -87,7 +87,6 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
                                         };
 
     auto src_dram_buffer = CreateBuffer(dram_config);
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
 
     std::map<CoreCoord, std::shared_ptr<tt_metal::Buffer>> core_to_l1_buffer;
     for (auto core_range : core_range_set.ranges()) {
@@ -130,7 +129,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_1.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -164,8 +163,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     // Reader kernel on all cores reads from same location in DRAM
     const std::array reader_rt_args = {
         src_dram_buffer->address(),
-        (std::uint32_t)dram_src_noc_xy.x,
-        (std::uint32_t)dram_src_noc_xy.y,
+        uint(0),
         num_tiles
     };
 
@@ -176,14 +174,16 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
             core,
             reader_rt_args);
 
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto bank_id = 0;
+        auto l1_dst_noc_xy = device->translated_coords_from_logical_coords(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);
+
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
             {dst_l1_buffer->address(),
-            (std::uint32_t)l1_dst_noc_xy.x,
-            (std::uint32_t)l1_dst_noc_xy.y,
+            l1_dst_noc_xy.x,
+            l1_dst_noc_xy.y,
             num_tiles});
     }
 

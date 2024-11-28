@@ -1896,12 +1896,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
+        const auto& core_noc = device->translated_worker_core_from_logical_core(core);
 
         /* in0 */
         uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
         const auto& next_core = cores[next_i % num_cores];
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        const auto& next_core_noc = device->translated_worker_core_from_logical_core(next_core);
         uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device);
 
         std::vector<uint32_t> mm_in0_args = {

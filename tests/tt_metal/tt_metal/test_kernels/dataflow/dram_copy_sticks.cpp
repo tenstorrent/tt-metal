@@ -14,15 +14,14 @@ void kernel_main() {
     std::uint32_t l1_buffer_addr        = get_arg_val<uint32_t>(0);
 
     std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
-    std::uint32_t dram_src_noc_x        = get_arg_val<uint32_t>(2);
-    std::uint32_t dram_src_noc_y        = get_arg_val<uint32_t>(3);
+    std::uint32_t bank_id        = get_arg_val<uint32_t>(2);
 
-    std::uint32_t num_sticks      = get_arg_val<uint32_t>(4);
-    std::uint32_t stick_size      =  get_arg_val<uint32_t>(5);
+    std::uint32_t num_sticks      = get_arg_val<uint32_t>(3);
+    std::uint32_t stick_size      =  get_arg_val<uint32_t>(4);
     for(uint32_t i = 0; i < 1; i++) {
         for(uint32_t stick_id = 0; stick_id < num_sticks; stick_id++) {
             // DRAM NOC src address
-            std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+            std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_buffer_src_addr);
             noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, stick_size);
             noc_async_read_barrier();
             l1_buffer_addr += stick_size;

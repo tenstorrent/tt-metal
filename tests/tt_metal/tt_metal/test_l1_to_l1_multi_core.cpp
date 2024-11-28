@@ -77,7 +77,6 @@ int main(int argc, char **argv) {
                 };
                 auto src_dram_buffer = CreateBuffer(dram_config);
                 uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-                auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
                 tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
                 auto l1_to_l1_kernel = tt_metal::CreateKernel(
@@ -91,8 +90,7 @@ int main(int argc, char **argv) {
                         l1_to_l1_kernel,
                         core,
                         {dram_buffer_src_addr,
-                        (std::uint32_t)dram_src_noc_xy.x,
-                        (std::uint32_t)dram_src_noc_xy.y,
+                        0,
                         l1_buffer_addr,
                         l1_buffer_addr,
                         (uint32_t)dst_soc_core.x,

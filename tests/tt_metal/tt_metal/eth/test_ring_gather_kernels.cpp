@@ -203,7 +203,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         CoreCoord sender_receiver_core;
         for (uint32_t j = 0; j < sender_receivers.size(); ++j) {
             if (std::get<1>(sender_receivers[j])->id() == sender_device->id()) {
-                sender_receiver_core = sender_device->ethernet_core_from_logical_core(std::get<3>(sender_receivers[j]));
+                sender_receiver_core = sender_device->translated_ethernet_core_from_logical_core(std::get<3>(sender_receivers[j]));
             }
         }
         auto eth_sender_kernel = tt_metal::CreateKernel(
@@ -249,7 +249,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         for (uint32_t j = 0; j < sender_receivers.size(); ++j) {
             if (std::get<0>(sender_receivers[j])->id() == receiver_device->id()) {
                 receiver_sender_core =
-                    receiver_device->ethernet_core_from_logical_core(std::get<2>(sender_receivers[j]));
+                    receiver_device->translated_ethernet_core_from_logical_core(std::get<2>(sender_receivers[j]));
             }
         }
 
@@ -371,8 +371,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                 .compile_args = {
                     uint32_t(num_bytes_per_send),
                     uint32_t(num_bytes_per_send >> 4),
-                    uint32_t(device->ethernet_core_from_logical_core(eth_receiver_core).x),
-                    uint32_t(device->ethernet_core_from_logical_core(eth_receiver_core).y),
+                    uint32_t(device->translated_ethernet_core_from_logical_core(eth_receiver_core).x),
+                    uint32_t(device->translated_ethernet_core_from_logical_core(eth_receiver_core).y),
                     uint32_t(input_buffer->buffer_type() == BufferType::DRAM),
                     uint32_t(output_buffers[i]->buffer_type() == BufferType::DRAM)}});
 
@@ -403,8 +403,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_1,
                 .compile_args = {
-                    uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
-                    uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
+                    uint32_t(device->translated_ethernet_core_from_logical_core(eth_sender_core).x),
+                    uint32_t(device->translated_ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
                         output_buffers[i]->buffer_type() == BufferType::DRAM)}});  // probably want to use NOC_1 here
 

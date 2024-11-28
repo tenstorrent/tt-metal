@@ -189,10 +189,6 @@ int main(int argc, char **argv) {
         auto src1_dram_buffer = CreateBuffer(weights_config);
         auto dst_dram_buffer = CreateBuffer(dst_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * in0_block_w * 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -251,11 +247,9 @@ int main(int argc, char **argv) {
 
         const std::array generic_binary_reader_args {
             src0_dram_buffer->address(),
-            (uint32_t)dram_src0_noc_xy.x,
-            (uint32_t)dram_src0_noc_xy.y,
+            (uint32_t) 0,
             src1_dram_buffer->address(),
-            (uint32_t)dram_src1_noc_xy.x,
-            (uint32_t)dram_src1_noc_xy.y,
+            (uint32_t) 0,
             (uint32_t)source_addresses.size(),
             (uint32_t)source_addresses_in_l1_addr,
             (uint32_t)num_blocks,
@@ -273,8 +267,7 @@ int main(int argc, char **argv) {
 
         const std::array writer_rt_args{
             dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
+            (std::uint32_t) 0,
             (std::uint32_t)out_subblock_h, // num tiles per sub block m
             (std::uint32_t)out_subblock_w, // num tiles per sub block n
             (std::uint32_t)M/out_subblock_h, // num sub blocks m

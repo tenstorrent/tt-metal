@@ -64,9 +64,7 @@ int main(int argc, char **argv) {
         auto src1_dram_buffer = CreateBuffer(dram_config);
         auto dst_l1_buffer = CreateBuffer(l1_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto l1_dst_noc_xy = device->translated_coords_from_logical_coords(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);;
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 1;
@@ -93,7 +91,7 @@ int main(int argc, char **argv) {
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_1.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -141,11 +139,9 @@ int main(int argc, char **argv) {
             mm_reader_kernel,
             core,
             {src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
+            0,
             src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
+            0,
             1,
             1,
             1,

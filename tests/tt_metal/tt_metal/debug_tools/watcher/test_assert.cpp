@@ -34,7 +34,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
         phys_core = device->ethernet_core_from_logical_core(logical_core);
     } else {
         logical_core = CoreCoord{0, 0};
-        phys_core = device->worker_core_from_logical_core(logical_core);
+        phys_core = device->translated_worker_core_from_logical_core(logical_core);
     }
     log_info(LogTest, "Running test on device {} core {}...", device->id(), phys_core.str());
 

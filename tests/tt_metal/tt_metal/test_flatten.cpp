@@ -112,8 +112,6 @@ int main(int argc, char **argv) {
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -173,8 +171,7 @@ int main(int argc, char **argv) {
             flatten_kernel,
             core,
             {dram_buffer_src_addr,
-            (std::uint32_t)dram_src_noc_xy.x,
-            (std::uint32_t)dram_src_noc_xy.y,
+            0,
             num_tiles_r,
             num_tiles_c,
             num_bytes_per_tensor_row});
@@ -184,8 +181,7 @@ int main(int argc, char **argv) {
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
+            0,
             num_tiles * 32});
 
 

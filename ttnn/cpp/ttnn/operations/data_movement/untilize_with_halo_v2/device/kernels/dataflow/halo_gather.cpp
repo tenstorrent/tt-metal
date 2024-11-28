@@ -103,8 +103,8 @@ void kernel_main() {
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
 
-    const uint16_t my_noc_x = my_x[noc_index];
-    const uint16_t my_noc_y = my_y[noc_index];
+    const uint16_t my_noc_x = TRANSLATED_NOC_X(my_x[noc_index]);
+    const uint16_t my_noc_y = TRANSLATED_NOC_Y(my_y[noc_index]);
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 

@@ -68,7 +68,6 @@ int main(int argc, char **argv) {
         auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
         assert(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0);
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
@@ -115,8 +114,7 @@ int main(int argc, char **argv) {
                     core,
                     {core_to_l1_addr.at(core),
                     dram_buffer_src_addr + (core_index * stick_size),
-                    (std::uint32_t)dram_src_noc_xy.x,
-                    (std::uint32_t)dram_src_noc_xy.y,
+                    0,
                     (std::uint32_t) 1,
                     (std::uint32_t) stick_size});
                     core_index++;

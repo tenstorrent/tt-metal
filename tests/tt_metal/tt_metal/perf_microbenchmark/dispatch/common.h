@@ -788,7 +788,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
 
     add_bare_dispatcher_cmd(cmds, cmd);
     for (CoreCoord core : worker_cores) {
-        CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
+        CoreCoord phys_worker_core = device->translated_worker_core_from_logical_core(core);
         cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
     }
     cmds.resize(padded_size(cmds.size(), hal.get_alignment(HalMemType::L1)/sizeof(uint32_t)));
@@ -808,7 +808,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
+    CoreCoord phys_worker_core = device->translated_worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
@@ -831,7 +831,7 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
+    CoreCoord phys_worker_core = device->translated_worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
@@ -856,8 +856,8 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start_coord, CoreType::WORKER);
-    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end_coord, CoreType::WORKER);
+    CoreCoord physical_start = device->translated_worker_core_from_logical_core(worker_core_range.start_coord);
+    CoreCoord physical_end = device->translated_worker_core_from_logical_core(worker_core_range.end_coord);
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
@@ -1040,8 +1040,8 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
         device_data.relevel(range);
 
         CQDispatchWritePackedLargeSubCmd sub_cmd;
-        CoreCoord physical_start = device->physical_core_from_logical_core(range.start_coord, CoreType::WORKER);
-        CoreCoord physical_end = device->physical_core_from_logical_core(range.end_coord, CoreType::WORKER);
+        CoreCoord physical_start = device->translated_worker_core_from_logical_core(range.start_coord);
+        CoreCoord physical_end = device->translated_worker_core_from_logical_core(range.end_coord);
         sub_cmd.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;

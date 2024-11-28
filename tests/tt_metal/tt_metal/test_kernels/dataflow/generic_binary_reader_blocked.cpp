@@ -12,19 +12,17 @@
 // It expects src1 data to already be tilized and it simply copies it to L1.
 void kernel_main() {
     std::uint32_t dram_buffer_src0_addr  = get_arg_val<uint32_t>(0);
-    std::uint32_t dram_src0_noc_x        = get_arg_val<uint32_t>(1);
-    std::uint32_t dram_src0_noc_y        = get_arg_val<uint32_t>(2);
-    std::uint32_t dram_buffer_src1_addr  = get_arg_val<uint32_t>(3);
-    std::uint32_t dram_src1_noc_x        = get_arg_val<uint32_t>(4);
-    std::uint32_t dram_src1_noc_y        = get_arg_val<uint32_t>(5);
-    std::uint32_t address_map_size       = get_arg_val<uint32_t>(6);
-    std::uint32_t address_map_l1_addr    = get_arg_val<uint32_t>(7);
-    std::uint32_t num_blocks             = get_arg_val<uint32_t>(8);
-    std::uint32_t src0_num_reads_per_block = get_arg_val<uint32_t>(9);
-    std::uint32_t src0_dram_read_size_bytes = get_arg_val<uint32_t>(10);
-    std::uint32_t src1_num_bytes_per_block = get_arg_val<uint32_t>(11);
-    std::uint32_t src0_num_tiles_per_block = get_arg_val<uint32_t>(12);
-    std::uint32_t src1_num_tiles_per_block = get_arg_val<uint32_t>(13);
+    std::uint32_t dram_src0_bank_id      = get_arg_val<uint32_t>(1);
+    std::uint32_t dram_buffer_src1_addr  = get_arg_val<uint32_t>(2);
+    std::uint32_t dram_src1_bank_id      = get_arg_val<uint32_t>(3);
+    std::uint32_t address_map_size       = get_arg_val<uint32_t>(4);
+    std::uint32_t address_map_l1_addr    = get_arg_val<uint32_t>(5);
+    std::uint32_t num_blocks             = get_arg_val<uint32_t>(6);
+    std::uint32_t src0_num_reads_per_block = get_arg_val<uint32_t>(7);
+    std::uint32_t src0_dram_read_size_bytes = get_arg_val<uint32_t>(8);
+    std::uint32_t src1_num_bytes_per_block = get_arg_val<uint32_t>(9);
+    std::uint32_t src0_num_tiles_per_block = get_arg_val<uint32_t>(10);
+    std::uint32_t src1_num_tiles_per_block = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t cb0_id = 0;
     constexpr uint32_t cb1_id = 1;
@@ -39,7 +37,7 @@ void kernel_main() {
         cb_reserve_back(cb1_id, src1_num_tiles_per_block);
         uint32_t l1_write0_addr = get_write_ptr(cb0_id);
         uint32_t l1_write1_addr = get_write_ptr(cb1_id);
-        std::uint64_t dram_buffer_src1_noc_addr = get_noc_addr(dram_src1_noc_x, dram_src1_noc_y, dram_buffer_src1_addr);
+        std::uint64_t dram_buffer_src1_noc_addr = get_noc_addr_from_bank_id<true>(dram_src1_bank_id, dram_buffer_src1_addr);
         // src1 is already tilized in DRAM. Read the whole block of tiles in a single DRAM read access.
         noc_async_read(dram_buffer_src1_noc_addr, l1_write1_addr, src1_num_bytes_per_block);
         // src0 is not tilized in DRAM.
@@ -47,7 +45,7 @@ void kernel_main() {
         // The source addresses in the list must be in the order of tiles
         for(uint32_t i = 0; i < src0_num_reads_per_block; i++) {
              uint32_t src_addr = source_addresses[source_addresses_list_index];
-             std::uint64_t dram_buffer_src0_noc_addr = get_noc_addr(dram_src0_noc_x, dram_src0_noc_y, dram_buffer_src0_addr + src_addr);
+             std::uint64_t dram_buffer_src0_noc_addr = get_noc_addr_from_bank_id<true>(dram_src0_bank_id, dram_buffer_src0_addr + src_addr);
              noc_async_read(dram_buffer_src0_noc_addr, l1_write0_addr, src0_dram_read_size_bytes);
              l1_write0_addr += src0_dram_read_size_bytes;
              source_addresses_list_index += 1;

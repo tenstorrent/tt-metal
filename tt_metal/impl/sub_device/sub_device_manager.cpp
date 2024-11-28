@@ -298,7 +298,7 @@ void SubDeviceManager::populate_noc_data() {
             auto translated_start =
                 this->device_->translated_coords_from_logical_coords(core_range.start_coord, CoreType::WORKER);
             auto translated_end = this->device_->translated_coords_from_logical_coords(core_range.end_coord, CoreType::WORKER);
-            uto translated_core_range = CoreRange(translated_start, translated_end);
+            auto translated_core_range = CoreRange(translated_start, translated_end);
             this->noc_mcast_unicast_data_[idx++] =
                 this->device_->get_translated_noc_multicast_encoding(noc_index, translated_core_range);
             this->noc_mcast_unicast_data_[idx++] = core_range.size();
@@ -309,7 +309,7 @@ void SubDeviceManager::populate_noc_data() {
         for (const auto& core_range : eth_cores.ranges()) {
             this->noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
-                auto physical_core = this->device_->translated_coords_from_logical_coords(core, CoreType::ETH);
+                auto translated_core = this->device_->translated_coords_from_logical_coords(core, CoreType::ETH);
                 this->noc_mcast_unicast_data_[idx++] =
                     this->device_->get_translated_noc_unicast_encoding(noc_index, translated_core);
             }

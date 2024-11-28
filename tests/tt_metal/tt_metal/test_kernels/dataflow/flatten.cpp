@@ -8,13 +8,12 @@
 void kernel_main() {
     // Kernel args
     uint32_t src_addr                      = get_arg_val<uint32_t>(0);
-    uint32_t src_noc_x                     = get_arg_val<uint32_t>(1);
-    uint32_t src_noc_y                     = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles_r                   = get_arg_val<uint32_t>(3);
-    uint32_t num_tiles_c                   = get_arg_val<uint32_t>(4);
+    uint32_t src_bank_id                   = get_arg_val<uint32_t>(1);
+    uint32_t num_tiles_r                   = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles_c                   = get_arg_val<uint32_t>(3);
 
     // How many bytes along a row in the original tensor
-    uint32_t num_bytes_per_tensor_row      = get_arg_val<uint32_t>(5);
+    uint32_t num_bytes_per_tensor_row      = get_arg_val<uint32_t>(4);
 
     /*
         Constants
@@ -43,7 +42,7 @@ void kernel_main() {
             uint32_t src_addr_ = src_addr + start_dram_addr_offset_for_tensor_row;
             for (uint32_t k = 0; k < num_tiles_c; k++) {
                 cb_reserve_back(cb_id_in0, 1);
-                uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr_);
+                uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(src_bank_id, src_addr_);
 
                 // Read one row of data
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);

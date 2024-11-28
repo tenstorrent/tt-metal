@@ -74,8 +74,7 @@ int main(int argc, char **argv) {
 
         auto dst_l1_buffer = CreateBuffer(l1_config);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto l1_dst_noc_xy = device->translated_coords_from_logical_coords(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -99,7 +98,7 @@ int main(int argc, char **argv) {
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_1.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -133,8 +132,7 @@ int main(int argc, char **argv) {
             unary_reader_kernel,
             core,
             {src_dram_buffer->address(),
-            (std::uint32_t)dram_src_noc_xy.x,
-            (std::uint32_t)dram_src_noc_xy.y,
+            0,
             num_tiles});
 
         tt_metal::SetRuntimeArgs(

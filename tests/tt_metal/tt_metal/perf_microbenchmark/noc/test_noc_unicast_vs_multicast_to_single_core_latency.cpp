@@ -22,7 +22,7 @@ void measure_latency(const string& kernel_name) {
 
     TT_ASSERT(producer_logical_core != consumer_logical_core, "Producer and consumer core are {}. They should not be the same!", producer_logical_core.str());
 
-    auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
+    auto first_worker_physical_core = device->translated_worker_core_from_logical_core({0, 0});
 
     std::map<string, string> defines = {
         {"WORKER_NOC_X", std::to_string(first_worker_physical_core.x)},

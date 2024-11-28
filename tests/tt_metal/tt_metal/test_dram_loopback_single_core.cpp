@@ -60,9 +60,6 @@ int main(int argc, char **argv) {
         auto output_dram_buffer = CreateBuffer(dram_config);
         uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
         auto dram_copy_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
@@ -89,11 +86,9 @@ int main(int argc, char **argv) {
             core,
             {l1_buffer_addr,
             input_dram_buffer_addr,
-            (std::uint32_t)input_dram_noc_xy.x,
-            (std::uint32_t)input_dram_noc_xy.y,
+            0,
             output_dram_buffer_addr,
-            (std::uint32_t)output_dram_noc_xy.x,
-            (std::uint32_t)output_dram_noc_xy.y,
+            0,
             dram_buffer_size});
 
 

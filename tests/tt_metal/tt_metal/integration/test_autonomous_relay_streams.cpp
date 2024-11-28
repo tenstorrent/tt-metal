@@ -97,8 +97,8 @@ std::vector<uint32_t> get_sender_writer_rt_args(
         sender_stream_config.tile_header_buffer_addr,
         relay_stream_config.tile_header_num_msgs,
 
-        static_cast<uint32_t>(device->worker_core_from_logical_core(relay_core).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(relay_core).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(relay_core).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(relay_core).y),
         relay_stream_id,
         sender_noc_id,
 
@@ -107,8 +107,8 @@ std::vector<uint32_t> get_sender_writer_rt_args(
         relay_stream_config.tile_header_buffer_addr,
 
         relay_done_semaphore,
-        static_cast<uint32_t>(device->worker_core_from_logical_core(other_relay_to_notify_when_done).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(other_relay_to_notify_when_done).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(other_relay_to_notify_when_done).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(other_relay_to_notify_when_done).y),
         other_relay_done_semaphore,
 
         static_cast<uint32_t>(sender_wait_for_receiver_semaphore),
@@ -139,13 +139,13 @@ std::vector<uint32_t> get_relay_rt_args(
         static_cast<uint32_t>(relay_stream_config.tile_header_num_msgs),
 
         // noc0 address
-        static_cast<uint32_t>(device->worker_core_from_logical_core(sender_core).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(sender_core).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(sender_core).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(sender_core).y),
         static_cast<uint32_t>(relay_stream_id),
         static_cast<uint32_t>(sender_noc_id),
 
-        static_cast<uint32_t>(device->worker_core_from_logical_core(receiver_core).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(receiver_core).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(receiver_core).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(receiver_core).y),
         static_cast<uint32_t>(relay_stream_id),
         static_cast<uint32_t>(receiver_noc_id),
         static_cast<uint32_t>(receiver_stream_config.buffer_addr),
@@ -180,8 +180,8 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
         static_cast<uint32_t>(receiver_stream_config.buffer_size),
         static_cast<uint32_t>(receiver_stream_config.tile_header_buffer_addr),
         static_cast<uint32_t>(receiver_stream_config.tile_header_num_msgs),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(relay_core).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(relay_core).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(relay_core).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(relay_core).y),
         static_cast<uint32_t>(relay_stream_id),
         static_cast<uint32_t>(receiver_noc_id),
         static_cast<uint32_t>(relay_stream_config.buffer_addr),
@@ -189,12 +189,12 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
         static_cast<uint32_t>(relay_stream_config.tile_header_buffer_addr),
 
         static_cast<uint32_t>(relay_done_semaphore),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(other_relay_core_to_notify_when_done).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(other_relay_core_to_notify_when_done).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(other_relay_core_to_notify_when_done).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(other_relay_core_to_notify_when_done).y),
         other_relay_done_semaphore,
 
-        static_cast<uint32_t>(device->worker_core_from_logical_core(sender_core).x),
-        static_cast<uint32_t>(device->worker_core_from_logical_core(sender_core).y),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(sender_core).x),
+        static_cast<uint32_t>(device->translated_worker_core_from_logical_core(sender_core).y),
         sender_receiver_semaphore,
         remote_src_start_phase_id};
 }
@@ -244,23 +244,23 @@ void build_and_run_autonomous_stream_test(
     log_trace(
         tt::LogTest,
         "sender_core: x={}, y={}",
-        device->physical_core_from_logical_core(sender_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(sender_core, CoreType::WORKER).y);
+        device->translated_coords_from_logical_coords(sender_core, CoreType::WORKER).x,
+        device->translated_coords_from_logical_coords(sender_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "first_relay_core: x={}, y={}",
-        device->physical_core_from_logical_core(first_relay_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(first_relay_core, CoreType::WORKER).y);
+        device->translated_coords_from_logical_coords(first_relay_core, CoreType::WORKER).x,
+        device->translated_coords_from_logical_coords(first_relay_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "second_relay_core: x={}, y={}",
-        device->physical_core_from_logical_core(second_relay_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(second_relay_core, CoreType::WORKER).y);
+        device->translated_coords_from_logical_coords(second_relay_core, CoreType::WORKER).x,
+        device->translated_coords_from_logical_coords(second_relay_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "receiver_core: x={}, y={}",
-        device->physical_core_from_logical_core(receiver_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(receiver_core, CoreType::WORKER).y);
+        device->translated_coords_from_logical_coords(receiver_core, CoreType::WORKER).x,
+        device->translated_coords_from_logical_coords(receiver_core, CoreType::WORKER).y);
 
     // Input DRAM buffer creation
     uint32_t buffer_size_bytes = num_messages * page_size;

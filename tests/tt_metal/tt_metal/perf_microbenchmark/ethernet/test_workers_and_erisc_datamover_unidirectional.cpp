@@ -250,7 +250,7 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tchip0_num_workers_on_channel: {}", chip0_num_workers_on_channel);
         for (uint32_t w = 0; w < chip0_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
-            auto worker_noc_coord = sender_device->physical_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
+            auto worker_noc_coord = sender_device->translated_coords_from_logical_coords(chip0_sender_worker_core, CoreType::WORKER);
             chip0_edm_args.push_back(KernelXY{
                 static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                                          .to_uint32());
@@ -408,7 +408,7 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tchip1_num_workers_on_channel: {}", chip1_num_workers_on_channel);
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
-            auto worker_noc_coord = receiver_device->physical_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
+            auto worker_noc_coord = receiver_device->translated_coords_from_logical_coords(chip1_sender_noc_xy, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
@@ -459,7 +459,7 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tnum_workers: {}", chip1_num_workers_on_channel);
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
-            auto worker_noc_coord = receiver_device->physical_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
+            auto worker_noc_coord = receiver_device->translated_coords_from_logical_coords(chip1_receiver_worker_core, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());

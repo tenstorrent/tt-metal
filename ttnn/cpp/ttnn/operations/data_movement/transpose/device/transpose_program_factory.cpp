@@ -1028,12 +1028,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
 
             if (worker_x_logical < num_cores_x and worker_y_logical < num_cores_y) {
-<<<<<<< HEAD
                 auto core_physical =
-                    device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
-=======
-                auto core_physical = device->translated_worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
->>>>>>> #0: WIP Make ops use translated coords
+                    device->translated_worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
 
                 read_cores_indices.push_back(shard_id);
                 read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
