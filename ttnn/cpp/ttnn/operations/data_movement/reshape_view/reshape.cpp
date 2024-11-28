@@ -343,13 +343,13 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
     // Just edit shape if shape has a 0 dimension
     if (tensor.volume() == 0) {
-        TT_ASSERT(shape.volume() == 0 && "tensor's volume is 0, but shape's volume is not 0");
-        TT_ASSERT((tensor.storage_type() != StorageType::MULTI_DEVICE &&
-                   tensor.storage_type() != StorageType::MULTI_DEVICE_HOST) &&
-                   "Reshaping a multi-device tensor with 0 volume is not supported");
+        TT_FATAL(shape.volume() == 0 , "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL((tensor.storage_type() != StorageType::MULTI_DEVICE &&
+                  tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+                  "Reshaping a multi-device tensor with 0 volume is not supported");
         return tensor.reshape(shape);
     }
-    TT_ASSERT(shape.volume() != 0 && "tensor's volume is not 0, but shape's volume is 0");
+    TT_FATAL(shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
     bool this_is_view =
         (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
