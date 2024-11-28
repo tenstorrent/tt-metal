@@ -1,5 +1,6 @@
 set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_free_list_allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_free_list_opt_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_allocation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_creation.cpp

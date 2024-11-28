@@ -63,7 +63,7 @@ public:
 
     virtual Statistics get_statistics() const = 0;
 
-    virtual void dump_blocks(std::ofstream& out) const = 0;
+    virtual void dump_blocks(std::ostream& out) const = 0;
 
     virtual void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) = 0;
 
