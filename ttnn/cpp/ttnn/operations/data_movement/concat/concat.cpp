@@ -317,7 +317,7 @@ ttnn::Tensor ConcatOperation::invoke(
         return shape_out;
     };
 
-    ttnn::SimpleShape logical_output_shape = compute_output_shape(input_tensors);
+    ttnn::SimpleShape logical_output_shape = compute_output_shape(input_tensors, dim);
 
     auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, mem_config, logical_output_shape);
     auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, mem_config);
