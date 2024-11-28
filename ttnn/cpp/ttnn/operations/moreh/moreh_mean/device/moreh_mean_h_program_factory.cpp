@@ -68,12 +68,12 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         all_cores,
         data_format,
         {
-            {CB::c_in0, num_input_tiles},                        // input
-            {CB::c_in2, 1},                                      // scaler
-            {CB::c_in3, 1},                                      // mask
-            {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  //
-            {CB::c_intermed1, 1},                                //
-            {CB::c_out0, 1},                                     // output
+            {CBIndex::c_0, num_input_tiles},                   // input
+            {CBIndex::c_2, 1},                                 // scaler
+            {CBIndex::c_3, 1},                                 // mask
+            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},  //
+            {CBIndex::c_25, 1},                                //
+            {CBIndex::c_16, 1},                                // output
         });
 
     float scaler = 1.0f / origin_H;
@@ -95,7 +95,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         reader_defines);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};
+        static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
 
     const auto writer_kernel_id = CreateWriteKernel(
         program,
@@ -113,7 +113,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
-        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                      // Ht
@@ -125,7 +125,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         units_per_core_group_2,  // Wt
         1,                       // NC
         origin_H};
-
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,

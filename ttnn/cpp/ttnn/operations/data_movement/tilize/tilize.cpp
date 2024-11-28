@@ -8,12 +8,14 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ExecuteTilize::invoke(
     uint8_t queue_id,
-    const ttnn::Tensor &input_tensor,
-    const std::optional<MemoryConfig> &memory_config,
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     return operation::run(
@@ -29,8 +31,8 @@ ttnn::Tensor ExecuteTilize::invoke(
 }
 
 ttnn::Tensor ExecuteTilize::invoke(
-    const ttnn::Tensor &input_tensor,
-    const std::optional<MemoryConfig> &memory_config,
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     return invoke(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);

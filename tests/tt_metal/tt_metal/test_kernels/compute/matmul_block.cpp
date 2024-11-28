@@ -21,9 +21,9 @@ void MAIN {
 #if (WITH_DT == 1)
     // Intentionally wrong init with different data formats
     mm_block_init(
-        tt::CB::c_in0,
-        tt::CB::c_in2,
-        tt::CB::c_out0,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_2,
+        tt::CBIndex::c_16,
         false,
         dst_tile_cols - 1,
         dst_tile_rows - 1,
@@ -31,9 +31,9 @@ void MAIN {
     );
     // Corrected init short with dt
     mm_block_init_short_with_dt(
-        tt::CB::c_in0,
-        tt::CB::c_in1,
-        tt::CB::c_in2,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_1,
+        tt::CBIndex::c_2,
         false,
         dst_tile_cols,
         dst_tile_rows,
@@ -42,9 +42,9 @@ void MAIN {
 #elif (WITH_DT == 0)
     // Intentionally wrong init with same data formats
     mm_block_init(
-        tt::CB::c_in1,
-        tt::CB::c_in0,
-        tt::CB::c_out0,
+        tt::CBIndex::c_1,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_16,
         false,
         dst_tile_cols - 1,
         dst_tile_rows - 1,
@@ -52,8 +52,8 @@ void MAIN {
     );
     // Corrected init short
     mm_block_init_short(
-        tt::CB::c_in0,
-        tt::CB::c_in1,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_1,
         false,
         dst_tile_cols,
         dst_tile_rows,
@@ -62,9 +62,9 @@ void MAIN {
 #endif
 #elif (TEST_INIT_SHORT == 0)
         mm_block_init(
-        tt::CB::c_in0,
-        tt::CB::c_in1,
-        tt::CB::c_out0,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_1,
+        tt::CBIndex::c_16,
         false,
         dst_tile_cols,
         dst_tile_rows,
@@ -75,12 +75,12 @@ void MAIN {
     acquire_dst();
     for(uint32_t b=0;b<block_cnt;++b)
     {
-        cb_wait_front(tt::CB::c_in0, in0_block_tile_cnt);
-        cb_wait_front(tt::CB::c_in1, in1_block_tile_cnt);
+        cb_wait_front(tt::CBIndex::c_0, in0_block_tile_cnt);
+        cb_wait_front(tt::CBIndex::c_1, in1_block_tile_cnt);
 
         matmul_block(
-            tt::CB::c_in0,
-            tt::CB::c_in1,
+            tt::CBIndex::c_0,
+            tt::CBIndex::c_1,
             0,
             0,
             0,
@@ -90,17 +90,17 @@ void MAIN {
             block_tile_dim
         );
 
-        cb_pop_front(tt::CB::c_in0, in0_block_tile_cnt);
-        cb_pop_front(tt::CB::c_in1, in1_block_tile_cnt);
+        cb_pop_front(tt::CBIndex::c_0, in0_block_tile_cnt);
+        cb_pop_front(tt::CBIndex::c_1, in1_block_tile_cnt);
     }
 
     // Pack out
-    cb_reserve_back(tt::CB::c_out0, out_block_tile_cnt);
+    cb_reserve_back(tt::CBIndex::c_16, out_block_tile_cnt);
     for(uint32_t i=0 ; i<out_block_tile_cnt;++i)
     {
-        pack_tile(i, tt::CB::c_out0);
+        pack_tile(i, tt::CBIndex::c_16);
     }
-    cb_push_back(tt::CB::c_out0, out_block_tile_cnt);
+    cb_push_back(tt::CBIndex::c_16, out_block_tile_cnt);
 
     release_dst();
 }

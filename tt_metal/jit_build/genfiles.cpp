@@ -8,14 +8,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <utility>
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
+#include "jit_build/data_format.hpp"
 #include "jit_build/settings.hpp"
 
-#include "tt_metal/hw/inc/circular_buffer.h"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 
 namespace fs = std::filesystem;
 
@@ -151,61 +153,8 @@ void jit_build_genfiles_triscs_src(
     });
 }
 
-static std::pair<vector<DataFormat>, vector<DataFormat>> extend_unpack_data_format_vectors_to_all_cbs(
-    const vector<DataFormat>& src_formats, const vector<DataFormat>& dst_formats) {
-    // for the purposes of consistency and brevity of the LLK code that uses these arrays,
-    // extend unpack data formats to all 32 CBs
-    // [out0...out7] is missing from the vector, insert invalid (not used by the unpacker)
 
-    vector<DataFormat> src_formats_all_cbs;
-    vector<DataFormat> dst_formats_all_cbs;
-
-    // copy inputs and params
-    for (int i = 0; i < 16; i++) {
-        src_formats_all_cbs.push_back(src_formats[i]);
-        dst_formats_all_cbs.push_back(dst_formats[i]);
-    }
-
-    // insert invalid data format for output [out0...out7]
-    for (int i = 0; i < 8; i++) {
-        src_formats_all_cbs.push_back(DataFormat::Invalid);
-        dst_formats_all_cbs.push_back(DataFormat::Invalid);
-    }
-
-    // copy intermediates
-    for (int i = 0; i < 8; i++) {
-        src_formats_all_cbs.push_back(src_formats[16 + i]);
-        dst_formats_all_cbs.push_back(dst_formats[16 + i]);
-    }
-
-    return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
-}
-
-static std::pair<vector<DataFormat>, vector<DataFormat>> extend_pack_data_format_vectors_to_all_cbs(
-    const vector<DataFormat>& src_formats, const vector<DataFormat>& dst_formats) {
-    // for the purposes of consistency and brevity of the LLK code that uses these arrays,
-    // extend pack data formats to all 32 CBs
-    // [in0...in7, param0...param7] are missing from the vector, insert invalid (not used by the unpacker)
-
-    vector<DataFormat> src_formats_all_cbs;
-    vector<DataFormat> dst_formats_all_cbs;
-
-    // insert invalid for inputs and params
-    for (int i = 0; i < 16; i++) {
-        src_formats_all_cbs.push_back(DataFormat::Invalid);
-        dst_formats_all_cbs.push_back(DataFormat::Invalid);
-    }
-
-    // copy outputs and intermediates
-    for (int i = 0; i < 16; i++) {
-        src_formats_all_cbs.push_back(src_formats[i]);
-        dst_formats_all_cbs.push_back(dst_formats[i]);
-    }
-
-    return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
-}
-
-static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
+static std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
     std::string formats_string = "";
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
@@ -214,7 +163,7 @@ static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
 }
 
 static std::string create_formats_array_string(
-    std::string array_type, std::string array_name, int array_size, std::string array_data) {
+    const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
     stringstream str_stream;
 
     str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << endl;
@@ -227,32 +176,21 @@ static std::string create_formats_array_string(
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
 generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<UnpackToDestMode> unpack_to_dest_mode) {
 
-    vector<DataFormat> src_formats = tt::get_unpack_src_formats(
-        desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
+    vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
-        desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, unpack_to_dest_mode);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
 
-    TT_ASSERT(
-        src_formats.size() == 24 && dst_formats.size() == 24,
-        "There must be 8 unpack src/dst formats for each input, param, and intermediate operands.");
+    TT_ASSERT(src_formats.size() == NUM_CIRCULAR_BUFFERS);
+    TT_ASSERT(dst_formats.size() == NUM_CIRCULAR_BUFFERS);
 
-    vector<DataFormat> src_formats_all_cbs;
-    vector<DataFormat> dst_formats_all_cbs;
-    tie(src_formats_all_cbs, dst_formats_all_cbs) =
-        extend_unpack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
-
-    TT_ASSERT(src_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
-    TT_ASSERT(dst_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
-
-    return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
+    return std::make_pair(src_formats, dst_formats);
 }
 
 static void emit_unpack_data_formats(
-    std::string unpack_data_format_descs,
-    std::vector<DataFormat> src_formats_all_cbs,
-    std::vector<DataFormat> dst_formats_all_cbs) {
+    const std::string& unpack_data_format_descs,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs) {
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
     ofstream file_stream;
     file_stream.open(unpack_data_format_descs);
@@ -261,22 +199,19 @@ static void emit_unpack_data_formats(
         "constexpr std::int32_t",
         "unpack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(src_formats_all_cbs));
+        data_format_vec_to_string(std::move(src_formats_all_cbs)));
     file_stream << create_formats_array_string(
         "constexpr std::int32_t",
         "unpack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(dst_formats_all_cbs));
+        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
     file_stream.close();
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
     tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool bfp8_pack_precise, const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.input_buf_dataformat_arr,
-        desc.param_buf_dataformat_arr,
-        desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr,
+        desc.buf_dataformat_arr,
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
         bfp8_pack_precise,
@@ -284,30 +219,18 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
         arch);
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.input_buf_dataformat_arr,
-        desc.param_buf_dataformat_arr,
-        desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr);
+        desc.buf_dataformat_arr);
 
-    TT_ASSERT(
-        src_formats.size() == 16 && dst_formats.size() == 16,
-        "There must be 8 pack src/dst formats for each output, and intermediate operands.");
+    TT_ASSERT(src_formats.size() == NUM_CIRCULAR_BUFFERS);
+    TT_ASSERT(dst_formats.size() == NUM_CIRCULAR_BUFFERS);
 
-    vector<DataFormat> src_formats_all_cbs;
-    vector<DataFormat> dst_formats_all_cbs;
-    tie(src_formats_all_cbs, dst_formats_all_cbs) =
-        extend_pack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
-
-    TT_ASSERT(src_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
-    TT_ASSERT(dst_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
-
-    return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
+    return std::make_pair(src_formats, dst_formats);
 }
 
 static void emit_pack_data_formats(
-    std::string pack_data_format_descs,
-    std::vector<DataFormat> src_formats_all_cbs,
-    std::vector<DataFormat> dst_formats_all_cbs) {
+    const std::string& pack_data_format_descs,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
     file_stream << "#pragma once\n\n";
@@ -315,12 +238,12 @@ static void emit_pack_data_formats(
         "constexpr unsigned char",
         "pack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(src_formats_all_cbs));
+        data_format_vec_to_string(std::move(src_formats_all_cbs)));
     file_stream << create_formats_array_string(
         "constexpr unsigned char",
         "pack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(dst_formats_all_cbs));
+        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
 
     // budabackend-style format array
     // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16,
@@ -368,31 +291,16 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
     // assuming all cores within a op have the same desc
     tt_hlk_desc& desc = options.hlk_desc;
 
-    // Determine what the packformat should be
-    DataFormat pack_format =
-        tt::get_pack_data_format(desc.output_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
-
     // Determine dst format under ambiguous conditions (either or both l1 input & output formats are Float32)
-    DataFormat unpack_conditional_dst_format = DataFormat::Invalid;
-    if (pack_format == DataFormat::Float32) {
-        ExpPrecision unpack_exp_prec = tt::get_data_exp_precision(desc.input_buf_dataformat_arr);
-        unpack_conditional_dst_format =
-            (unpack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
-    } else {
-        ExpPrecision pack_exp_prec = tt::get_data_exp_precision(desc.output_buf_dataformat_arr);
-        unpack_conditional_dst_format =
-            (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
-    }
+    ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
+    DataFormat unpack_conditional_dst_format = (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
 
-    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en) {
+    if (options.fp32_dest_acc_en && (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
-    tt::check_valid_in_out_data_formats(
-        desc.input_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr,
-        desc.param_buf_dataformat_arr,
-        desc.intermediate_buf_dataformat_arr);
+    tt::check_valid_formats_in_out_data_formats(
+        desc.buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
     tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode);
@@ -422,7 +330,7 @@ static std::string array_to_string(const uint32_t arr[]) {
     return formats_string;
 }
 
-static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
+static void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(unpack_tile_dims_descs);
     file_stream << "#pragma once\n\n";
@@ -436,7 +344,7 @@ static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_des
     file_stream.close();
 }
 
-static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
+static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(pack_tile_dims_descs);
     file_stream << "#pragma once\n\n";

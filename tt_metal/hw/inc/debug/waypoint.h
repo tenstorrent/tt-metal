@@ -31,8 +31,8 @@ constexpr uint32_t helper(const char (&s)[N]) {
     return fold(s, std::make_index_sequence<N - 1>{});
 }
 
-template<uint32_t x>
-inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t *debug_waypoint) {
+template <uint32_t x>
+inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
     *debug_waypoint = x;
 }
 
@@ -49,7 +49,7 @@ inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t *debug_waypoint) {
 #endif
 
 #define WATCHER_WAYPOINT_MAILBOX \
-    (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[WATCHER_WAYPOINT_MAILBOX_OFFSET])
+    (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[WATCHER_WAYPOINT_MAILBOX_OFFSET])
 
 #define WAYPOINT(x) write_debug_waypoint<helper(x)>(WATCHER_WAYPOINT_MAILBOX)
 

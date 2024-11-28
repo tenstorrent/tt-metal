@@ -464,10 +464,10 @@ struct Shape {
     explicit Shape(const std::initializer_list<uint32_t> shape, const std::initializer_list<uint32_t> shape_with_tile_padding) :
         value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
-    explicit Shape(tt::stl::Span<const uint32_t> shape, const Padding &padding) :
+    explicit Shape(tt::stl::Span<const uint32_t> shape, const tt::tt_metal::Padding &padding) :
         value{tt::tt_metal::LegacyShape{shape, padding}} {}
 
-    explicit Shape(const Shape &shape, const Padding &padding) :
+    explicit Shape(const Shape &shape, const tt::tt_metal::Padding &padding) :
         value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
 
     Shape(const SimpleShape& shape): value{shape.view()} {}

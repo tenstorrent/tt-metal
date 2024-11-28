@@ -107,13 +107,13 @@ FORCE_INLINE void sum(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     cb_pop_front(cb_b, 1);
 }
 
-FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out) {
+FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out, uint32_t num_input_units = 1) {
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
     copy_tile_to_dst_init_short();
 
-    cb_wait_front(cb_in, 1);
+    cb_wait_front(cb_in, num_input_units);
     cb_reserve_back(cb_out, 1);
 
     tile_regs_acquire();
@@ -150,11 +150,16 @@ void MAIN {
     const uint32_t num_chunks_per_row = get_arg_val<uint32_t>(3);
 
     binary_op_init_common(cb_a_in, cb_bx_in);
+    const uint32_t num_tiles_last_chunk = total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK == 0
+                                              ? NUM_TILES_IN_TILIZED_CHUNK
+                                              : total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK;
 
     // Fill initial hidden states
     for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_chunks_per_row; tilized_chunk_idx++) {
-        copy(cb_h_in, cb_h_acc);
-        cb_pop_front(cb_h_in, 1);
+        const uint32_t remaining_tiles_in_chunk =
+            tilized_chunk_idx == num_chunks_per_row - 1 ? num_tiles_last_chunk : NUM_TILES_IN_TILIZED_CHUNK;
+        copy(cb_h_in, cb_h_acc, remaining_tiles_in_chunk);
+        cb_pop_front(cb_h_in, remaining_tiles_in_chunk);
     }
 
     // For each row of tiles we want to tilize chunks of 32 tiles to pack the rows into tiles
@@ -167,9 +172,7 @@ void MAIN {
             // If we don't have a full chunk (NUM_TILES_IN_TILIZED_CHUNK tiles) we should figure out how many tiles we
             // have left. This only runs 2-3 tiles per shard so no need to unroll.
             const uint32_t remaining_tiles_in_chunk =
-                tilized_chunk_idx == num_chunks_per_row - 1 && total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK != 0
-                    ? total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK
-                    : NUM_TILES_IN_TILIZED_CHUNK;
+                tilized_chunk_idx == num_chunks_per_row - 1 ? num_tiles_last_chunk : NUM_TILES_IN_TILIZED_CHUNK;
 
             pack_block_rows_into_tiles(cb_a_in, cb_a_tilize_in, remaining_tiles_in_chunk);
             pack_block_rows_into_tiles(cb_bx_in, cb_bx_tilize_in, remaining_tiles_in_chunk);

@@ -21,7 +21,7 @@ void kernel_main() {
   const InterleavedAddrGen<true> dest_addr_gen = {
       .bank_base_address = output_buffer_addr, .page_size = write_page_size};
 
-  auto cb = tt::CB::c_in0;
+  auto cb = tt::CBIndex::c_0;
   for (uint32_t i = 0; i < num_pages; i++) {
     cb_wait_front(cb, 1);
     // NOTE THAT msg_hdr_size is doubled on host side to maintain alignment for DRAM reads/writes in THIS TEST ONLY

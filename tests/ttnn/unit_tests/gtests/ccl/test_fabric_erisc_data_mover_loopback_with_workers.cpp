@@ -8,7 +8,7 @@
 #include <limits>
 #include <random>
 
-#include "device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 #include "gtest/gtest.h"
 // #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
@@ -97,7 +97,7 @@ struct EthLinkBuilder {
 Correctness run_output_check(
     std::vector<uint32_t> const& all_zeros,
     std::vector<uint32_t> const& inputs,
-    std::shared_ptr<Buffer> output_buffer) {
+    const std::shared_ptr<Buffer>& output_buffer) {
     constexpr bool debug_mode = true;
     std::vector<uint32_t> readback_data_vec(all_zeros.size(), 0);  // init to 0 data for easier debug
 
@@ -281,7 +281,7 @@ void generate_sender_worker_kernels(
             info.termination_addr);
     }
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
     log_trace(tt::LogTest, "\tSenderWriter CT Args");
     for (auto const& arg : sender_worker_writer_compile_args) {
         log_trace(tt::LogTest, "\t\t{}", arg);

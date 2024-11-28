@@ -51,12 +51,12 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 2},                                                                  // y
-            {tt::CB::c_in1, 2},                                                                  // dy
-            {tt::CB::c_out0, 2},                                                                 // dx
-            {tt::CB::c_intermed0, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // y * dy
-            {tt::CB::c_intermed1, 2, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // sum(y * dy)
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
+            {tt::CBIndex::c_0, 2},                                                             // y
+            {tt::CBIndex::c_1, 2},                                                             // dy
+            {tt::CBIndex::c_16, 2},                                                            // dx
+            {tt::CBIndex::c_24, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // y * dy
+            {tt::CBIndex::c_25, 2, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // sum(y * dy)
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
         });
 
     // create read/wrtie kernel
@@ -68,10 +68,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     std::map<string, string> writer_defines;
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxBackwardOp::SOFTMAX)
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
         compute_defines["LOG"] = 1;

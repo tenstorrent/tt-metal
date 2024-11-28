@@ -2,20 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import ttnn
 import torch
-import torch.nn as nn
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-from models.demos.llama3.tt.llama_model import LMHead
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
-from typing import Optional
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 
 from models.utility_functions import (
     nearest_32,
@@ -288,8 +283,9 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
 
         h = self.norm(h, mode=mode)
 
-        if mode == "decode":  # h is expected to be interleaved for the lm head
-            h = ttnn.sharded_to_interleaved(h)
+        # TODO: Switch to using dram-sharded LM head and remove this
+        # Note: workaround for sharded_to_interleaved memory corruption (#15113)
+        h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
 
         seq_len = h.shape[2]
         MAX_MM_SEQ_LEN = 1024

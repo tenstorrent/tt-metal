@@ -388,7 +388,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             rot_mats,
         ) = self.copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, rot_mats))
 
-        tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
+        tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
+            tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             B=tokens.shape[0],
@@ -413,7 +414,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         h = self.prepare_inputs_common(position_ids, tokens)
         tt_h = self.configuration.prepare_inputs_ttnn_decode(
             h,
-            ttnn.DRAM_MEMORY_CONFIG,
+            None,  # on_host tensors have no memory_config
             on_host=True,
         )
 
@@ -487,7 +488,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
             return device_tensors
 
-    def transform_decode_inputs_device(self, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
+    def transform_decode_inputs_device(self, tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
         """
         Does any transformations on device tensors which are necessary before ttnn_decode_forward
         """
@@ -495,6 +496,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         S = 1
+
+        tt_h = ttnn.to_memory_config(tt_h, self.configuration.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT)
         tt_xattn_mask = ttnn.reshape(
@@ -528,7 +531,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             ),
         )
 
-        return (tt_xattn_mask, tt_full_text_mask_expand_1NSH)
+        return (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
 
     def process_output_prefill(self, tt_out, B, S):
         padded_seq_len = _get_padded_prefill_seqlen(S)

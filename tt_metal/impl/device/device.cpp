@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
-#include <chrono>
-#include <type_traits>
+#include <thread>
+#include "tt_metal/device.hpp"
+#include "common/core_coord.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -14,7 +15,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
-#include "common/env_lib.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -28,13 +28,14 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
+#include "tt_metal/types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
+    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
     id_(device_id), worker_thread_core(worker_core), completion_queue_reader_core(completion_queue_reader_core), work_executor(worker_core, device_id) {
     ZoneScoped;
     tunnel_device_dispatch_workers_ = {};
@@ -208,7 +209,7 @@ void Device::initialize_cluster() {
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 }
 
-void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {
+void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
     this->next_sub_device_manager_id_ = {0};
     auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap)));
@@ -220,10 +221,11 @@ void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t tr
 
 }
 
-std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {
+std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
+    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -240,13 +242,13 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_type),
+         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_physical_routing_x = soc_desc.worker_log_to_physical_routing_x,
          .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
-         .l1_bank_remap = l1_bank_remap,
+         .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
          .disable_interleaved = false});
@@ -265,17 +267,17 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->storage_only_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
@@ -758,21 +760,14 @@ void Device::clear_l1_state() {
             zero_vec_above_tile_header_buffer,
             eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
 
-        /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
-        std::vector<uint32_t> zero_vec_below_command_q_base(
-            (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
-
-        llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
-        */
     }
     // TODO: clear idle eriscs as well
 }
 
 void Device::configure_kernel_variant(
     Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,
+    const string& path,
+    const std::vector<uint32_t>& compile_args,
     CoreCoord kernel_core,
     CoreCoord kernel_physical_core,
     CoreType dispatch_core_type,
@@ -1824,6 +1819,7 @@ void Device::setup_tunnel_for_remote_devices() {
             uint8_t num_hw_cqs = this->num_hw_cqs_;
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
             CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
             uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             dispatch_worker_build_settings_t settings = {};
@@ -2194,7 +2190,8 @@ void Device::compile_command_queue_programs() {
         uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+            CoreType dispatch_core_type = dispatch_core_config.get_core_type();
             tt_cxy_pair prefetch_core = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
@@ -2930,7 +2927,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     }
 }
 
-bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
+bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
@@ -3064,8 +3061,8 @@ CoreCoord Device::logical_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id_);
-    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_type);
+    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(id_);
+    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
 CoreCoord Device::dram_grid_size() const {
@@ -3664,6 +3661,82 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
 }
+
+size_t v1::GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
+
+size_t v1::GetNumPCIeDevices() { return tt::Cluster::instance().number_of_pci_devices(); }
+
+chip_id_t v1::GetPCIeDeviceID(chip_id_t device_id) {
+    return tt::Cluster::instance().get_associated_mmio_device(device_id);
+}
+
+v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
+    ZoneScoped;
+
+    tt::DevicePool::initialize(
+        {device_id},
+        options.num_hw_cqs,
+        options.l1_small_size,
+        options.trace_region_size,
+        options.dispatch_core_config,
+        options.l1_bank_remap);
+
+    return tt::DevicePool::instance().get_active_device(device_id);
+}
+
+bool v1::CloseDevice(DeviceHandle device) { return v0::CloseDevice(device); }
+
+void v1::DeallocateBuffers(DeviceHandle device) { device->deallocate_buffers(); }
+
+void v1::DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet &worker_cores, bool last_dump) {
+    auto worker_cores_vec = corerange_to_cores(worker_cores);
+    detail::DumpDeviceProfileResults(device, worker_cores_vec, last_dump);
+}
+
+ARCH v1::GetArch(DeviceHandle device) { return device->arch(); }
+
+chip_id_t v1::GetId(DeviceHandle device) { return device->id(); }
+
+int v1::GetNumDramChannels(DeviceHandle device) { return device->num_dram_channels(); }
+
+std::uint32_t v1::GetL1SizePerCore(DeviceHandle device) { return device->l1_size_per_core(); }
+
+CoreCoord v1::GetComputeWithStorageGridSize(DeviceHandle device) { return device->compute_with_storage_grid_size(); }
+
+CoreCoord v1::GetDramGridSize(DeviceHandle device) { return device->dram_grid_size(); }
+
+void v1::EnableProgramCache(DeviceHandle device) { device->enable_program_cache(); }
+
+void v1::DisableAndClearProgramCache(DeviceHandle device) { device->disable_and_clear_program_cache(); }
+
+void v1::PushWork(DeviceHandle device, std::function<void()> work, bool blocking) {
+    device->push_work(std::move(work), blocking);
+}
+
+void v1::Synchronize(DeviceHandle device) { device->synchronize(); }
+
+std::vector<CoreCoord> v1::GetEthernetSockets(DeviceHandle device, chip_id_t connected_chip_id) {
+    return device->get_ethernet_sockets(connected_chip_id);
+}
+
+std::uint32_t v1::GetNumBanks(DeviceHandle device, BufferType buffer_type) { return device->num_banks(buffer_type); }
+
+std::int32_t v1::GetBankOffset(DeviceHandle device, BufferType buffer_type, std::uint32_t bank_id) {
+    return device->bank_offset(buffer_type, bank_id);
+}
+
+tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
+    DeviceHandle device, BufferType buffer_type, CoreCoord logical_core) {
+    return device->bank_ids_from_logical_core(buffer_type, logical_core);
+}
+
+float v1::GetSfpuEps(DeviceHandle device) { return device->sfpu_eps(); }
+
+float v1::GetSfpuNan(DeviceHandle device) { return device->sfpu_nan(); }
+
+float v1::GetSfpuInf(DeviceHandle device) { return device->sfpu_inf(); }
+
+std::size_t v1::GetNumProgramCacheEntries(DeviceHandle device) { return device->num_program_cache_entries(); }
 
 }  // namespace tt_metal
 

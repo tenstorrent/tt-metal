@@ -15,11 +15,11 @@ void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t ublock_size_tiles = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_in0 = tt::CB::c_in0; // Bfp8_b
-    constexpr auto cb_in1 = tt::CB::c_in1; // Bfp16_b
-    constexpr auto cb_in2 = tt::CB::c_in2; // Bfp16_b
-    constexpr auto cb_out0 = tt::CB::c_out0; // Fp32
-    constexpr auto cb_out1 = tt::CB::c_out1; // Bfp8_b
+    constexpr auto cb_in0 = tt::CBIndex::c_0; // Bfp8_b
+    constexpr auto cb_in1 = tt::CBIndex::c_1; // Bfp16_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2; // Bfp16_b
+    constexpr auto cb_out0 = tt::CBIndex::c_16; // Fp32
+    constexpr auto cb_out1 = tt::CBIndex::c_17; // Bfp8_b
 
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);

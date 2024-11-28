@@ -13,7 +13,7 @@
 
 // clang-format off
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/tt_xy_pair.h"
 #include "llrt/tt_memory.h"
 // clang-format on
 
@@ -119,24 +119,6 @@ void wait_until_cores_done(
     chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms = 0);
 
 }  // namespace internal_
-
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
-    uint64_t relo_addr;
-    if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-        // Move addresses in the local memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-    }
-#ifdef NCRISC_HAS_IRAM
-    else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-        // Move addresses in the trisc memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
-    }
-#endif
-    else {
-        relo_addr = addr;
-    }
-    return relo_addr;
-}
 
 }  // namespace llrt
 

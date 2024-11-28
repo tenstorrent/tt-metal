@@ -61,16 +61,16 @@ uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
 For this example, we will also specify the NoC coordinates to pass into the kernel functions as runtime arguments. We will use this to ensure that the kernels will access the data at the correct NoC addresses.
 
 ``` cpp
-constexpr uint32_t src0_cb_index = CB::c_in0;
+constexpr uint32_t src0_cb_index = CBIndex::c_0;
 constexpr uint32_t num_input_tiles = 1;
 CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
 CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-constexpr uint32_t src1_cb_index = CB::c_in1;
+constexpr uint32_t src1_cb_index = CBIndex::c_1;
 CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
 CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-constexpr uint32_t output_cb_index = CB::c_out0;
+constexpr uint32_t output_cb_index = CBIndex::c_16;
 constexpr uint32_t num_output_tiles = 1;
 CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
 CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
@@ -194,7 +194,7 @@ In the compute kernel, a single tile is read from each of the circular buffers c
 ``` cpp
 uint64_t dst_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_addr);
 
-constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
 uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 

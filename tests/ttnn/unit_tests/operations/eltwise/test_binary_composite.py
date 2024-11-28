@@ -269,7 +269,7 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -298,7 +298,7 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -337,7 +337,7 @@ def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -362,7 +362,7 @@ def test_binary_div_scalar_ttnn(accurate_mode, round_mode, input_shapes, value, 
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -1051,5 +1051,42 @@ def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.prelu)
     golden_tensor = golden_function(in_data1, scalar)
+
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 2, 32, 64, 64])),
+        (torch.Size([1, 3, 7, 29, 127])),
+        (torch.Size([1, 3, 2, 32])),
+        (torch.Size([1, 6, 49, 97])),
+        (torch.Size([1, 7, 320])),
+        (torch.Size([1, 49, 321])),
+        (torch.Size([4, 32])),
+        (torch.Size([49, 321])),
+    ),
+)
+@pytest.mark.parametrize(
+    "weight",
+    [
+        [-0.25],
+        [-2.7],
+        [0.45],
+        [6.4],
+        [2],
+        [-1],
+    ],
+)
+@skip_for_grayskull()
+def test_binary_prelu_1D_weight(input_shapes, weight, device):
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.prelu(input_tensor1, weight)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    golden_tensor = golden_function(in_data1, weight)
 
     assert_with_pcc(golden_tensor, output_tensor, 0.999)

@@ -81,14 +81,12 @@ Example::
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = 0}
 
-            );
+    );
 }
 
 }  // namespace detail
 
-void py_module(py::module& module) {
-    detail::bind_global_typecast(module);
-    }
+void py_module(py::module& module) { detail::bind_global_typecast(module); }
 
 }  // namespace copy
 }  // namespace operations

@@ -4,19 +4,20 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
+#include "tt_metal/buffer.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/types.hpp"
 
 #include <algorithm>
 #include <mutex>
-#include <string>
 #include <utility>
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
 #include "tt_stl/reflection.hpp"
 
@@ -460,6 +461,11 @@ DeviceAddr Buffer::aligned_size() const {
     return this->num_dev_pages() * this->aligned_page_size();
 }
 
+DeviceAddr Buffer::aligned_size_per_bank() const {
+    uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
+    return tt::tt_metal::detail::SizeBytesPerBank(this->size_, this->page_size_, num_banks, this->alignment());
+}
+
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
     auto shard_spec = this->shard_spec();
@@ -512,6 +518,22 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 DeviceAddr ShardSpecBuffer::size() const {
     auto shape_in_pages_ = this->shape_in_pages();
     return shape_in_pages_[0] * shape_in_pages_[1];
+}
+
+v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
+
+void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
+
+void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
+    detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});
+}
+
+void v1::ReadFromBuffer(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
+    detail::ReadFromBuffer(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), shard_order);
+}
+
+void v1::ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
+    detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), core_id);
 }
 
 }  // namespace tt_metal

@@ -150,7 +150,7 @@ def run_conv(
         enable_subblock_padding=False,
         output_layout=output_layout,
     )
-    if config_override and "act_block_h" in config_override:
+    if config_override and "act_block_h" in config_override and not auto_shard:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
     if config_override and "act_block_w_div" in config_override:
@@ -516,21 +516,22 @@ def test_conv_features_multi_device(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        (128, 128, 8, 8, 3, 3, 0, 0, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 1),
-        (576, 576, 8, 8, 3, 3, 0, 0, 1),
-        (960, 960, 4, 4, 3, 3, 0, 0, 1),
-        (256, 2048, 8, 8, 3, 3, 1, 1, 1),
-        (512, 2048, 16, 16, 3, 3, 1, 1, 1),
-        (768, 768, 16, 16, 3, 3, 0, 0, 1),
-        (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
-        (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
-        (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
-        (768, 32, 8, 8, 3, 3, 1, 1, 1),
-        (64, 128, 8, 8, 3, 3, 1, 1, 1),
-        (32, 128, 8, 8, 3, 3, 1, 1, 1),
+        (2, 128, 128, 9, 9, 3, 3, 0, 0, 1),
+        (2, 128, 256, 9, 9, 3, 3, 1, 1, 1),
+        (2, 576, 576, 9, 9, 3, 3, 0, 0, 1),
+        (2, 960, 960, 5, 5, 3, 3, 0, 0, 1),
+        (2, 256, 2048, 9, 9, 3, 3, 1, 1, 1),
+        (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
+        (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
+        (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 2),
+        (2, 1280, 2560, 15, 15, 3, 3, 0, 0, 2),
+        (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
+        (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
+        (2, 64, 128, 9, 9, 3, 3, 1, 1, 1),
+        (2, 32, 128, 9, 9, 3, 3, 1, 1, 1),
+        (1, 256, 256, 7, 7, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -546,9 +547,11 @@ def test_conv_features_multi_device(
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+@pytest.mark.parametrize("tilized_input", [True, False], ids=["tilized", "row_major"])
 def test_conv_ws(
     device,
     use_program_cache,
+    batch_size,
     output_channels,
     input_channels,
     input_height,
@@ -563,13 +566,13 @@ def test_conv_ws(
     weights_dtype,
     activations_dtype,
     auto_shard,
+    tilized_input,
 ):
     if device.core_grid.y != 8:
         pytest.skip("Needs 8x8 Grid")
 
     stride_h = stride
     stride_w = stride
-    batch_size = 2
     fp32_accum = True
     packer_l1_acc = True
     deallocate_activation = False
@@ -603,21 +606,17 @@ def test_conv_ws(
         padding=(pad_h, pad_w),
         groups=groups,
     )
-    output_shape_nhwc = [
-        torch_out_golden_tensor.shape[0],
-        torch_out_golden_tensor.shape[2],
-        torch_out_golden_tensor.shape[3],
-        torch_out_golden_tensor.shape[1],
-    ]
 
     reader_patterns_cache = {}
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
+    if tilized_input:
+        tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     if auto_shard and (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         if input_channels == 2048:
@@ -1521,9 +1520,9 @@ def test_sd_conv_wh(
             False,
         ),  # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
         (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}, False),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}, False),
-        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}, False),
+        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 8 * 32}, False),
+        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 8 * 32}, False),
+        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 8 * 32}, False),
     ),
 )
 @pytest.mark.parametrize(

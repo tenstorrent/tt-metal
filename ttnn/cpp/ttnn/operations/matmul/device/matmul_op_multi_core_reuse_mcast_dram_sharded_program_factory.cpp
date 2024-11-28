@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <utility>
 
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -312,7 +313,6 @@ void get_dram_reader_core_coords_wormhole_b0(
 
 void get_dram_reader_core_coords_blackhole(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
     // hardcoded for blackhole
     uint32_t full_grid_size_x = 17;
 
@@ -369,7 +369,8 @@ void get_dram_reader_core_coords_blackhole(
         auto x = coord.x;
 
         // if col is harvested, move core right by 1
-        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and x < (full_grid_size_x - 1)) {
+        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and
+               x < (full_grid_size_x - 1)) {
             x += 1;
         }
 
@@ -420,7 +421,7 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
 
 operation::ProgramWithCallbacks create_program_dram_sharded(
     tt::tt_metal::Device* device,
-    CoreRangeSet all_storage_cores,
+    const CoreRangeSet& all_storage_cores,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -486,7 +487,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
     uint32_t per_core_N_in1_sender = per_core_N_compute;
-    auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
+    auto subblock_hw =
+        bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -511,7 +513,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         per_core_N_compute = out_subblock_w * num_subblock_w_per_core_N;
     }
 
-    log_debug("per_core_M: {}, per_core_N_compute: {}, per_core_N_in1_sender: {}", per_core_M, per_core_N_compute, per_core_N_in1_sender);
+    log_debug(
+        "per_core_M: {}, per_core_N_compute: {}, per_core_N_in1_sender: {}",
+        per_core_M,
+        per_core_N_compute,
+        per_core_N_in1_sender);
     log_debug("out_subblock_h: {}, out_subblock_w: {}", out_subblock_h, out_subblock_w);
 
     uint32_t num_blocks = K / in0_block_w;
@@ -572,7 +578,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     uint32_t num_worker_cores = num_dram_banks;
-    uint32_t num_mcast_cores = num_worker_cores;
 
     // move conflict coord from mcast receiver to mcast sender
     std::vector<CoreCoord> all_storage_cores_vec = corerange_to_cores(all_storage_cores);
@@ -635,6 +640,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t start_core_y = 0;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
+    uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
@@ -696,7 +703,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         // in0/in1 common args
         (std::uint32_t)num_blocks,                                    // num_blocks
         (std::uint32_t)out_block_tiles,                               // out_block_num_tiles
-        (std::uint32_t)per_core_N_compute * output_single_tile_size,          // out_tensor_stride_w_bytes
+        (std::uint32_t)per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
         (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
         (std::uint32_t)per_core_M};
     if (bias_buffer != nullptr) {
@@ -782,8 +789,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in1_per_core_w,     // in1_per_core_w
 
         num_blocks,  // num_blocks
-        1, // out_num_blocks_x
-        1, // out_num_blocks_y
+        1,           // out_num_blocks_x
+        1,           // out_num_blocks_y
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -853,7 +860,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in2_CB_size / in0_single_tile_size,
         in2_CB_size);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
@@ -1049,8 +1056,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
     uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
-    tt::log_debug("per_core_N_storage: {}",per_core_N_storage);
-    tt::log_debug("num_cores_written_back: {}",num_cores_written_back);
+    tt::log_debug("per_core_N_storage: {}", per_core_N_storage);
+    tt::log_debug("num_cores_written_back: {}", num_cores_written_back);
     uint32_t total_tensor_width_written_back = 0;
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
@@ -1084,8 +1091,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         if (per_core_N_in1_sender < per_core_N_storage) {
             if (curr_storage_core_idx < num_cores_written_back) {
                 uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
-                uint32_t per_core_N_reshard_1 =
-                    (remaining_per_core_N_storage > per_core_N_in1_sender) ? per_core_N_in1_sender : remaining_per_core_N_storage;
+                uint32_t per_core_N_reshard_1 = (remaining_per_core_N_storage > per_core_N_in1_sender)
+                                                    ? per_core_N_in1_sender
+                                                    : remaining_per_core_N_storage;
                 uint32_t per_core_N_reshard_2 = per_core_N_in1_sender - per_core_N_reshard_1;
 
                 if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
@@ -1171,7 +1179,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
                     num_cores_write_back++;
 
                     bool increment_worker_core = (worker_core_stride + per_core_N_storage) >= per_core_N_in1_sender;
-                    uint32_t current_worker_stride_total = increment_worker_core ? per_core_N_in1_sender : worker_core_stride + per_core_N_storage;
+                    uint32_t current_worker_stride_total =
+                        increment_worker_core ? per_core_N_in1_sender : worker_core_stride + per_core_N_storage;
                     uint32_t current_worker_write_back_tiles = current_worker_stride_total - worker_core_stride;
 
                     log_debug(
@@ -1207,7 +1216,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_ASSERT(total_tensor_width_written_back <= expected_max_total_width, "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}", expected_max_total_width, total_tensor_width_written_back);
+    TT_ASSERT(
+        total_tensor_width_written_back <= expected_max_total_width,
+        "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}",
+        expected_max_total_width,
+        total_tensor_width_written_back);
 
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
@@ -1254,7 +1267,7 @@ namespace matmul {
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1266,12 +1279,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     bool skip_in0_mcast,
     bool skip_write_back) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
-    auto in0_tile = a.get_tile();
-    auto in1_tile = b.get_tile();
+    auto in0_tile = a.get_tensor_spec().tile();
+    auto in1_tile = b.get_tensor_spec().tile();
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
-    auto in0_tile_shape = a.get_tile().get_tile_shape();
-    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1296,8 +1309,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
 
-    uint32_t in0_single_tile_size = a.get_tile().get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = b.get_tile().get_tile_size(in1_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
@@ -1311,7 +1324,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
     TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
 
-   auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1349,14 +1362,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         in0_block_w,
         per_core_M,
         per_core_N,
-        fused_activation,
+        std::move(fused_activation),
         in0_buffer,
         in1_buffer,
         bias_buffer,
         out_buffer,
         in0_tile,
         in1_tile,
-        bias.has_value() ? bias->get_tile() : output_tile,
+        bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,
@@ -1371,7 +1384,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1391,7 +1404,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
         in0_block_w,
         per_core_M,
         per_core_N,
-        fused_activation,
+        std::move(fused_activation),
         untilize_out,
         skip_compute,
         skip_in0_mcast,

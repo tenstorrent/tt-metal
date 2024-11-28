@@ -10,7 +10,7 @@
  * LLK UNPACK UNTILIZE
  *************************************************************************/
 template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t *unpack_untilize_params) {
+inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack_untilize_params) {
     constexpr bool is_row_pool = false;
     constexpr bool within_face_16x16_transpose = false;
     constexpr StochRndType stoch_rnd_mode = StochRndType::None;

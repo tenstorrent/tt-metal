@@ -31,7 +31,7 @@ void kernel_main() {
         num_pages_per_read_chunk * page_size,
         receiver_read_sem_addr);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     for (uint32_t i = 0; i < total_pages_to_read; i += num_pages_per_read_chunk) {
         bool last_message = (i + num_pages_per_read_chunk) >= total_pages_to_read;

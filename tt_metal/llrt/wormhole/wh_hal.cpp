@@ -5,16 +5,19 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "core_config.h" // ProgrammableCoreType
+#include "core_config.h"  // ProgrammableCoreType
+#include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "noc/noc_parameters.h"
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"
 
 // Reserved DRAM addresses
-// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
+// committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+constexpr static std::uint32_t DRAM_BARRIER_SIZE =
+    ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 namespace tt {
 
@@ -22,8 +25,10 @@ namespace tt_metal {
 
 void Hal::initialize_wh() {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
-    static_assert(static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
-    static_assert(static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
@@ -43,6 +48,19 @@ void Hal::initialize_wh() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
+
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+        if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+            // Move addresses in the local memory range to l1 (copied by kernel)
+            return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
+        } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+            // Move addresses in the NCRISC memory range to l1 (copied by kernel)
+            return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
+        }
+
+        // No relocation needed
+        return addr;
+    };
 }
 
 }  // namespace tt_metal

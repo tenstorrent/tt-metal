@@ -21,8 +21,8 @@
 #include "common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
-#include "third_party/umd/device/xy_pair.h"
+#include "umd/device/tt_soc_descriptor.h"
+#include "umd/device/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "third_party/json/json.hpp"
@@ -231,6 +231,7 @@ class Buffer final {
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
+    DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS

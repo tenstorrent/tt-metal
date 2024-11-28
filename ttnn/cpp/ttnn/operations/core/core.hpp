@@ -43,7 +43,8 @@ ttnn::Tensor allocate_tensor_on_device(
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config);
 
-void copy_host_to_device_tensor(ttnn::Tensor host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+void copy_host_to_device_tensor(
+    const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
 
@@ -65,7 +66,8 @@ uint32_t begin_trace_capture(MeshDevice* device, const uint8_t cq_id = ttnn::Def
 
 void end_trace_capture(MeshDevice* device, const uint32_t tid, const uint8_t cq_id = ttnn::DefaultQueueId);
 
-void execute_trace(MeshDevice* device, const uint32_t tid, const uint8_t cq_id = ttnn::DefaultQueueId, bool blocking = true);
+void execute_trace(
+    MeshDevice* device, const uint32_t tid, const uint8_t cq_id = ttnn::DefaultQueueId, bool blocking = true);
 
 void release_trace(MeshDevice* device, const uint32_t tid);
 
@@ -79,9 +81,11 @@ using operations::core::squeeze_from_4D;
 using operations::core::to_device;
 using operations::core::unsqueeze_to_4D;
 
-constexpr auto to_dtype = ttnn::register_operation_with_auto_launch_op<"ttnn::to_dtype", ttnn::operations::core::ToDtype>();
+constexpr auto to_dtype =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::to_dtype", ttnn::operations::core::ToDtype>();
 constexpr auto to_memory_config =
     ttnn::register_operation_with_auto_launch_op<"ttnn::to_memory_config", ttnn::operations::core::ToMemoryConfig>();
-constexpr auto to_layout = ttnn::register_operation_with_auto_launch_op<"ttnn::to_layout", ttnn::operations::core::ToLayout>();
+constexpr auto to_layout =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::to_layout", ttnn::operations::core::ToLayout>();
 
 }  // namespace ttnn

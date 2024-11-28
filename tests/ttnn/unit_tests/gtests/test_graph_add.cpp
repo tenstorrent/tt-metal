@@ -4,7 +4,7 @@
 
 #include "gtest/gtest.h"
 #include "tt_metal/common/logger.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/core/core.hpp"
