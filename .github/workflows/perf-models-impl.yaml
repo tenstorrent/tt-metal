@@ -15,7 +15,7 @@ jobs:
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
         model-type: [llm_javelin, cnn_javelin, other]
-        include:
+        include: # include used to add a separate test without mingling in above
           - test-info: {name: "N300 Perf tests", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", tracy: true, owner_id: ULMEPM2MA} # Sean Nijjar
             model-type: CCL
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
@@ -36,25 +36,14 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - name: Download profiler build artifact
-        id: download-profiler-artifact
-        if: ${{ matrix.test-info.tracy }}
         uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-info.arch }}_profiler
-        continue-on-error: true
-      - name: Download build artifact
-        id: download-artifact
-        if: ${{ !matrix.test-info.tracy }}
-        uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.test-info.arch }}
       - name: Extract files
-        if: ${{ matrix.test-info.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-info.tracy }}
         run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run performance regressions
         id: performance_tests
-        if: ${{ matrix.test-info.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-info.tracy }}
         timeout-minutes: 70
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
@@ -66,7 +55,7 @@ jobs:
       #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() && (matrix.test-info.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-info.tracy) }}
+        if: ${{ !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
