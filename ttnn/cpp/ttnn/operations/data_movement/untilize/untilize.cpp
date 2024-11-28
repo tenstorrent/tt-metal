@@ -32,7 +32,7 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
             auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
-        .operation = base_untilize});
+        .operation = std::move(base_untilize)});
 }
 
 ttnn::Tensor ExecuteUntilize::invoke(
