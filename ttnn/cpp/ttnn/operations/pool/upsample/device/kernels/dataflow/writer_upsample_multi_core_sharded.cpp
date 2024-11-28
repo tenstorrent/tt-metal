@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-
     uint32_t stick_nbytes = get_arg_val<uint32_t>(0);
     uint32_t in_image_rows_per_core = get_arg_val<uint32_t>(1);
     uint32_t scale_h = get_arg_val<uint32_t>(2);

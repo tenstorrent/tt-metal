@@ -6,11 +6,11 @@
 
 // A helper function to exercise print features.
 inline void print_test_data() {
-    uint8_t  my_uint8  = 101;
+    uint8_t my_uint8 = 101;
     uint16_t my_uint16 = 555;
     uint32_t my_uint32 = 123456;
     uint64_t my_uint64 = 9123456789;
-    int8_t  my_int8  = -17;
+    int8_t my_int8 = -17;
     int16_t my_int16 = -343;
     int32_t my_int32 = -44444;
     int64_t my_int64 = -5123456789;

@@ -39,7 +39,8 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
     TT_FATAL((bshape[0] == 32), "Only batch 32 is supported for group attention matmul!");
 
-    const auto num_cores_used = std::max(ashape[1], tt::constants::TILE_HEIGHT);  // Need at least 32 cores for mcasting KV heads
+    const auto num_cores_used =
+        std::max(ashape[1], tt::constants::TILE_HEIGHT);  // Need at least 32 cores for mcasting KV heads
     TT_FATAL(
         (num_cores_used <= this->compute_with_storage_grid_size.x * this->compute_with_storage_grid_size.y),
         "Compute grid size is too small for group attention matmul! For now, we require at most 1 q_heads per core.");
@@ -119,7 +120,8 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> GroupAttnMatmulDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> GroupAttnMatmulDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
@@ -137,7 +139,8 @@ std::vector<tt::tt_metal::LegacyShape> GroupAttnMatmulDeviceOperation::compute_o
     return {tt::tt_metal::LegacyShape{1, ashape[1], ashape[2], N}};
 }
 
-std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     if (this->output_mem_config.is_sharded()) {
@@ -164,11 +167,11 @@ std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(const 
     } else {
         const auto& input_tensor = input_tensors.at(0);
         return {create_device_tensor(
-                compute_output_shapes(input_tensors).at(0),
-                this->output_dtype,
-                Layout::TILE,
-                input_tensor.device(),
-                this->output_mem_config)};
+            compute_output_shapes(input_tensors).at(0),
+            this->output_dtype,
+            Layout::TILE,
+            input_tensor.device(),
+            this->output_mem_config)};
     }
 }
 
@@ -196,12 +199,19 @@ operation::ProgramWithCallbacks GroupAttnMatmulDeviceOperation::create_program(
         this->compute_kernel_config);
 }
 
-const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensor_b.storage()),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
 
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
         this->transpose_hw,
@@ -221,5 +231,4 @@ const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const
         std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id());
 }
 
-
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::matmul

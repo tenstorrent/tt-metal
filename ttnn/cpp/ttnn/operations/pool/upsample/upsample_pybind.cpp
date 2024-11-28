@@ -44,11 +44,14 @@ void bind_upsample(py::module& module) {
         ttnn::upsample,
         doc,
         ttnn::pybind_arguments_t{
-            py::arg("input_tensor"), py::arg("scale_factor"), py::kw_only(), py::arg("mode") = "nearest",
-            py::arg("memory_config") = std::nullopt, py::arg("compute_kernel_config") = std::nullopt});
+            py::arg("input_tensor"),
+            py::arg("scale_factor"),
+            py::kw_only(),
+            py::arg("mode") = "nearest",
+            py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 
-
-} //detail
+}  // namespace detail
 void py_module(py::module& module) { detail::bind_upsample(module); }
-} //namespace ttnn::operations::upsample
+}  // namespace ttnn::operations::upsample

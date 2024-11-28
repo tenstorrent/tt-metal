@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -12,7 +12,7 @@
 namespace tt {
 namespace tt_metal::detail {
 
-void CloseDevices(const std::map<chip_id_t, Device *>& devices);
+void CloseDevices(const std::map<chip_id_t, Device*>& devices);
 
 }  // namespace tt_metal::detail
 
@@ -20,15 +20,15 @@ using Device = tt_metal::Device;
 class DevicePool {
     friend Device;
     friend tt_metal::v1::DeviceHandle;
-    friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, Device *>& devices);
+    friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, Device*>& devices);
 
-   public:
-    DevicePool &operator=(const DevicePool &) = delete;
-    DevicePool &operator=(DevicePool &&other) noexcept = delete;
-    DevicePool(const DevicePool &) = delete;
-    DevicePool(DevicePool &&other) noexcept = delete;
+public:
+    DevicePool& operator=(const DevicePool&) = delete;
+    DevicePool& operator=(DevicePool&& other) noexcept = delete;
+    DevicePool(const DevicePool&) = delete;
+    DevicePool(DevicePool&& other) noexcept = delete;
 
-    static DevicePool &instance() noexcept {
+    static DevicePool& instance() noexcept {
         TT_ASSERT(_inst != nullptr, "Trying to get DevicePool without initializing it");
         return *_inst;
     }
@@ -38,18 +38,19 @@ class DevicePool {
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
-        tt_metal::DispatchCoreType dispatch_core_type,
+        const tt_metal::DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
 
     tt_metal::v1::DeviceHandle get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::v1::DeviceHandle> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
-    void close_devices(const std::vector<Device *> &devices);
+    void close_devices(const std::vector<Device*>& devices);
     bool is_device_active(chip_id_t id) const;
     void register_worker_thread_for_device(tt_metal::v1::DeviceHandle device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(tt_metal::v1::DeviceHandle device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
-   private:
+
+private:
     ~DevicePool();
     DevicePool();
     uint8_t num_hw_cqs;
@@ -76,7 +77,7 @@ class DevicePool {
     void activate_device(chip_id_t id);
     void initialize_device(tt_metal::v1::DeviceHandle dev) const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
-    static DevicePool *_inst;
+    static DevicePool* _inst;
 
     // TODO remove with v0
     tt_metal::v1::DeviceHandle get_handle(Device* device) const;

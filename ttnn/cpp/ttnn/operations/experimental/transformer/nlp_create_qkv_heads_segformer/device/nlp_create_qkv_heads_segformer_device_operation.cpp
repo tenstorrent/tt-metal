@@ -17,38 +17,50 @@ void NlpCreateHeadsSegformerDeviceOperation::validate(const std::vector<Tensor>&
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(
+        input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
     TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
     TT_FATAL(input_shape[3] % tt::constants::TILE_HEIGHT == 0, "Error");
-    //TT_FATAL((input_shape == tt::tt_metal::LegacyShape({input_shape[0], 1, input_shape[2], 2304})), "Unsupported input shape");
+    // TT_FATAL((input_shape == tt::tt_metal::LegacyShape({input_shape[0], 1, input_shape[2], 2304})), "Unsupported
+    // input shape");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NlpCreateHeadsSegformerDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> NlpCreateHeadsSegformerDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
-    const auto head_dim = 32; // head_dim is hard-coded = 32
-    auto num_heads = input_shape[3] / tt::constants::TILE_HEIGHT; // head_dim is hard-coded = 32
-    output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim}, (tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim}, (tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim}};
-    //output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim},  };
+    const auto head_dim = 32;                                      // head_dim is hard-coded = 32
+    auto num_heads = input_shape[3] / tt::constants::TILE_HEIGHT;  // head_dim is hard-coded = 32
+    output_shape_vec = {
+        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim},
+        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim},
+        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim}};
+    // output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim},  };
 
     return output_shape_vec;
 }
 
-std::vector<Tensor> NlpCreateHeadsSegformerDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> NlpCreateHeadsSegformerDeviceOperation::create_output_tensors(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
         TT_ASSERT(false);
         return {};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(
+            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
 }
 
-operation::ProgramWithCallbacks NlpCreateHeadsSegformerDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks NlpCreateHeadsSegformerDeviceOperation::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 

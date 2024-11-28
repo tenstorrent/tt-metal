@@ -8,7 +8,7 @@
 #include <cstdint>
 
 namespace tt::fabric {
-enum BlockingMode: uint8_t {
+enum BlockingMode : uint8_t {
     //
     BUSY_WAIT_BLOCKING,
 

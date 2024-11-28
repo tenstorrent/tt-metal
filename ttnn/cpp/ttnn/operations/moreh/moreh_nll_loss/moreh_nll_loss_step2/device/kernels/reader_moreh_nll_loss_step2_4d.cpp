@@ -144,9 +144,8 @@ void kernel_main() {
 
         cb_push_back(cb_tmp_input, onetile);
         cb_pop_front(cb_target, onetile);
-
     }
 #if defined(WEIGHT)
-        cb_pop_front(cb_weight, weight_num_tile);
+    cb_pop_front(cb_weight, weight_num_tile);
 #endif
 }

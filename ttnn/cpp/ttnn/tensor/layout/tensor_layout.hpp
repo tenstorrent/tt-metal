@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "alignment.hpp"
 #include "size.hpp"
 #include "page_config.hpp"
@@ -18,15 +17,20 @@ namespace tt::tt_metal {
 using Strides = std::vector<size_t>;
 
 // TensorLayout describes how a tensor is laid out in memory
-// It takes datatype, layout (eg. TILE vs. RM), memory (eg. DRAM vs. L1), sharding (ie. how you want to cut your logical shape)
-// And provides information required to physically lay out the tensor in memory
+// It takes datatype, layout (eg. TILE vs. RM), memory (eg. DRAM vs. L1), sharding (ie. how you want to cut your logical
+// shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
-    // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a constructor
+    // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
+    // constructor
     [[deprecated("Use of Legacy Padded Shape is deprecated")]]
-    static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape);
+    static TensorLayout fromLegacyPaddedShape(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const ttnn::Shape& legacy_shape);
 
     Layout get_layout() const { return page_config_.get_layout(); }
     PageConfig get_page_config() const { return page_config_; }
@@ -67,7 +71,8 @@ public:
 
 private:
     // Private to not expose alignment parameter to the public API
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+    TensorLayout(
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     void initialize_alignment();
     void validate_alignment() const;
@@ -82,4 +87,4 @@ private:
     Alignment alignment_;
 };
 
-} // tt::tt_metal
+}  // namespace tt::tt_metal

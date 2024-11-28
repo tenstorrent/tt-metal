@@ -6,20 +6,16 @@
 #include "llk_sfpu_types.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 
-template <bool APPROXIMATE, class F, class ... ARGS>
+template <bool APPROXIMATE, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_params(
-    F&& sfpu_func,
-    uint dst_index,
-    int vector_mode = (int)VectorMode::RC,
-    ARGS&& ... args) {
-
+    F&& sfpu_func, uint dst_index, int vector_mode = (int)VectorMode::RC, ARGS&&... args) {
     _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
 
     if (vector_mode == (int)VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration (first row)
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {
-           sfpu_func(static_cast<ARGS&&>(args)...);
+            sfpu_func(static_cast<ARGS&&>(args)...);
             // Move to the next face
             _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }

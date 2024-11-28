@@ -183,7 +183,10 @@ Tensor to_weight_tile_layout(
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -213,7 +216,10 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -623,8 +629,9 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
     // Tensor has workers (on device) or runtime mode is synchronous or tensor has multiple buffers.
     // No need to check for borrowed storage.
     if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
-        tensor.tensor_attributes->num_shards_to_be_populated > 1)
+        tensor.tensor_attributes->num_shards_to_be_populated > 1) {
         return tensor;
+    }
 
     if (tensor.storage_type() == StorageType::BORROWED) {
         ZoneScopedN("CopyBorrowedStorage");

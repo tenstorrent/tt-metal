@@ -144,22 +144,23 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
     Buffer* padding_config_buffer = padding_config.buffer();
+    const uint32_t num_cores = all_cores.num_cores();
     auto padding_config_cb_config =
-        CircularBufferConfig(padding_config_buffer->size(), {{padding_config_cb_id, kernel_config_df}})
+        CircularBufferConfig(padding_config_buffer->size() / num_cores, {{padding_config_cb_id, kernel_config_df}})
             .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
             .set_globally_allocated_address(*padding_config_buffer);
     CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
     Buffer* local_config_buffer = local_config.buffer();
     auto local_config_cb_config =
-        CircularBufferConfig(local_config_buffer->size(), {{local_config_cb_id, kernel_config_df}})
+        CircularBufferConfig(local_config_buffer->size() / num_cores, {{local_config_cb_id, kernel_config_df}})
             .set_page_size(local_config_cb_id, local_config_buffer->page_size())
             .set_globally_allocated_address(*local_config_buffer);
     CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
     Buffer* remote_config_buffer = remote_config.buffer();
     auto remote_config_cb_config =
-        CircularBufferConfig(remote_config_buffer->size(), {{remote_config_cb_id, kernel_config_df}})
+        CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
             .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
             .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
@@ -182,8 +183,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_block_sharded,
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded
-    };
+        is_width_sharded};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;

@@ -8,7 +8,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
-
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
     constexpr bool core_in_in0_receiver_mcast_grid = (bool)get_compile_time_arg_val(1);
@@ -138,10 +137,10 @@ void kernel_main() {
 
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
-                    // All cores in receiver grid need to participate in receiving regardless if they produce output work or
-                    // not. Otherwise, data corruption since we mcast from and to the same CB (eg. extract_shard_sub_blocks). If
-                    // we only ever mcast with loopback src (ie. always to a different CB), we can have just the cores that
-                    // produce work participate in receiving.
+                    // All cores in receiver grid need to participate in receiving regardless if they produce output
+                    // work or not. Otherwise, data corruption since we mcast from and to the same CB (eg.
+                    // extract_shard_sub_blocks). If we only ever mcast with loopback src (ie. always to a different
+                    // CB), we can have just the cores that produce work participate in receiving.
                     if constexpr (core_in_in0_receiver_mcast_grid) {
                         // Set in0 semaphore value to INVALID
                         noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -172,9 +171,9 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
                         }
 
-                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its
-                        // value should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next
-                        // block
+                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
+                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
+                        // zero for the next block
                         if constexpr (core_in_in0_receiver_mcast_grid) {
                             // wait for every core in receiver grid EXCLUDING myself
                             noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests - 1);
@@ -207,7 +206,8 @@ void kernel_main() {
                             else {
                                 if constexpr (in0_mcast_num_cores == 1) {
                                     // noc_async_write if we only want to copy data between CB locally
-                                    noc_async_write(in0_tensor_read_addr, in0_multicast_data_addr, in0_block_size_bytes);
+                                    noc_async_write(
+                                        in0_tensor_read_addr, in0_multicast_data_addr, in0_block_size_bytes);
                                 } else {
                                     // multicast to every core in receiver grid
                                     noc_async_write_multicast_loopback_src(
@@ -233,8 +233,8 @@ void kernel_main() {
                                     in0_mcast_num_cores);
                             }
                         } else {
-                            // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all cores
-                            // in receiver grid
+                            // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
+                            // cores in receiver grid
                             noc_async_write_multicast(
                                 in0_tensor_read_addr,
                                 in0_multicast_data_addr,
@@ -249,13 +249,15 @@ void kernel_main() {
                                 in0_mcast_receiver_semaphore_noc_addr,
                                 in0_mcast_num_cores);
                         }
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
-                        // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
-        #ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency which means data could be changed before
+                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+                        // statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
+                        // which means data could be changed before
                         //  write is issued.
                         noc_async_writes_flushed();
-        #endif
+#endif
 
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
                         uint64_t in0_mcast_sender_semaphore_noc_addr = remote_sender_noc_addrs[block_id];
@@ -272,9 +274,9 @@ void kernel_main() {
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                     // If core does not produce output block work, free cb_id_in0 immediately.
-                    // This is necessary since mcast is in lockstep; this ensures write ptr addresses are synced properly for
-                    // cores that only send and have no compute / writer active. Technically, don't have to do this if cb_id_in0
-                    // is not double buffered.
+                    // This is necessary since mcast is in lockstep; this ensures write ptr addresses are synced
+                    // properly for cores that only send and have no compute / writer active. Technically, don't have to
+                    // do this if cb_id_in0 is not double buffered.
                     if constexpr (!core_has_output_block_work) {
                         cb_pop_front(cb_id_in0, in0_block_num_tiles);
                     }

@@ -111,7 +111,6 @@ def create_unet_model_parameters(
     parameters.c6_3["use_activation_double_buffer"] = True
     parameters.c6_3["input_channels_alignment"] = 16
 
-    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c7["use_activation_double_buffer"] = True
     parameters.c7["use_split_reader"] = True
     parameters.c7["input_channels_alignment"] = 16

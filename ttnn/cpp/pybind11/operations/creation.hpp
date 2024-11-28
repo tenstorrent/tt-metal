@@ -15,8 +15,140 @@ namespace py = pybind11;
 namespace ttnn {
 namespace operations {
 namespace creation {
-
 namespace detail {
+
+template <typename creation_operation_t, typename device_t, typename fill_value_t>
+auto create_pybind_full_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const std::vector<uint32_t>& shape,
+           const fill_value_t fill_value,
+           const std::optional<DataType>& dtype,
+           const std::optional<Layout>& layout,
+           const std::optional<std::reference_wrapper<device_t>> device,
+           const std::optional<MemoryConfig>& memory_config,
+           std::optional<ttnn::Tensor>& optional_output_tensor,
+           uint8_t queue_id) -> ttnn::Tensor {
+            return self(
+                queue_id,
+                ttnn::Shape{tt::tt_metal::LegacyShape{shape}},
+                fill_value,
+                dtype,
+                layout,
+                device,
+                memory_config,
+                optional_output_tensor);
+        },
+        py::arg("shape"),
+        py::arg("fill_value"),
+        py::arg("dtype") = std::nullopt,
+        py::arg("layout") = std::nullopt,
+        py::arg("device") = std::nullopt,
+        py::arg("memory_config") = std::nullopt,
+        py::arg("optional_tensor") = std::nullopt,
+        py::arg("queue_id") = ttnn::DefaultQueueId};
+}
+
+template <typename creation_operation_t, typename device_t>
+auto create_pybind_full_with_hard_coded_value_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const std::vector<uint32_t>& shape,
+           const std::optional<DataType>& dtype,
+           const std::optional<Layout>& layout,
+           const std::optional<std::reference_wrapper<device_t>> device,
+           const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
+        },
+        py::arg("shape"),
+        py::arg("dtype") = std::nullopt,
+        py::arg("layout") = std::nullopt,
+        py::arg("device") = std::nullopt,
+        py::arg("memory_config") = std::nullopt};
+}
+
+template <typename creation_operation_t, typename device_t, typename fill_value_t>
+auto create_pybind_full_like_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const ttnn::Tensor& tensor,
+           const fill_value_t fill_value,
+           const std::optional<DataType>& dtype,
+           const std::optional<Layout>& layout,
+           const std::optional<std::reference_wrapper<device_t>> device,
+           const std::optional<MemoryConfig>& memory_config,
+           std::optional<ttnn::Tensor>& optional_output_tensor,
+           uint8_t queue_id) -> ttnn::Tensor {
+            return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+        },
+        py::arg("tensor"),
+        py::arg("fill_value"),
+        py::arg("dtype") = std::nullopt,
+        py::arg("layout") = std::nullopt,
+        py::arg("device") = std::nullopt,
+        py::arg("memory_config") = std::nullopt,
+        py::arg("optional_tensor") = std::nullopt,
+        py::arg("queue_id") = ttnn::DefaultQueueId};
+}
+
+template <typename creation_operation_t, typename device_t>
+auto create_pybind_full_like_with_hard_coded_value_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const ttnn::Tensor& tensor,
+           const std::optional<DataType>& dtype,
+           const std::optional<Layout>& layout,
+           const std::optional<std::reference_wrapper<device_t>> device,
+           const std::optional<MemoryConfig>& memory_config,
+           std::optional<ttnn::Tensor>& optional_output_tensor,
+           uint8_t queue_id) -> ttnn::Tensor {
+            return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
+        },
+        py::arg("tensor"),
+        py::arg("dtype") = std::nullopt,
+        py::arg("layout") = std::nullopt,
+        py::arg("device") = std::nullopt,
+        py::arg("memory_config") = std::nullopt,
+        py::arg("optional_tensor") = std::nullopt,
+        py::arg("queue_id") = ttnn::DefaultQueueId};
+}
+
+template <typename creation_operation_t, typename device_t>
+auto create_pybind_empty_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const std::vector<uint32_t>& shape,
+           const DataType& dtype,
+           const Layout& layout,
+           device_t* device,
+           const MemoryConfig& memory_config) -> ttnn::Tensor {
+            return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
+        },
+        py::arg("shape"),
+        py::arg("dtype") = DataType::BFLOAT16,
+        py::arg("layout") = Layout::ROW_MAJOR,
+        py::arg("device"),
+        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG};
+}
+
+template <typename creation_operation_t, typename device_t>
+auto create_pybind_empty_like_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const ttnn::Tensor& reference,
+           const std::optional<DataType>& dtype,
+           const std::optional<Layout>& layout,
+           const std::optional<std::reference_wrapper<Device>> device,
+           const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return self(reference, dtype, layout, device, memory_config);
+        },
+        py::arg("tensor"),
+        py::kw_only(),
+        py::arg("dtype") = DataType::BFLOAT16,
+        py::arg("layout") = Layout::ROW_MAJOR,
+        py::arg("device") = std::nullopt,
+        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG};
+}
 
 template <typename creation_operation_t>
 void bind_full_operation(py::module& module, const creation_operation_t& operation) {
@@ -29,7 +161,7 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
             fill_value (float): The value to fill the tensor with.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -53,50 +185,18 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const std::vector<uint32_t>& shape,
-               const float fill_value,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-            },
-            py::arg("shape"),
-            py::arg("fill_value"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("optional_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId},
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const std::vector<uint32_t>& shape,
-               const int fill_value,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-            },
-            py::arg("shape"),
-            py::arg("fill_value"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("optional_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        create_pybind_full_overload<creation_operation_t, Device, float>(),
+        create_pybind_full_overload<creation_operation_t, MeshDevice, float>(),
+        create_pybind_full_overload<creation_operation_t, Device, int>(),
+        create_pybind_full_overload<creation_operation_t, MeshDevice, int>());
 }
 
 template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string, const std::string& info_doc = "") {
+void bind_full_operation_with_hard_coded_value(
+    py::module& module,
+    const creation_operation_t& operation,
+    const std::string& value_string,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor with the specified shape and fills it with the value of {1}.
@@ -105,7 +205,7 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
             shape (ttnn.Shape): The shape of the tensor.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
 
         Note:
@@ -134,20 +234,8 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const std::vector<uint32_t>& shape,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
-            },
-            py::arg("shape"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+        create_pybind_full_with_hard_coded_value_overload<creation_operation_t, Device>(),
+        create_pybind_full_with_hard_coded_value_overload<creation_operation_t, MeshDevice>());
 }
 
 template <typename creation_operation_t>
@@ -161,7 +249,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
             fill_value (float | int): The value to fill the tensor with.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -182,50 +270,18 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const ttnn::Tensor& tensor,
-               const float fill_value,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-            },
-            py::arg("tensor"),
-            py::arg("fill_value"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("optional_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId},
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const ttnn::Tensor& tensor,
-               const int fill_value,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-            },
-            py::arg("tensor"),
-            py::arg("fill_value"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("optional_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        create_pybind_full_like_overload<creation_operation_t, Device, float>(),
+        create_pybind_full_like_overload<creation_operation_t, MeshDevice, float>(),
+        create_pybind_full_like_overload<creation_operation_t, Device, int>(),
+        create_pybind_full_like_overload<creation_operation_t, MeshDevice, int>());
 }
 
 template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string, const std::string& info_doc = "") {
+void bind_full_like_operation_with_hard_coded_value(
+    py::module& module,
+    const creation_operation_t& operation,
+    const std::string& value_string,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the value of {1}. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
@@ -234,7 +290,7 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -262,24 +318,8 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const ttnn::Tensor& tensor,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> &optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
-            },
-            py::arg("tensor"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("optional_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, Device>(),
+        create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, MeshDevice>());
 }
 
 template <typename creation_operation_t>
@@ -328,7 +368,8 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
 }
 
-void bind_empty_operation(py::module& module, const std::string& info_doc = "") {
+template <typename creation_operation_t>
+void bind_empty_operation(py::module& module, const creation_operation_t& operation, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a device tensor with uninitialized values of the specified shape, data type, layout, and memory configuration.
@@ -351,45 +392,19 @@ void bind_empty_operation(py::module& module, const std::string& info_doc = "") 
             >>> print(tensor)
             ttnn.Tensor([[[[0.9, 0.21, 0.5], [0.67, 0.11, 0.30]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
         )doc",
-        ttnn::empty.base_name(),
+        operation.base_name(),
         info_doc);
 
-    using EmptyType = decltype(ttnn::empty);
     bind_registered_operation(
         module,
-        ttnn::empty,
+        operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const EmptyType& self,
-               const std::vector<uint32_t>& shape,
-               const DataType& dtype,
-               const Layout& layout,
-               Device* device,
-               const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
-            },
-            py::arg("shape"),
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("layout") = Layout::ROW_MAJOR,
-            py::arg("device"),
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG},
-        ttnn::pybind_overload_t{
-            [](const EmptyType& self,
-               const std::vector<uint32_t>& shape,
-               const DataType& dtype,
-               const Layout& layout,
-               MeshDevice* device,
-               const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
-            },
-            py::arg("shape"),
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("layout") = Layout::ROW_MAJOR,
-            py::arg("device"),
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+        create_pybind_empty_overload<creation_operation_t, Device>(),
+        create_pybind_empty_overload<creation_operation_t, MeshDevice>());
 }
 
-void bind_empty_like_operation(py::module& module) {
+template <typename creation_operation_t>
+void bind_empty_like_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
         Creates a new tensor with the same shape as the given `reference`, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.
@@ -400,7 +415,7 @@ void bind_empty_like_operation(py::module& module) {
         Keyword Args:
             dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to `ttnn.bfloat16`.
             layout (ttnn.Layout, optional): The desired layout of the output tensor. Defaults to `ttnn.ROW_MAJOR`.
-            device (ttnn.Device, optional): The device where the output tensor will be allocated. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device where the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
 
         Returns:
@@ -412,36 +427,25 @@ void bind_empty_like_operation(py::module& module) {
             >>> print(tensor)
             ttnn.Tensor([[[[0.87, 0.45, 0.22], [0.60, 0.75, 0.25]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
-        ttnn::empty_like.base_name());
+        operation.base_name());
 
-    using EmptyLikeType = decltype(ttnn::empty_like);
     bind_registered_operation(
         module,
-        ttnn::empty_like,
+        operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const EmptyLikeType& self,
-               const ttnn::Tensor& reference,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(reference, dtype, layout, device, memory_config);
-            },
-            py::arg("tensor"),
-            py::kw_only(),
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("layout") = Layout::ROW_MAJOR,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+        create_pybind_empty_like_overload<creation_operation_t, Device>(),
+        create_pybind_empty_like_overload<creation_operation_t, MeshDevice>());
 }
 
 }  // namespace detail
 
 void py_module(py::module& module) {
     detail::bind_full_operation(module, ttnn::full);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros, "0.0",
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_full_operation_with_hard_coded_value(
+        module,
+        ttnn::zeros,
+        "0.0",
+        R"doc(Supported dtypes, layouts, and ranks:
 
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -452,8 +456,11 @@ void py_module(py::module& module) {
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones, "1.0");
 
     detail::bind_full_like_operation(module, ttnn::full_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like, "0.0",
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_full_like_operation_with_hard_coded_value(
+        module,
+        ttnn::zeros_like,
+        "0.0",
+        R"doc(Supported dtypes, layouts, and ranks:
 
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -464,8 +471,10 @@ void py_module(py::module& module) {
 
     detail::bind_arange_operation(module, ttnn::arange);
 
-    detail::bind_empty_operation(module,
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_empty_operation(
+        module,
+        ttnn::empty,
+        R"doc(Supported dtypes, layouts, and ranks:
 
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -474,7 +483,7 @@ void py_module(py::module& module) {
         +----------------------------+---------------------------------+-------------------+
         |    BFLOAT_8                |          TILE                   |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
-    detail::bind_empty_like_operation(module);
+    detail::bind_empty_like_operation(module, ttnn::empty_like);
 }
 
 }  // namespace creation

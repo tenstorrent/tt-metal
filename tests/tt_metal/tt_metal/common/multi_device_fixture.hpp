@@ -8,19 +8,17 @@
 
 #include "host_api.hpp"
 #include "dispatch_fixture.hpp"
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
 class MultiDeviceFixture : public DispatchFixture {
-   protected:
-    void SetUp() override {
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    }
+protected:
+    void SetUp() override { this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }
 };
 
 class N300DeviceFixture : public MultiDeviceFixture {
-   protected:
+protected:
     void SetUp() override {
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -40,8 +38,8 @@ class N300DeviceFixture : public MultiDeviceFixture {
                 ids.push_back(id);
             }
 
-            const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+            const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {
             GTEST_SKIP();
