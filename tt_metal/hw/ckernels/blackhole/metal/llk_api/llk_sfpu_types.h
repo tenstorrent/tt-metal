@@ -59,6 +59,7 @@ enum SfpuType {
     logical_not_unary,
     erfinv,
     i0,
+    i1,
     silu,
     mask,
     negative,

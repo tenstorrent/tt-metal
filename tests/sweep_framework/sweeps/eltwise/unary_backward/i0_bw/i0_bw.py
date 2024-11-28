@@ -20,7 +20,7 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "xfail": {
+    "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
@@ -72,7 +72,7 @@ def run(
         input_shape
     )
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
 
@@ -100,6 +100,6 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     # print(pcc)
     return [pcc, e2e_perf]

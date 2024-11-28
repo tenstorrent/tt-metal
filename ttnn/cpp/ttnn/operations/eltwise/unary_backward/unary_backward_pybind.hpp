@@ -1482,7 +1482,7 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::i0_bw,
-        R"doc(Performs backward operations for i0 on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for i0 on :attr:`input_tensor` with given :attr:`grad_tensor`. Supported input range is (-10, 10))doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_op(
