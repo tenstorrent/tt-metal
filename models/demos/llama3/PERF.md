@@ -20,6 +20,7 @@ This configuration uses bfp4 MLP FF1+FF3 for all models.
 | 8b | N300 | 84 | 98 | 38.6 |
 | 8b | T3K | 84 | 98 | 52.6 |
 | 11b | N300 | 86 | 97 | 38.6 |
+| 11b | T3K | 84 | 98 | 52.6 |
 | 70b | T3K | 95 | 100 | 14.3 |
 
 ## LlamaOptimizations.accuracy
@@ -38,4 +39,5 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.
 | 8b | N300 | 90 | 98 | 34.1 |
 | 8b | T3K | 88 | 97 | 49.9 |
 | 11b | N300 | 90 | 97 | 33.8 |
+| 11b | T3K | 88 | 97 | 52.6 |
 | 70b | T3K | 95 | 100 | 14.5 |

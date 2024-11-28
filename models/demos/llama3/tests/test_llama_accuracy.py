@@ -34,8 +34,6 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     sections = content.split("## ")
     target_section = next(s for s in sections if s.startswith(f"LlamaOptimizations.{optimizations.__name__}\n"))
 
-    print(target_section)
-
     # Parse the table and find the row for our model and device
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
@@ -86,13 +84,6 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
     # Load model args and tokenizer
     model_args = TtModelArgs(mesh_device, optimizations=optimizations)
     tokenizer = Tokenizer(model_args.tokenizer_path)
-
-    # Get accuracy thresholds from PERF.md
-    min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-        model_args.model_name,
-        model_args.device_name,
-        optimizations,
-    )
 
     # Load state_dict for TT model
     logger.info("Loading weights...")
@@ -319,6 +310,13 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
             expected = " | ".join(sanitize(t) for t in error["expected"])
             true_word = sanitize(tokenizer.decode([true_token]))
             logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
+
+    # Get accuracy thresholds from PERF.md
+    min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+        model_args.model_name,
+        model_args.device_name,
+        optimizations,
+    )
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
     assert total_top1_acc > min_top1_acc, f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >{min_top1_acc}%)"
