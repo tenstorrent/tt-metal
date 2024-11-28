@@ -34,7 +34,7 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.llama3.tt.model_config import LlamaOptimizations
 
 
-def load_and_cache_context(context_url, cache_dir):
+def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
 
     if cache_file.exists():
@@ -56,6 +56,11 @@ def load_and_cache_context(context_url, cache_dir):
             logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
             context_text = ""
 
+    # Clip the context to the max length provided
+    if max_length:
+        context_text = context_text[:max_length]
+        logger.info(f"Clipped the context text to {max_length} characters")
+
     return context_text
 
 
@@ -69,12 +74,18 @@ def load_inputs(user_input, batch):
     cache_dir = Path("models/demos/llama3/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # TODO Miguel: Clip the long prompt to actually fit within token limit
     for i in range(batch):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
-            context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
-            prompt = context_text + "\n\n" + prompt
+            if "max_length" in user_input[i]:  # Clip the context to the max length provided
+                context_text = load_and_cache_context(
+                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
+                )
+            else:
+                context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
+            prompt = (
+                "```" + context_text + "```\n\n" + prompt
+            )  # Add the markdown block to the context to comply with the prompt
         in_prompt.append(prompt)
     return in_prompt
 
@@ -445,7 +456,7 @@ def run_llama3_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(
+        tt_out_tok = ttnn.argmax(  # TODO Miguel: Move argmax to host when batch_size > 1 to avoid slowdowns
             tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
         )
         ttnn.deallocate(tt_out_rm)
@@ -543,7 +554,9 @@ def run_llama3_demo(
             # Save output token to print out later
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
-                if user_tok != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
+                if (
+                    user_tok != 128009 and user_done[user] == False
+                ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
                     all_outputs[user].append(user_tok)
                 else:
                     user_done[user] = True
@@ -635,7 +648,7 @@ def run_llama3_demo(
     compile_decode_time = profiler.get_duration("compile_decode")
     inference_prefill_time = profiler.get_duration("inference_prefill")
     inference_decode_time = profiler.get_duration("inference_decode")
-    log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(max_generated_tokens))
+    log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(total_tokens_generated))
     log_saving_file_time = profiler.get_duration(f"log_saving_file")
 
     # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
@@ -674,7 +687,7 @@ def run_llama3_demo(
     logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
     logger.info(f"Prefill inference time per user: {round(inference_prefill_time/num_users_generated_prefill, 4)}s")
     logger.info(
-        f"Total Decode inference time ({max_generated_tokens-1} iterations): {round(measurements['inference_decode'], 4)}s"
+        f"Total Decode inference time ({total_tokens_generated-1} iterations): {round(measurements['inference_decode'], 4)}s"
     )
     logger.info("")
     logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 2)}ms")
@@ -832,11 +845,11 @@ def run_llama3_demo(
     "paged_attention",
     (
         True,
-        # False,
+        False,
     ),
     ids=(
         "paged_attention",
-        # "default_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(  # TODO Substitute these values for a proper vLLM integration
@@ -845,7 +858,7 @@ def run_llama3_demo(
 )
 @pytest.mark.parametrize(
     "max_generated_tokens",  # Maximum number of tokens to decode, per user
-    (100,),
+    (1000,),
 )
 def test_llama_demo(
     input_prompts,
@@ -887,9 +900,9 @@ def test_llama_demo(
         paged_attention=paged_attention,
         paged_attention_config=paged_attention_config,
         max_generated_tokens=max_generated_tokens,
+        optimizations=optimizations,
         single_layer=single_layer,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
-        print_to_file=False,
-        optimizations=optimizations,
+        print_to_file=True,  # TODO Miguel set this to false before merging
     )
