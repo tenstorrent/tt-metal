@@ -315,7 +315,7 @@ void kernel_main() {
                 cb_push_back(cb_id_weight, total_weight_num_tiles);
             }
 
-        } // out_num_blocks_h
+        }  // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;
 

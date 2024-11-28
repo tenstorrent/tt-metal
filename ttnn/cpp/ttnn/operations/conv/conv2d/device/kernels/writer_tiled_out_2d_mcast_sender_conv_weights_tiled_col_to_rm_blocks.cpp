@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -59,12 +59,12 @@ void kernel_main() {
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
 
-    #ifdef UNPAD_UNTILIZE_OUT
+#ifdef UNPAD_UNTILIZE_OUT
     constexpr uint32_t out_block_width_ntiles = get_compile_time_arg_val(33);
     constexpr uint32_t out_block_width_padded_bytes = get_compile_time_arg_val(34);
     constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(35);
     constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(36);
-    #endif
+#endif
     uint32_t i = 0;
     i += 1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i);
@@ -90,31 +90,42 @@ void kernel_main() {
     }
 
     // mcast args
-    uint32_t weights_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_dest_noc_start_y         = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_num_dests                = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_num_cores                = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_sender_semaphore_addr    = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
-    uint32_t weights_mcast_receiver_semaphore_addr  = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
-    uint32_t out_aligned_page_size                  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i);
+    i += 1;
+    uint32_t weights_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i);
+    i += 1;
+    uint32_t weights_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i);
+    i += 1;
+    uint32_t weights_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i);
+    i += 1;
+    uint32_t weights_mcast_num_dests = get_arg_val<uint32_t>(i);
+    i += 1;
+    uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i);
+    i += 1;
+    uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i));
+    i += 1;
+    uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i));
+    i += 1;
+    uint32_t out_aligned_page_size = get_arg_val<uint32_t>(i);
+    i += 1;
 
-    #ifndef SKIP_MCAST
-        // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-        volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
-        *(weights_mcast_receiver_semaphore_addr_ptr) = VALID;
-        // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-        // to receive the mcast
-        volatile tt_l1_ptr uint32_t* weights_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_sender_semaphore_addr);
+#ifndef SKIP_MCAST
+    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
+    *(weights_mcast_receiver_semaphore_addr_ptr) = VALID;
+    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
+    // to receive the mcast
+    volatile tt_l1_ptr uint32_t* weights_mcast_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_sender_semaphore_addr);
 
-        uint64_t weights_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-            weights_mcast_dest_noc_start_x,
-            weights_mcast_dest_noc_start_y,
-            weights_mcast_dest_noc_end_x,
-            weights_mcast_dest_noc_end_y,
-            weights_mcast_receiver_semaphore_addr);
-    #endif
+    uint64_t weights_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+        weights_mcast_dest_noc_start_x,
+        weights_mcast_dest_noc_start_y,
+        weights_mcast_dest_noc_end_x,
+        weights_mcast_dest_noc_end_y,
+        weights_mcast_receiver_semaphore_addr);
+#endif
 
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
     const DataFormat out_df = get_dataformat(cb_id_out0);
@@ -156,7 +167,8 @@ void kernel_main() {
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
             uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
-            for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
+            for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
+                 weight_tile_h_outer_i++) {
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
 
@@ -166,20 +178,20 @@ void kernel_main() {
                 // loop over weight block tiles along h
                 // num_blocks_weight_h * weight_block_height_ntiles
                 // weight_stride_h
-                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h * weight_block_height_ntiles; block_weight_h++) {
-
+                for (uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h * weight_block_height_ntiles;
+                     block_weight_h++) {
                     // mcast args
                     // uint32_t weights_start_address = weight_write_l1_addr;
                     // uint32_t weights_block_size_bytes = 0;
 
                     uint32_t weight_tile_id = weight_current_block_start_tile_id;
                     // loop over weight block tiles along w
-                    for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                    for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
                         s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
                         weight_write_l1_addr += weight_tile_nbytes;
                         weights_block_size_bytes += weight_tile_nbytes;
                         weight_tile_id += 1;
-                    } // for weight_block_w
+                    }  // for weight_block_w
                     weight_current_block_start_tile_id += weight_stride_h;
                 }
 
@@ -216,13 +228,15 @@ void kernel_main() {
                 // be sent in order they are issued
                 noc_async_writes_flushed();
 #endif
-                    // We should also multicast the flag to destinations
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
-                #endif
+                // We should also multicast the flag to destinations
+                // num_dests must not include source, since we are NOT really doing a local copy!
+                noc_semaphore_set_multicast(
+                    weights_mcast_receiver_semaphore_addr,
+                    weights_mcast_receiver_semaphore_noc_addr,
+                    weights_mcast_num_cores);
+#endif
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
-            } // for weight_block_height_num_outer
-
+            }  // for weight_block_height_num_outer
 
 #ifdef FUSE_BIAS
             if (load_bias) {
@@ -271,10 +285,13 @@ void kernel_main() {
                 // be sent in order they are issued
                 noc_async_writes_flushed();
 #endif
-                    // We should also multicast the flag to destinations
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
-                #endif
+                // We should also multicast the flag to destinations
+                // num_dests must not include source, since we are NOT really doing a local copy!
+                noc_semaphore_set_multicast(
+                    weights_mcast_receiver_semaphore_addr,
+                    weights_mcast_receiver_semaphore_noc_addr,
+                    weights_mcast_num_cores);
+#endif
 
                 cb_push_back(bias_cb_id, bias_ntiles);
                 load_bias = false;
@@ -328,14 +345,15 @@ void kernel_main() {
 
         // Increment weight start tile id for next block in width dim
         weight_start_tile_id += weight_next_block_stride_w;
-    } // out_num_blocks_w
-    #ifdef SHARDED_OUT
-    #ifdef UNPAD_UNTILIZE_OUT
+    }  // out_num_blocks_w
+#ifdef SHARDED_OUT
+#ifdef UNPAD_UNTILIZE_OUT
     uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
+    print_pages(dst_cb_addr, 64, 64);
 
     uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
     for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
-        for(uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
+        for (uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
             for (uint32_t bh = 0; bh < out_block_height_num_tiles; bh++) {
                 cb_wait_front(untilized_padded_out_cb, out_block_width_ntiles);
                 uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
@@ -350,8 +368,10 @@ void kernel_main() {
             }
         }
     }
-    #else
-    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
-    #endif
+#else
+    cb_wait_front(
+        cb_id_out0,
+        out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+#endif
 #endif
 }
