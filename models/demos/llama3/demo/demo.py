@@ -65,7 +65,7 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 
 # load from json, return as a list
-def load_inputs(user_input, batch):
+def load_inputs(user_input, batch, instruct_mode):
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
@@ -83,9 +83,12 @@ def load_inputs(user_input, batch):
                 )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
-            prompt = (
-                "```" + context_text + "```\n\n" + prompt
-            )  # Add the markdown block to the context to comply with the prompt
+            if instruct_mode:
+                prompt = (
+                    "```" + context_text + "```\n\n" + prompt
+                )  # Add the markdown block to the context to comply with the prompt
+            else:
+                prompt = context_text
         in_prompt.append(prompt)
     return in_prompt
 
@@ -206,7 +209,7 @@ def run_llama3_demo(
     if len(user_input) == 1:
         input_prompts = user_input * batch_size
     else:
-        input_prompts = load_inputs(user_input, batch_size)
+        input_prompts = load_inputs(user_input, batch_size, instruct_mode)
     profiler.end("loading_inputs")
 
     # Generate the batched prompts (rotate the inputs between the users, for each batch)
