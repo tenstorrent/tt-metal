@@ -102,7 +102,7 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id,
             return res;
         },
         .pre_transform =
-            [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
+            [queue_id, output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
             std::vector<ttnn::Tensor> itensors;
             itensors.reserve(tensors.size());
             std::transform(
@@ -141,7 +141,8 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id,
                 });
             return std::make_tuple(itensors, dim, groups);
         },
-        .post_transform = [&logical_output_shape, queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
+        .post_transform = [&logical_output_shape,
+                           queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
             // now we have a rm tensor, so we need ensure its's padded to tile size and re-tilize it
             if (output.get_layout() != ttnn::TILE_LAYOUT) {
                 auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
