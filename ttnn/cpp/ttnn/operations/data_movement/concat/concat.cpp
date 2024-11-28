@@ -33,7 +33,6 @@ inline void concat_db_print(bool condition, const std::string& msg) {
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-using ConcatArgs = std::tuple<const std::vector<ttnn::Tensor>&, int, unsigned int>;
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;

@@ -74,3 +74,48 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
         passing1 = torch.equal(untilized_inp, c1)
 
     assert passing1
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    (
+        [1, 1, 1, 32 * 5, 32 * 1],
+        [1, 1, 1, 32 * 4, 32 * 2],
+        [1, 1, 1, 32 * 3, 32 * 3],
+        [1, 1, 1, 32 * 2, 32 * 4],
+        [1, 1, 1, 32 * 1, 32 * 5],
+        [1, 2, 3, 32 * 2, 32 * 1],
+    ),
+)
+def test_run_untilize_5d(dtype, shape, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
+    torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
+
+    torch.manual_seed(10)
+
+    if dtype == ttnn.float32:
+        inp = torch.rand(*shape).float() * 1000.0
+    else:
+        inp = torch.rand(*shape).bfloat16()
+
+    a = ttnn.from_torch(inp, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    our_untilized = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True, use_pack_untilize=True)
+    our_untilized = our_untilized.cpu().to_torch()
+
+    if dtype == ttnn.float32:
+        passing1, output = comp_pcc(inp, our_untilized, 0.999999)
+        logger.info(output)
+    else:
+        passing1 = torch.equal(inp, our_untilized)
+
+    assert passing1
