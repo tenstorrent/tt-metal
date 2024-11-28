@@ -188,10 +188,10 @@ def run_all_reduce_test(
         ([1, 1, 8192, 32]),
         ([1, 1, 1024, 32]),
         ([1, 1, 2048, 32]),
-        ([4, 1, 32, 4096]),
+        # ([4, 1, 32, 4096]), # Skipped as shape unsupported by L1 memory (OOM issue)
         ([8, 1, 32, 1024]),
         ([1, 4, 1024, 32]),
-        ([2, 4, 2048, 32]),
+        # ([2, 4, 2048, 32]), # Skipped as shape unsupported by L1 memory (OOM issue)
     ],
 )
 @pytest.mark.parametrize(
