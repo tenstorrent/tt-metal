@@ -381,13 +381,54 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
             // Another possibility is to wait for the device to flush and print the string piecemeal.
             // As a negative side effect,
             // unfortunately this special case increases the code size generated for each instance of <<.
+            // payload_sz = DebugPrintStrCopy(
+            //     reinterpret_cast<volatile char*>(printbuf + code_sz + sz_sz), debug_print_overflow_error_message);
+            // printbuf[0] = DPrintCSTR;
+            // printbuf[code_sz] = payload_sz;
+            // wpos = payload_sz + sz_sz + code_sz;
+            // dprint_buffer->aux.wpos = wpos;
+            // return;
+
             volatile uint8_t* printbuf = dprint_buffer->data;
-            payload_sz = DebugPrintStrCopy(
-                reinterpret_cast<volatile char*>(printbuf + code_sz + sz_sz), debug_print_overflow_error_message);
-            printbuf[0] = DPrintCSTR;
-            printbuf[code_sz] = payload_sz;
-            wpos = payload_sz + sz_sz + code_sz;
-            dprint_buffer->aux.wpos = wpos;
+            uint32_t remaining_payload_size = payload_sz;
+            while (remaining_payload_size > 0) {
+                uint32_t curr_payload_size;
+                if (remaining_payload_size >= sizeof(DebugPrintMemLayout::data) - 2) {
+                    curr_payload_size = sizeof(DebugPrintMemLayout::data) - 2;
+                } else {
+                    curr_payload_size = remaining_payload_size;
+                }
+                remaining_payload_size -= curr_payload_size;
+
+                printbuf[wpos] = typecode;
+                wpos += code_sz;
+                printbuf[wpos] = curr_payload_size;
+                wpos += sz_sz;
+                for (uint32_t j = 0; j < curr_payload_size - 1; j++) {  // might be the issue
+                    printbuf[wpos + j] = *valaddr;
+                    valaddr++;
+                }
+                printbuf[wpos + curr_payload_size - 1] = '\0';
+                wpos += curr_payload_size;
+                dprint_buffer->aux.wpos = wpos;
+                WAYPOINT("DPW");
+                while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
+#if defined(COMPILE_FOR_ERISC)
+                    internal_::risc_context_switch();
+#endif
+                    // If we've closed the device, we've now disabled printing on it, don't hang.
+                    if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                        return;
+                    };  // wait for host to catch up to wpos with it's rpos
+                }
+                WAYPOINT("DPD");
+                wpos = 0;
+                // TODO(AP): are these writes guaranteed to be ordered?
+                if (remaining_payload_size > 0) {
+                    remaining_payload_size += 1;
+                    dprint_buffer->aux.rpos = 0;
+                }
+            }
             return;
         }
     }
