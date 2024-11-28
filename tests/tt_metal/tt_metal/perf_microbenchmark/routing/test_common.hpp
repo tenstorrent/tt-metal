@@ -17,7 +17,7 @@ static inline std::string to_string(pkt_dest_size_choices_t choice) {
 
 static inline void log_phys_coord_to_json(nlohmann::json& config, const std::vector<CoreCoord>& phys_cores, const std::string& name) {
     for (int i = 0; i < phys_cores.size(); ++i) {
-config[fmt::format("{}_{}", name, i)] = fmt::format("({}, {})", phys_cores[i].x, phys_cores[i].y);
+        config[fmt::format("{}_{}", name, i)] = fmt::format("({}, {})", phys_cores[i].x, phys_cores[i].y);
     }
 }
 
