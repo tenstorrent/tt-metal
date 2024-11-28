@@ -104,49 +104,6 @@ def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     return rot_emb_matrix
 
 
-def gather_rotary_emb(rot_emb_matrix, position_ids):
-    """
-    Gather the rotary embeddings for a given position_ids
-    """
-    batch_size, seqlen = position_ids.shape
-    emb_size, _, dhead = rot_emb_matrix.shape
-    position_ids = position_ids.view(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, dhead, dhead)
-    rot_emb = rot_emb_matrix.gather(0, position_ids).view(batch_size, seqlen, dhead, dhead)
-    return rot_emb
-
-
-def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
-    if isinstance(start_pos, int):
-        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
-    position_ids = start_pos.view(seqlen, batch)
-    rot_emb = gather_rotary_emb(rot_mat, position_ids)
-    return rot_emb
-
-
-# Sample logits from a distribution
-def sample_top_p(probs: torch.Tensor, p: float):
-    assert 0 <= p <= 1
-
-    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
-    probs_sum = torch.cumsum(probs_sort, dim=-1)
-    mask = probs_sum - probs_sort > p
-    probs_sort[mask] = 0.0
-    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
-
-    next_token = torch.multinomial(probs_sort, num_samples=1)
-    return torch.gather(probs_idx, -1, next_token)
-
-
-def sample(logits: torch.Tensor, temperature: float, top_p: float):
-    if temperature > 0:
-        probs = torch.softmax(logits / temperature, dim=-1)
-        next_token = sample_top_p(probs.squeeze(), top_p)
-    else:
-        next_token = torch.argmax(logits, dim=-1)
-
-    return next_token
-
-
 def gather_cos_sin(position_ids, cos, sin):
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
@@ -280,3 +237,49 @@ def first_five(tensor, mesh_device):
     Helper function to return the first 5 elements of a tensor via torch
     """
     return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, :5]
+
+
+# Sample logits from a distribution
+def sample_top_p(probs: torch.Tensor, p: float):
+    assert 0 <= p <= 1
+
+    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+    probs_sum = torch.cumsum(probs_sort, dim=-1)
+    mask = probs_sum - probs_sort > p
+    probs_sort[mask] = 0.0
+    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+
+    next_token = torch.multinomial(probs_sort, num_samples=1)
+    return torch.gather(probs_idx, -1, next_token)
+
+
+def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True):
+    vocab_size = tt_input.shape[-1]
+    pt_input = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[..., :vocab_size]
+    if temperature > 0:
+        probs = torch.softmax(pt_input / temperature, dim=-1)
+        pt_out = sample_top_p(probs.squeeze(), top_p).view(1, 1, 1, -1)
+    else:
+        pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
+    if on_host:
+        return (
+            ttnn.as_tensor(
+                pt_out,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                device=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+            pt_out,
+        )
+    else:
+        return (
+            ttnn.from_torch(
+                pt_out,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+            pt_out,
+        )

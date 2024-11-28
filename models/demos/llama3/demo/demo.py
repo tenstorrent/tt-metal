@@ -22,6 +22,7 @@ from models.demos.llama3.tt.llama_common import (
     HostEmbedding,
     encode_prompt_llama_instruct,
     PagedAttentionConfig,
+    sample_host,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
@@ -180,6 +181,7 @@ def run_llama3_demo(
     paged_attention_config,
     max_generated_tokens,
     optimizations,
+    sampling_params,
     single_layer,
     instruct_mode,
     is_ci_env,
@@ -424,6 +426,8 @@ def run_llama3_demo(
 
         logger.info("Starting decode...")
 
+        # Set sampling mode
+        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
         # Create events
         profiler.start(f"compile_trace_{batch_idx}")
         op_event = ttnn.create_event(mesh_device)
@@ -459,10 +463,20 @@ def run_llama3_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(  # TODO Miguel: Move argmax to host when batch_size > 1 to avoid slowdowns
-            tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
-        )
-        ttnn.deallocate(tt_out_rm)
+        if argmax_on_device:
+            tt_out_tok = ttnn.argmax(  # TODO Miguel: Move argmax to host when batch_size > 1 to avoid slowdowns
+                tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
+            )
+            ttnn.deallocate(tt_out_rm)
+        else:
+            tt_out_tok_reset, _ = sample_host(
+                tt_out_rm,
+                mesh_device,
+                temperature=sampling_params["temperature"],
+                top_p=sampling_params["top_p"],
+                on_host=True,
+            )
+            ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         ttnn.plus_one(current_pos_tensor)
         profiler.end(f"compile_trace_{batch_idx}")
 
@@ -488,10 +502,11 @@ def run_llama3_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(
-            tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
-        )  # TODO Multicore is not compatible with batch > 1
-        ttnn.deallocate(tt_out_rm)
+        if argmax_on_device:
+            tt_out_tok = ttnn.argmax(
+                tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
+            )  # TODO Multicore is not compatible with batch > 1
+            ttnn.deallocate(tt_out_rm)
         ttnn.plus_one(current_pos_tensor)
         # ttnn.plus_one(rot_mat_idxs)  # TODO <- This won't work since embedding requires uint32 and plus_one only works for int32
 
@@ -549,9 +564,20 @@ def run_llama3_demo(
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
-            tt_output_torch = ttnn.to_torch(
-                tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
-            )[0, 0, 0, :batch_size]
+            if argmax_on_device:
+                tt_output_torch = ttnn.to_torch(
+                    tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+                )[0, 0, 0, :batch_size]
+            else:
+                tt_out_tok_reset, tt_output_torch = sample_host(
+                    tt_out_rm,
+                    mesh_device,
+                    temperature=sampling_params["temperature"],
+                    top_p=sampling_params["top_p"],
+                    on_host=True,
+                )
+                tt_output_torch = tt_output_torch[0, 0, 0, :batch_size]
+                ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
             ttnn.record_event(1, write_event)
 
             # Save output token to print out later
@@ -842,6 +868,10 @@ def run_llama3_demo(
     indirect=True,
 )
 @pytest.mark.parametrize(
+    "sampling_params",
+    [{"temperature": 0.6, "top_p": 0.08}],
+)
+@pytest.mark.parametrize(
     "batch_size",
     (
         1,
@@ -872,6 +902,7 @@ def test_llama_demo(
     max_seq_len,
     instruct_weights,
     batch_size,
+    sampling_params,
     num_batches,
     paged_attention,
     page_params,
@@ -908,6 +939,7 @@ def test_llama_demo(
         paged_attention_config=paged_attention_config,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
+        sampling_params=sampling_params,
         single_layer=single_layer,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
