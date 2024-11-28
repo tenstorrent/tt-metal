@@ -39,8 +39,7 @@ class TtLlamaMLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
-        # Set to "self.args.is_large_model" for mixed-mode MLP which is slightly more accurate
-        self.four_bit_mlp = True
+        self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
         self.w1 = as_sharded_tensor(

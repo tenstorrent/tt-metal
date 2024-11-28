@@ -733,9 +733,9 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
         "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
-        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k full",
-        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k performance-full",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k performance-quick",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance",
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
         "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
@@ -750,7 +750,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "vision-text-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py",
         "vision-vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
         "perf": "pytest models/demos/llama3/tests/test_llama_perf.py -k 1024",
-        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py",
+        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k performance",
     }
 
     # Check if the command is a shortcut and replace it if necessary

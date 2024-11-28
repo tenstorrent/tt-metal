@@ -2,7 +2,11 @@
 
 Performance collected from [demo/demo.py](demo/demo.py) and accuracy collected from [tests/test_llama_accuracy.py](tests/test_llama_accuracy.py). You can generate this table by running these tests with the `lt` tool (tell it to run `accuracy,demo`) and pressing `m` whilst in the results section to export to markdown.
 
-4-bit MLP:
+Note that `test_llama_accuracy.py` parses the below to determine expected values.
+
+## LlamaOptimizations.performance
+
+This configuration uses bfp4 MLP FF1+FF3 for all models.
 
 | Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |-------|--------|-----------|-----------|---------------|
@@ -18,7 +22,9 @@ Performance collected from [demo/demo.py](demo/demo.py) and accuracy collected f
 | 11b | N300 | 86 | 97 | 38.6 |
 | 70b | T3K | 95 | 100 | 14.3 |
 
-Mixed-bit MLP (main):
+## LlamaOptimizations.accuracy
+
+This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.
 
 | Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |-------|--------|-----------|-----------|---------------|

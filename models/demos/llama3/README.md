@@ -85,6 +85,13 @@ pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
 pytest models/demos/llama3/demo/demo.py -k 'general and 2_batch'
 ```
 
+By default we run the models in `LlamaOptimizations.performance` mode. You can override this by setting the `optimizations` argument in the demo. To compare the two on a long prompt, you can run:
+
+```
+pytest models/demos/llama3/demo/demo.py -k 'long-performance'
+pytest models/demos/llama3/demo/demo.py -k 'long-accuracy'
+```
+
 ### Expected performance and accuracy
 
-See [PERF.md](PERF.md) for expected performance and accuracy.
+See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
