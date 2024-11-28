@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "control_plane.hpp"
+#include "tt_fabric/control_plane.hpp"
 
 namespace tt::tt_fabric {
 
@@ -46,7 +46,7 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_yaml_file) {
                                                            "tests/tt_metal/tt_fabric/common/tg_cluster_desc.yaml";
         this->initialize_from_cluster_desc_yaml_file(tg_cluster_desc_path.string());
         // TODO: uncomment this when we know where to write the routing tables to
-        // this->configure_routing_tables();
+        this->configure_routing_tables();
     } else {
         TT_FATAL(false, "Unsupported mesh graph descriptor file {}", mesh_graph_desc_yaml_file);
     }
@@ -253,35 +253,21 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table(std::uint3
                 const auto& target_direction = router_intra_mesh_routing_table[mesh_id][src_chip_id][dst_chip_id];
                 const auto& eth_chans_in_target_direction =
                     this->router_port_directions_to_physical_eth_chan_map_[mesh_id][src_chip_id][target_direction];
-                // TODO: check if we want the ethernet channels sorted, such that
-                //   - chan 0,4,8,12 talk to each other
-                //   - chan 1,5,9,13 talk to each other
-                //   - chan 2,6,10,14 talk to each other
-                //   - chan 3,7,11,15 talk to each other
-                //   For now there is no sorting, just whatever order the control plane parsed in the available channels
-                //   in that direction
-
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination chip as the ethernet channel on the same plane
                 for (const auto& [direction, eth_chans_on_side] :
                      this->router_port_directions_to_physical_eth_chan_map_[mesh_id][src_chip_id]) {
-                    for (int plane_id = 0; plane_id < eth_chans_on_side.size(); plane_id++) {
-                        // Wrap around in case there are more ethernet channels on source than ethernet channesl in
-                        // target direction
-                        int target_direction_plane_id = plane_id % eth_chans_in_target_direction.size();
+                    for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_chip_id == dst_chip_id) {
-                            // This entry represents mesh to itself, should not be used by FW
-                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][eth_chans_on_side[plane_id]]
-                                                            [dst_chip_id] = 0xee;
+                            // This entry represents chip to itself, should not be used by FW
+                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] = eth_chan_magic_values::ROUTE_TO_LOCAL_CHIP;
                         } else if (target_direction == direction) {
-                            // This entry represents an outgoing eth channel, should not be used by FW
-                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][eth_chans_on_side[plane_id]]
-                                                            [dst_chip_id] = 0xff;
+                            // This entry represents an outgoing eth channel
+                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] = eth_chan_magic_values::OUTGOING_ETH_LINK;
                         } else {
-                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][eth_chans_on_side[plane_id]]
-                                                            [dst_chip_id] =
-                                eth_chans_in_target_direction[target_direction_plane_id];
+                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] =
+                                this->get_eth_chan_id(src_chan_id, eth_chans_in_target_direction);
                         }
                     }
                 }
@@ -309,35 +295,22 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table(std::uint3
                 const auto& target_direction = router_inter_mesh_routing_table[src_mesh_id][src_chip_id][dst_mesh_id];
                 const auto& eth_chans_in_target_direction =
                     this->router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id][target_direction];
-                // TODO: check if we want the ethernet channels sorted, such that
-                //   - chan 0,4,8,12 talk to each other
-                //   - chan 1,5,9,13 talk to each other
-                //   - chan 2,6,10,14 talk to each other
-                //   - chan 3,7,11,15 talk to each other
-                //   For now there is no sorting, just whatever order the control plane parsed in the available channels
-                //   in that direction
 
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination mesh as the ethernet channel on the same plane
                 for (const auto& [direction, eth_chans_on_side] :
                      this->router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id]) {
-                    for (int plane_id = 0; plane_id < eth_chans_on_side.size(); plane_id++) {
-                        // Wrap around in case there are more ethernet channels on source than ethernet channesl in
-                        // target direction
-                        int target_direction_plane_id = plane_id % eth_chans_in_target_direction.size();
+                    for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_mesh_id == dst_mesh_id) {
-                            // This entry represents chip to itself, should not be used by FW
-                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][eth_chans_on_side[plane_id]]
-                                                            [dst_mesh_id] = 0xee;
+                            // This entry represents mesh to itself, should not be used by FW
+                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] = eth_chan_magic_values::ROUTE_TO_LOCAL_CHIP;
                         } else if (target_direction == direction) {
-                            // This entry represents an outgoing eth channel, should not be used by FW
-                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][eth_chans_on_side[plane_id]]
-                                                            [dst_mesh_id] = 0xff;
+                            // This entry represents an outgoing eth channel
+                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] = eth_chan_magic_values::OUTGOING_ETH_LINK;
                         } else {
-                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][eth_chans_on_side[plane_id]]
-                                                            [dst_mesh_id] =
-                                eth_chans_in_target_direction[target_direction_plane_id];
+                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] =
+                                this->get_eth_chan_id(src_chan_id, eth_chans_in_target_direction);
                         }
                     }
                 }
@@ -348,22 +321,18 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table(std::uint3
 
 void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const {
     // TODO: remove this
-    constexpr std::uint32_t INTRA_MESH_TABLE_ADDR = 0x20000;
-    constexpr std::uint32_t INTER_MESH_TABLE_ADDR = 0x30000;
-    constexpr std::uint32_t entries_per_uint32_t = 4;
-
     const auto& chip_intra_mesh_routing_tables = this->intra_mesh_routing_tables_[mesh_id][chip_id];
     const auto& chip_inter_mesh_routing_tables = this->inter_mesh_routing_tables_[mesh_id][chip_id];
     const auto& physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
     // Loop over ethernet channels to only write to cores with ethernet links
     // Looping over chip_intra/inter_mesh_routing_tables will write to all cores, even if they don't have ethernet links
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+    const auto& chip_eth_chans_map = this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id];
+    for (const auto& [direction, eth_chans] : chip_eth_chans_map) {
         for (const auto& eth_chan : eth_chans) {
             // eth_chans are the active ethernet channels on this chip
             const auto& eth_chan_intra_mesh_routing_table = chip_intra_mesh_routing_tables[eth_chan];
             const auto& eth_chan_inter_mesh_routing_table = chip_inter_mesh_routing_tables[eth_chan];
-            std::vector<std::uint32_t> intra_mesh_data, inter_mesh_data;
+            /*std::vector<std::uint32_t> intra_mesh_data, inter_mesh_data;
             intra_mesh_data.reserve(eth_chan_intra_mesh_routing_table.size() / entries_per_uint32_t);
             inter_mesh_data.reserve(eth_chan_inter_mesh_routing_table.size() / entries_per_uint32_t);
             for (std::uint32_t i = 0; i < eth_chan_intra_mesh_routing_table.size(); i += entries_per_uint32_t) {
@@ -383,31 +352,64 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                     }
                 }
                 inter_mesh_data.push_back(entry);
+            }*/
+            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config;
+            tt::tt_fabric::pack_routing_table(
+                &(fabric_router_config.intra_mesh_table),
+                eth_chan_intra_mesh_routing_table.data(),
+                eth_chan_intra_mesh_routing_table.size());
+            tt::tt_fabric::pack_routing_table(
+                &(fabric_router_config.inter_mesh_table),
+                eth_chan_inter_mesh_routing_table.data(),
+                eth_chan_inter_mesh_routing_table.size());
+            if (chip_eth_chans_map.find(RoutingDirection::N) != chip_eth_chans_map.end()) {
+                fabric_router_config.port_direction.north = this->get_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::N));
+            } else {
+                fabric_router_config.port_direction.north = eth_chan_magic_values::INVALID_DIRECTION;
+            }
+            if (chip_eth_chans_map.find(RoutingDirection::S) != chip_eth_chans_map.end()) {
+                fabric_router_config.port_direction.south = this->get_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::S));
+            } else {
+                fabric_router_config.port_direction.south = eth_chan_magic_values::INVALID_DIRECTION;
+            }
+            if (chip_eth_chans_map.find(RoutingDirection::E) != chip_eth_chans_map.end()) {
+                fabric_router_config.port_direction.east = this->get_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::E));
+            } else {
+                fabric_router_config.port_direction.east = eth_chan_magic_values::INVALID_DIRECTION;
+            }
+            if (chip_eth_chans_map.find(RoutingDirection::W) != chip_eth_chans_map.end()) {
+                fabric_router_config.port_direction.west = this->get_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::W));
+            } else {
+                fabric_router_config.port_direction.west = eth_chan_magic_values::INVALID_DIRECTION;
             }
 
+            fabric_router_config.my_mesh_id = mesh_id;
+            fabric_router_config.my_device_id = chip_id;
+            // TODO: remove this when merging to main
+            /*
+            std::cout << " writing routing table entry data for eth core " << eth_chan << " " << (std::uint16_t)fabric_router_config.port_direction.north << " " << (std::uint16_t)fabric_router_config.port_direction.east << " " << (std::uint16_t)fabric_router_config.port_direction.south << " " << (std::uint16_t)fabric_router_config.port_direction.west <<
+              std::endl;
             // Write data to physical eth core
             tt_cxy_pair physical_eth_core(
                 physical_chip_id, tt::Cluster::instance().get_soc_desc(physical_chip_id).ethernet_cores[eth_chan]);
-            /*std::cout << " dumping routing table entry data for eth core " << physical_eth_core.str() << std::endl <<
-            "  intra mesh table: "; for (const auto& entry: intra_mesh_data) { std::cout << std::hex << "0x" << entry <<
-            " " << std::dec;
+            std::cout << " dumping routing table entry data for eth core " << physical_eth_core.str() << std::endl;
+            std::cout << "  intra mesh table: ";
+            for (int i = 0; i < eth_chan_intra_mesh_routing_table.size(); i++) {
+                std::cout << std::hex << "0x" << (std::uint16_t)fabric_router_config.intra_mesh_table.dest_entry[i]
+                          << " " << std::dec;
             }
             std::cout << std::endl << "  inter mesh table: ";
-            for (const auto& entry: inter_mesh_data) {
-                std::cout << std::hex << "0x" << entry << " " << std::dec;
+            for (int i = 0; i < eth_chan_inter_mesh_routing_table.size(); i++) {
+                std::cout << std::hex << "0x" << (std::uint16_t)fabric_router_config.inter_mesh_table.dest_entry[i]
+                          << " " << std::dec;
             }
-            std::cout << std::endl;*/
+            std::cout << std::endl;
+*/
             tt::Cluster::instance().write_core(
-                intra_mesh_data.data(),
-                intra_mesh_data.size() * sizeof(uint32_t),
+                (void*)&fabric_router_config,
+                sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 physical_eth_core,
-                INTRA_MESH_TABLE_ADDR,
-                false);
-            tt::Cluster::instance().write_core(
-                inter_mesh_data.data(),
-                inter_mesh_data.size() * sizeof(uint32_t),
-                physical_eth_core,
-                INTER_MESH_TABLE_ADDR,
+                tt::tt_fabric::FABRIC_ROUTER_CONFIG_BASE,
                 false);
         }
     }
@@ -436,8 +438,8 @@ void ControlPlane::print_routing_tables() const {
             const auto& chip_routing_table = this->intra_mesh_routing_tables_[mesh_id][chip_id];
             for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
                 ss << "   D" << chip_id << " Eth Chan " << eth_chan << ": ";
-                for (const auto& dst_chip_id : chip_routing_table[eth_chan]) {
-                    ss << dst_chip_id << " ";
+                for (const auto& dst_chan_id : chip_routing_table[eth_chan]) {
+                    ss << (std::uint16_t)dst_chan_id << " ";
                 }
                 ss << std::endl;
             }
@@ -454,8 +456,8 @@ void ControlPlane::print_routing_tables() const {
             const auto& chip_routing_table = this->inter_mesh_routing_tables_[mesh_id][chip_id];
             for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
                 ss << "   D" << chip_id << " Eth Chan " << eth_chan << ": ";
-                for (const auto& dst_mesh_id : chip_routing_table[eth_chan]) {
-                    ss << dst_mesh_id << " ";
+                for (const auto& dst_chan_id : chip_routing_table[eth_chan]) {
+                    ss << (std::uint16_t)dst_chan_id << " ";
                 }
                 ss << std::endl;
             }
@@ -475,7 +477,7 @@ void ControlPlane::print_ethernet_channels() const {
                  this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
                 ss << "   " << magic_enum::enum_name(direction) << ":";
                 for (const auto& eth_chan : eth_chans) {
-                    ss << eth_chan << " ";
+                    ss << (std::uint16_t)eth_chan << " ";
                 }
                 ss << std::endl;
             }

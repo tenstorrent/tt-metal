@@ -27,6 +27,7 @@ class RoutingTableGenerator {
     const InterMeshConnectivity& get_inter_mesh_connectivity() const {
         return this->mesh_graph_->get_inter_mesh_connectivity();
     }
+    const ChipSpec& get_chip_spec() const { return this->mesh_graph_->get_chip_spec(); }
 
     RoutingTable get_intra_mesh_table() const { return this->intra_mesh_table_; }
     RoutingTable get_inter_mesh_table() const { return this->inter_mesh_table_; }

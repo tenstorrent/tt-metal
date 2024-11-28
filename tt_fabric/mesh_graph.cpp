@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mesh_graph.hpp"
+#include "tt_fabric/mesh_graph.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -86,7 +86,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {N,
                  RouterEdge{
                      .port_direction = RoutingDirection::N,
-                     std::vector<chip_id_t>(this->chip_.num_eth_ports_per_direction, N),
+                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, N),
                      .weight = 0}});
         }
         if (E < num_chips_in_board && (E / row_size == src_chip_id / row_size)) {
@@ -94,7 +94,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {E,
                  RouterEdge{
                      .port_direction = RoutingDirection::E,
-                     std::vector<chip_id_t>(this->chip_.num_eth_ports_per_direction, E),
+                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, E),
                      .weight = 0}});
         }
         if (S < num_chips_in_board) {
@@ -102,7 +102,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {S,
                  RouterEdge{
                      .port_direction = RoutingDirection::S,
-                     std::vector<chip_id_t>(this->chip_.num_eth_ports_per_direction, S),
+                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, S),
                      .weight = 0}});
         }
         if (W >= 0 && (W / row_size == src_chip_id / row_size)) {
@@ -110,7 +110,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {W,
                  RouterEdge{
                      .port_direction = RoutingDirection::W,
-                     std::vector<chip_id_t>(this->chip_.num_eth_ports_per_direction, W),
+                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
                      .weight = 0}});
         }
     } else if (fabric_type == FabricType::TORUS) {
@@ -141,7 +141,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         num_eth_ports_per_direction != chip["ethernet_ports"]["W"].as<std::uint32_t>()) {
         TT_FATAL(true, "MeshGraph: Expecting the same number of ethernet ports in each direction");
     }
-    this->chip_ = Chip{
+    this->chip_spec_ = ChipSpec{
         .arch = arch.value(),
         .num_eth_ports_per_direction = num_eth_ports_per_direction,
         .num_z_ports = chip["ethernet_ports"]["Z"].IsDefined() ? chip["ethernet_ports"]["Z"].as<std::uint32_t>() : 0};
@@ -217,28 +217,28 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         // North, start from NW corner
         std::uint32_t chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_ew_size; chip_id++) {
-            for (std::uint32_t i = 0; i < this->chip_.num_eth_ports_per_direction; i++) {
+            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
             }
         }
         // South, start from SW corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_size - mesh_ew_size); chip_id < mesh_size; chip_id++) {
-            for (std::uint32_t i = 0; i < this->chip_.num_eth_ports_per_direction; i++) {
+            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
             }
         }
         // East, start from NE corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_ew_size - 1); chip_id < mesh_size; chip_id += mesh_ew_size) {
-            for (std::uint32_t i = 0; i < this->chip_.num_eth_ports_per_direction; i++) {
+            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }
         }
         // WEST, start from SW corner
         chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < (mesh_size - mesh_ew_size); chip_id += mesh_ew_size) {
-            for (std::uint32_t i = 0; i < this->chip_.num_eth_ports_per_direction; i++) {
+            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }

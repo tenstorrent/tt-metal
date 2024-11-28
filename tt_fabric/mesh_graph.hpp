@@ -15,7 +15,7 @@
 #include "tt_metal/third_party/umd/device/tt_arch_types.h"
 
 namespace tt::tt_fabric {
-struct Chip {
+struct ChipSpec {
     tt::ARCH arch;
     std::uint32_t num_eth_ports_per_direction;
     std::uint32_t num_z_ports;
@@ -72,6 +72,8 @@ class MeshGraph {
     const IntraMeshConnectivity& get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
     const InterMeshConnectivity& get_inter_mesh_connectivity() const { return inter_mesh_connectivity_; }
 
+    const ChipSpec& get_chip_spec() const { return chip_spec_; }
+
    private:
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_mesh, FabricType fabric_type) const;
@@ -84,7 +86,7 @@ class MeshGraph {
         chip_id_t dest_chip_id,
         RoutingDirection port_direction);
 
-    Chip chip_;
+    ChipSpec chip_spec_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
 };
