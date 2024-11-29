@@ -19,17 +19,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from models.utility_functions import torch_random
 
 
-def get_device_grid_size():
-    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-    assert device_name in ["wormhole_b0", "grayskull"]
-    if device_name == "grayskull":
-        y, x = 9, 12
-    else:
-        y, x = 8, 8
-
-    return y, x
-
-
 def sanitize_shape_rm(input_shape):
     if input_shape[-1] % 2 != 0:
         input_shape[-1] = input_shape[-1] + 1

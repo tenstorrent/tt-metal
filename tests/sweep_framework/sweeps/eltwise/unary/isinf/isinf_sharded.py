@@ -10,8 +10,12 @@ import torch
 import random
 import ttnn
 import math
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm, get_device_grid_size
-from tests.sweep_framework.sweep_utils.sharding_utils import gen_sharded_spec_unary, parse_sharding_spec
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from tests.sweep_framework.sweep_utils.sharding_utils import (
+    gen_sharded_spec_unary,
+    parse_sharding_spec,
+    get_device_grid_size,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_inf
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -67,10 +71,6 @@ def run(
         input_spec
     )
 
-    # print(
-    #     f"X {X} Y {Y} input_shape {input_shape} {input_a_dtype} {input_layout} {sharding_strategy} {shard_orientation} tensor_hw_as_shard_shape {tensor_hw_as_shard_shape}"
-    # )
-
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
@@ -99,5 +99,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(pcc)
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
