@@ -869,7 +869,14 @@ def run_llama3_demo(
 )
 @pytest.mark.parametrize(
     "sampling_params",
-    [{"temperature": 0.6, "top_p": 0.08}],
+    (
+        [{"temperature": 0.6, "top_p": 0.08}],
+        [{"temperature": 0, "top_p": 0.08}],
+    ),
+    ids=(
+        "sampling",
+        "argmax",
+    ),
 )
 @pytest.mark.parametrize(
     "batch_size",
