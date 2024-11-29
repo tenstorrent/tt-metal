@@ -53,7 +53,12 @@ from models.utility_functions import skip_for_grayskull
         pytest.param(LlamaOptimizations.performance, id="performance"),
     ],
 )
-def test_llama_model_inference(mesh_device, seq_len, optimizations, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_model_inference(
+    mesh_device, seq_len, optimizations, use_program_cache, reset_seeds, ensure_gc, is_ci_env
+):
+    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
+        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
