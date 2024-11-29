@@ -538,7 +538,7 @@ class resnetBlock2D:
                     reshard_if_not_optimal=False,
                 )
                 compute_config = self.ttnn.init_device_compute_kernel_config(
-                    device.arch(),
+                    self.device.arch(),
                     math_fidelity=ttnn.MathFidelity.LoFi,
                     math_approx_mode=True,
                     fp32_dest_acc_en=True,
