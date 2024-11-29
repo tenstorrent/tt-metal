@@ -55,7 +55,7 @@ PermuteDeviceOperation::SingleCore::cached_program_t PermuteDeviceOperation::Sin
     tt::tt_metal::Device* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_pages_to_read = 1;
+    uint32_t num_input_pages_to_read = 2;
 
     CoreRange core({0, 0}, {0, 0});
     tt::tt_metal::CircularBufferConfig cb_src0_config =
