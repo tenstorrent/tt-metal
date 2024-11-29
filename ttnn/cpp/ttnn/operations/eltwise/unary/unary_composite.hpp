@@ -143,6 +143,18 @@ struct ExecuteUnaryCompositeThreshold {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
+struct ExecuteUnaryCompositeBatchNorm {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const float eps = 1e-05,
+        const float momentum = 0.1,
+        std::optional<Tensor> running_mean = std::nullopt,
+        std::optional<Tensor> running_var = std::nullopt,
+        const std::optional<Tensor>& weight = std::nullopt,
+        const std::optional<Tensor>& bias = std::nullopt,
+        const bool training = false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
 struct ExecuteUnaryCompositeClip {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -296,6 +308,8 @@ constexpr auto hardsigmoid = ttnn::register_operation_with_auto_launch_op<
 constexpr auto hardtanh = ttnn::register_operation_with_auto_launch_op<
     "ttnn::hardtanh",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
+constexpr auto batch_norm = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::batch_norm", operations::unary::ExecuteUnaryCompositeBatchNorm>();
 constexpr auto clip =
     ttnn::register_operation_with_auto_launch_op<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp =

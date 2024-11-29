@@ -1681,6 +1681,85 @@ void bind_unary_composite_rpow(
 
 
 template <typename unary_operation_t>
+void bind_batch_norm(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+
+        Applies Spatial Batch Normalization over each channel on :attr:`input_tensor`.
+
+        . math::
+            \verb|{0}|(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+
+        Keyword Args:
+            eps (float, optional): Epsilon value. Defaults to `1e-05`.
+            momentum (float, optional): Momentum value. Defaults to `0.1`.
+            running_mean (ttnn.Tensor, optional): the running_mean required for inference mode. Defaults to `None`.
+            running_var (ttnn.Tensor, optional): the running_var required for inference mode. Defaults to `None`.
+            weight (ttnn.Tensor, optional): the weight or gamma value. Defaults to `None`.
+            bias (ttnn.Tensor, optional): the bias or beta value. Defaults to `None`.
+            training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False`(Inference mode).
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 4
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> seed = 124
+            >>> prob = 0.2
+            >>> output = {1}(tensor, seed=seed, probability=prob, scale= 1.0/(1.0 - prob))
+        )doc",
+        ttnn::batch_norm.base_name(),
+        ttnn::batch_norm.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        ttnn::batch_norm,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const float eps,
+               const float momentum,
+               std::optional<Tensor> running_mean,
+               std::optional<Tensor> running_var,
+               const std::optional<Tensor>& weight,
+               const std::optional<Tensor>& bias,
+               const bool training,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, eps, momentum, running_mean, running_var, weight, bias, training, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("eps") = 1e-05,
+            py::arg("momentum") = 0.1,
+            py::arg("running_mean") = std::nullopt,
+            py::arg("running_var") = std::nullopt,
+            py::arg("weight") = std::nullopt,
+            py::arg("bias") = std::nullopt,
+            py::arg("training") = false,
+            py::arg("memory_config") = std::nullopt});
+}
+
+
+template <typename unary_operation_t>
 void bind_dropout(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -1889,6 +1968,8 @@ void py_module(py::module& module) {
            Last dimension of input tensor should be divisible by 64.
 
         )doc");
+
+    detail::bind_batch_norm(module, ttnn::batch_norm);
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
