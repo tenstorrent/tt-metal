@@ -11,11 +11,7 @@ import random
 import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
-from tests.sweep_framework.sweep_utils.sharding_utils import (
-    gen_sharded_spec_unary,
-    parse_sharding_spec,
-    get_device_grid_size,
-)
+from tests.sweep_framework.sweep_utils.sharding_utils import gen_sharded_spec_unary, parse_sharding_spec
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_inf
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -23,7 +19,6 @@ from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
-Y, X = get_device_grid_size()
 
 random.seed(0)
 
@@ -34,7 +29,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, Y, X),
+        "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
@@ -44,7 +39,7 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
+    input_shape, X, Y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
@@ -67,9 +62,14 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    input_shape, sharding_strategy, shard_orientation, tensor_hw_as_shard_shape, input_layout = parse_sharding_spec(
-        input_spec
-    )
+    (
+        input_shape,
+        core_grid,
+        sharding_strategy,
+        shard_orientation,
+        tensor_hw_as_shard_shape,
+        input_layout,
+    ) = parse_sharding_spec(input_spec)
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
@@ -77,9 +77,9 @@ def run(
     torch_input_tensor_a = gen_rand_inf(input_shape, low=-100, high=100)
     torch_output_tensor = torch.isneginf(torch_input_tensor_a)
 
-    sharded_config = ttnn.create_sharded_memory_config(
+    sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
-        core_grid=ttnn.CoreGrid(y=Y, x=X),
+        core_grid=core_grid,
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
@@ -99,4 +99,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+    return [pcc, e2e_perf]

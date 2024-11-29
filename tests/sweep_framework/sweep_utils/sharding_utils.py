@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import ttnn
 import itertools
 import random
@@ -18,9 +19,10 @@ def get_device_grid_size():
     return y, x
 
 
-def gen_sharded_spec_unary(
-    num_shapes, y, x, max_tensor_size=4 * 1024 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]
-):
+def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
+    # device.compute_with_storage_grid_size()
+    y, x = get_device_grid_size()
+
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
@@ -118,6 +120,8 @@ def gen_sharded_spec_unary(
             spec_list.append(
                 {
                     "input_shape": input_shape,
+                    "X": x,
+                    "Y": y,
                     "sharding_strategy": sharding_strategy,
                     "shard_orientation": shard_orientation,
                     "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
@@ -130,6 +134,8 @@ def gen_sharded_spec_unary(
 
 def parse_sharding_spec(input_spec):
     input_shape = input_spec["input_shape"]
+    X = input_spec["X"]
+    Y = input_spec["Y"]
     sharding_strategy = input_spec["sharding_strategy"]
     shard_orientation = input_spec["shard_orientation"]
     tensor_hw_as_shard_shape = input_spec["tensor_hw_as_shard_shape"]
@@ -152,4 +158,11 @@ def parse_sharding_spec(input_spec):
     else:
         input_layout = ttnn.ROW_MAJOR_LAYOUT
 
-    return input_shape, sharding_strategy, shard_orientation, tensor_hw_as_shard_shape, input_layout
+    return (
+        input_shape,
+        ttnn.CoreGrid(y=Y, x=X),
+        sharding_strategy,
+        shard_orientation,
+        tensor_hw_as_shard_shape,
+        input_layout,
+    )
