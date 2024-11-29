@@ -60,22 +60,9 @@ Authors:
 
 Large language models require two distinct phases for inference due to the fundamental nature of transformer attention and autoregressive generation: prefill and decode.
 
-The prefill phase is done sequentially for each user, but parallel for the prompt tokens of each user. During prefill, the model computes attention scores for all prompt tokens against each other and populates the key-value (KV) cache which will speed up the computation of the decode phase. At the end of the prefill phase, the first token for the following autoregressive generation will also be computed.
+On tenstorrent harware, the prefill phase is done sequentially for each user, but parallel for the prompt tokens of each user. During prefill, the model computes attention scores for all prompt tokens against each other and populates the key-value (KV) cache which will speed up the computation of the decode phase. At the end of the prefill phase, the first token for the following autoregressive generation will also be computed.
 
 The decode phase is parallel-computed for all users, but sequential for each token within a batch of users. Each new token can only be generated after the previous one, as the model must maintain causality in attention computations.
-
-#### Llama3 Module and Test Differences
-
-In our current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`. 
-To test these, we provide two separate attention test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
-- A tensor of size `(batch, dim)` in L1 for decode,
-- A tensor of size `(seqlen, dim)` in DRAM for prefill.
-
-Each attention test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the TTNN device implementation.
-
-The current version of the MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences (mentioned in the section below).
-
-The decoder module (which encapsulates both attention and MLP) and model module (which encapsulates the decoder and the remaining parts of the Llama3 model) also handle prefill and decode in the same file, but they call the respective modes within the attention and MLP modules.
 
 #### **Technical Implementation Differences**
 
@@ -372,6 +359,20 @@ For our llama family of models we are using the following sharding schemes:
   - DRAM-sharding
   - Avoiding sharded to interleaved calls
 ### 4.8 Module Tests
+
+#### Llama3 Module and Test Differences
+
+In our current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`. 
+To test these, we provide two separate attention test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
+- A tensor of size `(batch, dim)` in L1 for decode,
+- A tensor of size `(seqlen, dim)` in DRAM for prefill.
+
+Each attention test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the TTNN device implementation.
+
+The current version of the MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences (mentioned in the section below).
+
+The decoder module (which encapsulates both attention and MLP) and model module (which encapsulates the decoder and the remaining parts of the Llama3 model) also handle prefill and decode in the same file, but they call the respective modes within the attention and MLP modules.
+
 ### 4.9 Performance Testing
 ### 4.10 Common Pitfalls
 #### 4.10.1 Error Messages
