@@ -455,6 +455,7 @@ To set up pre-commit on your local machine, follow these steps:
    ```bash
    pip install pre-commit
    ```
+   *Note:* pre-commit is already installed if you are using the python virtual environment.
 2. **Install the Git Hook Scripts**:
    In your local repository, run the following command to install the pre-commit hooks:
    ```bash
