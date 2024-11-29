@@ -13,6 +13,7 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
+#include "tensix.h"
 
 #include "hal.hpp"
 

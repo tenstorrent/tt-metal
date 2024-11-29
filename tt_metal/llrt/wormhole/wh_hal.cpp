@@ -9,6 +9,7 @@
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
+#include "tensix.h"
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"

@@ -9,6 +9,7 @@
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
+#include "tensix.h"
 
 #include "hal.hpp"
 #include "blackhole/bh_hal.hpp"
