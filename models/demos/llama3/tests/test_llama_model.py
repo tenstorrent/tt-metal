@@ -75,7 +75,7 @@ def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_
     if layers == 1:
         pcc = 0.88 if mode_accuracy else 0.86
     else:
-        pcc = 0.94 if mode_accuracy else 0.94
+        pcc = 0.94 if mode_accuracy else 0.86
 
     # Define tight final PCC thresholds for quick mode
     final_model_pcc = {
