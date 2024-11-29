@@ -154,28 +154,30 @@ int main(int argc, char** argv) {
 
                 vector<uint16_t> tiled_bcast_values;
                 vector<uint16_t> ref_bcast_values;
-                vector<uint32_t> ref_bcast_shape = {N, C, 1, 1};
                 float bcast_1value = 10.0f;
                 uint16_t bcast_1value16 = bfloat16(bcast_1value).to_uint16();
                 unsigned num_bcast_tiles = 0;
                 // build the constant tiles to be broadcast
                 if (bcast_dim == BcastDim::HW) {
-                    num_bcast_tiles = NC;
                     ref_bcast_values.resize(NC, 0);
+                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, TILE_WIDTH};
+                    vector<uint16_t> ref_bcast_values_with_tile_padding;
+                    ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * TILE_WIDTH, 0);
                     for (int j = 0; j < NC; j++) {
                         // add something not too large but different between tiles
-                        ref_bcast_values[j] = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        ref_bcast_values[j] = val;
+                        ref_bcast_values_with_tile_padding[j * TILE_HEIGHT * TILE_WIDTH] = val;
                     }
                     // convert the reference broadcast tensor to tiled format
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values,
-                        ref_bcast_shape,
+                        ref_bcast_values_with_tile_padding,
+                        ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
                     TT_FATAL(tiled_bcast_values[0] == bcast_1value16, "Error");
+                    num_bcast_tiles = NC;
                     // restore ref values and shape to 1
-                    ref_bcast_shape[3] = 1;
-                    ref_bcast_shape[4] = 1;
                 } else if (bcast_dim == BcastDim::H) {
                     // For bcast_h a.k.a. Dim::R we broadcast _over_ H, meaning we take a W vector and += it over each
                     // element in the H dimension At least that's the behavior i've seen from a single tile bcast-H So
@@ -185,14 +187,18 @@ int main(int argc, char** argv) {
                     // generate broadcast values along the W axis with one extra tile (needed by the kernel I believe)
                     // TODO(AP): need to figure out why the extra tile in broadcast inputs is expected by the kernel
                     ref_bcast_values.resize(NC * W, 0);
-                    ref_bcast_shape[3] = W;
+                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, W};
+                    vector<uint16_t> ref_bcast_values_with_tile_padding;
+                    ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * W, 0);
                     for (int j = 0; j < NC * W; j++) {
                         // add something not too large but different between tiles
-                        ref_bcast_values[j] = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        ref_bcast_values[j] = val;
+                        ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values,
-                        ref_bcast_shape,
+                        ref_bcast_values_with_tile_padding,
+                        ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
                     num_bcast_tiles = NC * Wt;
@@ -200,14 +206,18 @@ int main(int argc, char** argv) {
                 } else if (bcast_dim == BcastDim::W) {
                     // see the comments above for BCAST_H
                     ref_bcast_values.resize(NC * H, 0);
-                    ref_bcast_shape[2] = H;
+                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, H, TILE_WIDTH};
+                    vector<uint16_t> ref_bcast_values_with_tile_padding;
+                    ref_bcast_values_with_tile_padding.resize(NC * H * TILE_WIDTH, 0);
                     for (int j = 0; j < NC * H; j++) {
                         // add something not too large but different between tiles
-                        ref_bcast_values[j] = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        ref_bcast_values[j] = val;
+                        ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values,
-                        ref_bcast_shape,
+                        ref_bcast_values_with_tile_padding,
+                        ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
                     num_bcast_tiles = NC * Ht;
