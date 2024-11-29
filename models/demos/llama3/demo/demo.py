@@ -464,7 +464,7 @@ def run_llama3_demo(
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
         if argmax_on_device:
-            tt_out_tok = ttnn.argmax(  # TODO Miguel: Move argmax to host when batch_size > 1 to avoid slowdowns
+            tt_out_tok = ttnn.argmax(  # TODO When ttnn.argmax supports multicore, avoid falling back to host
                 tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
             )
             ttnn.deallocate(tt_out_rm)
