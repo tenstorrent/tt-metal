@@ -37,14 +37,35 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "xfail": {
-        "input_spec": list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "TENSOR_HW"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "TENSOR_HW"))
-        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "BLOCK"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "BLOCK"))
-        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "HEIGHT"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "HEIGHT"))
-        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "WIDTH"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "WIDTH")),
+        "input_spec": list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "BLOCK", True))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "BLOCK", True))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "HEIGHT", True))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "HEIGHT", True))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "WIDTH", True))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "WIDTH", True))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "TENSOR_HW", True))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "TENSOR_HW", True))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "BLOCK", False))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "BLOCK", False))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "HEIGHT", False))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "HEIGHT", False))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "WIDTH", False))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "WIDTH", False))
+        + list(gen_unary_sharded_spec(8, 4, "ROW_MAJOR", "TENSOR_HW", False))
+        + list(gen_unary_sharded_spec(8, 4, "COL_MAJOR", "TENSOR_HW", False)),
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    },
+    "test": {
+        "input_spec": [
+            {
+                "input_shape": [1, 1, 1, 32 * 8 * 8],
+                "core_grid_size": (8, 8),
+                "sharding_strategy": "WIDTH",
+                "shard_orientation": "ROW_MAJOR",
+                "shard_height_mul_of_32": True,
+            }
+        ],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     },
@@ -52,75 +73,8 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, core_grid_size, shard_orientation, sharding_strategy, tensor_hw_as_shard_shape = parse_sharding_spec(
-        test_vector["input_spec"]
-    )
-    y, x = core_grid_size
-
-    pre_sharded_height = math.prod(input_shape[:-1])
-    pre_sharded_width = input_shape[-1]
-
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "Row Major layout and bfloat8_b are not supported"
-
-    if not tensor_hw_as_shard_shape:
-        if sharding_strategy == ttnn.ShardStrategy.BLOCK:
-            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                if pre_sharded_height % y != 0:
-                    return (
-                        True,
-                        "Prod of all dimensions except the innermost must be divisible by the y coordinate of coregrid when using block sharding",
-                    )
-                if pre_sharded_width % x != 0:
-                    return (
-                        True,
-                        "Innermost dimension must be divisible by the x coordinate of coregrid when using block sharding",
-                    )
-                if (pre_sharded_height // y) % 32 != 0:
-                    return True, "Shard height must be a multiple of input tile size"
-                if (pre_sharded_width // x) % 32 != 0:
-                    return True, "Shard width must be a multiple of input tile size"
-            else:
-                if pre_sharded_height % x != 0:
-                    return (
-                        True,
-                        "Prod of all dimensions except the innermost must be divisible by the x coordinate of coregrid when using block sharding",
-                    )
-                if pre_sharded_width % y != 0:
-                    return (
-                        True,
-                        "Innermost dimension must be divisible by the y coordinate of coregrid when using block sharding",
-                    )
-                if (pre_sharded_height // x) % 32 != 0:
-                    return True, "Shard height must be a multiple of input tile size"
-                if (pre_sharded_width // y) % 32 != 0:
-                    return True, "Shard width must be a multiple of input tile size"
-
-        elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
-            if pre_sharded_width % (y * x) != 0:
-                return True, "Last dimension must be divisible by a total number of cores when using width sharding"
-            if pre_sharded_height % 32 != 0:
-                return True, "Shard height must be a multiple of input tile size"
-            if (pre_sharded_width // (x * y)) % 32 != 0:
-                return True, "Shard width must be a multiple of input tile size"
-
-        else:
-            if pre_sharded_height % (y * x) != 0:
-                return (
-                    True,
-                    "Prod of all dimensions except the innermost must be divisible by a total number of cores when using width sharding",
-                )
-            if (pre_sharded_height // (x * y)) % 32 != 0:
-                return True, "Shard height must be a multiple of input tile size"
-            if pre_sharded_width % 32 != 0:
-                return True, "Shard width must be a multiple of input tile size"
-
-    else:
-        if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
-            return (
-                True,
-                "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
-            )
 
     return False, None
 
@@ -139,18 +93,24 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    input_shape, core_grid_size, shard_orientation, sharding_strategy, tensor_hw_as_shard_shape = parse_sharding_spec(
-        input_spec
-    )
+    (
+        input_shape,
+        core_grid_size,
+        shard_orientation,
+        sharding_strategy,
+        tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
+    ) = parse_sharding_spec(input_spec)
     y, x = core_grid_size
     device_grid_size = ttnn.CoreGrid(y=y, x=x)
 
-    sharded_config = ttnn.create_sharded_memory_config(
+    sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
         core_grid=device_grid_size,
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+        tile_layout=True,
     )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
