@@ -45,25 +45,6 @@ run_perf_models_other() {
     env python models/perf/merge_perf_results.py
 }
 
-run_n300_ccl_all_gather_perf_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_n300_ccl_all_gather_perf_tests"
-
-  tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t n300
-  fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_n300_ccl_all_gather_perf_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_perf_models_llm_javelin() {
     local tt_arch=$1
     local test_marker=$2
@@ -219,8 +200,6 @@ main() {
         run_perf_models_cnn_javelin "$tt_arch" "$test_marker"
     elif [[ "$pipeline_type" == *"other_models_performance"* ]]; then
         run_perf_models_other "$tt_arch" "$test_marker"
-    elif [[ "$pipeline_type" == "CCL_models_performance"* ]]; then
-        run_n300_ccl_all_gather_perf_tests
     else
         echo "$pipeline_type is not recoognized performance pipeline" 2>&1
         exit 1

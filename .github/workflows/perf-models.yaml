@@ -7,12 +7,10 @@ on:
   workflow_call:
 
 jobs:
-  build-artifact-profiler:
+  build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
-    with:
-      tracy: true
     secrets: inherit
   models-perf:
-    needs: build-artifact-profiler
+    needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml
     secrets: inherit

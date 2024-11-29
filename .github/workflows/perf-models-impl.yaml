@@ -15,9 +15,6 @@ jobs:
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
         model-type: [llm_javelin, cnn_javelin, other]
-        include: # include used to add a separate test without mingling in above
-          - test-info: {name: "N300 Perf tests", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", tracy: true, owner_id: ULMEPM2MA} # Sean Nijjar
-            model-type: CCL
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -35,10 +32,9 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Download profiler build artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-info.arch }}_profiler
+          name: TTMetal_build_${{ matrix.test-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
       - uses: ./.github/actions/install-python-deps
@@ -57,26 +53,10 @@ jobs:
         id: check-perf-report
         if: ${{ !cancelled() }}
         run: |
-          TODAY=$(date +%Y_%m_%d)
-          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
-          PERF_REPORT_FILENAME_CCL="CCL_Perf_${TODAY}.csv"
-          if [ "${{ matrix.test-info.tracy }}" == "true" ]; then
-            if [ -f "$PERF_REPORT_FILENAME_CCL" ]; then
-              echo "Found CCL Perf report: $PERF_REPORT_FILENAME_CCL"
-              echo "perf_report_filename=$PERF_REPORT_FILENAME_CCL" >> "$GITHUB_OUTPUT"
-            else
-              echo "No CCL perf report found for today."
-              exit 1
-            fi
-          else
-            if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
-              echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
-              echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
-            else
-              echo "No Models perf report found for today."
-              exit 1
-            fi
-          fi
+          ls -hal
+          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
+          ls -hal $PERF_REPORT_FILENAME
+          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
