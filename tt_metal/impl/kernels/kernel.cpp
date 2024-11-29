@@ -451,7 +451,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto worker_core = device->translated_worker_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
@@ -461,7 +461,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
 
 bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     auto device_id = device->id();
-    auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
+    auto ethernet_core = device->translated_ethernet_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
 
     if (this->config_.eth_mode == Eth::IDLE) {
@@ -483,7 +483,7 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core, uin
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto worker_core = device->translated_worker_core_from_logical_core(logical_core);
     std::vector<ll_api::memory> binaries = this->binaries(device->build_key());
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {

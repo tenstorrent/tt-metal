@@ -338,7 +338,7 @@ void watcher_init(Device* device) {
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
+            CoreCoord worker_core = device->translated_worker_core_from_logical_core(logical_core);
             if (debug_delays_val.find(worker_core) != debug_delays_val.end()) {
                 data->debug_insert_delays = debug_delays_val[worker_core];
             } else {
@@ -363,7 +363,7 @@ void watcher_init(Device* device) {
         } else {
             continue;
         }
-        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        CoreCoord physical_core = device->translated_ethernet_core_from_logical_core(eth_core);
         if (debug_delays_val.find(physical_core) != debug_delays_val.end()) {
             data->debug_insert_delays = debug_delays_val[physical_core];
         } else {

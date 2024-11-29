@@ -216,6 +216,10 @@ class Cluster {
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
+    bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) const;
+    bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) const;
+    CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
+
    private:
     Cluster();
     ~Cluster();
@@ -232,8 +236,7 @@ class Cluster {
     void get_metal_desc_from_tt_desc(
         const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
         const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
-    tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
-
+    void generate_virtual_to_umd_coord_mapping();
     // Reserves ethernet cores in cluster for tunneling
     void reserve_ethernet_cores_for_tunneling();
     // Returns map of connected chip ids to active ethernet cores
@@ -263,6 +266,9 @@ class Cluster {
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
 
+    std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     bool is_tg_cluster_;

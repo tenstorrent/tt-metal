@@ -88,7 +88,7 @@ void Device::get_associated_dispatch_phys_cores(
                     CoreCoord phys_core_dispatch_hd;
                     if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                        phys_core_dispatch_hd = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
+                        phys_core_dispatch_hd = this->translated_coords_from_logical_coords(dispatch_location, dispatch_core_type);
                         my_dispatch_cores[this->id_].insert(phys_core_dispatch_hd);
                         dispatch_hd_allocated = true;
                         log_debug(tt::LogMetal, "MMIO Device Dispatch core: Logical: {} - Physical: {}", dispatch_location.str(), phys_core_dispatch_hd.str());
@@ -96,14 +96,14 @@ void Device::get_associated_dispatch_phys_cores(
                     // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_hd
                     if (dispatch_core_manager::instance().is_dispatcher_s_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core_dispatch_s = get_physical_core_coordinate(dispatch_s_location, dispatch_core_type);
+                        CoreCoord phys_core_dispatch_s = this->translated_coords_from_logical_coords(dispatch_s_location, dispatch_core_type);
                         if ((!dispatch_hd_allocated) or (phys_core_dispatch_s != phys_core_dispatch_hd)) {
                             my_dispatch_cores[dispatch_s_location.chip].insert(phys_core_dispatch_s);
                         }
                     }
                     if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
+                        CoreCoord phys_core = this->translated_coords_from_logical_coords(prefetch_location, dispatch_core_type);
                         my_dispatch_cores[this->id_].insert(phys_core);
                         log_debug(tt::LogMetal, "MMIO Device Prefetch core: Logical: {} - Physical: {}", prefetch_location.str(), phys_core.str());
                     }
@@ -112,25 +112,25 @@ void Device::get_associated_dispatch_phys_cores(
                     //skip remote dispatch cores only if respective remote device is active.
                     if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
+                        CoreCoord phys_core = this->translated_coords_from_logical_coords(dispatch_location, dispatch_core_type);
                         other_dispatch_cores[this->id_].insert(phys_core);
                         log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will keep running on MMIO Device.", dispatch_location.str(), phys_core.str());
                     }
                     if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
+                        CoreCoord phys_core = this->translated_coords_from_logical_coords(prefetch_location, dispatch_core_type);
                         other_dispatch_cores[this->id_].insert(phys_core);
                         log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will keep running on MMIO Device.", prefetch_location.str(), phys_core.str());
                     }
                     if (dispatch_core_manager::instance().is_mux_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
+                        CoreCoord phys_core = this->translated_coords_from_logical_coords(mux_location, dispatch_core_type);
                         other_dispatch_cores[this->id_].insert(phys_core);
                         log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will keep running on MMIO Device.", mux_location.str(), phys_core.str());
                     }
                     if (dispatch_core_manager::instance().is_demux_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
+                        CoreCoord phys_core = this->translated_coords_from_logical_coords(demux_location, dispatch_core_type);
                         other_dispatch_cores[this->id_].insert(phys_core);
                         log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will keep running on MMIO Device.", demux_location.str(), phys_core.str());
                     }
@@ -146,46 +146,46 @@ void Device::get_associated_dispatch_phys_cores(
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
+                CoreCoord phys_core = this->translated_coords_from_logical_coords(dispatch_location, dispatch_core_type);
                 my_dispatch_cores[dispatch_location.chip].insert(phys_core);
                 log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will be reset on MMIO Device.", dispatch_location.str(), phys_core.str());
             }
             if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
+                CoreCoord phys_core = this->translated_coords_from_logical_coords(prefetch_location, dispatch_core_type);
                 my_dispatch_cores[prefetch_location.chip].insert(phys_core);
                 log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will be reset on MMIO Device.", prefetch_location.str(), phys_core.str());
             }
             if (dispatch_core_manager::instance().is_mux_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
+                CoreCoord phys_core = this->translated_coords_from_logical_coords(mux_location, dispatch_core_type);
                 my_dispatch_cores[mux_location.chip].insert(phys_core);
                 log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will be reset on MMIO Device.", mux_location.str(), phys_core.str());
             }
             if (dispatch_core_manager::instance().is_demux_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
+                CoreCoord phys_core = this->translated_coords_from_logical_coords(demux_location, dispatch_core_type);
                 my_dispatch_cores[demux_location.chip].insert(phys_core);
                 log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), phys_core.str());
             }
                 CoreCoord phys_core;
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
+                phys_core = this->translated_coords_from_logical_coords(dispatch_location, dispatch_core_type);
                 my_dispatch_cores[dispatch_location.chip].insert(phys_core);
                 // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
                 tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core_dispatch_s = get_physical_core_coordinate(dispatch_s_location, dispatch_core_type);
+                CoreCoord phys_core_dispatch_s = this->translated_coords_from_logical_coords(dispatch_s_location, dispatch_core_type);
                 if (phys_core_dispatch_s != phys_core) {
                     my_dispatch_cores[dispatch_s_location.chip].insert(phys_core_dispatch_s);
                 }
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
+                phys_core = this->translated_coords_from_logical_coords(prefetch_location, dispatch_core_type);
                 my_dispatch_cores[dispatch_location.chip].insert(phys_core);
                 tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
+                phys_core = this->translated_coords_from_logical_coords(mux_location, dispatch_core_type);
                 my_dispatch_cores[dispatch_location.chip].insert(phys_core);
                 tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
+                phys_core = this->translated_coords_from_logical_coords(demux_location, dispatch_core_type);
                 my_dispatch_cores[dispatch_location.chip].insert(phys_core);
         }
     }
@@ -431,7 +431,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
             } else {
                 std::vector<CoreCoord> physical_dispatch_cores = {};
                 if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER) {
-                    physical_dispatch_cores = this->worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
+                    physical_dispatch_cores = this->translated_worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
                 }
                 if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), phys_core) != physical_dispatch_cores.end()) {
                     // Dispatch cores - Host writes launch messages
@@ -508,7 +508,7 @@ void Device::reset_cores() {
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord physical_core = this->translated_ethernet_core_from_logical_core(eth_core);
         std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
         std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
         DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
@@ -585,7 +585,7 @@ void Device::reset_cores() {
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+            CoreCoord worker_core = this->translated_worker_core_from_logical_core(logical_core);
 
             // Don't reset dispatch cores for other devices, in case they're still running.
             if (other_dispatch_cores[this->id_].find(worker_core) == other_dispatch_cores[this->id_].end()) {
@@ -669,7 +669,7 @@ void Device::initialize_and_launch_firmware() {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             if (!this->storage_only_cores_.count(logical_core)) {
-                CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+                CoreCoord worker_core = this->translated_worker_core_from_logical_core(logical_core);
                 tt::llrt::write_hex_vec_to_core(
                     this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalL1MemAddrType::CORE_INFO));
                 this->initialize_firmware(HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
@@ -681,7 +681,7 @@ void Device::initialize_and_launch_firmware() {
     // Clear erisc sync info
     std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord physical_core = this->translated_ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
             this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
@@ -689,14 +689,14 @@ void Device::initialize_and_launch_firmware() {
 
     // Load erisc app base FW to eth cores
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord phys_eth_core = this->translated_ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
-        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord phys_eth_core = this->translated_ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::IDLE_ETH, phys_eth_core, &launch_msg, &go_msg);
@@ -744,7 +744,7 @@ void Device::clear_l1_state() {
 
     // Clear erisc sync info
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord physical_core = this->translated_ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
             this->id(),
@@ -2887,7 +2887,7 @@ void Device::init_command_queue_device() {
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
             launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
             go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
-            CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
+            CoreCoord phys_core = this->translated_coords_from_logical_coords(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, &go_msg, this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
         }
     }
@@ -2904,7 +2904,7 @@ void Device::init_command_queue_device() {
                 for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
                     launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
                     go_msg_t go_msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
-                    CoreCoord phys_core = mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type);
+                    CoreCoord phys_core = mmio_device->translated_coords_from_logical_coords(logical_dispatch_core, core_type);
                     tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, &go_msg, mmio_device->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
                 }
             }
@@ -2990,7 +2990,7 @@ bool Device::close() {
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+            CoreCoord worker_core = this->translated_worker_core_from_logical_core(logical_core);
 
             if (cores_to_skip[mmio_device_id].find(worker_core) == cores_to_skip[mmio_device_id].end()) {
                 if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
@@ -3099,6 +3099,14 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
     return worker_cores;
 }
 
+std::vector<CoreCoord> Device::translated_worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
+    std::vector<CoreCoord> worker_cores(logical_cores.size());
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
+        worker_cores[idx] = translated_worker_core_from_logical_core(logical_cores[idx]);
+
+    return worker_cores;
+}
+
 CoreCoord Device::translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const {
     return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }
@@ -3133,8 +3141,7 @@ CoreCoord Device::translated_ethernet_core_from_logical_core(const CoreCoord &lo
 }
 
 CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &physical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(this->id(), physical_core);
 }
 
 std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {

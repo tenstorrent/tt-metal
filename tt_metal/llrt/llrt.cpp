@@ -102,8 +102,7 @@ std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &co
 }
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(chip_id, physical_core);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {

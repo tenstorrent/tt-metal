@@ -792,7 +792,7 @@ void detail::Program_::init_semaphores(const Device &device, const CoreCoord &lo
     for (auto semaphore : semaphores_on_core) {
         llrt::write_hex_vec_to_core(
             device.id(),
-            device.physical_core_from_logical_core(logical_core, core_type),
+            device.translated_coords_from_logical_coords(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
@@ -1519,7 +1519,7 @@ void Program::set_runtime_id(uint64_t id) { pimpl_->set_runtime_id(id); }
 
 uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    CoreCoord phys_core = device->translated_coords_from_logical_coords(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
     const auto &sub_device_ids = this->determine_sub_device_ids(device);
@@ -1541,7 +1541,7 @@ uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, Core
 
 uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    CoreCoord phys_core = device->translated_coords_from_logical_coords(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
     const auto &sub_device_ids = this->determine_sub_device_ids(device);
@@ -1571,7 +1571,7 @@ void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
 
 uint32_t detail::Program_::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    CoreCoord phys_core = device->translated_coords_from_logical_coords(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
@@ -1584,7 +1584,7 @@ uint32_t Program::get_sem_size(Device *device, CoreCoord logical_core, CoreType 
 
 uint32_t detail::Program_::get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    CoreCoord phys_core = device->translated_coords_from_logical_coords(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 

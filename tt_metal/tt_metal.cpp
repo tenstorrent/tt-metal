@@ -305,14 +305,14 @@ bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t addres
 bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type)
 {
     ZoneScoped;
-    auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
+    auto worker_core = device->translated_coords_from_logical_coords(logical_core, core_type);
     llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
     return true;
 }
 
 bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
 {
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto worker_core = device->translated_worker_core_from_logical_core(logical_core);
     tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
@@ -320,7 +320,7 @@ bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t ad
 bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
 {
     tt::Cluster::instance().l1_barrier(device->id());
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto worker_core = device->translated_worker_core_from_logical_core(logical_core);
     host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
     return true;
 }
@@ -328,7 +328,7 @@ bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t ad
 bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
 {
     tt::Cluster::instance().l1_barrier(device->id());
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto worker_core = device->translated_worker_core_from_logical_core(logical_core);
     tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
@@ -658,7 +658,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
                 go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
-                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                auto physical_core = device->translated_coords_from_logical_coords(logical_core, core_type);
                 not_done_cores.insert(physical_core);
                 tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
@@ -681,7 +681,7 @@ void WaitProgramDone(Device *device, Program &program) {
         const auto & logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto &logical_core : logical_cores) {
-            auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+            auto physical_core = device->translated_coords_from_logical_coords(logical_core, core_type);
             not_done_cores.insert(physical_core);
         }
     }
@@ -710,7 +710,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
         CoreType core_type = hal.get_core_type(index);
         for (const auto &logical_core : logical_cores) {
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
-            CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+            CoreCoord physical_core = device->translated_coords_from_logical_coords(logical_core, core_type);
 
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
@@ -761,7 +761,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
-                        auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                        auto physical_core = device->translated_coords_from_logical_coords(logical_core, core_type);
                         for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {

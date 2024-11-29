@@ -92,15 +92,11 @@ void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
 void print_worker_cores(chip_id_t chip_id = 0);
 
 inline bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) !=
-           soc_desc.physical_workers.end();
+    return tt::Cluster::instance().is_worker_core(core, chip_id);
 }
 
 inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_ethernet_cores.begin(), soc_desc.physical_ethernet_cores.end(), core) !=
-           soc_desc.physical_ethernet_cores.end();
+    return tt::Cluster::instance().is_ethernet_core(core, chip_id);
 }
 
 uint32_t generate_risc_startup_addr(bool is_eth_core);
