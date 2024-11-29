@@ -36,7 +36,8 @@ def test_reshape_sharded_rm(device, n, c, h, w):
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
     )
 
-    tt_output_tensor = tt_input_tensor.reshape_unsafe(n, c, h * 2, w // 2)
+    # tt_output_tensor = tt_input_tensor.reshape_unsafe(n, c, h * 2, w // 2)
+    tt_output_tensor = ttnn.experimental.reshape(tt_input_tensor, n, c, h * 2, w // 2)
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
