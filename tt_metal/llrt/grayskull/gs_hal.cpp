@@ -12,6 +12,7 @@
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
+#include "noc/noc_overlay_parameters.h"
 
 #include "hal.hpp"
 
@@ -141,6 +142,15 @@ void Hal::initialize_gs() {
 
         // No relocation needed
         return addr;
+    };
+
+    this->valid_reg_addr_func_ = [](uint32_t addr) {
+        return (
+            ((addr >= NOC_OVERLAY_START_ADDR) &&
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+            ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
+            ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
+            (addr == RISCV_DEBUG_REG_SOFT_RESET_0));
     };
 }
 
