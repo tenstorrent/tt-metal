@@ -3715,6 +3715,53 @@ const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
 }
 
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_worker_core_assignment() const {
+    uint32_t full_grid_size_x = this->grid_size().x;
+    uint32_t full_grid_size_y = this->grid_size().y;
+
+    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    uint32_t num_dram_banks = this->num_dram_channels();
+    std::vector<CoreCoord> dram_phy_coords;
+    for (int i = 0; i < num_dram_banks; ++i) {
+        dram_phy_coords.push_back(dram_core_from_dram_channel(i));
+    }
+
+    std::vector<CoreCoord> all_worker_cores_logical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        for (int j = 0; j < num_cores_y; ++j) {
+            all_worker_cores_logical.push_back(CoreCoord(i, j));
+        }
+    }
+
+    std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+    for (int i = 0; i < num_cores_y; ++i) {
+        auto core_phy = this->worker_core_from_logical_core(CoreCoord(0, i));
+        worker_phy_y.at(i) = core_phy.y;
+    }
+    std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+    for (int i = 0; i < num_cores_x; ++i) {
+        auto core_phy = this->worker_core_from_logical_core(CoreCoord(i, 0));
+        worker_phy_x.push_back(core_phy.x);
+    }
+
+    auto physical_worker_cores = reassign_cores_based_on_worker_grid_config(this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y, num_dram_banks);
+    std::vector<CoreCoord> logical_worker_cores;
+    for (int i = 0; i < physical_worker_cores.size(); ++i) {
+        for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
+            auto core = this->worker_core_from_logical_core(all_worker_cores_logical[j]);
+            if (physical_worker_cores[i] == core) {
+                logical_worker_cores.push_back(all_worker_cores_logical[j]);
+            }
+        }
+    }
+    return logical_worker_cores;
+}
+
+
+
 size_t v1::GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
 
 size_t v1::GetNumPCIeDevices() { return tt::Cluster::instance().number_of_pci_devices(); }

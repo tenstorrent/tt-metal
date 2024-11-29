@@ -180,4 +180,8 @@ inline CoreCoord get_physical_core_coordinate(const tt_cxy_pair& logical_locatio
     return soc_desc.get_physical_core_from_logical_core(CoreCoord(logical_location.x, logical_location.y), core_type);
 }
 
+std::vector<CoreCoord> reassign_cores_based_on_worker_grid_config(
+    ARCH arch, const std::vector<CoreCoord>& dram_phy_coords, uint32_t full_grid_size_x, uint32_t full_grid_size_y,
+    std::vector<uint32_t> worker_phy_x, std::vector<uint32_t> worker_phy_y, uint32_t num_dram_banks);
+
 }  // namespace tt
