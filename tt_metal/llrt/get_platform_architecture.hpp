@@ -8,6 +8,7 @@
 
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/assert.hpp"
+#include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/cluster.h"
 
 namespace tt::tt_metal {
@@ -47,8 +48,8 @@ namespace tt::tt_metal {
  * @endcode
  *
  * @see tt::get_arch_from_string
- * @see tt::umd::Cluster::detect_available_device_ids
- * @see detect_arch
+ * @see tt_ClusterDescriptor::detect_arch
+ * @see tt_ClusterDescriptor::get_arch
  */
 inline tt::ARCH get_platform_architecture() {
     auto arch = tt::ARCH::Invalid;
@@ -57,12 +58,12 @@ inline tt::ARCH get_platform_architecture() {
         TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
         arch = tt::get_arch_from_string(arch_env);
     } else {
-        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        if (!physical_mmio_device_ids.empty()) {
-            arch = detect_arch(physical_mmio_device_ids.at(0));
-            for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
-                chip_id_t device_id = physical_mmio_device_ids.at(i);
-                tt::ARCH detected_arch = detect_arch(device_id);
+        auto cluster_desc = tt_ClusterDescriptor::create();
+        if (cluster_desc->get_number_of_chips() > 0) {
+            const std::unordered_set<chip_id_t> &device_ids = cluster_desc->get_all_chips();
+            arch = cluster_desc->get_arch(*device_ids.begin());
+            for (auto device_id : device_ids) {
+                tt::ARCH detected_arch = cluster_desc->get_arch(device_id);
                 TT_FATAL(
                     arch == detected_arch,
                     "Expected all devices to be {} but device {} is {}",
