@@ -59,7 +59,7 @@ class MambaConv:
             deallocate_activation=True,
         )
         self.conv1d_compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
+            self.device.arch(),
             math_fidelity=self.config.math_fidelity,
         )
 
