@@ -316,10 +316,12 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
 
-    if dtype is not None:
-        tensor = tensor.to(dtype=dtype)
+    torch_tensor = TorchTensor(tensor)
 
-    return TorchTensor(tensor)
+    if dtype is not None:
+        torch_tensor = torch_tensor.to(dtype=dtype)
+
+    return torch_tensor
 
 
 def _golden_function(tensor, *args, **kwargs):
