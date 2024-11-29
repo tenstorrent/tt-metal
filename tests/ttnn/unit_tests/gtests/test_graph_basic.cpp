@@ -29,7 +29,7 @@ TEST_P(BufferTestFixture, BufferTest) {
 
     tt::tt_metal::Device* device = &(this->getDevice());
     {
-        ttnn::graph::GraphProcessor::begin_graph_capture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
+        ttnn::graph::GraphProcessor::begin_graph_capture(run_mode);
         {
             const auto input_a = ttnn::TensorSpec(
                 params.shape_a,
