@@ -179,7 +179,7 @@ TEST(FreeListOptTest, Coalescing) {
     ASSERT_TRUE(c.has_value());
     allocator.deallocate(b.value());
     allocator.deallocate(a.value());
-    
+
     auto d = allocator.allocate(2_KiB);
     ASSERT_TRUE(d.has_value());
     ASSERT_EQ(d.value(), 0);
@@ -195,7 +195,7 @@ TEST(FreeListOptTest, CoalescingAfterResetShrink) {
     ASSERT_TRUE(c.has_value());
     allocator.deallocate(b.value());
     allocator.deallocate(a.value());
-    
+
     allocator.shrink_size(1_KiB);
     auto d = allocator.allocate(2_KiB);
     allocator.reset_size();
