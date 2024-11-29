@@ -79,7 +79,8 @@ class TtLlamaConv2dPatch(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        self.compute_kernel_config = ttnn.CreateComputeKernelConfig(
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=True,

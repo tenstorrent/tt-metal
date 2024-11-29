@@ -114,7 +114,8 @@ def run_conv_transpose2d(
         enable_subblock_padding=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    compute_config = ttnn.CreateComputeKernelConfig(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,

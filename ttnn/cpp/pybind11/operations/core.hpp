@@ -6,7 +6,9 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <optional>
 
+#include "pybind11/cast.h"
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -48,6 +50,17 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
+
+    module.def("init_device_compute_kernel_config", &ttnn::init_device_compute_kernel_config,
+            py::arg("arch"),
+            py::arg("device_kernel_config") = std::nullopt,
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::LoFi,
+            py::arg("math_approx_mode") = true,
+            py::arg("fp32_dest_acc_en") = false,
+            py::arg("packer_l1_acc") = false,
+            py::arg("dst_full_sync_en") = false
+        );
     module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 
     module.def(

@@ -58,7 +58,8 @@ class MambaConv:
             input_channels_alignment=32,
             deallocate_activation=True,
         )
-        self.conv1d_compute_config = ttnn.CreateComputeKernelConfig(
+        self.conv1d_compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=self.config.math_fidelity,
         )
 

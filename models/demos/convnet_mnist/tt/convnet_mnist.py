@@ -27,7 +27,8 @@ def convnet_mnist(
         deallocate_activation=True,
         reallocate_halo_output=True,
     )
-    compute_config = ttnn.CreateComputeKernelConfig(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,

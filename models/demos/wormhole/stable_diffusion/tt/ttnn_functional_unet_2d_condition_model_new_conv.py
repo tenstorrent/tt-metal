@@ -389,7 +389,8 @@ class UNet2DConditionModel:
             transpose_shards=False,
             reshard_if_not_optimal=True,
         )
-        compute_config = ttnn.CreateComputeKernelConfig(
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
@@ -655,7 +656,8 @@ class UNet2DConditionModel:
             transpose_shards=False,
             reshard_if_not_optimal=True,
         )
-        compute_config = ttnn.CreateComputeKernelConfig(
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=True,

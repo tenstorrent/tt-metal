@@ -147,7 +147,8 @@ def run_conv(
         enable_subblock_padding=False,
         output_layout=output_layout,
     )
-    compute_config = ttnn.CreateComputeKernelConfig(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
@@ -286,7 +287,8 @@ def run_conv_with_split(
         shard_layout=shard_layout if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
     )
-    compute_config = ttnn.CreateComputeKernelConfig(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
@@ -641,7 +643,8 @@ def test_conv_ws(
         act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
     )
-    compute_config = ttnn.CreateComputeKernelConfig(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
@@ -2754,7 +2757,9 @@ def test_shallow_conv_with_tiled_input(device):
         input_height=img_h,
         input_width=img_w,
         groups=1,
-        compute_config=ttnn.CreateComputeKernelConfig(),
+        compute_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+        ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

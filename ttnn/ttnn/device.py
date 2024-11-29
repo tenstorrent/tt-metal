@@ -28,6 +28,7 @@ DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 
 open_device = ttnn._ttnn.device.open_device
+init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
 
 
 def close_device(device: "ttnn.device.Device"):
@@ -162,37 +163,5 @@ pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
-
-def CreateComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=True,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=False,
-    dst_full_sync_en=False,
-):
-    device = ttnn.GetDefaultDevice()
-    if is_wormhole_b0(device):
-        return ttnn.WormholeComputeKernelConfig(
-            math_fidelity=math_fidelity,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=packer_l1_acc,
-            math_approx_mode=math_approx_mode,
-            dst_full_sync_en=dst_full_sync_en,
-        )
-    elif is_blackhole(device):
-        return ttnn.BlackholeComputeKernelConfig(
-            math_fidelity=math_fidelity,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=packer_l1_acc,
-            math_approx_mode=math_approx_mode,
-            dst_full_sync_en=dst_full_sync_en,
-        )
-    elif is_grayskull(device):
-        return ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=math_fidelity, math_approx_mode=math_approx_mode, dst_full_sync_en=dst_full_sync_en
-        )
-    else:
-        raise ValueError("Unsupported device")
-
 
 __all__ = []
