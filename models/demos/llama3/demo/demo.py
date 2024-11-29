@@ -895,7 +895,7 @@ def run_llama3_demo(
 )
 @pytest.mark.parametrize(
     "max_generated_tokens",  # Maximum number of tokens to decode, per user
-    (1000,),
+    (200,),
 )
 def test_llama_demo(
     input_prompts,

@@ -268,7 +268,7 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.uint32,
                 device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None,
             ),
             pt_out,
         )
