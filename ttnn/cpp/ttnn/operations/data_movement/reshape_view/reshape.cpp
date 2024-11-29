@@ -340,6 +340,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const uint8_t queue_id,
     const std::optional<PadValue> &pad_value
      ) {
+    MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
     const ttnn::Shape shape = shape_corrector(tensor, input_shape);
@@ -366,6 +367,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
     bool this_is_view = (tensor_shape[-1] == shape[-1]) &&
+        (mem_config.is_sharded()==tensor.memory_config().is_sharded()) &&
+        (mem_config.is_l1()==tensor.memory_config().is_l1())
         ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
         (tensor_shape_second_last_dim==shape_second_last_dim) || //Second last dimension is the same
         (shape_second_last_dim % tile_second_dim==0 && tensor_shape_second_last_dim % tile_first_dim==0)); //There is no padding on the second last dimension
@@ -400,7 +403,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         shape,
         tile_first_dim,
         tile_second_dim,
-        memory_config.value_or(tensor.memory_config()),
+        mem_config,
         queue_id,
         pad_value.value_or(default_pad_value)
         );

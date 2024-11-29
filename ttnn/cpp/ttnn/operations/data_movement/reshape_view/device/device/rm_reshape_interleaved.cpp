@@ -54,7 +54,7 @@ void kernel_main() {
     constexpr bool tensor_is_dram                   = get_compile_time_arg_val(0) == 1;
     #define src_aligned_to_64                       get_compile_time_arg_val<uint32_t>(1) == 1
     #define src_aligned_to_16                       get_compile_time_arg_val<uint32_t>(2) == 1
-
+    //Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this core
     if (nop == 1)
     {
         return;
