@@ -14,21 +14,84 @@ class Down2:
         else:
             torch_model = model.torch_model
         self.torch_model = torch_model
-        self.conv1 = Conv(torch_model, "down2.conv1", [1, 160, 160, 64], (2, 2, 1, 1))
-        self.conv2 = Conv(torch_model, "down2.conv2", [1, 80, 80, 128], (1, 1, 0, 0), deallocate=False)
-        self.conv3 = Conv(torch_model, "down2.conv3", [1, 80, 80, 128], (1, 1, 0, 0))
-        self.conv4 = Conv(torch_model, "down2.conv4", [1, 80, 80, 64], (1, 1, 0, 0), deallocate=False)
+        self.conv1 = Conv(
+            torch_model,
+            "down2.conv1",
+            [1, 160, 160, 64],
+            (2, 2, 1, 1),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv2 = Conv(
+            torch_model,
+            "down2.conv2",
+            [1, 80, 80, 128],
+            (1, 1, 0, 0),
+            deallocate=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv3 = Conv(
+            torch_model,
+            "down2.conv3",
+            [1, 80, 80, 128],
+            (1, 1, 0, 0),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv4 = Conv(
+            torch_model,
+            "down2.conv4",
+            [1, 80, 80, 64],
+            (1, 1, 0, 0),
+            deallocate=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
 
         self.res1_conv1 = Conv(
-            torch_model, "down2.resblock.module_list.0.0", [1, 80, 80, 64], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down2.resblock.module_list.0.0",
+            [1, 80, 80, 64],
+            (1, 1, 0, 0),
+            deallocate=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
-        self.res1_conv2 = Conv(torch_model, "down2.resblock.module_list.0.1", [1, 80, 80, 64], (1, 1, 1, 1))
+        self.res1_conv2 = Conv(
+            torch_model,
+            "down2.resblock.module_list.0.1",
+            [1, 80, 80, 64],
+            (1, 1, 1, 1),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
         self.res2_conv1 = Conv(
-            torch_model, "down2.resblock.module_list.1.0", [1, 80, 80, 64], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down2.resblock.module_list.1.0",
+            [1, 80, 80, 64],
+            (1, 1, 0, 0),
+            deallocate=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
-        self.res2_conv2 = Conv(torch_model, "down2.resblock.module_list.1.1", [1, 80, 80, 64], (1, 1, 1, 1))
+        self.res2_conv2 = Conv(
+            torch_model,
+            "down2.resblock.module_list.1.1",
+            [1, 80, 80, 64],
+            (1, 1, 1, 1),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
 
-        self.conv5 = Conv(torch_model, "down2.conv5", [1, 80, 80, 128], (1, 1, 0, 0))
+        self.conv5 = Conv(
+            torch_model,
+            "down2.conv5",
+            [1, 80, 80, 128],
+            (1, 1, 0, 0),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
 
     def __call__(self, device, input_tensor):
         output_tensor_split = self.conv1(device, input_tensor)
