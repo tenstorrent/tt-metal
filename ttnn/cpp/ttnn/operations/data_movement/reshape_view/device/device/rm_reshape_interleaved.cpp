@@ -44,18 +44,21 @@ void kernel_main() {
     const uint32_t read_start_page          = get_arg_val<uint32_t>(5);
     const uint32_t read_end_page            = get_arg_val<uint32_t>(6);
     const uint32_t write_start_page         = get_arg_val<uint32_t>(7);
+    const uint32_t write_start_offset       = get_arg_val<uint32_t>(8);
     //cb_id_in0 is a circular buffer with 1 source_page_size_bytes page if no alignment needed
     //source_read_size_bytes otherwise
-    const uint32_t cb_id_in0                = get_arg_val<uint32_t>(8);
+    const uint32_t cb_id_in0                = get_arg_val<uint32_t>(9);
     //cb_id_in1 is a circular buffer with 1 dest_page_size_bytes+16 (rounded up to next 64B) page
-    const uint32_t cb_id_in1                = get_arg_val<uint32_t>(9);
-
-
+    const uint32_t cb_id_in1                = get_arg_val<uint32_t>(10);
+    const uint32_t nop                      = get_arg_val<uint32_t>(11);
     constexpr bool tensor_is_dram                   = get_compile_time_arg_val(0) == 1;
     #define src_aligned_to_64                       get_compile_time_arg_val<uint32_t>(1) == 1
     #define src_aligned_to_16                       get_compile_time_arg_val<uint32_t>(2) == 1
-    #define dst_aligned_to_16                       get_compile_time_arg_val<uint32_t>(3) == 1
 
+    if (nop == 1)
+    {
+        return;
+    }
 
     const InterleavedAddrGen<tensor_is_dram> s = {
         .bank_base_address = src_addr,
@@ -71,8 +74,9 @@ void kernel_main() {
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;
     uint32_t readable = 0;
+    uint32_t end_to_write = 0;
     uint32_t transaction = 0;
-    uint32_t writable = dest_page_size_bytes;
+    uint32_t writable = dest_page_size_bytes - write_start_offset;
     //cb_id_in0 is a CB source_read_size_bytes page size, 1 page
     //cb_id_in1 is a CB dest_page_size_bytes + allignment_to_64 page size, 1 page
     cb_reserve_back(cb_id_in0, 1);
@@ -81,13 +85,9 @@ void kernel_main() {
     const uint32_t dest_buffer = get_write_ptr(cb_id_in1);
 
     uint64_t dst_noc_addr = get_noc_addr(write_page, d);
-#if (dst_aligned_to_16)
-    uint32_t write_offset = 0;
-#else
-    uint32_t write_offset = dst_noc_addr&OFFSET_16;
-    uint32_t begin_write_offset = write_offset;
-#endif
-    for (uint32_t i = read_start_page; i <= read_end_page; i++) {
+    uint64_t write_offset = dst_noc_addr&OFFSET_16 + write_start_offset;
+    uint64_t begin_write_offset = write_offset;
+    for (uint32_t i = read_start_page; i < read_end_page; i++) {
         //Read from source
         uint64_t src_noc_addr = s.get_noc_addr(i,0);
 
@@ -117,15 +117,19 @@ void kernel_main() {
                 writable = writable -readable;
                 write_offset = write_offset + readable;
                 readable = 0;
+                end_to_write = end_to_write + readable;
+                if (i == read_end_page-1)
+                {
+                    noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, end_to_write);
+                    cb_push_back(cb_id_in0, 1);
+                    cb_push_back(cb_id_in1, 1);
+                    return;
+                }
             }
             else if (readable == writable)
             {
                 tt::data_movement::common::tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, readable);
-#if ((dst_aligned_to_16))
-                noc_async_write(dest_buffer,dst_noc_addr, dest_page_size_bytes);
-#else
                 noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, dest_page_size_bytes);
-#endif
                 writable = dest_page_size_bytes;
                 readable = 0;
                 if (i == read_end_page-1)
@@ -134,35 +138,25 @@ void kernel_main() {
                     cb_push_back(cb_id_in1, 1);
                     return;
                 }
+                end_to_write = 0;
                 write_page++;
                 dst_noc_addr = get_noc_addr(write_page, d);
-#if ((dst_aligned_to_16))
-                write_offset=0;
-#else
                 write_offset = dst_noc_addr&OFFSET_16;
                 begin_write_offset = write_offset;
-#endif
             }
             else
             {
                 //writable < readable
 
                 tt::data_movement::common::tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, writable);
-#if ((dst_aligned_to_16))
-                noc_async_write(dest_buffer,dst_noc_addr, dest_page_size_bytes);
-#else
                 noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, dest_page_size_bytes);
-#endif
+                end_to_write = 0;
                 readable = readable - writable;
                 read_offset = read_offset + writable;
                 write_page++;
                 dst_noc_addr = get_noc_addr(write_page, d);
-#if ((dst_aligned_to_16))
-                write_offset=0;
-#else
                 write_offset = dst_noc_addr&OFFSET_16;
                 begin_write_offset = write_offset;
-#endif
                 writable = dest_page_size_bytes;
             }
         }
