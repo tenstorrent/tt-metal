@@ -6,7 +6,8 @@
 // It's best to copy and paste the functions in rather than include the header as code size will likely explode
 // Best to separate in to cpp/hpp at some point to avoid the code size explosion but need to figure out the linking
 // issues
-
+#include <stdio.h>
+#include <cstring>
 #define MASK_64      0xFFFFFFFFFFFFFFC0
 #define OFFSET_64    0x000000000000003F
 #define MASK_16      0xFFFFFFFFFFFFFFF0

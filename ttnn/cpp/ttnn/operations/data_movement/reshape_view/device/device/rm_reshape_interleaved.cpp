@@ -29,8 +29,6 @@ Runtime arguments
 */
 #include <stdint.h>
 #include "dataflow_api.h"
-#include <stdio.h>
-#include <cstring>
 #include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
