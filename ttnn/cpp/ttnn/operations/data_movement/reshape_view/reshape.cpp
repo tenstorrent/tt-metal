@@ -307,16 +307,44 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
     return tensor.reshape(shape);
 }
 
+ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+    //Correct the shape to account for inferred dimensions
+    uint32_t input_volume = tensor.get_logical_volume();
+    uint32_t output_volume = 1;
+    uint32_t inferred_dim = -1;
+    for (uint32_t i=0; i< shape.rank(); i++) {
+        if (((int)(shape[i])) == -1) {
+            if (inferred_dim != -1) {
+                TT_FATAL(false, "Only one dimension can be inferred in reshape");
+            }
+            inferred_dim = i;
+        } else {
+            output_volume = output_volume * shape[i];
+        }
+    }
+    if (inferred_dim == -1)
+    {
+        return shape;
+    }
+
+    uint32_t implied_dim_value = (output_volume == 0) ? 0: input_volume/output_volume;
+    ttnn::SmallVector<uint32_t> new_shape(shape.size());
+    auto old_shape = shape.logical_shape().view();
+    std::copy(old_shape.begin(), old_shape.end(), new_shape.begin());
+    new_shape[inferred_dim] = implied_dim_value;
+    return ttnn::Shape(std::move(new_shape));
+}
+
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    const ttnn::Shape& shape,
+    const ttnn::Shape& input_shape,
     const std::optional<MemoryConfig> &memory_config,
     const uint8_t queue_id,
     const std::optional<PadValue> &pad_value
      ) {
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
-
+    const ttnn::Shape shape = shape_corrector(tensor, input_shape);
     // First Case, No reshape Required
     if (tensor_shape == shape) {
         return tensor;
