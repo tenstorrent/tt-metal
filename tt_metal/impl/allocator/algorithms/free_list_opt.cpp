@@ -122,11 +122,12 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     }
     size_t allocated_block_index = allocate_in_block(target_block_index, alloc_size, offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
-    TT_FATAL(
-        start_address + offset_bytes_ >= address_limit,
-        "Out of Memory: Cannot allocate at an address below {}. Allocation at {}",
-        address_limit,
-        start_address + offset_bytes_);
+    if(start_address + offset_bytes_ < address_limit) {
+        TT_THROW(
+            "Out of Memory: Cannot allocate at an address below {}. Allocation at {}",
+            address_limit,
+            start_address + offset_bytes_);
+    }
     return start_address + offset_bytes_;
 }
 
