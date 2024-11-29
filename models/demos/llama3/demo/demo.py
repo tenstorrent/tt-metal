@@ -182,7 +182,6 @@ def run_llama3_demo(
     max_generated_tokens,
     optimizations,
     sampling_params,
-    single_layer,
     instruct_mode,
     is_ci_env,
     print_to_file,
@@ -223,11 +222,14 @@ def run_llama3_demo(
     # TODO Miguel Add configuration for  the combinations of Llama3 models and TT architectures and max supported sizes
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(
+        mesh_device,
+        instruct=instruct_mode,
+        max_batch_size=batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+    )
     tokenizer = Tokenizer(model_args.tokenizer_path)
-
-    if single_layer:
-        model_args.n_layers = 1
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -427,7 +429,8 @@ def run_llama3_demo(
         logger.info("Starting decode...")
 
         # Set sampling mode
-        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        # argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = False
         # Create events
         profiler.start(f"compile_trace_{batch_idx}")
         op_event = ttnn.create_event(mesh_device)
@@ -787,8 +790,7 @@ def run_llama3_demo(
     }
 
     # Save benchmark data for CI dashboard
-    # if is_ci_env:
-    if True:
+    if is_ci_env:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
         benchmark_data.prep_csvs(
             profiler,
@@ -799,62 +801,71 @@ def run_llama3_demo(
             batch_size=batch_size,
             input_sequence_length=prefill_seq_len,
             output_sequence_length=1,
-            # config_params=,
-            # precision=,
         )
 
 
-# input_prompts: Input file size with prompts to process
-# max_seq_len: Maximum sequence length supported by the model (max size = 128 * 1024)
-# instruct_weights: Whether to use instruct weights or general weights
-# Num_batches: How many consecutive batches of users are run
-# single_layer: Whether to run the model with a single layer (for debug)
+# List of supported Parameters for demo.py
+#
+# input_prompts (string): input json file with prompts to process. See models/demos/llama3/demo/*.json for list of input files
+# instruct (bool): Whether to use instruct weights or general weights
+# repeat_batches (int): Number of consecutive batches of users to run (default: 1)
+# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
+# max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
+# paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
+# page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
+# sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
+#
+# optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
+# FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, max_seq_len, instruct_weights, num_batches, single_layer, optimizations",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
     [
-        ("models/demos/llama3/demo/input_data_prefill_128.json", 1024, False, 1, False, LlamaOptimizations.performance),
-        ("models/demos/llama3/demo/input_data_prefill_128.json", 1024, False, 2, False, LlamaOptimizations.performance),
-        (
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",
-            1024, 
-            True,
-            1,
-            False,
-            LlamaOptimizations.performance,
+        (  # Latency run - single user, small prompt
+            "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
-        (
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",
-            1024, 
-            True,
-            2,
-            False,
-            LlamaOptimizations.performance,
+        (  # Throughput run - 32 users, small prompt
+            "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
-        ("models/demos/llama3/demo/input_data_long_32k.json", 128 * 1024, True, 1, False, LlamaOptimizations.performance),
-        ("models/demos/llama3/demo/input_data_long_64k.json", 128 * 1024, True, 1, False, LlamaOptimizations.performance),
-        ("models/demos/llama3/demo/input_data_long_128k.json", 128 * 1024, True, 1, False, LlamaOptimizations.performance),
-        ("models/demos/llama3/demo/input_data_long_128k.json", 128 * 1024, True, 1, False, LlamaOptimizations.accuracy),
-        (
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",
-            1024,
-            True,
-            1,
-            True,
-            LlamaOptimizations.performance,
+        (  # Max length mode run - Single user, long prompt (adapted to the model being used and architecture)
+            "models/demos/llama3/demo/input_data_long_128k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
-        ("models/demos/llama3/demo/mayo.json", 1024, True, 1, False),
     ],
     ids=[
-        "general-1_batch",
-        "general-2_batch",
-        "instruct-1_batch",
-        "instruct-2_batch",
-        "instruct-long-32k",
-        "instruct-long-64k",
-        "instruct-long-128k",
-        "instruct-long-128k-accuracy",
-        "single_layer",
-        "mayo",  # TODO Miguel: Remove this debug test
+        "latency",
+        "throughput",
+        "max-length",
+    ],
+)
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        LlamaOptimizations.performance,
+        LlamaOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
@@ -867,64 +878,24 @@ def run_llama3_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "sampling_params",
-    (
-        [{"temperature": 0.6, "top_p": 0.08}],
-        [{"temperature": 0, "top_p": 0.08}],
-    ),
-    ids=(
-        "sampling",
-        "argmax",
-    ),
-)
-@pytest.mark.parametrize(
-    "batch_size",
-    (
-        1,
-        32,
-    ),
-)
-@pytest.mark.parametrize(
-    "paged_attention",
-    (
-        True,
-        False,
-    ),
-    ids=(
-        "paged_attention",
-        "default_attention",
-    ),
-)
-@pytest.mark.parametrize(  # TODO Substitute these values for a proper vLLM integration
-    "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
-)
-@pytest.mark.parametrize(
-    "max_generated_tokens",  # Maximum number of tokens to decode, per user
-    (200,),
-)
 def test_llama_demo(
     input_prompts,
+    instruct,
+    repeat_batches,
     max_seq_len,
-    instruct_weights,
     batch_size,
-    sampling_params,
-    num_batches,
+    max_generated_tokens,
     paged_attention,
     page_params,
-    max_generated_tokens,
+    sampling_params,
     optimizations,
-    single_layer,
     mesh_device,
     use_program_cache,
     is_ci_env,
     reset_seeds,
 ):
-    if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True or batch_size > 1):
-        pytest.skip(
-            "CI demo test only runs instruct weights with batch_size=1 to reduce CI pipeline load (all modes are supported)"
-        )
+    if is_ci_env and "long" in input_prompts:
+        pytest.skip("Do not run the 'max-length test on CI to reduce load")
 
     mesh_device.enable_async(True)
 
@@ -941,14 +912,13 @@ def test_llama_demo(
         mesh_device=mesh_device,
         max_seq_len=max_seq_len,
         batch_size=batch_size,
-        num_batches=num_batches,
+        num_batches=repeat_batches,
         paged_attention=paged_attention,
         paged_attention_config=paged_attention_config,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
         sampling_params=sampling_params,
-        single_layer=single_layer,
-        instruct_mode=instruct_weights,
+        instruct_mode=instruct,
         is_ci_env=is_ci_env,
         print_to_file=True,  # TODO Miguel set this to false before merging
     )
