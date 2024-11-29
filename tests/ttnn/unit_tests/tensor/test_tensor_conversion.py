@@ -77,15 +77,13 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, device):
     tt_tensor = ttnn.Tensor(py_tensor, tt_dtype)
     if tt_dtype in {ttnn.bfloat8_b, ttnn.bfloat4_b}:
         assert tt_tensor.storage_type() == ttnn.StorageType.OWNED
-        tt_tensor = tt_tensor.to(ttnn.TILE_LAYOUT)
+        assert tt_tensor.layout == ttnn.TILE_LAYOUT
     else:
         assert tt_tensor.storage_type() == ttnn.StorageType.BORROWED
+        assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     tt_tensor = tt_tensor.to(device)
     tt_tensor = tt_tensor.cpu()
-
-    if tt_dtype in {ttnn.bfloat8_b, ttnn.bfloat4_b}:
-        tt_tensor = tt_tensor.to(ttnn.ROW_MAJOR_LAYOUT)
 
     if python_lib == torch:
         py_tensor_after_round_trip = tt_tensor.to_torch()
