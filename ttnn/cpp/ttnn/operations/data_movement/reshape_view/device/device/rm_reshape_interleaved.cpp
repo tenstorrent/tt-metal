@@ -32,40 +32,7 @@ Runtime arguments
 #include <stdio.h>
 #include <cstring>
 #include "debug/dprint.h"  // required in all kernels using DPRINT
-
-#define MASK_64      0xFFFFFFFFFFFFFFC0
-#define OFFSET_64    0x000000000000003F
-#define MASK_16      0xFFFFFFFFFFFFFFF0
-#define OFFSET_16    0x000000000000000F
-
-
-template <bool guaranteed_16B_alligned, bool read_async>
-FORCE_INLINE
-void tt_memmove (
-    const uint32_t dst_l1_addr,
-    const uint64_t src_l1_addr,
-    const uint32_t bytes)
-{
-    //Uses noc_async_read when possible to copy the data over
-    if constexpr (guaranteed_16B_alligned)
-    {
-        noc_async_read(get_noc_addr(src_l1_addr),dst_l1_addr, bytes);
-        noc_async_read_barrier();
-    }
-    else
-    {
-        if ((dst_l1_addr&OFFSET_16) == (src_l1_addr&OFFSET_16))
-        {
-            noc_async_read(get_noc_addr(src_l1_addr),dst_l1_addr, bytes);
-            noc_async_read_barrier();
-        }
-        else
-        {
-            memmove((void *)(dst_l1_addr), (void *)(src_l1_addr), (size_t) (bytes));
-        }
-    }
-}
-
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     //We are guranteed to be in 2D going to 2D
@@ -148,14 +115,14 @@ void kernel_main() {
             noc_async_write_barrier();
             if (readable < writable)
             {
-                tt_memmove<false,true>(dest_buffer+write_offset, source_buffer + read_offset, readable);
+                tt::data_movement::common::tt_memmove<false,true>(dest_buffer+write_offset, source_buffer + read_offset, readable);
                 writable = writable -readable;
                 write_offset = write_offset + readable;
                 readable = 0;
             }
             else if (readable == writable)
             {
-                tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, readable);
+                tt::data_movement::common::tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, readable);
 #if ((dst_aligned_to_16))
                 noc_async_write(dest_buffer,dst_noc_addr, dest_page_size_bytes);
 #else
@@ -182,7 +149,7 @@ void kernel_main() {
             {
                 //writable < readable
 
-                tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, writable);
+                tt::data_movement::common::tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, writable);
 #if ((dst_aligned_to_16))
                 noc_async_write(dest_buffer,dst_noc_addr, dest_page_size_bytes);
 #else

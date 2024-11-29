@@ -7,7 +7,42 @@
 // Best to separate in to cpp/hpp at some point to avoid the code size explosion but need to figure out the linking
 // issues
 
+#define MASK_64      0xFFFFFFFFFFFFFFC0
+#define OFFSET_64    0x000000000000003F
+#define MASK_16      0xFFFFFFFFFFFFFFF0
+#define OFFSET_16    0x000000000000000F
+
 namespace tt::data_movement::common {
+
+template <bool guaranteed_16B_alligned, bool copy_async>
+FORCE_INLINE
+void tt_memmove (
+    const uint32_t dst_l1_addr,
+    const uint64_t src_l1_addr,
+    const uint32_t bytes)
+{
+    //Function performs a memory copy between two l1 addresses in the local core
+    //Uses noc_async_read when possible to copy the data over
+    //Set guaranteed 16B alligned to true if the source and destination are externally guaranteed to be 16B alligned (dangerous)
+    //Set copy_async to true if you wish to perform the operation asynchronously, in this case you can add a noc_async_read_barrier to synchronize later
+    if constexpr (guaranteed_16B_alligned)
+    {
+        noc_async_read(get_noc_addr(src_l1_addr),dst_l1_addr, bytes);
+        if constexpr (!copy_async) {noc_async_read_barrier();}
+    }
+    else
+    {
+        if ((dst_l1_addr&OFFSET_16) == (src_l1_addr&OFFSET_16))
+        {
+            noc_async_read(get_noc_addr(src_l1_addr),dst_l1_addr, bytes);
+            if constexpr (!copy_async) {noc_async_read_barrier();}
+        }
+        else
+        {
+            memmove((void *)(dst_l1_addr), (void *)(src_l1_addr), (size_t) (bytes));
+        }
+    }
+}
 
 // this function is useful for converting bfloat16 values to float32
 FORCE_INLINE float bfloat16_to_float32(uint16_t bfloat16_data) {

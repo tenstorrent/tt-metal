@@ -27,6 +27,29 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
+ttnn::Tensor convert_tile_to_rm(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& shape,
+    const uint32_t tile_first_dim,
+    const uint32_t tile_second_dim,
+    const MemoryConfig &memory_config,
+    const uint8_t queue_id,
+    const PadValue &pad_value
+) {
+    //Convert the 3D->3D reshaping to row major and back to tile
+    auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    rm_tensor = convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
+        rm_tensor,
+        shape,
+        tile_first_dim,
+        tile_second_dim,
+        memory_config,
+        queue_id,
+        pad_value
+    );
+    rm_tensor = ttnn::to_layout(rm_tensor, ttnn::Layout::TILE, std::nullopt, std::nullopt, (Device*)nullptr);
+    return rm_tensor;
+}
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     //This function is due to embedding issue 15558, once the issue is fixed we want to delete it
     tt::log_warning("host_reshape is deprecated and will be removed in the near future");
@@ -82,6 +105,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
         {
             second_dim = second_dim * tensor_shape[i];
         }
+        //Call reshape with the equivalent data 2D Row Major input tensor
         return fix_shape_and_perform_reshape_on_2D_RM(
             PerformView
             (
@@ -99,22 +123,71 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
     }
     else if (layout == ttnn::Layout::TILE)
     {
-        auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-        rm_tensor = convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
-            rm_tensor,
-            shape,
+        uint32_t third_dim = 1;
+        //Collapse into the third last dimension
+        for (int i=0; i <tensor_shape.rank()-2; i++)
+        {
+            third_dim = third_dim * tensor_shape[i];
+        }
+        //Figure out the second last dimension
+        const uint32_t second_dim = tensor_shape.rank() > 1 ? tensor_shape[-2] : 1;
+        //Call reshape with the equivalent data 3D Tile input tensor
+        return fix_shape_and_perform_reshape_on_3D_TILE(
+            PerformView
+            (
+                tensor,
+                ttnn::Shape{third_dim,second_dim,tensor_shape[-1]},
+                tile_first_dim,
+                tile_second_dim
+            )
+            ,shape,
             tile_first_dim,
             tile_second_dim,
             memory_config,
             queue_id,
             pad_value
         );
-        rm_tensor = ttnn::to_layout(rm_tensor, ttnn::Layout::TILE, std::nullopt, std::nullopt, (Device*)nullptr);
-        return rm_tensor;
     }
     TT_FATAL(false, "layout is neither tile nor row major");
 
 }
+
+ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& shape,
+    const uint32_t tile_first_dim,
+    const uint32_t tile_second_dim,
+    const MemoryConfig &memory_config,
+    const uint8_t queue_id,
+    const PadValue &pad_value
+    )
+{
+    //This function turns a TILE 3D->MD into an equivalent 3D->3D conversion and then turns the 3D output back to MD using a 0 cost view
+    //Collapse into the third last dimension
+    TT_FATAL((shape.rank()!=0), "can't do reshape to rank 0 tensor");
+    uint32_t third_dim = 1;
+    for (int i=0; i <shape.rank()-2; i++)
+    {
+        third_dim = third_dim * shape[i];
+    }
+    //Figure out the second last dimension
+    const uint32_t second_dim = shape.rank() > 1 ? shape[-2] : 1;
+    return PerformView
+    (
+        convert_tile_to_rm(
+            tensor,
+            ttnn::Shape{third_dim,second_dim,shape[-1]},
+            tile_first_dim,
+            tile_second_dim,
+            memory_config,
+            queue_id,
+            pad_value
+        ),
+        shape,
+        tile_first_dim,
+        tile_second_dim);
+}
+
 ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& shape,
