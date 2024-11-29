@@ -729,6 +729,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Open log file
     entry.open_log_file()
 
+    # TODO Miguel: Update LT to the final demo.py configuration
+
     # Define command shortcuts
     command_shortcuts = {
         "demo": "pytest models/demos/llama3/demo/demo.py -k 'instruct-1 and attention-1'",
