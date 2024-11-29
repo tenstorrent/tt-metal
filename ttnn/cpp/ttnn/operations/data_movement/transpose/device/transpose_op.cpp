@@ -160,6 +160,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
             } else {
                 std::swap(shard_spec.shape[0], shard_spec.shape[1]);
                 output_mem_config.shard_spec = shard_spec;
+                output_mem_config.memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
             }
         } else if (this->dim == TransposeOpDim::HC) {
             output_mem_config.shard_spec = input_tensor.shard_spec().value();
