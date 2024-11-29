@@ -61,15 +61,13 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
 
     *writer_runtime_args = {
         &output,
-        (uint32_t)output.noc_coordinates().x,
-        (uint32_t)output.noc_coordinates().y,
+        (uint32_t)0,
         output.num_pages()
     };
 
     *reader_runtime_args = {
         &input,
-        (uint32_t)input.noc_coordinates().x,
-        (uint32_t)input.noc_coordinates().y,
+        (uint32_t)0,
         input.num_pages()
     };
 
