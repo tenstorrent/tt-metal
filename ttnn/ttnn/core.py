@@ -208,7 +208,7 @@ def create_sharded_memory_config(
 
 
 # This function is based off the existing "create_sharded_memory_config". This new function has support for calculating shard shape when tensor shape is not divisible by num of cores.
-# The existing function should be deprecated with this one. Not replacing right now to avoid a big change.
+# The existing function should be deprecated with this one. Not replacing right now to avoid a big change.git
 def create_sharded_memory_config_(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
@@ -318,17 +318,17 @@ def create_sharded_memory_config_(
             if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
                 tensor_height_padded = roundup(tensor_height, grid_size.y * 32) if tile_layout else tensor_height
                 shard_shape = divup(tensor_height_padded, grid_size.y), divup(tensor_width, grid_size.x)
-
             elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
                 tensor_height_padded = roundup(tensor_height, grid_size.x * 32) if tile_layout else tensor_height
                 shard_shape = divup(tensor_height_padded, grid_size.x), divup(tensor_width, grid_size.y)
             else:
                 raise RuntimeError("Invalid shard orientation")
         elif tensor_memory_layout == TensorMemoryLayout.HEIGHT_SHARDED:
-            tensor_height_padded = roundup(tensor_height, total_num_cores) if tile_layout else tensor_height
+            tensor_height_padded = roundup(tensor_height, total_num_cores * 32) if tile_layout else tensor_height
             shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
-            shard_shape = tensor_height, divup(tensor_width, total_num_cores)
+            tensor_height_padded = roundup(tensor_height, 32) if tile_layout else tensor_height
+            shard_shape = tensor_height_padded, divup(tensor_width, total_num_cores)
         else:
             raise RuntimeError("Invalid sharding scheme")
 

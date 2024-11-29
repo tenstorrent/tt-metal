@@ -52,75 +52,10 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, core_grid_size, shard_orientation, sharding_strategy, tensor_hw_as_shard_shape = parse_sharding_spec(
-        test_vector["input_spec"]
-    )
-    y, x = core_grid_size
-
-    pre_sharded_height = math.prod(input_shape[:-1])
-    pre_sharded_width = input_shape[-1]
-
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Input to eltwise binary must be tilized"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
-
-    if not tensor_hw_as_shard_shape:
-        if sharding_strategy == ttnn.ShardStrategy.BLOCK:
-            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                if pre_sharded_height % y != 0:
-                    return (
-                        True,
-                        "Prod of all dimensions except the innermost must be divisible by the y coordinate of coregrid when using block sharding",
-                    )
-                if pre_sharded_width % x != 0:
-                    return (
-                        True,
-                        "Innermost dimension must be divisible by the x coordinate of coregrid when using block sharding",
-                    )
-                if (pre_sharded_height // y) // 32 <= 0:
-                    return True, "Shard height must be a atleast 32"
-                if (pre_sharded_width // x) // 32 <= 0:
-                    return True, "Shard width must be atleast 32"
-            else:
-                if pre_sharded_height % x != 0:
-                    return (
-                        True,
-                        "Prod of all dimensions except the innermost must be divisible by the x coordinate of coregrid when using block sharding",
-                    )
-                if pre_sharded_width % y != 0:
-                    return (
-                        True,
-                        "Innermost dimension must be divisible by the y coordinate of coregrid when using block sharding",
-                    )
-                if (pre_sharded_height // x) // 32 <= 0:
-                    return True, "Shard height must be a atleast 32"
-                if (pre_sharded_width // y) // 32 <= 0:
-                    return True, "Shard width must be a atleast 32"
-
-        elif sharding_strategy == ttnn.ShardStrategy.WIDTH:
-            if pre_sharded_width % (y * x) != 0:
-                return True, "Last dimension must be divisible by a total number of cores when using width sharding"
-            if pre_sharded_height // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if (pre_sharded_width // (x * y)) // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
-
-        else:
-            if pre_sharded_height % (y * x) != 0:
-                return (
-                    True,
-                    "Prod of all dimensions except the innermost must be divisible by a total number of cores when using width sharding",
-                )
-            if (pre_sharded_height // (x * y)) // 32 <= 0:
-                return True, "Shard height must be a atleast 32"
-            if pre_sharded_width // 32 <= 0:
-                return True, "Shard width must be a atleast 32"
-
-    else:
-        if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
-            True, "Shard dimensions must be divisible by 32"
-
     return False, None
 
 
@@ -138,18 +73,24 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    input_shape, core_grid_size, shard_orientation, sharding_strategy, tensor_hw_as_shard_shape = parse_sharding_spec(
-        input_spec
-    )
+    (
+        input_shape,
+        core_grid_size,
+        shard_orientation,
+        sharding_strategy,
+        tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
+    ) = parse_sharding_spec(input_spec)
     y, x = core_grid_size
     device_grid_size = ttnn.CoreGrid(y=y, x=x)
 
-    sharded_config = ttnn.create_sharded_memory_config(
+    sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
         core_grid=device_grid_size,
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+        tile_layout=True,
     )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
