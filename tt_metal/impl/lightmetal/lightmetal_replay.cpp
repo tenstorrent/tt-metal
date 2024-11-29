@@ -203,10 +203,10 @@ void LightMetalReplay::printLightMetalBinaryContents() {
                     }
                     break;
                 }
-                case tt::target::CommandType::LightMetalLoadTraceIdCommand: {
-                    const auto* cmd_variant = command->cmd_as_LightMetalLoadTraceIdCommand();
+                case tt::target::CommandType::LoadTraceCommand: {
+                    const auto* cmd_variant = command->cmd_as_LoadTraceCommand();
                     if (cmd_variant) {
-                        std::cout << "LightMetalLoadTraceId Command:" << std::endl;
+                        std::cout << "LoadTrace Command:" << std::endl;
                         std::cout << "  tid: " << cmd_variant->tid() << std::endl;
                         std::cout << "  cq_id: " << cmd_variant->cq_id() << std::endl;
                     }
@@ -255,34 +255,34 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_ReplayTraceCommand());
     break;
   }
-  case ::tt::target::CommandType::LightMetalLoadTraceIdCommand: {
-    execute(command->cmd_as_LightMetalLoadTraceIdCommand());
+  case ::tt::target::CommandType::LoadTraceCommand: {
+    execute(command->cmd_as_LoadTraceCommand());
     break;
   }
   default:
-    throw std::runtime_error("Unsupported command type");
+    throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
     break;
   }
 }
 
 // Per API command handlers.
 void LightMetalReplay::execute(tt::target::EnqueueTraceCommand const *cmd) {
-    log_info(tt::LogMetalTrace, "KCM NEW Execute EnqueueTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
+    log_info(tt::LogMetalTrace, "KCM LightMetalReplay EnqueueTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
     // FIXME - Needs some tweaking, since API takes CQ should binarize cq_id and device_id.
     CommandQueue &cq = this->device_->command_queue(cmd->cq_id());
     EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
 void LightMetalReplay::execute(tt::target::ReplayTraceCommand const *cmd) {
-    log_info(tt::LogMetalTrace, "KCM NEW Execute ReplayTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
+    log_info(tt::LogMetalTrace, "KCM LightMetalReplay ReplayTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
     ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
 }
 
-void LightMetalReplay::execute(tt::target::LightMetalLoadTraceIdCommand const *cmd) {
-    log_info(tt::LogMetalTrace, "KCM NEW Execute LightMetalLoadTraceId(). cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
+void LightMetalReplay::execute(tt::target::LoadTraceCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "KCM LightMetalReplay LoadTrace(). cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
+    // Get the trace descriptor from flatbuffer and load it to device.
     auto trace_desc = getTraceByTraceId(cmd->tid());
-    // FIXME - Modify to take a TraceDescriptor instead of tid.
-    LightMetalLoadTraceId(this->device_, cmd->tid(), cmd->cq_id());
+    LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.
@@ -304,7 +304,7 @@ bool LightMetalReplay::executeLightMetalBinary() {
         }
 
         setupDevices();
-        log_info(tt::LogMetalTrace, "{} - cmds: {} traces: {}", __FUNCTION__, commands->size(), trace_descriptors->size());
+        log_info(tt::LogMetalTrace, "KCM Executing Binary w/ cmds: {} traces: {}", commands->size(), trace_descriptors->size());
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0,
         // should expand to cover multiple program, devices, cqs, etc. FIXME

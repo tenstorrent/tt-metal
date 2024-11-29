@@ -1,0 +1,32 @@
+namespace tt.target;
+
+enum Arch: uint {
+  Grayskull = 0,
+  Wormhole_b0 = 1,
+  Blackhole = 2,
+}
+
+enum BufferType: ushort {
+  DRAM = 0,
+  L1 = 1,
+  SystemMemory = 2,
+  L1Small = 3,
+  Trace = 4,
+}
+
+enum TensorMemoryLayout: ushort {
+  None = 0,
+  Interleaved = 1,
+  SingleBank = 2,
+  HeightSharded = 3,
+  WidthSharded = 4,
+  BlockSharded = 5,
+}
+
+table InterleavedBufferConfig {
+    device_id: int; // FIXME Device *device;
+    size: int; // Size in bytes
+    page_size: int; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    buffer_type: BufferType;
+    buffer_layout: TensorMemoryLayout;
+}

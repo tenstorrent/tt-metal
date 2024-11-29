@@ -238,6 +238,7 @@ class Device {
     void light_metal_end_capture();
     void light_metal_load_trace_id(const uint32_t tid, const uint8_t cq_id); // TODO - Should take TraceDescriptor
     void light_metal_save_trace_id(const uint32_t tid);
+    void load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor &trace_desc);
 
     std::vector<std::pair<uint32_t, detail::TraceDescriptor>> collect_traces(const std::vector<uint32_t>& tids);
     void save_traces_to_disk(const std::vector<uint32_t>& tids, const std::string& filename);

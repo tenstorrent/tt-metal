@@ -3413,12 +3413,11 @@ void Device::light_metal_load_trace_id(const uint32_t tid, const uint8_t cq_id) 
 
     log_info(tt::LogMetal, "KCM Inside {} for cq: {} file: {} got tid: {}", __FUNCTION__, (uint32_t)cq_id, this->light_metal_trace_.config.filename, tid);
 
-    // FIXME - This function should take TraceDescriptor directly.
-
     // FIXME - This is bringup hack to parse flatbuffer binary and extract TraceDescriptor by trace_id.
     // would be replaced by updating this API to take TraceDescriptor directly.
-    // auto traceDescOpt = getTraceByTraceId(this->light_metal_trace_.config.filename, tid);
     std::optional<detail::TraceDescriptor> traceDescOpt;
+
+    // FIXME - Need to modify this.
 
     if (traceDescOpt.has_value()) {
         const auto& trace_desc = traceDescOpt.value();
@@ -3434,6 +3433,15 @@ void Device::light_metal_load_trace_id(const uint32_t tid, const uint8_t cq_id) 
     } else {
         std::cout << "Trace ID " << tid << " not found or an error occurred." << std::endl;
     }
+}
+
+// Load the TraceDescriptor for a given trace_id to the device.
+void Device::load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor &trace_desc) {
+    this->MarkAllocationsSafe(); // KCM - Copied from begin_trace
+    this->trace_buffer_pool_.insert({tid, Trace::create_empty_trace_buffer()});
+    *this->trace_buffer_pool_[tid]->desc = trace_desc;
+    Trace::initialize_buffer(this->command_queue(cq_id), this->trace_buffer_pool_[tid]);
+    this->MarkAllocationsUnsafe(); // Copied from end_trace
 }
 
 // Collect a trace for later use, return vector of binary data.

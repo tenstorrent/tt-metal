@@ -21,7 +21,7 @@ namespace tt::target {
     struct Command;
     struct ReplayTraceCommand;
     struct EnqueueTraceCommand;
-    struct LightMetalLoadTraceIdCommand;
+    struct LoadTraceCommand;
 
     // Forward decl for binary_generated.h
     namespace lightmetal {
@@ -55,7 +55,7 @@ public:
     void execute(tt::target::Command const *command);
     void execute(tt::target::EnqueueTraceCommand const *command);
     void execute(tt::target::ReplayTraceCommand const *command);
-    void execute(tt::target::LightMetalLoadTraceIdCommand const *command);
+    void execute(tt::target::LoadTraceCommand const *command);
 
     // Temporary debug
     void printLightMetalBinaryContents();

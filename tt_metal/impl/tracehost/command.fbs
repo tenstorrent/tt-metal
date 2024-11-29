@@ -16,15 +16,15 @@ table EnqueueTraceCommand {
     blocking: bool;
 }
 
-table LightMetalLoadTraceIdCommand {
-    tid: int;
+table LoadTraceCommand {
+    tid: int; // Pointer to trace data.
     cq_id: int;
 }
 
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
-    LightMetalLoadTraceIdCommand
+    LoadTraceCommand
     // EnqueueWriteBuffer
 }
 

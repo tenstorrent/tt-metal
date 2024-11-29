@@ -662,6 +662,8 @@ void LightMetalEndCapture(Device *device);
 // KCM - Consider flipping the order of these arguments to match other APIs
 void LightMetalLoadTraceId(Device *device, const uint32_t trace_id, const uint8_t cq_id);
 
+void LoadTrace(Device *device, const uint8_t cq_id, const uint32_t trace_id, detail::TraceDescriptor &trace_desc);
+
 /**
  * Read device side profiler data and dump results into device side CSV log
  *
