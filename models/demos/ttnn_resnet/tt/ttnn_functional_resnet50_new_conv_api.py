@@ -192,7 +192,8 @@ class resnet50Bottleneck:
                     enable_split_reader=enable_split_reader,
                     enable_subblock_padding=enable_subblock_padding,
                 ),
-                compute_config=ttnn.CreateComputeKernelConfig(
+                compute_config=ttnn.init_device_compute_kernel_config(
+                    device.arch(),
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                     packer_l1_acc=packer_l1_accum_enabled,
                 ),
@@ -251,7 +252,8 @@ class resnet50Bottleneck:
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
@@ -341,7 +343,8 @@ class resnet50Bottleneck:
                 enable_split_reader=enable_split_reader,
                 enable_subblock_padding=enable_subblock_padding,
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
@@ -386,7 +389,8 @@ class resnet50Bottleneck:
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
@@ -588,7 +592,8 @@ class resnet50:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
         )
-        self.conv1_compute_config = ttnn.CreateComputeKernelConfig(
+        self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=self.model_config["MATH_FIDELITY"],
             packer_l1_acc=True if whb0_and_b16 else False,
         )

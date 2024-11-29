@@ -92,8 +92,12 @@ class Conv:
             enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
         )
-        compute_config = ttnn.CreateComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h

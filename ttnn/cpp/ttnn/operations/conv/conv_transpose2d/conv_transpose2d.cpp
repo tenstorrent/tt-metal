@@ -110,6 +110,8 @@ Result conv_transpose2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config ) {
         Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+        DeviceComputeKernelConfig compute_config = compute_config_.value_or(DeviceComputeKernelConfig());
+
 
         //Inverse of sliding_window.get_output_shape()
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
@@ -353,8 +355,8 @@ Result ConvTranpose2dOperation::invoke(
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_){
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config){
     return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(compute_config_), std::move(memory_config));
 }
 
@@ -377,7 +379,7 @@ Result ConvTranpose2dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config ) {
+    const std::optional<const MemoryConfig>& memory_config){
     return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(compute_config_), std::move(memory_config));
 }
 

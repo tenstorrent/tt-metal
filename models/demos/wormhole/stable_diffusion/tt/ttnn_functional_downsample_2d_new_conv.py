@@ -136,7 +136,8 @@ class downsample_2d:
         if hidden_states.memory_config() != self.input_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.input_memory_config)
 
-        compute_config = ttnn.CreateComputeKernelConfig(
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=True,

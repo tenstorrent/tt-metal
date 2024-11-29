@@ -119,7 +119,8 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -143,7 +144,8 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -167,7 +169,8 @@ class resnet50Bottleneck:
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 ),
-                compute_config=ttnn.CreateComputeKernelConfig(
+                compute_config=ttnn.init_device_compute_kernel_config(
+                    device.arch(),
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                 ),
                 conv_op_cache=conv_op_cache,
@@ -195,7 +198,8 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
@@ -220,7 +224,8 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             ),
-            compute_config=ttnn.CreateComputeKernelConfig(
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
