@@ -366,12 +366,13 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
-    bool this_is_view = (tensor_shape[-1] == shape[-1]) &&
-        (mem_config.is_sharded()==tensor.memory_config().is_sharded()) &&
-        (mem_config.is_l1()==tensor.memory_config().is_l1())
-        ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
-        (tensor_shape_second_last_dim==shape_second_last_dim) || //Second last dimension is the same
-        (shape_second_last_dim % tile_second_dim==0 && tensor_shape_second_last_dim % tile_first_dim==0)); //There is no padding on the second last dimension
+    bool this_is_view =
+        (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
+        (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
+        ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) ||          // Its row major
+         (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
+         (shape_second_last_dim % tile_second_dim == 0 &&
+          tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
             // This case has been allowed in the past though it means introducing padding values to the data
             return tensor.reshape(shape);
