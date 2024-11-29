@@ -306,6 +306,26 @@ def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     assert layout == ttnn_output.layout
     output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+# issue 15048
+def test_broken_reshape(device):
+    src_shape = (1, 56, 56, 64)
+    target_shape = (1, 1, 56 * 56, 64)
+    torch_input_tensor = torch.randn(src_shape, dtype=torch.bfloat16)
+    torch_result = torch_input_tensor.reshape(target_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, target_shape)
+    output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_result, output, 0.9999)
 

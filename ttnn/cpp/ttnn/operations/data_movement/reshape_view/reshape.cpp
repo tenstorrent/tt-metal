@@ -38,16 +38,14 @@ ttnn::Tensor convert_tile_to_rm(
 ) {
     //Convert the 3D->3D reshaping to row major and back to tile
     auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-    rm_tensor = convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
+    rm_tensor = ReshapeViewOperation::invoke(
         rm_tensor,
         shape,
-        tile_first_dim,
-        tile_second_dim,
         memory_config,
         queue_id,
         pad_value
     );
-    rm_tensor = ttnn::to_layout(rm_tensor, ttnn::Layout::TILE, std::nullopt, std::nullopt, (Device*)nullptr);
+    rm_tensor = ttnn::to_layout(rm_tensor, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     return rm_tensor;
 }
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -371,23 +369,27 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) || //Its row major
         (tensor_shape_second_last_dim==shape_second_last_dim) || //Second last dimension is the same
         (shape_second_last_dim % tile_second_dim==0 && tensor_shape_second_last_dim % tile_first_dim==0)); //There is no padding on the second last dimension
-    bool tile_tensor_view_reshape_possible =
-        (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
-         shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
-         shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
-         tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
-
-    if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or tile_tensor_view_reshape_possible) {
-        // This case has been allowed in the past though it means introducing padding values to the data
-        return tensor.reshape(shape);
-    }
-
+    if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
+            // This case has been allowed in the past though it means introducing padding values to the data
+            return tensor.reshape(shape);
+        }
 
     if (this_is_view) {
         return PerformView(tensor,shape, tile_first_dim, tile_second_dim);
     }
     if(shape.logical_shape().volume() != tensor.get_logical_volume())
     {
+        //This is completely incorrect but it is due to issue 15137 or issue 15558
+        bool tile_tensor_view_reshape_possible =
+            (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
+            shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
+            shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
+            tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
+
+        if (tile_tensor_view_reshape_possible) {
+            // This case has been allowed in the past though it means introducing padding values to the data
+            return tensor.reshape(shape);
+        }
         //This is a completely incorrect test but it is due to issue 15558
         return detail::host_reshape(tensor, shape);
     }
