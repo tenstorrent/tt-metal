@@ -458,5 +458,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 // set transaction id for a noc read
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
