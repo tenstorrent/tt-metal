@@ -108,7 +108,12 @@ void MAIN {
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t num_output_tiles = in_ntiles_c / in_nblocks_c;
-    tilizeA_B_reduce_init<true>(
+
+    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX/SUM");
+    constexpr bool neginf_srca = (REDUCE_OP == PoolType::MAX ? true : false);
+    constexpr bool zero_srca_reduce = (REDUCE_OP == PoolType::MAX ? false : true);
+
+    tilizeA_B_reduce_init<neginf_srca, zero_srca_reduce>(
         in_cb_id,
         in_scalar_cb_id,
         num_output_tiles,
