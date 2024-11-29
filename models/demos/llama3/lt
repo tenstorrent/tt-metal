@@ -477,6 +477,10 @@ def main(stdscr):
                         entry["log_file"] = None
                         entry["stop_event"].clear()
                         screen_needs_update.set()
+        elif c == ord("m") and current_line >= len(input_fields):
+            # Export results to markdown
+            export_results_to_markdown(output_entries, stdscr)
+            screen_needs_update.set()
         else:
             if current_line < len(input_fields) and not exiting:
                 current_field = current_line
@@ -729,9 +733,9 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
         "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
-        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k full",
-        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k performance-full",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k performance-quick",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance",
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
         "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
@@ -746,7 +750,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "vision-text-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py",
         "vision-vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
         "perf": "pytest models/demos/llama3/tests/test_llama_perf.py -k 1024",
-        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py",
+        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k performance",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -1031,6 +1035,49 @@ def cancel_entry(entry):
             return True
     # Entry is running/resetting, so don't remove it
     return False
+
+
+def export_results_to_markdown(output_entries, stdscr):
+    demo_results = {}
+    accuracy_results = {}
+
+    # Collect results from entries
+    for entry in output_entries:
+        if entry.command_name == "demo" and entry.status == "Finished":
+            demo_results[(entry.model, entry.device)] = entry.speed
+        elif entry.command_name == "accuracy" and entry.status == "Finished":
+            # Parse Top-1 and Top-5 from output
+            top1 = "N/A"
+            top5 = "N/A"
+            if entry.output:
+                match = re.search(r"Top-1: (\d+)% \| Top-5: (\d+)%", entry.output)
+                if match:
+                    top1, top5 = match.groups()
+            accuracy_results[(entry.model, entry.device)] = (top1, top5)
+
+    # Create markdown table
+    markdown_lines = [
+        "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |",
+        "|-------|--------|-----------|-----------|---------------|",
+    ]
+
+    for key in demo_results.keys():
+        model, device = key
+        speed = demo_results.get(key, "N/A")
+        top1, top5 = accuracy_results.get(key, ("N/A", "N/A"))
+        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} |")
+
+    # Write to PERF.md
+    with open("PERF.md", "w") as f:
+        f.write("\n".join(markdown_lines) + "\n")
+
+    # Clear screen and show message
+    stdscr.clear()
+    stdscr.addstr(0, 0, "\n".join(markdown_lines))
+    stdscr.addstr(len(markdown_lines) + 1, 0, f"Table written to {os.path.abspath('PERF.md')}")
+    stdscr.addstr(len(markdown_lines) + 2, 0, "Press any key to return...")
+    stdscr.refresh()
+    stdscr.getch()  # Wait for a key press
 
 
 if __name__ == "__main__":

@@ -21,6 +21,30 @@ from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
 from tqdm import tqdm
+from dataclasses import dataclass
+
+
+@dataclass
+class LlamaOptimizations:
+    bfp4_mlp: bool
+    # Future fields will go here:
+    # bfp8_activations: bool
+    # bfp8_layernorm: bool
+    # bfp8_ccl: bool
+
+    @classmethod
+    def accuracy(cls, model_name):
+        """Configuration optimized for accuracy
+        Only 3.1-70B uses bfp4 MLPs in this configuration
+        """
+        return cls(bfp4_mlp=model_name == "3.1-70B")
+
+    @classmethod
+    def performance(cls, model_name):
+        """Configuration optimized for performance
+        All models use bfp4 MLPs in this configuration
+        """
+        return cls(bfp4_mlp=True)
 
 
 class TtModelArgs:
@@ -68,12 +92,17 @@ class TtModelArgs:
         "LLAMA3_1_70B_PARAMS": "models/demos/llama3/model_params/Llama3.1-70B-Instruct",
     }
 
-    def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
-        # Add this near the top of the class, with other class attributes
+    def __init__(
+        self,
+        mesh_device,
+        instruct=False,
+        dummy_weights=False,
+        max_batch_size=1,
+        optimizations=LlamaOptimizations.accuracy,
+    ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
-        self.is_large_model = False
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
@@ -126,9 +155,13 @@ class TtModelArgs:
         elif "3.1-70B" in LLAMA_DIR:
             local_params = "LLAMA3_1_70B_PARAMS"
             self.model_name = "3.1-70B"
-            self.is_large_model = True
         else:
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+
+        if callable(optimizations):
+            self.optimizations = optimizations(self.model_name)
+        else:
+            self.optimizations = optimizations
 
         # Load model params
         if not dummy_weights:

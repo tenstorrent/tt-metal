@@ -15,7 +15,7 @@ from models.demos.llama3.tt.llama_common import (
     encode_prompt_llama_instruct,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer, precompute_freqs_cis
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -46,19 +46,36 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
+        pytest.param(LlamaOptimizations.performance, id="performance"),
+    ],
+)
+def test_llama_model_inference(
+    mesh_device, seq_len, optimizations, use_program_cache, reset_seeds, ensure_gc, is_ci_env
+):
+    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
+        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.91  # TODO Look on improving PCC
+    # This sets the minimum PCC for each iteration based on optimization mode
+    if optimizations == LlamaOptimizations.accuracy:
+        pcc = 0.91  # TODO Look on improving PCC
+    else:  # performance mode
+        assert optimizations == LlamaOptimizations.performance
+        pcc = 0.91
 
     mesh_device.enable_async(True)
 
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, instruct=instruct, max_batch_size=1)
+    model_args = TtModelArgs(mesh_device, instruct=instruct, max_batch_size=1, optimizations=optimizations)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")

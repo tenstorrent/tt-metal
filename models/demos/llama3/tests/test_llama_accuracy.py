@@ -14,9 +14,46 @@ from models.demos.llama3.tt.llama_common import (
     HostEmbedding,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.demo.demo import preprocess_inputs_prefill
+from pathlib import Path
+
+
+def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: LlamaOptimizations):
+    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    # Get model size (e.g., "1b", "3b", etc.)
+    model_size = model_name.split("-")[1].lower()
+
+    # Read PERF.md
+    perf_file = Path(__file__).parent.parent / "PERF.md"
+    with open(perf_file, "r") as f:
+        content = f.read()
+
+    # Split into sections based on optimization mode
+    sections = content.split("## ")
+    target_section = next(s for s in sections if s.startswith(f"LlamaOptimizations.{optimizations.__name__}\n"))
+
+    # Parse the table and find the row for our model and device
+    rows = [
+        line.split("|")[1:]  # Each row starts with a separator
+        for line in target_section.split("\n")
+        if f"| {model_size} | {device_name} |" in line
+    ]
+    if not rows:
+        raise ValueError(
+            f"Could not find accuracy data for {model_size} on {device_name} in {optimizations.__name__} mode"
+        )
+
+    assert (
+        len(rows) == 1
+    ), f"Found multiple rows for {model_size} on {device_name} in {optimizations.__name__} mode in PERF.md"
+    row = rows[0]
+    top1_acc = float(row[2].strip())
+    top5_acc = float(row[3].strip())
+
+    # Allow for rounding
+    return top1_acc - 0.5, top5_acc - 0.5
 
 
 @torch.no_grad()
@@ -32,15 +69,20 @@ from models.demos.llama3.demo.demo import preprocess_inputs_prefill
     ],
     indirect=True,
 )
-def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
+        pytest.param(LlamaOptimizations.performance, id="performance"),
+    ],
+)
+def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cache, reset_seeds, optimizations):
     dtype = ttnn.bfloat8_b
-    min_top1_acc = 75
-    min_top5_acc = 96
 
     mesh_device.enable_async(True)
 
     # Load model args and tokenizer
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, optimizations=optimizations)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Load state_dict for TT model
@@ -268,6 +310,13 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
             expected = " | ".join(sanitize(t) for t in error["expected"])
             true_word = sanitize(tokenizer.decode([true_token]))
             logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
+
+    # Get accuracy thresholds from PERF.md
+    min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+        model_args.model_name,
+        model_args.device_name,
+        optimizations,
+    )
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
     assert total_top1_acc > min_top1_acc, f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >{min_top1_acc}%)"

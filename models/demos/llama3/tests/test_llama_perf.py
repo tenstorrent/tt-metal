@@ -15,7 +15,7 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
@@ -50,7 +50,7 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, optimizations=LlamaOptimizations.performance)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if "3.2-1B" in model_args.DEFAULT_CACHE_PATH:
