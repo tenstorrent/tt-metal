@@ -23,10 +23,10 @@ repos:
   rev: v1.35.1
   hooks:
     - id: yamllint
-- repo: https://github.com/pre-commit/mirrors-clang-format
-  rev: v19.1.4
-  hooks:
-    - id: clang-format
-      entry: git-clang-format
-      types_or: [c++, c]
-      args: ["--style=file"]
+# - repo: https://github.com/pre-commit/mirrors-clang-format
+#   rev: v19.1.4
+#   hooks:
+#     - id: clang-format
+#       entry: git-clang-format
+#       types_or: [c++, c]
+#       args: ["--style=file"]

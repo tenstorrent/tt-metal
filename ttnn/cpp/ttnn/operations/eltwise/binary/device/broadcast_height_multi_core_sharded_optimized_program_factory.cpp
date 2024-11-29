@@ -91,7 +91,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
     uint32_t shard_size_in_bytes = shard_spec.numel() * a.element_size();
 
-    uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / TILE_HW;  // ceil value
+    uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
     TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
 
     uint32_t Wt, Ht;
