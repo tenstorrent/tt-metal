@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <gtest/gtest.h>
 #include "allocator/allocator.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
