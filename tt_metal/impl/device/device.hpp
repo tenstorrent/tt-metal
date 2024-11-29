@@ -116,7 +116,7 @@ class Device {
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_worker_core_assignment() const;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_worker_core_assignment();
 
     CoreCoord translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const;
     CoreCoord translated_coords_from_physical_coords(const CoreCoord &physical_coord, const CoreType& core_type) const;
@@ -323,7 +323,7 @@ class Device {
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
-
+    std::vector<CoreCoord> optimal_dram_bank_to_worker_core_assignment_;
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
     std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;

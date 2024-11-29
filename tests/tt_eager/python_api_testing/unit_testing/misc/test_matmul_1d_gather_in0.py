@@ -37,21 +37,6 @@ def num_cores_to_rectangle_grid(num_cores, device):
     return (x, y)
 
 
-def get_physical_to_logical_core_mapping(device):
-    """
-    Get a mapping from physical core coords to logical core coords
-
-    Returns a dictionary.
-    """
-    mapping = {}
-    grid = device.compute_with_storage_grid_size()
-    for x in range(grid.x):
-        for y in range(grid.y):
-            physical_core = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
-            mapping[(physical_core.x, physical_core.y)] = (x, y)
-    return mapping
-
-
 PREFETCHER_GRID = [
     (8, 11),
     (8, 9),
@@ -137,13 +122,8 @@ def run_multi_core_matmul_1d(
 
     if use_arbitrary_cores:
         # x, y
-        if isinstance(grid, tuple):  # Generate random grid
-            CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
-            random.shuffle(CORE_RANGE)
-        else:  # Use custom grid
-            mapping = get_physical_to_logical_core_mapping(device)
-            CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
-
+        CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
+        random.shuffle(CORE_RANGE)
         core_range_set = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(

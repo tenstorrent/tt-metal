@@ -22,196 +22,6 @@ namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-void get_dram_reader_core_coords_grayskull(
-    tt::tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-    // hardcoded for grayskull
-    uint32_t full_grid_size_y = 12;
-
-    // get all the logical coord
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    // get dram banks and coords
-    uint32_t num_banks = device->num_dram_channels();
-    uint32_t max_bank_id = num_banks - 1;
-    std::vector<CoreCoord> dram_coord_phy;
-    for (int i = 0; i < num_banks; ++i) {
-        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
-    }
-
-    // get worker logical coords
-    std::vector<CoreCoord> all_worker_cores_logical;
-    for (int i = 0; i < num_cores_x; ++i) {
-        for (int j = 0; j < num_cores_y; ++j) {
-            all_worker_cores_logical.push_back(CoreCoord(i, j));
-        }
-    }
-
-    // get y coords of the workers
-    std::vector<uint32_t> all_worker_cores_y_physical;
-    uint32_t max_worker_y_physical = 0;
-    uint32_t min_worker_y_physical = 10000;
-    for (int i = 0; i < num_cores_y; ++i) {
-        auto core_phy = device->worker_core_from_logical_core(CoreCoord(0, i));
-        all_worker_cores_y_physical.push_back(core_phy.y);
-        if (core_phy.y > max_worker_y_physical) {
-            max_worker_y_physical = core_phy.y;
-        }
-        if (core_phy.y < min_worker_y_physical) {
-            min_worker_y_physical = core_phy.y;
-        }
-    }
-
-    // get the harvested rows, we treat dram and eth cores as harvested as well
-    std::vector<uint32_t> harvested_rows;
-    for (int i = 0; i < full_grid_size_y; ++i) {
-        auto y = i;
-
-        if (std::find(all_worker_cores_y_physical.begin(), all_worker_cores_y_physical.end(), y) ==
-            all_worker_cores_y_physical.end()) {
-            harvested_rows.push_back(y);
-        }
-    }
-
-    // get the ajacent cores of DRAM banks
-    std::vector<CoreCoord> adj_core_physical;
-    for (int i = 0; i < num_banks; ++i) {
-        auto dram_core = dram_coord_phy[i];
-        uint32_t adj_core_x = dram_core.x;
-        uint32_t adj_core_y = dram_core.y + 1;
-        adj_core_physical.push_back(CoreCoord(adj_core_x, adj_core_y));
-    }
-
-    // move worker if they are in the harvested rows
-    for (auto& coord : adj_core_physical) {
-        auto y = coord.y;
-
-        // if row is harvested, move core down by 1
-        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and
-               y < (full_grid_size_y - 1)) {
-            y += 1;
-        }
-
-        coord.y = y;
-    }
-
-    // find the logical coord from physical coord
-    std::vector<CoreCoord> adj_core_logical_realloc;
-    for (int i = 0; i < adj_core_physical.size(); ++i) {
-        for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
-            auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
-            if (adj_core_physical[i] == core) {
-                adj_core_logical_realloc.push_back(all_worker_cores_logical[j]);
-            }
-        }
-    }
-
-    // create sets
-    std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < num_banks; ++i) {
-        all_cores_set.insert(CoreRange(adj_core_logical_realloc[i]));
-    }
-    all_cores = CoreRangeSet(all_cores_set);
-    all_cores_ordered = adj_core_logical_realloc;
-}
-
-void get_dram_reader_core_coords_wormhole_b0(
-    tt::tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-    all_cores_ordered = device->get_optimal_dram_bank_to_worker_core_assignment();
-    std::set<CoreRange> all_cores_set;
-    for (const auto& worker_core : all_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
-    }
-    all_cores = CoreRangeSet(all_cores_set);
-}
-
-void get_dram_reader_core_coords_blackhole(
-    tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-    // hardcoded for blackhole
-    uint32_t full_grid_size_x = 17;
-
-    // get all the logical coord
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    // get dram banks and coords
-    uint32_t num_banks = device->num_dram_channels();
-    uint32_t max_bank_id = num_banks - 1;
-    std::vector<CoreCoord> dram_coord_phy;
-    for (int i = 0; i < num_banks; ++i) {
-        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
-    }
-
-    // get worker logical coords
-    std::vector<CoreCoord> all_worker_cores_logical;
-    for (int i = 0; i < num_cores_x; ++i) {
-        for (int j = 0; j < num_cores_y; ++j) {
-            all_worker_cores_logical.push_back(CoreCoord(i, j));
-        }
-    }
-
-    // get x coords of the workers
-    std::vector<uint32_t> all_worker_cores_x_physical;
-    for (int i = 0; i < num_cores_x; ++i) {
-        auto core_phy = device->worker_core_from_logical_core(CoreCoord(i, 0));
-        all_worker_cores_x_physical.push_back(core_phy.x);
-    }
-
-    // get the harvested cols, we treat dram and eth cores as harvested as well
-    std::vector<uint32_t> harvested_cols;
-    for (int i = 0; i < full_grid_size_x; ++i) {
-        auto x = i;
-
-        if (std::find(all_worker_cores_x_physical.begin(), all_worker_cores_x_physical.end(), x) ==
-            all_worker_cores_x_physical.end()) {
-            harvested_cols.push_back(x);
-        }
-    }
-
-    // get the ajacent cores of DRAM banks
-    std::vector<CoreCoord> adj_core_physical;
-    for (int i = 0; i < num_banks; ++i) {
-        auto dram_core = dram_coord_phy[i];
-        uint32_t adj_core_x = dram_core.x + 1;
-        uint32_t adj_core_y = dram_core.y;
-        adj_core_physical.push_back(CoreCoord(adj_core_x, adj_core_y));
-    }
-
-    // move worker if they are in the harvested cols
-    for (auto& coord : adj_core_physical) {
-        auto x = coord.x;
-
-        // if col is harvested, move core right by 1
-        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and
-               x < (full_grid_size_x - 1)) {
-            x += 1;
-        }
-
-        coord.x = x;
-    }
-
-    // find the logical coord from physical coord
-    std::vector<CoreCoord> adj_core_logical_realloc;
-    for (int i = 0; i < adj_core_physical.size(); ++i) {
-        for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
-            auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
-            if (adj_core_physical[i] == core) {
-                adj_core_logical_realloc.push_back(all_worker_cores_logical[j]);
-            }
-        }
-    }
-
-    // create sets
-    std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < num_banks; ++i) {
-        all_cores_set.insert(CoreRange(adj_core_logical_realloc[i]));
-    }
-    all_cores = CoreRangeSet(all_cores_set);
-    all_cores_ordered = adj_core_logical_realloc;
-}
-
 void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
@@ -232,6 +42,15 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
     for (const CoreCoord& item : commons) {
         v2.erase(std::remove(v2.begin(), v2.end(), item), v2.end());
     }
+}
+
+void get_optimal_dram_bank_to_reader_assignment(Device* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_worker_core_assignment();
+    std::set<CoreRange> all_cores_set;
+    for (const auto& worker_core : all_worker_cores_ordered) {
+        all_cores_set.insert(CoreRange(worker_core));
+    }
+    all_worker_cores = CoreRangeSet(all_cores_set);
 }
 
 operation::ProgramWithCallbacks create_program_dram_sharded(
@@ -278,18 +97,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     tt_metal::Program program{};
 
     // get the dram readers
-    CoreRangeSet all_worker_cores;
     std::vector<CoreCoord> all_worker_cores_ordered;
-
-    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-        get_dram_reader_core_coords_wormhole_b0(device, all_worker_cores, all_worker_cores_ordered);
-    } else if (device->arch() == tt::ARCH::GRAYSKULL) {
-        get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
-    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-        get_dram_reader_core_coords_blackhole(device, all_worker_cores, all_worker_cores_ordered);
-    } else {
-        TT_THROW("Device not supported");
-    }
+    CoreRangeSet all_worker_cores;
+    get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores);
 
     // dram banks
     uint32_t num_dram_banks = all_worker_cores_ordered.size();
