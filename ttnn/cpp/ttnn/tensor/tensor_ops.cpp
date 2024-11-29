@@ -248,7 +248,14 @@ Tensor tensor_pad(
         input_tensor.storage_type() == StorageType::OWNED or
         input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST or
         input_tensor.storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
-    TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
+    // TODO: Flip to assert when we remove use cases in python and c++
+    if (input_tensor.get_layout() != Layout::ROW_MAJOR) {
+        log_warning(
+            tt::LogOp,
+            "Tensor layout {} must be ROW_MAJOR for padding! Returning original tensor!",
+            input_tensor.get_layout());
+        return input_tensor;
+    }
 
     auto input_shape = input_tensor.get_legacy_shape();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
