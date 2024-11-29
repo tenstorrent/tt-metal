@@ -29,7 +29,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     do_crt1((uint32_t tt_l1_ptr
                  *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
-    noc_local_state_init(NOC_INDEX);
+    noc_local_state_init<risc_type, DM_DEDICATED_NOC>(NOC_INDEX);
 
     kernel_main();
 }

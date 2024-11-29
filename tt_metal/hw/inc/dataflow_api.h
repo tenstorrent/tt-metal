@@ -28,6 +28,11 @@
 #include "debug/assert.h"
 #include "dev_msgs.h"
 
+#if defined(COMPILE_FOR_BRISC)
+constexpr uint8_t risc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
+#else
+constexpr uint8_t risc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#endif
 #if defined(KERNEL_BUILD)
 constexpr uint8_t noc_index = NOC_INDEX;
 constexpr uint8_t noc_mode = NOC_MODE;
@@ -1386,7 +1391,7 @@ inline void noc_async_write(
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len(
+        ncrisc_noc_fast_write_any_len<risc_type, noc_mode>(
             noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
         WAYPOINT("NAWD");
     }
@@ -1410,7 +1415,7 @@ inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len(
+    ncrisc_noc_fast_write_any_len<risc_type, noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1474,7 +1479,7 @@ inline void noc_async_write_multicast(
     } else {
         WAYPOINT("NMWW");
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len(
+        ncrisc_noc_fast_write_any_len<risc_type, noc_mode>(
             noc,
             write_cmd_buf,
             src_local_l1_addr,
@@ -1525,7 +1530,7 @@ inline void noc_semaphore_set_multicast(
     uint8_t noc = noc_index) {
     WAYPOINT("NSMW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len(
+    ncrisc_noc_fast_write_any_len<risc_type, noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1709,7 +1714,11 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NWBW");
-    while (!ncrisc_noc_nonposted_writes_flushed(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed<risc_type>(noc));
+    } else {
+        while (!ncrisc_noc_nonposted_writes_flushed(noc));
+    }
     WAYPOINT("NWBD");
 }
 

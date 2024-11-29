@@ -438,6 +438,14 @@ int main() {
                     dynamic_noc_init();
                 }
             }
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                dynamic_noc_local_state_init();
+                // DPRINT << "risc: " << (uint)risc_type << " noc: " << (uint32_t)noc_index << " " << get_noc_nonposted_writes_acked<risc_type>(noc_index) << " " << NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
+                // DPRINT << "risc: " << (uint)risc_type << " noc: " << (uint32_t)(1-noc_index) << " " << get_noc_nonposted_writes_acked<risc_type>(1-noc_index) << " " << NOC_STATUS_READ_REG(1-noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
+                // DPRINT << "risc: " << (uint)1 << " noc: " << (uint32_t)noc_index << " " << get_noc_nonposted_writes_acked<1-risc_type>(noc_index) << " " << NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
+                // DPRINT << "risc: " << (uint)1 << " noc: " << (uint32_t)(1-noc_index) << " " << get_noc_nonposted_writes_acked<1-risc_type>(1-noc_index) << " " << NOC_STATUS_READ_REG(1-noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
+
+            }
             prev_noc_mode = noc_mode;
 
             uint32_t tt_l1_ptr* cb_l1_base =

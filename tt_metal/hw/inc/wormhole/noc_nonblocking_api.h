@@ -8,6 +8,7 @@
 
 #include "noc_parameters.h"
 #include "dev_msgs.h"
+#include "noc_overlay_parameters.h"
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
 #define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
@@ -51,6 +52,43 @@ extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 extern uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
+
+#define NONPOSTED_WR_ACK_RECEIVED 2
+
+#define BRISC_NOC0_NONPOSTED_WR_ACK_RECEIVED MEM_NOC_COUNTER_BASE
+#define BRISC_NOC1_NONPOSTED_WR_ACK_RECEIVED (BRISC_NOC0_NONPOSTED_WR_ACK_RECEIVED + MEM_NOC_COUNTER_SIZE)
+#define NCRISC_NOC0_NONPOSTED_WR_ACK_RECEIVED (BRISC_NOC1_NONPOSTED_WR_ACK_RECEIVED + MEM_NOC_COUNTER_SIZE)
+#define NCRISC_NOC1_NONPOSTED_WR_ACK_RECEIVED (NCRISC_NOC0_NONPOSTED_WR_ACK_RECEIVED + MEM_NOC_COUNTER_SIZE)
+
+template <uint32_t risc_type>
+inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
+    if constexpr (
+        risc_type == static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0)) {  // BRISC
+        return noc == 0 ? BRISC_NOC0_NONPOSTED_WR_ACK_RECEIVED : BRISC_NOC1_NONPOSTED_WR_ACK_RECEIVED;
+    } else {
+        return noc == 0 ? NCRISC_NOC0_NONPOSTED_WR_ACK_RECEIVED : NCRISC_NOC1_NONPOSTED_WR_ACK_RECEIVED;
+    }
+}
+
+// noc_nonposted_writes_acked
+template <uint32_t risc_type>
+inline __attribute__((always_inline)) uint32_t get_noc_nonposted_writes_acked(uint32_t noc) {
+    uint32_t counter_addr = get_noc_counter_address<risc_type>(noc);
+    return NOC_READ_REG(counter_addr);
+}
+
+template <uint32_t risc_type>
+inline __attribute__((always_inline)) void inc_noc_nonposted_writes_acked(uint32_t noc, uint32_t inc = 1) {
+    uint32_t counter_addr = get_noc_counter_address<risc_type>(noc);
+    uint32_t val = NOC_READ_REG(counter_addr) + inc;
+    NOC_WRITE_REG(counter_addr, val);
+}
+
+template <uint32_t risc_type>
+inline __attribute__((always_inline)) void set_noc_nonposted_writes_acked(uint32_t noc, uint32_t val) {
+    uint32_t counter_addr = get_noc_counter_address<risc_type>(noc);
+    NOC_WRITE_REG(counter_addr, val);
+}
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
@@ -100,6 +138,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
+template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -123,11 +162,17 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if (posted) {
-        noc_posted_writes_num_issued[noc] += 1;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if (!posted) {
+            inc_noc_nonposted_writes_acked<risc_type>(noc, num_dests);
+        }
     } else {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += num_dests;
+        if (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
+        }
     }
 }
 
@@ -175,6 +220,13 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
     return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc]);
+}
+
+template<uint32_t risc_type>
+inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
+    uint32_t self_risc_acked = get_noc_nonposted_writes_acked<risc_type>(noc);
+    uint32_t other_risc_acked = get_noc_nonposted_writes_acked<1-risc_type>(noc);
+    return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == (self_risc_acked + other_risc_acked));
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
@@ -263,6 +315,13 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_posted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
 }
 
+inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
+    set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0)>(NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_WR_ACK_RECEIVED));
+    set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0)>(NOC_1, 0);
+    set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1)>(NOC_0, 0);
+    set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1)>(NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_WR_ACK_RECEIVED));
+}
+
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     for (int noc = 0; noc < NUM_NOCS; noc++) {
         noc_reads_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
@@ -296,6 +355,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
+template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -310,7 +370,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     bool posted = false) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write(
+        ncrisc_noc_fast_write<risc_type, noc_mode>(
             noc,
             cmd_buf,
             src_addr,
@@ -327,7 +387,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write(
+    ncrisc_noc_fast_write<risc_type, noc_mode>(
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve, posted);
 }
 
