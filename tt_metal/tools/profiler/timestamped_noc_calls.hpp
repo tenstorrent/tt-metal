@@ -37,7 +37,7 @@ inline std::pair<uint32_t, uint32_t> decode_noc_id_into_coord(uint32_t id, uint8
     return decode_noc_xy_to_coord(interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc));
 }
 
-template <uint16_t STATIC_ID = 7777>
+template <uint16_t STATIC_ID = 12345>
 inline void recordTimestampedEvent(
     KernelProfilerEventMetadata::NocXferType noc_xfer_type,
     uint32_t dst_x = 0,
@@ -47,7 +47,7 @@ inline void recordTimestampedEvent(
     KernelProfilerEventMetadata ev_md;
     ev_md.dst_x = dst_x;
     ev_md.dst_y = dst_y;
-    ev_md.noc_xfer_type = KernelProfilerEventMetadata::NocXferType::WRITE;
+    ev_md.noc_xfer_type = noc_xfer_type;
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerEventMetadata::NocType::NOC_1 : KernelProfilerEventMetadata::NocType::NOC_0;
     ev_md.setFlitsFromBytes(num_bytes);
@@ -83,7 +83,7 @@ void noc_async_read_tile_ts(
     auto [decoded_x, decoded_y] = decode_noc_id_into_coord<DRAM>(id);
     recordTimestampedEvent(KernelProfilerEventMetadata::NocXferType::READ, decoded_x, decoded_y, NUM_BYTES_IN_TILE);
 
-    noc_async_read_tile(id, s, dst_local_l1_addr, noc);
+    noc_async_read_tile(id, s, dst_local_l1_addr, offset, noc);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -98,7 +98,7 @@ void noc_async_read_ts(std::uint64_t noc_addr, uint32_t local_l1_addr, uint32_t 
 
 void noc_async_write_ts(uint32_t local_l1_addr, std::uint64_t noc_addr, uint32_t num_bytes, int noc = noc_index) {
     auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
-    recordTimestampedEvent(KernelProfilerEventMetadata::NocXferType::READ, decoded_x, decoded_y, num_bytes);
+    recordTimestampedEvent(KernelProfilerEventMetadata::NocXferType::WRITE, decoded_x, decoded_y, num_bytes);
 
     noc_async_write(local_l1_addr, noc_addr, num_bytes, noc);
 }
@@ -114,11 +114,11 @@ void noc_async_writes_flushed_ts(uint8_t noc = noc_index) {
 /* -------------------------------------------------------------------------- */
 /*                                  barriers                                  */
 /* -------------------------------------------------------------------------- */
-void noc_async_read_barrier_ts(uint8_t noc = noc_index){
+void noc_async_read_barrier_ts(uint8_t noc = noc_index) {
     recordTimestampedEvent(KernelProfilerEventMetadata::NocXferType::READ_BARRIER);
     noc_async_read_barrier(noc);
 }
-void noc_async_write_barrier_ts(uint8_t noc = noc_index){
+void noc_async_write_barrier_ts(uint8_t noc = noc_index) {
     recordTimestampedEvent(KernelProfilerEventMetadata::NocXferType::WRITE_BARRIER);
     noc_async_write_barrier(noc);
 }
