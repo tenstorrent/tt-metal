@@ -17,6 +17,7 @@
 #include "dev_msgs.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tools/profiler/event_metadata.hpp"
 
 namespace tt {
 
@@ -230,6 +231,12 @@ void DeviceProfiler::readRiscProfilerResults(
         riscNum ++;
     }
 
+    // add trailing ] to close off JSON
+    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    std::ofstream log_file(log_path, std::ios_base::app);
+    log_file << "]" << std::endl;
+    log_file.close();
+
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
 
@@ -250,17 +257,16 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp)
 }
 
 void DeviceProfiler::dumpResultToFile(
-        uint32_t run_id,
-        uint32_t run_host_id,
-        int device_id,
-        CoreCoord core,
-        int core_flat,
-        int risc_num,
-        uint64_t data,
-        uint32_t timer_id,
-        uint64_t timestamp
-        ){
-    std::pair<uint32_t, CoreCoord> deviceCore = {device_id,core};
+    uint32_t run_id,
+    uint32_t run_host_id,
+    int device_id,
+    CoreCoord core,
+    int core_flat,
+    int risc_num,
+    uint64_t data,
+    uint32_t timer_id,
+    uint64_t timestamp) {
+    std::pair<uint32_t, CoreCoord> deviceCore = {device_id, core};
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
@@ -270,62 +276,37 @@ void DeviceProfiler::dumpResultToFile(
     std::string source_file = "";
     uint64_t source_line = 0;
 
-    if ((packet_type == kernel_profiler::ZONE_START) || (packet_type == kernel_profiler::ZONE_END))
-    {
-
-        tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
-        if (packet_type == kernel_profiler::ZONE_END)
-        {
-            zone_phase = tracy::TTDeviceEventPhase::end;
-        }
-
-        if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end())
-        {
-            std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
-            getline(source_info, zone_name, ',');
-            getline(source_info, source_file, ',');
-
-            std::string source_line_str;
-            getline(source_info, source_line_str, ',');
-            source_line = stoi(source_line_str);
-        }
-
-        tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_host_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
-
-        auto ret = device_events.insert(event);
-
-        if (!ret.second) return;
+    if (packet_type != kernel_profiler::PacketTypes::TS_DATA) {
+        return;
     }
 
     firstTimestamp(timestamp);
 
-    if (!std::filesystem::exists(log_path))
-    {
+    if (!std::filesystem::exists(log_path)) {
         log_file.open(log_path);
-        log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, run host ID,  zone name, type, source line, source file" << std::endl;
-    }
-    else
-    {
+        log_file << "[\n";
+    } else {
         log_file.open(log_path, std::ios_base::app);
     }
 
-    //log_file << fmt::format("{:4},{:3},{:3},{:>7},{:7},{:15},{:15},{:5},{:>25},{:>6},{:6},{}",
-    log_file << fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            device_id,
-            core.x,
-            core.y,
-            tracy::riscName[risc_num],
-            t_id,
-            timestamp,
-            data,
-            run_id,
-            run_host_id,
-            zone_name,
-            magic_enum::enum_name(packet_type),
-            source_line,
-            source_file
-            );
+    static int64_t last_timestamp = 0;
+    int64_t delta = timestamp - last_timestamp;
+    last_timestamp = timestamp;
+
+    KernelProfilerEventMetadata ev_md(data);
+
+    log_file << fmt::format(
+        R"({{ "proc":"{}",  "sx":{},  "sy":{},  "dx":{},  "dy":{},  "flits":{},  "type":"{}", "timestamp":{} }},)",
+        tracy::riscName[risc_num],
+        core.x,
+        core.y,
+        ev_md.dst_x,
+        ev_md.dst_y,
+        ev_md.noc_xfer_flits,
+        magic_enum::enum_name(ev_md.noc_xfer_type),
+        timestamp - smallest_timestamp,
+        delta);
+
     log_file << std::endl;
     log_file.close();
 }
