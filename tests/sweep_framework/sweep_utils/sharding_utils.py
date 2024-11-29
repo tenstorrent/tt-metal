@@ -9,19 +9,10 @@ import random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
-def get_device_grid_size():
-    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-    if device_name == "grayskull":
-        y, x = 9, 12
-    else:
-        y, x = 8, 8
-
-    return y, x
-
-
 def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
     # device.compute_with_storage_grid_size()
-    y, x = get_device_grid_size()
+    y = 8
+    x = 8
 
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
