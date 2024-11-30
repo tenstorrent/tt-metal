@@ -156,7 +156,8 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::Paralle
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv);
+    bool is_mm_conv,
+    bool is_non_tile_mul_width=false);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
 
@@ -180,7 +181,7 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 template <typename T>
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width, bool is_non_tile_mul_width=false);
 
 template <typename T>
 Result conv2d(
