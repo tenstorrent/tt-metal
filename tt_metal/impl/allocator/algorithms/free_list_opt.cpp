@@ -12,6 +12,27 @@
 #include <vector>
 #include <array>
 
+inline size_t intlg2(size_t n) {
+    // std::log2() is slow
+    size_t count = 0;
+    while (n > 0) {
+        count++;
+        n >>= 1;
+    }
+    return count;
+}
+
+inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregated_base) {
+    size_t n = max_size_bytes / size_segregated_base;
+    ssize_t count = intlg2(n);
+    // 128MB as the last seggregated class size should be enough
+    // avoid having too many classes as iterating them is not free
+    ssize_t max_count = intlg2(128 * 1024 * 1024 / size_segregated_base);
+    // -1 because that's usually the entry for the memory (or half of it) which is not useful
+    // Limit max to
+    return std::clamp(count, ssize_t{2}, max_count);
+}
+
 namespace tt {
 
 namespace tt_metal {
@@ -20,6 +41,7 @@ namespace allocator {
 
 FreeListOpt::FreeListOpt(
     DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment) :
+    size_segregated_count((num_segerated_classes(max_size_bytes, size_segregated_base))),
     Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
     // Reduce reallocations by reserving memory for free list components
     constexpr size_t initial_block_count = 64;
@@ -122,7 +144,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     }
     size_t allocated_block_index = allocate_in_block(target_block_index, alloc_size, offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
-    if(start_address + offset_bytes_ < address_limit) {
+    if (start_address + offset_bytes_ < address_limit) {
         TT_THROW(
             "Out of Memory: Cannot allocate at an address below {}. Allocation at {}",
             address_limit,
