@@ -71,7 +71,7 @@ private:
     // Size class index is calculated by taking the log2 of the block size divided by the base size
     // ex: size = 2048, base = 1024, log2(2048/1024) = 1, so size class index = 1
     inline static constexpr size_t size_segregated_base = 1024;  // in bytes
-    inline static constexpr size_t size_segregated_count = 12;   // Number of size classes
+    const size_t size_segregated_count;                          // Number of size classes
     std::vector<std::vector<size_t>> free_blocks_segregated_by_size_;
 
     // internal functions
@@ -80,7 +80,7 @@ private:
     // NOTE: This function DOES NOT remove block_index from the segregated list. Caller should do that
     size_t allocate_in_block(size_t block_index, DeviceAddr alloc_size, size_t offset);
 
-    inline static size_t get_size_segregated_index(DeviceAddr size_bytes) {
+    inline size_t get_size_segregated_index(DeviceAddr size_bytes) const {
         // std::log2 is SLOW, so we use a simple log2 implementation for integers. I assume GCC compiles this to a
         // count leading zeros instruction then a subtraction.
         size_t lg = 0;
