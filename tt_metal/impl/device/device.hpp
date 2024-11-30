@@ -377,7 +377,7 @@ class Device {
 
     SubDeviceManagerId get_active_sub_device_manager_id() const;
     SubDeviceManagerId get_default_sub_device_manager_id() const;
-    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr mesh_l1_size);
+    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);

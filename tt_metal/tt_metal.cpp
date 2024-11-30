@@ -1161,12 +1161,12 @@ uint32_t CreateSemaphore(
         core_spec);
 }
 
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore::create(device, cores, initial_value, buffer_type);
 }
 
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
 }

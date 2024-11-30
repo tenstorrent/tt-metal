@@ -9,8 +9,10 @@
 #include <optional>
 #include <vector>
 
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -18,6 +20,8 @@ using DeviceIds = std::vector<int>;
 using MeshDeviceID = size_t;
 using MeshOffset = std::pair<size_t, size_t>;
 class MeshDeviceView;
+
+struct MeshSubDeviceManagerId;
 
 struct MeshDeviceConfig {
     MeshShape mesh_shape;
@@ -171,6 +175,12 @@ public:
 
     size_t num_program_cache_entries() const;
 
+    MeshSubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
+    void load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
+    void clear_loaded_sub_device_manager();
+    void remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
+
     static std::shared_ptr<MeshDevice> fetch_mesh_device(const std::vector<Device*>& devices);
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
@@ -181,5 +191,13 @@ public:
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
+
+// TODO: This will be removed once we have DistributedDevice
+// Currently required since each device manages its own sub-device manager ids
+struct MeshSubDeviceManagerId {
+    MeshSubDeviceManagerId(const MeshDevice& mesh_device);
+
+    std::vector<SubDeviceManagerId> sub_device_manager_ids;
+};
 
 }  // namespace tt::tt_metal::distributed
