@@ -94,7 +94,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                 segregated_item_index = j;
                 break;
             } else if (
-                block_size_[block_index] >= alloc_size &&
+                block_size_[block_index] > alloc_size &&
                 (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
                 target_block_index = block_index;
                 segregated_list = &free_blocks;
@@ -212,7 +212,8 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     // The existing FreeList implementation does not check if the address is actually allocated. Just return if it's not
     // Do we want to keep this behavior?
 
-    auto block_index_opt = get_and_remove_from_alloc_table(absolute_address);
+    DeviceAddr addr = absolute_address - offset_bytes_;
+    auto block_index_opt = get_and_remove_from_alloc_table(addr);
     if (!block_index_opt.has_value()) {
         return;
     }
