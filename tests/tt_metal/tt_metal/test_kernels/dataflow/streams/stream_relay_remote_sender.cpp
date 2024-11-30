@@ -41,15 +41,15 @@ uint32_t get_sender_stream_config_reg(uint32_t tx_noc_id, uint32_t rx_src_update
 }
 
 FORCE_INLINE void write_message_size_to_message_info_buffer(
-    stream_state_t const &stream_state, uint32_t message_size_noc_words) {
+    stream_state_t const& stream_state, uint32_t message_size_noc_words) {
     ASSERT((message_size_noc_words << 4) <= stream_state.local_buffer_size);
     if (!((message_size_noc_words << 4) <= stream_state.local_buffer_size)) {
         DPRINT << "YIKES\n";
     }
-    *reinterpret_cast<volatile uint32_t *>(stream_state.local_msg_info_ptr) = message_size_noc_words;
+    *reinterpret_cast<volatile uint32_t*>(stream_state.local_msg_info_ptr) = message_size_noc_words;
 }
 
-FORCE_INLINE void reset_stream_message_info_buffer_rdptr(stream_state_t &stream_state, uint32_t stream_id) {
+FORCE_INLINE void reset_stream_message_info_buffer_rdptr(stream_state_t& stream_state, uint32_t stream_id) {
     stream_state.local_msg_info_ptr = stream_state.local_msg_info_ptr_base_address;
     NOC_STREAM_WRITE_REG(
         stream_id, STREAM_MSG_INFO_PTR_REG_INDEX, ((uint32_t)(stream_state.local_msg_info_ptr_base_address >> 4)));
@@ -57,7 +57,7 @@ FORCE_INLINE void reset_stream_message_info_buffer_rdptr(stream_state_t &stream_
         stream_id, STREAM_MSG_INFO_WR_PTR_REG_INDEX, (((uint32_t)stream_state.local_msg_info_ptr_base_address >> 4)));
 }
 FORCE_INLINE void advance_stream_message_info_buffer_wrptr(
-    stream_state_t &stream_state, uint32_t stream_id, uint32_t message_size) {
+    stream_state_t& stream_state, uint32_t stream_id, uint32_t message_size) {
     stream_state.local_msg_info_ptr += (1 << 4);
     stream_state.local_buffer_read_offset += message_size;
     if (stream_state.local_buffer_read_offset >= stream_state.local_buffer_size) {
@@ -72,7 +72,7 @@ FORCE_INLINE void wait_for_stream_write_complete(uint32_t sender_stream_id) {
 }
 
 FORCE_INLINE void copy_from_cb_to_stream_buffer(
-    stream_state_t &stream_state, uint32_t message_base, uint32_t message_size_noc_words) {
+    stream_state_t& stream_state, uint32_t message_base, uint32_t message_size_noc_words) {
     ASSERT((message_size_noc_words << 4) <= stream_state.local_buffer_size);
     if (!((message_size_noc_words << 4) <= stream_state.local_buffer_size)) {
         DPRINT << "YIKES2\n";
@@ -94,7 +94,7 @@ FORCE_INLINE void copy_from_cb_to_stream_buffer(
     noc_async_write_barrier();
 }
 
-FORCE_INLINE void hang_toggle(volatile uint32_t *hang_toggle_semaphore) {
+FORCE_INLINE void hang_toggle(volatile uint32_t* hang_toggle_semaphore) {
     return;
     while (*hang_toggle_semaphore == 0) {
         asm volatile("");
@@ -103,7 +103,7 @@ FORCE_INLINE void hang_toggle(volatile uint32_t *hang_toggle_semaphore) {
 }
 
 FORCE_INLINE void stream_noc_write(
-    stream_state_t &stream_state,
+    stream_state_t& stream_state,
     uint32_t message_base,
     uint32_t sender_stream_id,
     uint32_t dest_addr,
@@ -113,11 +113,11 @@ FORCE_INLINE void stream_noc_write(
     uint32_t dest_tile_header_buffer_addr,
     uint32_t local_start_phase,
     bool very_first_message,
-    volatile uint32_t *hang_toggle_semaphore,
+    volatile uint32_t* hang_toggle_semaphore,
     uint32_t message_id) {
     const uint32_t tiles_per_phase = stream_state.messages_per_phase;
 
-    uint32_t message_size_noc_words = *reinterpret_cast<volatile uint32_t *>(message_base);
+    uint32_t message_size_noc_words = *reinterpret_cast<volatile uint32_t*>(message_base);
 
     uint32_t dest_noc_reg = 0;
     uint32_t num_tiles = stream_state.num_tiles_sent;
@@ -266,10 +266,10 @@ void kernel_main() {
     uint32_t other_relay_done_semaphore = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t wait_receiver_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    *reinterpret_cast<volatile uint32_t *>(wait_receiver_semaphore) = 0;
+    *reinterpret_cast<volatile uint32_t*>(wait_receiver_semaphore) = 0;
 
     uint32_t first_relay_remote_src_start_phase_addr = get_arg_val<uint32_t>(arg_idx++);
-    volatile uint32_t *hang_toggle_semaphore = reinterpret_cast<volatile uint32_t *>(get_arg_val<uint32_t>(arg_idx++));
+    volatile uint32_t* hang_toggle_semaphore = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
 
     uint32_t local_starting_phase =
         notify_remote_receiver_of_starting_phase(
@@ -280,10 +280,10 @@ void kernel_main() {
 
     // clear the buffers
     for (uint32_t i = 0; i < stream_buffer_size / sizeof(uint32_t); i++) {
-        reinterpret_cast<volatile uint32_t *>(stream_buffer_addr)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(stream_buffer_addr)[i] = 0;
     }
     for (uint32_t i = 0; i < stream_tile_header_max_num_messages * 4; i++) {
-        reinterpret_cast<volatile uint32_t *>(stream_tile_header_buffer_addr)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(stream_tile_header_buffer_addr)[i] = 0;
     }
 
     stream_state_t stream_state{
@@ -352,7 +352,7 @@ void kernel_main() {
     // should reset first so that no data is in flight. Sender and receiver must ensure that no
     // payloads are in flight to the relay stream(s) before sending the reset signal to the relay
     // core
-    noc_semaphore_wait(reinterpret_cast<volatile uint32_t *>(wait_receiver_semaphore), 1);
+    noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(wait_receiver_semaphore), 1);
 
     stream_reset(stream_id);
 
