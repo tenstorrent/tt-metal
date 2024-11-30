@@ -248,6 +248,8 @@ class Buffer final {
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
     std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
 
+    size_t unique_id() const { return unique_id_; }
+
     Buffer(
         Device *device,
         DeviceAddr size,
@@ -300,6 +302,8 @@ class Buffer final {
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::weak_ptr<Buffer> weak_self;
+    size_t unique_id_ = 0;
+    static std::atomic<size_t> next_unique_id;
 };
 
 }  // namespace v0
