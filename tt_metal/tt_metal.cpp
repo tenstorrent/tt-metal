@@ -427,8 +427,8 @@ void WriteToDeviceSharded(Buffer &buffer, tt::stl::Span<const uint8_t> host_buff
         page.insert(
             page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + page_size);
 
-        auto noc_coordinates = buffer.noc_coordinates(bank_id);
-        llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+        auto core_coordinates = device->translated_worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_id));
+        llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
     }
 }
 
@@ -449,15 +449,19 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, tt::stl::Span<cons
     int data_index = 0;
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint8_t> page;
+        // Get address offset of buffer in bank. Required when writing to DRAM.
+        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        std::vector<uint32_t> page;
         page.insert(
             page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
+                WriteToDeviceDRAMChannel(device, bank_index, bank_local_address, page);
+                break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                auto core_coordinates = device->translated_worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
+                llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
         }
@@ -502,25 +506,29 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, uint8_t* host_buf
     size_t host_idx = 0;
 
     uint32_t bank_index = 0;
-    std::vector<uint8_t> page;
+    std::vector<uint32_t> page;
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
+        // Get address offset of buffer in bank. Required when reading from DRAM.
+        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE:
+                ReadFromDeviceDRAMChannel(device, bank_index, bank_local_address, page_size, page);
+                break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                auto core_coordinates = device->translated_worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
                 page.resize(page_size);
-                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
+                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
 
         // Copy page into host buffer
-        std::memcpy(host_buffer + host_idx, page.data(), page.size());
-        host_idx += page.size();
+        std::memcpy(host_buffer + host_idx, page.data(), page_size);
+        host_idx += page_size;
 
         bank_index = (bank_index + 1) % num_banks;
     }
@@ -537,7 +545,8 @@ void read_pages_to_host_helper(
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
     uint32_t host_buffer_start = host_page_id * page_size;
-    tt::Cluster::instance().read_core(host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
+    auto core_coordinates = device->translated_worker_core_from_logical_core(dev_buffer.logical_core_from_bank_id(bank_id));
+    tt::Cluster::instance().read_core(host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
 }
 
 void ReadFromDeviceSharded(Buffer &buffer, uint8_t* host_buffer, bool shard_order) {

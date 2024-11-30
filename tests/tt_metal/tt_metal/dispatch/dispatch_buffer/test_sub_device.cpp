@@ -54,13 +54,13 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         std::vector<CoreCoord> physical_cores_1;
         physical_cores_1.reserve(sharded_cores_1_vec.size());
         for (const auto& core : sharded_cores_1_vec) {
-            physical_cores_1.push_back(device->worker_core_from_logical_core(core));
+            physical_cores_1.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         std::vector<CoreCoord> physical_cores_2;
         physical_cores_2.reserve(sharded_cores_2_vec.size());
         for (const auto& core : sharded_cores_2_vec) {
-            physical_cores_2.push_back(device->worker_core_from_logical_core(core));
+            physical_cores_2.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         device->load_sub_device_manager(sub_device_manager_1);

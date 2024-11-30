@@ -228,6 +228,8 @@ class Buffer final {
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
+
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;

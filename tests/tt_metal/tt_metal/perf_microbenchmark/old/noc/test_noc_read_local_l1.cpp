@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
 
-                auto phy_core = device->worker_core_from_logical_core(core);
+                auto phy_core = device->translated_worker_core_from_logical_core(core);
                 if (debug) {
                     log_info(LogTest, "{} {} - logical {} {} - phy_core {} {}", r, c, c, r, phy_core.x, phy_core.y);
                 }

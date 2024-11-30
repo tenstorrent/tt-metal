@@ -47,7 +47,7 @@ static void test_sems_across_core_types(DispatchFixture *fixture,
                 });
 
             CoreCoord tensix_core(0, 0);
-            CoreCoord phys_tensix_core = device->worker_core_from_logical_core(tensix_core);
+            CoreCoord phys_tensix_core = device->translated_worker_core_from_logical_core(tensix_core);
             uint32_t tensix_sem_id = CreateSemaphore(program, tensix_core, tensix_sem_init_val, CoreType::WORKER);
             auto tensix_kernel = CreateKernel(
                 program,

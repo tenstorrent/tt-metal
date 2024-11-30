@@ -41,7 +41,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
         std::vector<CoreCoord> physical_cores_1;
         physical_cores_1.reserve(sharded_cores_1_vec.size());
         for (const auto& core : sharded_cores_1_vec) {
-            physical_cores_1.push_back(device->worker_core_from_logical_core(core));
+            physical_cores_1.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         device->load_sub_device_manager(sub_device_manager);
@@ -74,7 +74,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
             input_1_it += page_size_1 / sizeof(uint32_t);
         }
         auto sem_addr = global_semaphore->address();
-        auto physical_syncer_core = device->worker_core_from_logical_core(syncer_core);
+        auto physical_syncer_core = device->translated_worker_core_from_logical_core(syncer_core);
         tt::llrt::write_hex_vec_to_core(device->id(), physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
 
         // Full synchronization

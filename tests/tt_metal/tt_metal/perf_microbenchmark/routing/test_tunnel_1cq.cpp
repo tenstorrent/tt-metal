@@ -159,10 +159,10 @@ int main(int argc, char **argv) {
         tt_metal::Device *device_r = tt_metal::CreateDevice(device_id_r);
 
         CoreCoord tunneler_logical_core = device->get_ethernet_sockets(device_id_r)[0];
-        CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
+        CoreCoord tunneler_phys_core = device->translated_ethernet_core_from_logical_core(tunneler_logical_core);
 
         CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(device_id_l)[0];
-        CoreCoord r_tunneler_phys_core = device_r->ethernet_core_from_logical_core(r_tunneler_logical_core);
+        CoreCoord r_tunneler_phys_core = device_r->translated_ethernet_core_from_logical_core(r_tunneler_logical_core);
 
 
 
@@ -173,16 +173,16 @@ int main(int argc, char **argv) {
         tt_metal::Program program_r = tt_metal::CreateProgram();
 
         CoreCoord mux_core = {mux_x, mux_y};
-        CoreCoord mux_phys_core = device->worker_core_from_logical_core(mux_core);
+        CoreCoord mux_phys_core = device->translated_worker_core_from_logical_core(mux_core);
 
         CoreCoord demux_core = {demux_x, demux_y};
-        CoreCoord demux_phys_core = device_r->worker_core_from_logical_core(demux_core);
+        CoreCoord demux_phys_core = device_r->translated_worker_core_from_logical_core(demux_core);
 
         //tx on left chip
         std::vector<CoreCoord> l_tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
-            l_tx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            l_tx_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     src_endpoint_start_id + i, // 0: src_endpoint_id
@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
         std::vector<CoreCoord> r_tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
-            r_tx_phys_core.push_back(device_r->worker_core_from_logical_core(core));
+            r_tx_phys_core.push_back(device_r->translated_worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     src_endpoint_start_id + i, // 0: src_endpoint_id
@@ -437,7 +437,7 @@ int main(int argc, char **argv) {
         std::vector<CoreCoord> r_rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
             CoreCoord core = {rx_x+i, rx_y};
-            r_rx_phys_core.push_back(device_r->worker_core_from_logical_core(core));
+            r_rx_phys_core.push_back(device_r->translated_worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     dest_endpoint_start_id + i, // 0: dest_endpoint_id
@@ -479,7 +479,7 @@ int main(int argc, char **argv) {
         std::vector<CoreCoord> l_rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
             CoreCoord core = {rx_x+i, rx_y};
-            l_rx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            l_rx_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     dest_endpoint_start_id + i, // 0: dest_endpoint_id

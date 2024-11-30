@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         CoreCoord logical_core(0, 0);
-        CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
+        CoreCoord physical_core = device->translated_worker_core_from_logical_core(logical_core);
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         TT_ASSERT(device_id == mmio_device_id, "This test can only be run on MMIO device!");

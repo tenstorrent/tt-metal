@@ -347,10 +347,6 @@ int main(int argc, char **argv) {
                 TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024, "Error");
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024, "Error");
 
-                auto dram_src0_noc_xy = device->dram_core_from_dram_channel(dram_src0_channel_id);
-                auto dram_src1_noc_xy = device->dram_core_from_dram_channel(dram_src1_channel_id);
-                auto dram_dst_noc_xy = device->dram_core_from_dram_channel(dram_dst_channel_id);
-
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -363,29 +359,28 @@ int main(int argc, char **argv) {
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
                 const std::array mm_reader_args = {
-                    (std::uint32_t) dram_buffer_src0_addr,
-                    (std::uint32_t) dram_src0_noc_xy.x,
-                    (std::uint32_t) dram_src0_noc_xy.y,
-                    (std::uint32_t) dram_buffer_src1_addr,
-                    (std::uint32_t) dram_src1_noc_xy.x,
-                    (std::uint32_t) dram_src1_noc_xy.y,
-                    (std::uint32_t) (K/in0_block_w), // num_blocks
-                    (std::uint32_t) per_core_M * in0_block_w, // input 0 block num tiles
-                    (std::uint32_t) per_core_N * in0_block_w, // input 1 block num tiles
-                    (std::uint32_t) per_core_M * in0_block_w * single_tile_size, // input 0 block bytes
-                    (std::uint32_t) per_core_N * in0_block_w * single_tile_size};
+                    (std::uint32_t)dram_buffer_src0_addr,
+                    (std::uint32_t)0,
+                    (std::uint32_t)dram_buffer_src1_addr,
+                    (std::uint32_t)0,
+                    (std::uint32_t)(K / in0_block_w),                            // num_blocks
+                    (std::uint32_t)per_core_M * in0_block_w,                     // input 0 block num tiles
+                    (std::uint32_t)per_core_N * in0_block_w,                     // input 1 block num tiles
+                    (std::uint32_t)per_core_M * in0_block_w * single_tile_size,  // input 0 block bytes
+                    (std::uint32_t)per_core_N * in0_block_w * single_tile_size};
 
                 const std::array writer_args = {
-                    (std::uint32_t) dram_buffer_dst_addr,
-                    (std::uint32_t) dram_dst_noc_xy.x,
-                    (std::uint32_t) dram_dst_noc_xy.y,
-                    (std::uint32_t) out_subblock_h, // num tiles per sub block m
-                    (std::uint32_t) out_subblock_w, // num tiles per sub block n
-                    (std::uint32_t) per_core_M/out_subblock_h, // num sub blocks m
-                    (std::uint32_t) per_core_N/out_subblock_w, // num sub blocks n
-                    (std::uint32_t) out_subblock_w * single_tile_size * (per_core_N/out_subblock_w), // bytes offset to next row within sub-block
-                    (std::uint32_t) out_subblock_h * out_subblock_w * single_tile_size * (per_core_N/out_subblock_w), // bytes offset to next row of sub-blocks
-                    (std::uint32_t) out_subblock_w * single_tile_size};
+                    (std::uint32_t)dram_buffer_dst_addr,
+                    (std::uint32_t)0,
+                    (std::uint32_t)out_subblock_h,               // num tiles per sub block m
+                    (std::uint32_t)out_subblock_w,               // num tiles per sub block n
+                    (std::uint32_t)per_core_M / out_subblock_h,  // num sub blocks m
+                    (std::uint32_t)per_core_N / out_subblock_w,  // num sub blocks n
+                    (std::uint32_t)out_subblock_w * single_tile_size *
+                        (per_core_N / out_subblock_w),  // bytes offset to next row within sub-block
+                    (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size *
+                        (per_core_N / out_subblock_w),  // bytes offset to next row of sub-blocks
+                    (std::uint32_t)out_subblock_w * single_tile_size};
 
                 tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_args);
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);

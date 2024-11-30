@@ -27,11 +27,11 @@ inline std::tuple<Program, Program, Program, std::unique_ptr<GlobalSemaphore>> c
     Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
-    auto waiter_core_physical = device->worker_core_from_logical_core(waiter_coord);
+    auto waiter_core_physical = device->translated_worker_core_from_logical_core(waiter_coord);
     auto incrementer_cores = sub_device_1.cores(HalProgrammableCoreType::TENSIX);
     auto syncer_coord = incrementer_cores.ranges().back().end_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
-    auto syncer_core_physical = device->worker_core_from_logical_core(syncer_coord);
+    auto syncer_core_physical = device->translated_worker_core_from_logical_core(syncer_coord);
     auto all_cores = waiter_core.merge(incrementer_cores).merge(syncer_core);
     auto global_sem = CreateGlobalSemaphore(device, all_cores, INVALID);
 
@@ -71,14 +71,14 @@ inline std::tuple<Program, Program, Program, std::unique_ptr<GlobalSemaphore>> c
     Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
-    auto waiter_core_physical = device->ethernet_core_from_logical_core(waiter_coord);
+    auto waiter_core_physical = device->translated_ethernet_core_from_logical_core(waiter_coord);
     auto tensix_waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto tensix_waiter_core = CoreRangeSet(CoreRange(tensix_waiter_coord, tensix_waiter_coord));
-    auto tensix_waiter_core_physical = device->worker_core_from_logical_core(tensix_waiter_coord);
+    auto tensix_waiter_core_physical = device->translated_worker_core_from_logical_core(tensix_waiter_coord);
     auto incrementer_cores = sub_device_1.cores(HalProgrammableCoreType::TENSIX);
     auto syncer_coord = incrementer_cores.ranges().back().end_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
-    auto syncer_core_physical = device->worker_core_from_logical_core(syncer_coord);
+    auto syncer_core_physical = device->translated_worker_core_from_logical_core(syncer_coord);
     auto all_cores = tensix_waiter_core.merge(incrementer_cores).merge(syncer_core);
     auto global_sem = CreateGlobalSemaphore(device, all_cores, INVALID);
 

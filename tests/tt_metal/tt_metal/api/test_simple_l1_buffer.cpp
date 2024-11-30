@@ -54,7 +54,7 @@ namespace tt::test::buffer::detail {
         tt_metal::Program program = tt_metal::CreateProgram();
         const uint32_t cb_index = 0;
         const uint32_t output_cb_index = 16;
-        const CoreCoord phys_core = device->worker_core_from_logical_core(core);
+        const CoreCoord phys_core = device->translated_worker_core_from_logical_core(core);
 
         tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb_index, page_size);
@@ -62,16 +62,20 @@ namespace tt::test::buffer::detail {
 
         auto reader_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_reader_unary.cpp",
             core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_0, .compile_args = {cb_index}});
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = {cb_index}});
         auto writer_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_writer_unary.cpp",
             core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_1, .compile_args = {cb_index}});
-
-
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_1,
+                .compile_args = {cb_index}});
 
         tt_metal::SetRuntimeArgs(
             program,

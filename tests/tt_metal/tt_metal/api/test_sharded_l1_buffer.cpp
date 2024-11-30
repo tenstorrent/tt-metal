@@ -150,7 +150,7 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite)
         std::vector<CoreCoord> physical_cores;
         physical_cores.reserve(cores.size());
         for (const auto& core : cores) {
-            physical_cores.push_back(device->worker_core_from_logical_core(core));
+            physical_cores.push_back(device->translated_worker_core_from_logical_core(core));
         }
         uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
         uint32_t total_size = cores.size() * page_size;

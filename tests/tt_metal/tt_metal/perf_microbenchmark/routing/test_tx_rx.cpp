@@ -104,8 +104,8 @@ int main(int argc, char **argv) {
         CoreCoord traffic_gen_tx_core = {tx_x, tx_y};
         CoreCoord traffic_gen_rx_core = {rx_x, rx_y};
 
-        CoreCoord phys_traffic_gen_tx_core = device->worker_core_from_logical_core(traffic_gen_tx_core);
-        CoreCoord phys_traffic_gen_rx_core = device->worker_core_from_logical_core(traffic_gen_rx_core);
+        CoreCoord phys_traffic_gen_tx_core = device->translated_worker_core_from_logical_core(traffic_gen_tx_core);
+        CoreCoord phys_traffic_gen_rx_core = device->translated_worker_core_from_logical_core(traffic_gen_rx_core);
 
         std::vector<uint32_t> traffic_gen_tx_compile_args =
             {

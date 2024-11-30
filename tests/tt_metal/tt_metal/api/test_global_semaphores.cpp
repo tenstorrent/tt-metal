@@ -25,7 +25,7 @@ TEST_F(DeviceFixture, InitializeGlobalSemaphores) {
 
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                    device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                    device->id(), device->translated_worker_core_from_logical_core(core), address, sizeof(uint32_t));
 
                 EXPECT_EQ(sem_vals[0], initial_value);
             }
@@ -37,7 +37,7 @@ TEST_F(DeviceFixture, InitializeGlobalSemaphores) {
 
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                    device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                    device->id(), device->translated_worker_core_from_logical_core(core), address, sizeof(uint32_t));
                 EXPECT_EQ(sem_vals[0], initial_value);
             }
         }
@@ -69,7 +69,10 @@ TEST_F(DeviceFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
                 const auto& cores_vec = cores_vecs[i];
                 for (const auto& core : cores_vec) {
                     auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                        device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                        device->id(),
+                        device->translated_worker_core_from_logical_core(core),
+                        address,
+                        sizeof(uint32_t));
                     EXPECT_EQ(sem_vals[0], initial_value);
                 }
             }
@@ -91,24 +94,24 @@ TEST_F(DeviceFixture, ResetGlobalSemaphores) {
 
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                    device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                    device->id(), device->translated_worker_core_from_logical_core(core), address, sizeof(uint32_t));
                 tt::llrt::write_hex_vec_to_core(
-                    device->id(), device->worker_core_from_logical_core(core), overwrite_value, address);
+                    device->id(), device->translated_worker_core_from_logical_core(core), overwrite_value, address);
                 EXPECT_EQ(sem_vals[0], initial_value);
             }
             tt::Cluster::instance().l1_barrier(device->id());
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                    device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                    device->id(), device->translated_worker_core_from_logical_core(core), address, sizeof(uint32_t));
 
                 EXPECT_EQ(sem_vals[0], overwrite_value[0]);
             }
             global_semaphore->reset_semaphore_value();
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                    device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                    device->id(), device->translated_worker_core_from_logical_core(core), address, sizeof(uint32_t));
                 tt::llrt::write_hex_vec_to_core(
-                    device->id(), device->worker_core_from_logical_core(core), overwrite_value, address);
+                    device->id(), device->translated_worker_core_from_logical_core(core), overwrite_value, address);
                 EXPECT_EQ(sem_vals[0], initial_value);
             }
         }
