@@ -4,6 +4,8 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/global_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/run_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_pybind.cpp
@@ -580,6 +582,8 @@ set(TTNN_SRC)
 
 set(PYBIND_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/tensor.cpp

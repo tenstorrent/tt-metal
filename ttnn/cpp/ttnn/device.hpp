@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/types.hpp"
+
 namespace ttnn {
 
 namespace device {

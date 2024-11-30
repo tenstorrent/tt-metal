@@ -102,6 +102,16 @@ from ttnn._ttnn.multi_device import (
 
 from ttnn._ttnn.events import create_event, record_event, wait_for_event
 
+from ttnn._ttnn.global_circular_buffer import (
+    create_global_circular_buffer,
+)
+
+from ttnn._ttnn.global_semaphore import (
+    create_global_semaphore,
+    get_global_semaphore_address,
+    reset_global_semaphore_value,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -175,6 +185,8 @@ from ttnn.device import (
     format_input_tensor,
     format_output_tensor,
     pad_to_tile_shape,
+    SubDevice,
+    SubDeviceManagerId,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
