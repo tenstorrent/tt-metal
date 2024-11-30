@@ -7,7 +7,7 @@
 
 /*
  * Test printing from a kernel running on BRISC.
-*/
+ */
 
 void kernel_main() {
     DPRINT << "Test Debug Print: ERISC" << ENDL();

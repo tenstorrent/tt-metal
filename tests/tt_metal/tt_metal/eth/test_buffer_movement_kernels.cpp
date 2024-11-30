@@ -32,7 +32,7 @@ struct BankedConfig {
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
-}
+}  // namespace
 
 namespace unit_tests::erisc::kernels {
 
@@ -45,20 +45,16 @@ bool chip_to_chip_dram_buffer_transfer(
     const size_t& byte_size) {
     bool pass = true;
 
-
     tt::tt_metal::InterleavedBufferConfig sender_dram_config{
-                    .device= sender_device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+        .device = sender_device,
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig receiver_dram_config{
-                    .device= receiver_device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
-
+        .device = receiver_device,
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     // Create source buffer on sender device
     auto input_dram_buffer = CreateBuffer(sender_dram_config);
@@ -314,13 +310,33 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            16));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            16 * 1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            1000 * 1024));
     }
 }
 
@@ -332,13 +348,33 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            16));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            16 * 1024));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            1000 * 1024));
     }
 }
 
@@ -378,7 +414,13 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
             test_config,
             test_config.page_size_bytes));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            MAX_BUFFER_SIZE));
         test_config = BankedConfig{
             .num_pages = 200,
             .size_bytes = 200 * 2 * 32 * 32,
@@ -394,7 +436,13 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
             test_config,
             test_config.page_size_bytes));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+            static_cast<DispatchFixture*>(this),
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            MAX_BUFFER_SIZE));
     }
 }
 
@@ -434,7 +482,13 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     test_config,
                     test_config.page_size_bytes));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    test_config,
+                    MAX_BUFFER_SIZE));
                 test_config = BankedConfig{
                     .num_pages = 200,
                     .size_bytes = 200 * 2 * 32 * 32,
@@ -450,7 +504,13 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     test_config,
                     test_config.page_size_bytes));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    test_config,
+                    MAX_BUFFER_SIZE));
             }
         }
     }
@@ -476,13 +536,33 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
                     receiver_eth_core.str());
 
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    16));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1024));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    1024));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 16 * 1024));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    16 * 1024));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, 1000 * 1024));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    1000 * 1024));
             }
         }
     }
@@ -524,7 +604,13 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     test_config,
                     test_config.page_size_bytes));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                    static_cast<DispatchFixture*>(this),sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    test_config,
+                    MAX_BUFFER_SIZE));
                 test_config = BankedConfig{
                     .num_pages = 200,
                     .size_bytes = 200 * 2 * 32 * 32,
@@ -540,7 +626,13 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     test_config,
                     test_config.page_size_bytes));
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                    static_cast<DispatchFixture*>(this), sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config, MAX_BUFFER_SIZE));
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sender_eth_core,
+                    receiver_eth_core,
+                    test_config,
+                    MAX_BUFFER_SIZE));
             }
         }
     }

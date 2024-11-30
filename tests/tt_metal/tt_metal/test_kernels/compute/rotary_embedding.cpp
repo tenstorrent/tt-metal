@@ -19,7 +19,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_wait_front(in1_cb, in1_idx + 1);
     cb_reserve_back(out_cb, num_tiles);
 
-    #ifdef DECODE_MODE
+#ifdef DECODE_MODE
     ACQ();
     mul_bcast_rows_init_short();
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
@@ -27,8 +27,8 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     REL();
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
-    // We don't pop in1 in decode which is sin/cos since we don't stream
-    #else
+// We don't pop in1 in decode which is sin/cos since we don't stream
+#else
     ACQ();
     mul_tiles_init();
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
@@ -37,7 +37,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
-    #endif
+#endif
 }
 
 ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -87,7 +87,7 @@ void MAIN {
     uint32_t updated_cos_cb = cos_cb;
     uint32_t updated_sin_cb = sin_cb;
 
-    #ifdef DECODE_MODE
+#ifdef DECODE_MODE
     constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(12);
     constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(13);
     constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(14);
@@ -100,13 +100,13 @@ void MAIN {
     TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
-    #endif
+#endif
     uint32_t in1_idx = 0;
     for (uint32_t i = 0; i < num_rows; i++) {
         for (uint32_t j = 0; j < Wt; j++) {
-            #ifdef DECODE_MODE
+#ifdef DECODE_MODE
             in1_idx = j;
-            #endif
+#endif
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1)
                 cb_wait_front(rotated_in_cb, onetile);
@@ -141,8 +141,7 @@ void MAIN {
             cb_push_back(out_cb, onetile);
             cb_pop_front(cos_interm_cb, onetile);
             cb_pop_front(sin_interm_cb, onetile);
-
         }
     }
 }
-} // NAMESPACE
+}  // namespace NAMESPACE

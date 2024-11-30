@@ -23,5 +23,4 @@ void kernel_main() {
 
     noc_async_read(dram_buffer_src_noc_addr, local_eth_l1_addr_base, dram_buffer_size);
     noc_async_read_barrier();
-
 }

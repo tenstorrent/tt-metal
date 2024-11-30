@@ -35,8 +35,7 @@ std::vector<ValueType> generate_strided_vector(
 }
 
 template <typename ValueType>
-std::vector<ValueType> generate_constant_vector(
-    const ValueType& constant, const size_t& numel) {
+std::vector<ValueType> generate_constant_vector(const ValueType& constant, const size_t& numel) {
     std::vector<ValueType> results(numel, constant);
     return results;
 }
@@ -130,13 +129,12 @@ std::vector<PackType> generate_packed_random_vector_from_vector(
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_strided_vector(
-     const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
+    const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
     return pack_vector<PackType, ValueType>(generate_strided_vector(init, assigned, stride, offset, numel));
 }
 
 template <typename PackType, typename ValueType>
-std::vector<PackType> generate_packed_constant_vector(
-    const ValueType& constant, const size_t& numel) {
+std::vector<PackType> generate_packed_constant_vector(const ValueType& constant, const size_t& numel) {
     return pack_vector<PackType, ValueType>(generate_constant_vector(constant, numel));
 }
 
@@ -148,7 +146,6 @@ std::vector<PackType> generate_packed_increment_vector(
     float start = 0.0,
     int count = 16,
     bool slide = true) {
-
     return pack_vector<PackType, ValueType>(generate_increment_vector(init, numel, increment, start, count, slide));
 }
 

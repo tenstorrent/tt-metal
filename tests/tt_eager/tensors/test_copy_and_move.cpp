@@ -19,9 +19,7 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-
-bool test_tensor_copy_semantics(Device *device) {
-
+bool test_tensor_copy_semantics(Device* device) {
     bool pass = true;
     tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
@@ -42,7 +40,9 @@ bool test_tensor_copy_semantics(Device *device) {
     pass &= dev_a_data == dev_a_copy_data;
 
     // host tensor updated with host tensor copy assignment
-    Tensor host_c = ttnn::numpy::arange<bfloat16>(0, tt_metal::compute_volume(single_tile_shape), 1).reshape(single_tile_shape).to(Layout::TILE);
+    Tensor host_c = ttnn::numpy::arange<bfloat16>(0, tt_metal::compute_volume(single_tile_shape), 1)
+                        .reshape(single_tile_shape)
+                        .to(Layout::TILE);
     Tensor host_c_copy = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE);
     host_c_copy = host_c;
     auto host_c_data = owned_buffer::get_as<bfloat16>(host_c);
@@ -80,7 +80,7 @@ bool test_tensor_copy_semantics(Device *device) {
     return pass;
 }
 
-bool test_tensor_move_semantics(Device *device) {
+bool test_tensor_move_semantics(Device* device) {
     bool pass = true;
     tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
@@ -146,13 +146,14 @@ bool test_tensor_move_semantics(Device *device) {
     return pass;
 }
 
-bool test_tensor_deallocate_semantics(Device *device) {
-
+bool test_tensor_deallocate_semantics(Device* device) {
     bool pass = true;
     tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
-    MemoryConfig dram_mem_config = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::DRAM};
-    MemoryConfig l1_mem_config = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::L1};
+    MemoryConfig dram_mem_config =
+        MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+    MemoryConfig l1_mem_config =
+        MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1};
 
     // dev tensor allocate, deallocate, reallocate same address DRAM
     Tensor dev_a = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, dram_mem_config);
@@ -187,7 +188,7 @@ bool test_tensor_deallocate_semantics(Device *device) {
     return pass;
 }
 
-bool test_tensor_deallocate_and_close_device(Device *device) {
+bool test_tensor_deallocate_and_close_device(Device* device) {
     bool pass = true;
     tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
@@ -205,16 +206,15 @@ bool test_tensor_deallocate_and_close_device(Device *device) {
     return pass;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_tensor_copy_semantics(device);
 
@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
 
         pass &= test_tensor_deallocate_and_close_device(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

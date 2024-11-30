@@ -12,46 +12,51 @@
 #define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
-    #include "debug_macros.h"
+#include "debug_macros.h"
 
-    SliceRange srt = SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4};
-    SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-    SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-    SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+SliceRange srt = SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4};
+SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
+SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
+SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
 
-    inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-        PDPRINT("======");
-        for (int32_t r = 0; r < 32; ++ r) {
-            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-            PDPRINT((uint)r << TileSlice(cb_id, tile_id, sr, true, untilize));
-        }
-        PDPRINT("++++++");
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    PDPRINT("======");
+    for (int32_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = r + 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        PDPRINT((uint)r << TileSlice(cb_id, tile_id, sr, true, untilize));
     }
+    PDPRINT("++++++");
+}
 
-    inline void print_cb_details(uint32_t cb_id) {
-        PDPRINT("cb_id " << cb_id << ": { "
-                << "size: " << cb_interface[cb_id].fifo_size << ", "
-                << "limit: " << cb_interface[cb_id].fifo_limit << ", "
-                << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
-                << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
-                << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
-                << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
-                << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }");
-    }
+inline void print_cb_details(uint32_t cb_id) {
+    PDPRINT(
+        "cb_id " << cb_id << ": { "
+                 << "size: " << cb_interface[cb_id].fifo_size << ", "
+                 << "limit: " << cb_interface[cb_id].fifo_limit << ", "
+                 << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
+                 << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
+                 << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
+                 << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
+                 << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }");
+}
 #endif
 
-inline void tilize(uint32_t out_nelems,
-                   uint32_t in_cb_id,
-                   uint32_t in_ntiles_hw,
-                   uint32_t in_ntiles_c,
-                   uint32_t in_ntiles_hwc,
-                   uint32_t window_hw_padded,
-                   uint32_t out_cb_id) {
+inline void tilize(
+    uint32_t out_nelems,
+    uint32_t in_cb_id,
+    uint32_t in_ntiles_hw,
+    uint32_t in_ntiles_c,
+    uint32_t in_ntiles_hwc,
+    uint32_t window_hw_padded,
+    uint32_t out_cb_id) {
     tilize_init_short(in_cb_id, in_ntiles_hwc);
-    for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+    for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++out_elem_i) {
         cb_wait_front(in_cb_id, 1);
         cb_reserve_back(out_cb_id, in_ntiles_hwc);
-        tilize_block(in_cb_id, in_ntiles_hwc, out_cb_id);  // TODO: need to ensure the ordering for reduction when in_ntiles_hw > 1
+        tilize_block(
+            in_cb_id,
+            in_ntiles_hwc,
+            out_cb_id);  // TODO: need to ensure the ordering for reduction when in_ntiles_hw > 1
         // print_full_tile(in_cb_id, 0, false);
         // PDPRINT("OUT TILE :: " << TileSlice(out_cb_id, 0, srr, true, true));
         // print_cb_details(in_cb_id);
@@ -61,14 +66,15 @@ inline void tilize(uint32_t out_nelems,
     tilize_uninit(in_cb_id);
 }
 
-inline void reduce_h(uint32_t out_nelems,
-                     uint32_t in_cb_id,
-                     uint32_t in_scalar_cb_id,
-                     uint32_t in_ntiles_hw,
-                     uint32_t in_ntiles_c,
-                     uint32_t in_ntiles_hwc,
-                     uint32_t out_ntiles_c,
-                     uint32_t out_cb_id) {
+inline void reduce_h(
+    uint32_t out_nelems,
+    uint32_t in_cb_id,
+    uint32_t in_scalar_cb_id,
+    uint32_t in_ntiles_hw,
+    uint32_t in_ntiles_c,
+    uint32_t in_ntiles_hwc,
+    uint32_t out_ntiles_c,
+    uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
     reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_COL>(out_cb_id);
@@ -76,7 +82,7 @@ inline void reduce_h(uint32_t out_nelems,
     for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
         // add to accumulator all the in_ntiles_hw in a column of tiles
         acquire_dst();
-        uint32_t dst_i = 0; // TODO [AS]: Use more than one dst tile at a time
+        uint32_t dst_i = 0;  // TODO [AS]: Use more than one dst tile at a time
         for (uint32_t hw_i = 0; hw_i < in_ntiles_hw; ++hw_i) {
             uint32_t tile_i = base_tile_id + hw_i;
             reduce_tile(in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i);
@@ -114,21 +120,29 @@ void MAIN {
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
-    #if DEBUG_PRINT == 1
-        print_cb_details(in_cb_id);
-        print_cb_details(in_scalar_cb_id);
-        print_cb_details(in_tiled_cb_id);
-        print_cb_details(out_cb_id);
-    #endif
+#if DEBUG_PRINT == 1
+    print_cb_details(in_cb_id);
+    print_cb_details(in_scalar_cb_id);
+    print_cb_details(in_tiled_cb_id);
+    print_cb_details(out_cb_id);
+#endif
 
     cb_wait_front(in_scalar_cb_id, 1);
-    for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {
+    for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
         // NOTE: Assuming in_ntiles_hw < 8 for now.
         // TODO: subblocking to support this.
         // tilize
         tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
         // Reduce H
-        reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+        reduce_h(
+            out_nelems,
+            in_tiled_cb_id,
+            in_scalar_cb_id,
+            in_ntiles_hw,
+            in_ntiles_c,
+            in_ntiles_hwc,
+            out_ntiles_c,
+            out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

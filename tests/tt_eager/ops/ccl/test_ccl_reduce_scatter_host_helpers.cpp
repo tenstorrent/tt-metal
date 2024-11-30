@@ -13,14 +13,13 @@
 #include <vector>
 #include <cstdint>
 
+using ttnn::ccl::generate_slice_sequence_on_dim;
 using ttnn::ccl::cmd::CclCommandArg;
 using ttnn::ccl::cmd::CclCommandArgCode;
-using ttnn::ccl::cmd::CclCommandHeader;
 using ttnn::ccl::cmd::CclCommandCode;
-using ttnn::ccl::generate_slice_sequence_on_dim;
+using ttnn::ccl::cmd::CclCommandHeader;
 using shape4d = ttnn::ccl::Shape4D<uint32_t>;
-TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tensor_Dim3_Slice0to7)
-{
+TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tensor_Dim3_Slice0to7) {
     const std::size_t num_slices = 8;
     const std::int64_t start_slice_index = 0;
     const std::int64_t end_slice_index_exclusive = 8;
@@ -35,8 +34,7 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
         num_slices,
         start_slice_index,
         end_slice_index_exclusive,
-        worker_index
-    );
+        worker_index);
 
     std::vector<uint32_t> args;
     ASSERT_EQ(slices.size(), 8);
@@ -45,14 +43,20 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
     const std::size_t args_per_command_header = 1;
     const std::size_t args_per_command_arg_header = 1;
 
-    const std::size_t args_per_full_tensor_field = CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::size_in_words();
-    const std::size_t args_per_full_tensor_slice_command = args_per_command_header + args_per_command_arg_header + args_per_full_tensor_field;
+    const std::size_t args_per_full_tensor_field =
+        CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::size_in_words();
+    const std::size_t args_per_full_tensor_slice_command =
+        args_per_command_header + args_per_command_arg_header + args_per_full_tensor_field;
 
-    const std::size_t args_per_shape_field = CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
-    const std::size_t args_per_member_update = args_per_command_header + args_per_command_arg_header + args_per_shape_field;
+    const std::size_t args_per_shape_field =
+        CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
+    const std::size_t args_per_member_update =
+        args_per_command_header + args_per_command_arg_header + args_per_shape_field;
     const std::size_t num_commands_with_single_field_update = num_slices - 1;
 
-    ASSERT_EQ(args.size(), num_commands_with_single_field_update * args_per_member_update + args_per_full_tensor_slice_command);
+    ASSERT_EQ(
+        args.size(),
+        num_commands_with_single_field_update * args_per_member_update + args_per_full_tensor_slice_command);
 
     shape4d expected_tensor_slice_shape = shape4d(1, 1, 1, 8);
 
@@ -61,8 +65,7 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
         log_info(tt::LogOp, "arg {}: {}", i, args[i]);
     }
 
-
-    { // Validate the first command
+    {  // Validate the first command
         std::size_t cmd_start_offset = 0;
         CclCommandHeader cmd_hdr = CclCommandHeader::from_uint32(args[cmd_start_offset]);
         CclCommandCode cmd_code = cmd_hdr.code;
@@ -82,8 +85,5 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
         ASSERT_EQ(args[arg_offset++], expected_tensor_slice_shape.z);
         ASSERT_EQ(args[arg_offset++], expected_tensor_slice_shape.y);
         ASSERT_EQ(args[arg_offset++], expected_tensor_slice_shape.x);
-
-
     }
-
 }

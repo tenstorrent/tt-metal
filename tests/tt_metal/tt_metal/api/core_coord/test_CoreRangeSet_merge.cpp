@@ -38,7 +38,8 @@ TEST_F(CoreCoordFixture, TestCoreRangeSetMergeCoreCoord) {
 
     // "H", sub-optimal currently, should be reduced down to 3 CRs instead of 5
     EXPECT_EQ(
-        empty_crs.merge(std::vector{::CoreRange{{0, 0}, {1, 5}}, ::CoreRange{{3, 0}, {4, 5}}, ::CoreRange{{0, 2}, {4, 3}}}),
+        empty_crs.merge(
+            std::vector{::CoreRange{{0, 0}, {1, 5}}, ::CoreRange{{3, 0}, {4, 5}}, ::CoreRange{{0, 2}, {4, 3}}}),
         ::CoreRangeSet(std::set{
             ::CoreRange{{0, 0}, {1, 1}},
             ::CoreRange{{0, 2}, {4, 3}},

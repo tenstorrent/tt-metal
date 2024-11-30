@@ -16,27 +16,26 @@ namespace unit_tests::basic::test_noc {
 
 const uint32_t init_value = 0x1234B33F;
 
-uint32_t read_reg (Device* device, CoreCoord logical_node, uint32_t reg_addr) {
+uint32_t read_reg(Device* device, CoreCoord logical_node, uint32_t reg_addr) {
     // Read and return reg value form reading
     uint32_t reg_data = unit_tests::basic::test_noc::init_value;
     tt_metal::detail::ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
     return reg_data;
 }
 
-void read_translation_table (Device* device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
+void read_translation_table(
+    Device* device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
 #ifdef NOC_X_ID_TRANSLATE_TABLE_0
     std::vector<uint32_t> x_reg_addrs = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3)
-    };
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3)};
     std::vector<uint32_t> y_reg_addrs = {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)
-    };
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
     x_remap.clear();
     for (const auto& reg_addr : x_reg_addrs) {
         auto regval = read_reg(device, logical_node, reg_addr);
@@ -48,7 +47,7 @@ void read_translation_table (Device* device, CoreCoord logical_node, std::vector
     y_remap.clear();
     for (const auto& reg_addr : y_reg_addrs) {
         auto regval = read_reg(device, logical_node, reg_addr);
-        ASSERT_NE(regval, init_value); // Need to make sure we read in valid reg
+        ASSERT_NE(regval, init_value);  // Need to make sure we read in valid reg
         for (int i = 0; i < 8; i++) {
             y_remap.push_back(regval & 0xF);
             regval = regval >> 4;
@@ -70,11 +69,10 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     device = tt::tt_metal::CreateDevice(device_id);
     CoreCoord unharvested_logical_grid_size;
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10);  break;
+        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10); break;
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
-        default:
-            TT_THROW("Unsupported arch {}", get_umd_arch_name());
+        default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {
@@ -115,7 +113,8 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
             // Read register from specific node
             uint32_t node_id_regval;
             node_id_regval = unit_tests::basic::test_noc::read_reg(device, CoreCoord(x, y), NOC_NODE_ID);
-            ASSERT_NE(node_id_regval, unit_tests::basic::test_noc::init_value); // Need to make sure we read in valid reg
+            ASSERT_NE(
+                node_id_regval, unit_tests::basic::test_noc::init_value);  // Need to make sure we read in valid reg
             // Check it matches software translated xy
             uint32_t my_x = node_id_regval & NOC_NODE_ID_MASK;
             uint32_t my_y = (node_id_regval >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
@@ -146,13 +145,13 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
             unit_tests::basic::test_noc::read_translation_table(device, CoreCoord(x, y), x_remap, y_remap);
             bool core_has_translation_error = false;
             // bottom 16 values are not remapped --> identity
-            for (int x=0; x<16; x++) {
-                EXPECT_EQ (x, x_remap[x]);
+            for (int x = 0; x < 16; x++) {
+                EXPECT_EQ(x, x_remap[x]);
                 core_has_translation_error |= (x != x_remap[x]);
             }
             // bottom 16 values are not remapped --> identity
-            for (int y=0; y<16; y++) {
-                EXPECT_EQ ( y, y_remap[y]);
+            for (int y = 0; y < 16; y++) {
+                EXPECT_EQ(y, y_remap[y]);
                 core_has_translation_error |= (y != y_remap[y]);
             }
             ASSERT_FALSE(core_has_translation_error);
@@ -168,7 +167,7 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
     const uint32_t stream_id = 0;
     const uint32_t stream_reg = 4;
 
-    for (tt_metal::Device *device : this->devices_) {
+    for (tt_metal::Device* device : this->devices_) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreCoord logical_grid_size = device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
@@ -177,8 +176,8 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_reg_read_write.cpp",
             all_cores,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0}
-        );
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
 
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t value_to_write = 0x1234;
@@ -191,9 +190,15 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
                 CoreCoord worker_target_core = device->worker_core_from_logical_core(logical_target_core);
 
                 tt_metal::SetRuntimeArgs(
-                    program, kernel_id, logical_core,
-                    {worker_target_core.x, worker_target_core.y, stream_id, stream_reg, value_to_write, l1_unreserved_base}
-                );
+                    program,
+                    kernel_id,
+                    logical_core,
+                    {worker_target_core.x,
+                     worker_target_core.y,
+                     stream_id,
+                     stream_reg,
+                     value_to_write,
+                     l1_unreserved_base});
 
                 value_to_write++;
             }
@@ -206,7 +211,8 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
             for (uint32_t y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core(x, y);
                 std::vector<uint32_t> readback = {0xDEADBEEF};
-                tt_metal::detail::ReadFromDeviceL1(device, logical_core, l1_unreserved_base, sizeof(uint32_t), readback);
+                tt_metal::detail::ReadFromDeviceL1(
+                    device, logical_core, l1_unreserved_base, sizeof(uint32_t), readback);
                 EXPECT_EQ(readback[0], expected_value_to_read);
                 expected_value_to_read++;
             }

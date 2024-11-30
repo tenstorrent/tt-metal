@@ -27,21 +27,39 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
     auto sharded_cores_2_vec = corerange_to_cores(sharded_cores_2, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
+        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
-    ShardedBufferConfig shard_config_1 = {nullptr, sharded_cores_1.num_cores() * page_size_1, page_size_1, BufferType::L1, TensorMemoryLayout::HEIGHT_SHARDED, shard_spec_buffer_1};
-    auto input_1 = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
+    ShardedBufferConfig shard_config_1 = {
+        nullptr,
+        sharded_cores_1.num_cores() * page_size_1,
+        page_size_1,
+        BufferType::L1,
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        shard_spec_buffer_1};
+    auto input_1 =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
 
-    ShardSpecBuffer shard_spec_buffer_2 = ShardSpecBuffer(sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_2.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_2 = ShardSpecBuffer(
+        sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_2.num_cores(), 1});
     uint32_t page_size_2 = 64;
-    ShardedBufferConfig shard_config_2 = {nullptr, sharded_cores_2.num_cores() * page_size_2, page_size_2, BufferType::L1, TensorMemoryLayout::HEIGHT_SHARDED, shard_spec_buffer_2};
-    auto input_2 = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_2.size / sizeof(uint32_t));
+    ShardedBufferConfig shard_config_2 = {
+        nullptr,
+        sharded_cores_2.num_cores() * page_size_2,
+        page_size_2,
+        BufferType::L1,
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        shard_spec_buffer_2};
+    auto input_2 =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_2.size / sizeof(uint32_t));
 
     uint32_t page_size_3 = 1024;
-    InterleavedBufferConfig interleaved_config = {nullptr, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
-    auto input_3 = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, interleaved_config.size / sizeof(uint32_t));
+    InterleavedBufferConfig interleaved_config = {
+        nullptr, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
+    auto input_3 =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, interleaved_config.size / sizeof(uint32_t));
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
         auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
         DeviceAddr l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
@@ -73,8 +91,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         EXPECT_EQ(input_1, output_1);
         auto input_1_it = input_1.begin();
         for (const auto& physical_core : physical_cores_1) {
-            auto readback = tt::llrt::read_hex_vec_from_core(
-                device->id(), physical_core, buffer_1->address(), page_size_1);
+            auto readback =
+                tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer_1->address(), page_size_1);
             EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
             input_1_it += page_size_1 / sizeof(uint32_t);
         }
@@ -95,13 +113,13 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         EXPECT_EQ(input_2, output_2);
         auto input_2_it = input_2.begin();
         for (const auto& physical_core : physical_cores_2) {
-            auto readback = tt::llrt::read_hex_vec_from_core(
-                device->id(), physical_core, buffer_3->address(), page_size_2);
+            auto readback =
+                tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer_3->address(), page_size_2);
             EXPECT_TRUE(std::equal(input_2_it, input_2_it + page_size_2 / sizeof(uint32_t), readback.begin()));
             input_2_it += page_size_2 / sizeof(uint32_t);
         }
 
-        auto buffer_4 = CreateBuffer(shard_config_1,  SubDeviceId{0});
+        auto buffer_4 = CreateBuffer(shard_config_1, SubDeviceId{0});
         EXPECT_EQ(buffer_4->address(), max_addr - buffer_4->aligned_page_size());
         EXPECT_THROW(CreateBuffer(interleaved_config, SubDeviceId{0}), std::exception);
     }

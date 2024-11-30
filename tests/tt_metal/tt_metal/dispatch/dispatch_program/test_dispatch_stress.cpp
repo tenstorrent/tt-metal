@@ -12,7 +12,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-void RunTest(Device *device) {
+void RunTest(Device* device) {
     // Set up program
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
@@ -24,40 +24,30 @@ void RunTest(Device *device) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core_range,
-        tt_metal::DataMovementConfig {
+        tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {l1_unreserved_base}
-        }
-    );
+            .compile_args = {l1_unreserved_base}});
     KernelHandle ncrisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core_range,
-        tt_metal::DataMovementConfig {
+        tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {l1_unreserved_base + 4}
-        }
-    );
+            .compile_args = {l1_unreserved_base + 4}});
 
     // Write runtime args
-    auto get_first_arg = [](Device *device, CoreCoord &core, uint32_t multiplier) {
-        return (uint32_t) device->id() + (uint32_t) core.x * 10 * multiplier;
+    auto get_first_arg = [](Device* device, CoreCoord& core, uint32_t multiplier) {
+        return (uint32_t)device->id() + (uint32_t)core.x * 10 * multiplier;
     };
-    auto get_second_arg = [](Device *device, CoreCoord &core, uint32_t multiplier) {
-        return (uint32_t) core.y * 100 * multiplier;
+    auto get_second_arg = [](Device* device, CoreCoord& core, uint32_t multiplier) {
+        return (uint32_t)core.y * 100 * multiplier;
     };
 
     for (CoreCoord core : core_range) {
-        std::vector<uint32_t> brisc_rt_args = {
-            get_first_arg(device, core, 1),
-            get_second_arg(device, core, 1)
-        };
-        std::vector<uint32_t> ncrisc_rt_args = {
-            get_first_arg(device, core, 2),
-            get_second_arg(device, core, 2)
-        };
+        std::vector<uint32_t> brisc_rt_args = {get_first_arg(device, core, 1), get_second_arg(device, core, 1)};
+        std::vector<uint32_t> ncrisc_rt_args = {get_first_arg(device, core, 2), get_second_arg(device, core, 2)};
         SetRuntimeArgs(program, brisc_kid, core, brisc_rt_args);
         SetRuntimeArgs(program, ncrisc_kid, core, ncrisc_rt_args);
     }
@@ -76,34 +66,30 @@ void RunTest(Device *device) {
     // Check results
     for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
-        tt_metal::detail::ReadFromDeviceL1(
-            device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result
-        );
+        tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
         std::vector<uint32_t> ncrisc_result;
-        tt_metal::detail::ReadFromDeviceL1(
-            device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result
-        );
+        tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
         uint32_t expected_result = get_first_arg(device, core, 1) + get_second_arg(device, core, 1);
-        if (expected_result != brisc_result[0])
+        if (expected_result != brisc_result[0]) {
             log_warning(
                 LogTest,
                 "Device {}, Core {}, BRISC result was incorrect. Expected {} but got {}",
                 device->id(),
                 core.str(),
                 expected_result,
-                brisc_result[0]
-            );
+                brisc_result[0]);
+        }
         EXPECT_TRUE(expected_result == brisc_result[0]);
         expected_result = get_first_arg(device, core, 2) + get_second_arg(device, core, 2);
-        if (expected_result != ncrisc_result[0])
+        if (expected_result != ncrisc_result[0]) {
             log_warning(
                 LogTest,
                 "Device {}, Core {}, NCRISC result was incorrect. Expected {} but got {}",
                 device->id(),
                 core.str(),
                 expected_result,
-                ncrisc_result[0]
-            );
+                ncrisc_result[0]);
+        }
         EXPECT_TRUE(expected_result == ncrisc_result[0]);
     }
 }
@@ -111,8 +97,9 @@ void RunTest(Device *device) {
 TEST(DispatchStress, TensixRunManyTimes) {
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     // Skip fast dispatch until it's supported for remote device.
-    if (!slow_dispatch)
+    if (!slow_dispatch) {
         GTEST_SKIP();
+    }
     // Run 500 times to make sure that things work
     for (int idx = 0; idx < 400; idx++) {
         log_info(LogTest, "Running iteration #{}", idx);
@@ -124,12 +111,12 @@ TEST(DispatchStress, TensixRunManyTimes) {
         }
         vector<Device*> devices_;
         auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
-        for (const auto &[id, device] : reserved_devices_) {
+        for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
 
         // Run the test on each device
-        for (Device *device : devices_) {
+        for (Device* device : devices_) {
             log_info(LogTest, "Running on device {}", device->id());
             RunTest(device);
         }

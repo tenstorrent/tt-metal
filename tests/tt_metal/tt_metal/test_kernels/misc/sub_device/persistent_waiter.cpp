@@ -20,5 +20,4 @@ void kernel_main() {
     noc_semaphore_wait(sem, num_inc);
     noc_semaphore_inc(noc_local_sem_addr, -num_inc);
     noc_async_atomic_barrier();
-
 }

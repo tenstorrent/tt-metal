@@ -18,8 +18,8 @@ using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
 
 Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
-    using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
     for (int i = 0; i < 3; i++) {
@@ -35,7 +35,8 @@ Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
     // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
+        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
 
@@ -47,16 +48,17 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
     ttnn::SimpleShape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
-    auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
-    auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
+    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     for (int outer_loop = 0; outer_loop < 5; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         for (int i = 0; i < 30; i++) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0)
+                if (i == 0 and outer_loop == 0) {
                     device->enable_program_cache();
+                }
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -68,14 +70,27 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
 
                 auto write_event = std::make_shared<Event>();
                 auto workload_event = std::make_shared<Event>();
-                ttnn::write_buffer(0, input_tensor, {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
+                ttnn::write_buffer(
+                    0,
+                    input_tensor,
+                    {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(0), write_event);
                 ttnn::wait_for_event(device->command_queue(1), write_event);
                 auto output_tensor = dispatch_ops_to_device(device, input_tensor, 1);
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(0), workload_event);
 
-                ttnn::read_buffer(0, output_tensor, {readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data});
+                ttnn::read_buffer(
+                    0,
+                    output_tensor,
+                    {readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
@@ -87,7 +102,8 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
     // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
+        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
 
@@ -99,8 +115,8 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
     ttnn::SimpleShape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
-    auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
-    auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
+    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
 
     TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
     ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
@@ -110,8 +126,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0)
+                if (i == 0 and outer_loop == 0) {
                     device->enable_program_cache();
+                }
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -121,14 +138,27 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
 
                 auto write_event = std::make_shared<Event>();
                 auto workload_event = std::make_shared<Event>();
-                ttnn::write_buffer(1, input_tensor, {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
+                ttnn::write_buffer(
+                    1,
+                    input_tensor,
+                    {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(1), write_event);
                 ttnn::wait_for_event(device->command_queue(0), write_event);
                 auto output_tensor = dispatch_ops_to_device(device, input_tensor, 0);
                 ttnn::record_event(device->command_queue(0), workload_event);
                 ttnn::wait_for_event(device->command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                ttnn::read_buffer(1, output_tensor, {readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data});
+                ttnn::read_buffer(
+                    1,
+                    output_tensor,
+                    {readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
@@ -140,7 +170,8 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
     // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
+        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
 
@@ -152,8 +183,8 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
     ttnn::SimpleShape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
-    auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
-    auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
+    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
 
     for (int outer_loop = 0; outer_loop < 5; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
@@ -161,8 +192,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0)
+                if (i == 0 and outer_loop == 0) {
                     device->enable_program_cache();
+                }
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -175,13 +207,26 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 auto write_event = std::make_shared<Event>();
                 auto workload_event = std::make_shared<Event>();
 
-                ttnn::write_buffer(1, input_tensor, {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
+                ttnn::write_buffer(
+                    1,
+                    input_tensor,
+                    {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(1), write_event);
                 ttnn::wait_for_event(device->command_queue(1), write_event);
                 auto output_tensor = dispatch_ops_to_device(device, input_tensor, 1);
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(1), workload_event);
-                ttnn::read_buffer(1, output_tensor, {readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data});
+                ttnn::read_buffer(
+                    1,
+                    output_tensor,
+                    {readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data,
+                     readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);

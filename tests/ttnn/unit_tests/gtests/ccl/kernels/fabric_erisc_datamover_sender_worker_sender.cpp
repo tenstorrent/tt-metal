@@ -24,11 +24,10 @@ union transmit_config {
 // Worker core - Data Movement Writer -> Sends to Erisc Data Mover (sender side).
 // -> takes input from local cb and pushes to erisc L1
 void kernel_main() {
-
     // Test doesn't support multiple pages per send yet since we are writing
     // to interleaved which will never have subsequent pages on the same core
     // (and hence, able to share a packet header)
-    constexpr uint32_t num_pages_per_send = 1;//get_compile_time_arg_val(0);
+    constexpr uint32_t num_pages_per_send = 1;  // get_compile_time_arg_val(0);
     constexpr uint32_t total_pages_to_send = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
@@ -49,15 +48,18 @@ void kernel_main() {
     const uint32_t eth_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
     // erisc l1 semaphore address
     const uint32_t eth_sender_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    volatile uint32_t* const writer_send_sem_addr = reinterpret_cast<volatile uint32_t* const >(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    volatile uint32_t* const writer_send_sem_addr =
+        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_buffers_per_edm_channel = get_arg_val<uint32_t>(arg_idx++);
-    size_t edm_connection_handshake_addr = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    size_t edm_connection_handshake_addr =
+        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
     size_t edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t edm_buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     size_t dest_addr = get_arg_val<uint32_t>(arg_idx++);
-    volatile uint32_t* const last_message_semaphore_address = reinterpret_cast<volatile uint32_t* const >(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    volatile uint32_t* const last_message_semaphore_address =
+        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     *last_message_semaphore_address = 0;
     auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     // TODO: move to semaphore
@@ -75,9 +77,7 @@ void kernel_main() {
         config.unicast.distance = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
     }
 
-    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
-        .bank_base_address = dest_addr, .page_size = page_size};
-
+    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {.bank_base_address = dest_addr, .page_size = page_size};
 
     ASSERT(num_buffers_per_channel > 0);
     auto sender = tt::fabric::WorkerToFabricEdmSender(
@@ -92,8 +92,7 @@ void kernel_main() {
         edm_buffer_size_bytes,
         edm_buffer_index_address,
         writer_send_sem_addr,
-        worker_buffer_index_semaphore_addr
-        );
+        worker_buffer_index_semaphore_addr);
 
     sender.open();
 
@@ -117,11 +116,12 @@ void kernel_main() {
         const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
         const size_t dest_addr = dest_noc_address & 0xFFFFFFFF;
         const size_t dest_noc_x = (dest_noc_address >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
-        const size_t dest_noc_y = (dest_noc_address >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+        const size_t dest_noc_y =
+            (dest_noc_address >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
         const size_t packet_size = page_size + sizeof(tt::fabric::PacketHeader);
 
         auto packet_addr = get_read_ptr(cb_id_in0);
-        auto &packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(packet_addr);
+        auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(packet_addr);
         if constexpr (mcast_mode) {
             packet_header.to_write()
                 .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
@@ -129,9 +129,8 @@ void kernel_main() {
                     dest_addr,
                     (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
-                    static_cast<uint8_t>(dest_noc_y)
-                });
-            packet_header.reserved2 = 0x1111; // debug only
+                    static_cast<uint8_t>(dest_noc_y)});
+            packet_header.reserved2 = 0x1111;  // debug only
         } else {
             packet_header.to_write()
                 .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
@@ -139,12 +138,12 @@ void kernel_main() {
                     dest_addr,
                     (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
-                    static_cast<uint8_t>(dest_noc_y)
-                });
-            packet_header.reserved2 = 0x1111; // debug only
+                    static_cast<uint8_t>(dest_noc_y)});
+            packet_header.reserved2 = 0x1111;  // debug only
         }
 
-        uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address = sender.edm_buffer_addr +
+                                  (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
         sender.send_payload_blocking_from_address(packet_addr, packet_size);
         noc_async_writes_flushed();
         cb_pop_front(cb_id_in0, pages_to_send);
@@ -153,21 +152,17 @@ void kernel_main() {
     if constexpr (!mcast_mode) {
         sender.wait_for_empty_write_slot();
 
-        auto &packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
+        auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
         ASSERT(*last_message_semaphore_address == 0);
         packet_header.reserved = 0xE;
         packet_header.reserved2 = 0xFFFF;
         packet_header.to_atomic_inc();
         packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{1});
         packet_header.to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader(
-                reinterpret_cast<size_t>(last_message_semaphore_address),
-                1,
-                32,
-                my_x[0],
-                my_y[0]
-            ));
+            reinterpret_cast<size_t>(last_message_semaphore_address), 1, 32, my_x[0], my_y[0]));
 
-        sender.send_payload_blocking_from_address(a_packet_header_addr, packet_header.get_payload_size_including_header());
+        sender.send_payload_blocking_from_address(
+            a_packet_header_addr, packet_header.get_payload_size_including_header());
 
         noc_semaphore_wait(last_message_semaphore_address, 1);
     }
@@ -185,10 +180,13 @@ void kernel_main() {
             sender.close();
         }
         if (distance == 0) {
-            noc_inline_dw_write(get_noc_addr(edm_noc_x, edm_noc_y, termination_addr), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+            noc_inline_dw_write(
+                get_noc_addr(edm_noc_x, edm_noc_y, termination_addr),
+                tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
         } else {
-            auto &packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
-            reinterpret_cast<volatile uint32_t*>(a_packet_header_addr)[sizeof(tt::fabric::PacketHeader) >> 2] = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
+            auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
+            reinterpret_cast<volatile uint32_t*>(a_packet_header_addr)[sizeof(tt::fabric::PacketHeader) >> 2] =
+                tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
             sender.wait_for_empty_write_slot();
             packet_header.to_write()
                 .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{static_cast<uint8_t>(distance - 1)})
@@ -196,14 +194,13 @@ void kernel_main() {
                     termination_addr,
                     sizeof(tt::fabric::PacketHeader) + sizeof(uint32_t),
                     static_cast<uint8_t>(edm_noc_x),
-                    static_cast<uint8_t>(edm_noc_y)
-                });
-            sender.send_payload_blocking_from_address(a_packet_header_addr, packet_header.get_payload_size_including_header());
+                    static_cast<uint8_t>(edm_noc_y)});
+            sender.send_payload_blocking_from_address(
+                a_packet_header_addr, packet_header.get_payload_size_including_header());
             noc_async_writes_flushed();
         }
     }
     if (!closed) {
         sender.close();
     }
-
 }

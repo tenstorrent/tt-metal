@@ -42,7 +42,7 @@ uint32_t get_runtime_arg_addr(uint32_t l1_unreserved_base, tt::RISCV processor, 
     return result_base + offset;
 };
 
-Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
+Program initialize_program_data_movement(Device* device, const CoreRangeSet& core_range_set) {
     Program program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
@@ -56,14 +56,16 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
     return std::move(program);
 }
 
-Program initialize_program_data_movement_rta(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args,
-                                             bool common_rtas = false) {
+Program initialize_program_data_movement_rta(
+    Device* device, const CoreRangeSet& core_range_set, uint32_t num_unique_rt_args, bool common_rtas = false) {
     Program program = tt_metal::CreateProgram();
 
-    uint32_t rta_base_dm = get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), tt::RISCV::BRISC, common_rtas);
-    std::map<string, string> dm_defines = {{"DATA_MOVEMENT", "1"},
-                                           {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
-                                           {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
+    uint32_t rta_base_dm =
+        get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), tt::RISCV::BRISC, common_rtas);
+    std::map<string, string> dm_defines = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
+        {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
     if (common_rtas) {
         dm_defines["COMMON_RUNTIME_ARGS"] = "1";
     }
@@ -73,19 +75,25 @@ Program initialize_program_data_movement_rta(Device *device, const CoreRangeSet 
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = dm_defines});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = dm_defines});
 
     detail::CompileProgram(device, program);
     return std::move(program);
 }
 
-Program initialize_program_compute(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
+Program initialize_program_compute(
+    Device* device, const CoreRangeSet& core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
     Program program = tt_metal::CreateProgram();
 
     // Tell kernel how many unique and common RT args to expect. Will increment each.
-    uint32_t rta_base_compute = get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), tt::RISCV::COMPUTE, false);
-    uint32_t common_rta_base_compute = get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), tt::RISCV::COMPUTE, true);
-    std::vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args, rta_base_compute, common_rta_base_compute};
+    uint32_t rta_base_compute =
+        get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), tt::RISCV::COMPUTE, false);
+    uint32_t common_rta_base_compute =
+        get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), tt::RISCV::COMPUTE, true);
+    std::vector<uint32_t> compile_args = {
+        num_unique_rt_args, num_common_rt_args, rta_base_compute, common_rta_base_compute};
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
 
@@ -93,13 +101,24 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
         core_range_set,
-        tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compile_args});
+        tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compile_args});
 
     return std::move(program);
 }
 
-// Verify the runtime args for a single core (apply optional non-zero increment amounts to values written to match compute kernel)
-bool verify_core_rt_args(Device *device, bool is_common, CoreCoord core, uint32_t base_addr, const std::vector<uint32_t> &written_args, const uint32_t incr_val) {
+// Verify the runtime args for a single core (apply optional non-zero increment amounts to values written to match
+// compute kernel)
+bool verify_core_rt_args(
+    Device* device,
+    bool is_common,
+    CoreCoord core,
+    uint32_t base_addr,
+    const std::vector<uint32_t>& written_args,
+    const uint32_t incr_val) {
     bool pass = true;
 
     std::vector<uint32_t> observed_args;
@@ -108,8 +127,15 @@ bool verify_core_rt_args(Device *device, bool is_common, CoreCoord core, uint32_
     for (size_t i = 0; i < written_args.size(); i++) {
         uint32_t expected_result = written_args.at(i) + incr_val;
         bool got_expected_result = observed_args.at(i) == expected_result;
-        log_debug(tt::LogTest, "Validating {} Args. Core: {} at addr: 0x{:x} idx: {} - Expected: {} Observed: {}",
-            is_common ? "Common" : "Unique", core.str(), base_addr, i, expected_result, observed_args[i]);
+        log_debug(
+            tt::LogTest,
+            "Validating {} Args. Core: {} at addr: 0x{:x} idx: {} - Expected: {} Observed: {}",
+            is_common ? "Common" : "Unique",
+            core.str(),
+            base_addr,
+            i,
+            expected_result,
+            observed_args[i]);
         pass &= got_expected_result;
         EXPECT_TRUE(got_expected_result);
     }
@@ -118,8 +144,11 @@ bool verify_core_rt_args(Device *device, bool is_common, CoreCoord core, uint32_
 
 // Iterate over all cores unique and common runtime args, and verify they match expected values.
 bool verify_results(
-    bool are_args_incremented, Device *device, const Program &program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args, const std::vector<uint32_t> &common_rt_args = {}) {
-
+    bool are_args_incremented,
+    Device* device,
+    const Program& program,
+    const std::map<CoreCoord, std::vector<uint32_t>>& core_to_rt_args,
+    const std::vector<uint32_t>& common_rt_args = {}) {
     bool pass = true;
     EXPECT_TRUE(program.num_kernels() == 1);
 
@@ -129,29 +158,33 @@ bool verify_results(
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
-        auto rt_args_base_addr = get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), kernel->processor(), false);
+        auto rt_args_base_addr =
+            get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), kernel->processor(), false);
 
         // Verify Unique RT Args (per core)
-        for (const auto &logical_core : kernel->cores_with_runtime_args()) {
+        for (const auto& logical_core : kernel->cores_with_runtime_args()) {
             auto expected_rt_args = core_to_rt_args.at(logical_core);
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args);
 
-            pass &= verify_core_rt_args(device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
+            pass &= verify_core_rt_args(
+                device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
             auto rt_args_size_bytes = rt_args.size() * sizeof(uint32_t);
         }
 
         // Verify common RT Args (same for all cores) if they exist.
         if (common_rt_args.size() > 0) {
-            auto common_rt_args_base_addr = get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), kernel->processor(), true);
+            auto common_rt_args_base_addr =
+                get_runtime_arg_addr(device->get_base_allocator_addr(HalMemType::L1), kernel->processor(), true);
 
-            for (auto &core_range : kernel->logical_coreranges()) {
+            for (auto& core_range : kernel->logical_coreranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core({x, y});
                         auto rt_args = kernel->common_runtime_args();
                         EXPECT_EQ(rt_args, common_rt_args);
-                        pass &= verify_core_rt_args(device, true, logical_core, common_rt_args_base_addr, common_rt_args, common_arg_incr_val);
+                        pass &= verify_core_rt_args(
+                            device, true, logical_core, common_rt_args_base_addr, common_rt_args, common_arg_incr_val);
                     }
                 }
             }
@@ -168,7 +201,8 @@ TEST_F(DeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
-        auto program = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
+        auto program =
+            unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
         ASSERT_TRUE(program.num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
@@ -198,13 +232,15 @@ TEST_F(DeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
         EXPECT_TRUE(unit_tests::runtime_args::verify_results(false, this->devices_.at(id), program, core_to_rt_args));
 
-        auto program2 = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 4, true);
+        auto program2 = unit_tests::runtime_args::initialize_program_data_movement_rta(
+            this->devices_.at(id), core_range_set, 4, true);
         // Set common runtime args, automatically sent to all cores used by kernel.
         std::vector<uint32_t> common_runtime_args = {303, 606, 999, 1234};
         SetCommonRuntimeArgs(program2, 0, common_runtime_args);
         detail::WriteRuntimeArgsToDevice(this->devices_.at(id), program2);
         tt_metal::detail::LaunchProgram(this->devices_.at(id), program2);
-        EXPECT_TRUE(unit_tests::runtime_args::verify_results(false, this->devices_.at(id), program2, core_to_rt_args, common_runtime_args));
+        EXPECT_TRUE(unit_tests::runtime_args::verify_results(
+            false, this->devices_.at(id), program2, core_to_rt_args, common_runtime_args));
     }
 }
 
@@ -216,7 +252,8 @@ TEST_F(DeviceFixture, TensixLegallyModifyRTArgsCompute) {
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
-        auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, initial_runtime_args.size(), common_runtime_args.size());
+        auto program = unit_tests::runtime_args::initialize_program_compute(
+            this->devices_.at(id), core_range_set, initial_runtime_args.size(), common_runtime_args.size());
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
@@ -233,7 +270,8 @@ TEST_F(DeviceFixture, TensixLegallyModifyRTArgsCompute) {
         SetCommonRuntimeArgs(program, 0, common_runtime_args);
 
         tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
-        EXPECT_TRUE(unit_tests::runtime_args::verify_results(true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
+        EXPECT_TRUE(unit_tests::runtime_args::verify_results(
+            true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
     }
 }
 
@@ -247,8 +285,9 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
 
-        auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, initial_runtime_args.size(), common_runtime_args.size());
-        SetRuntimeArgs(program, 0, first_core_range, initial_runtime_args); // First core range only.
+        auto program = unit_tests::runtime_args::initialize_program_compute(
+            this->devices_.at(id), core_range_set, initial_runtime_args.size(), common_runtime_args.size());
+        SetRuntimeArgs(program, 0, first_core_range, initial_runtime_args);  // First core range only.
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto x = first_core_range.start_coord.x; x <= first_core_range.end_coord.x; x++) {
@@ -261,7 +300,8 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
         // Set common runtime args, automatically sent to all cores used by kernel.
         SetCommonRuntimeArgs(program, 0, common_runtime_args);
         tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
-        EXPECT_TRUE(unit_tests::runtime_args::verify_results(true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
+        EXPECT_TRUE(unit_tests::runtime_args::verify_results(
+            true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
     }
 }
 
@@ -273,7 +313,8 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
-        auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, 2, common_runtime_args.size());
+        auto program = unit_tests::runtime_args::initialize_program_compute(
+            this->devices_.at(id), core_range_set, 2, common_runtime_args.size());
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -293,14 +334,14 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
         SetCommonRuntimeArgs(program, 0, common_runtime_args);
 
         tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
-        EXPECT_TRUE(unit_tests::runtime_args::verify_results(true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
+        EXPECT_TRUE(unit_tests::runtime_args::verify_results(
+            true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
     }
 }
 
-// Some cores have more unique runtime args than others. Unused in kernel, but API supports it, so verify it works and that
-// common runtime args are appropriately offset by amount from core(s) with most unique runtime args.
+// Some cores have more unique runtime args than others. Unused in kernel, but API supports it, so verify it works and
+// that common runtime args are appropriately offset by amount from core(s) with most unique runtime args.
 TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
-
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
@@ -321,7 +362,8 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
             }
         }
 
-        auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, max_unique_rt_args, common_runtime_args.size());
+        auto program = unit_tests::runtime_args::initialize_program_compute(
+            this->devices_.at(id), core_range_set, max_unique_rt_args, common_runtime_args.size());
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -345,16 +387,19 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
         SetCommonRuntimeArgs(program, 0, common_runtime_args);
 
         tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
-        EXPECT_TRUE(unit_tests::runtime_args::verify_results(true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
+        EXPECT_TRUE(unit_tests::runtime_args::verify_results(
+            true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args));
     }
 }
 
-// Too many unique and common runtime args, overflows allowed space and throws expected exception from both unique/common APIs.
+// Too many unique and common runtime args, overflows allowed space and throws expected exception from both
+// unique/common APIs.
 TEST_F(DeviceFixture, TensixIllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
         CoreRangeSet core_range_set(first_core_range);
-        auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set, 0, 0); // Kernel isn't run here.
+        auto program = unit_tests::runtime_args::initialize_program_compute(
+            this->devices_.at(id), core_range_set, 0, 0);  // Kernel isn't run here.
 
         // Set 100 unique args, then try to set 300 common args and fail.
         std::vector<uint32_t> initial_runtime_args(100);
@@ -376,7 +421,8 @@ TEST_F(DeviceFixture, TensixIllegallyModifyRTArgs) {
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
-        auto program = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
+        auto program =
+            unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
         ASSERT_TRUE(program.num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);

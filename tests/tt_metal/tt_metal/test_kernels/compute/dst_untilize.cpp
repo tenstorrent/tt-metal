@@ -11,7 +11,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     constexpr uint32_t num_faces = get_compile_time_arg_val(2);
@@ -21,7 +20,7 @@ void MAIN {
     copy_tile_to_dst_init_short(tt::CBIndex::c_0);
     pack_untilize_dst_init_short<per_core_block_tile_cnt>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
 
-    for(uint32_t b = 0; b < per_core_block_cnt; ++ b) {
+    for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
         cb_reserve_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
 
@@ -41,4 +40,4 @@ void MAIN {
 
     pack_untilize_uninit();
 }
-}
+}  // namespace NAMESPACE

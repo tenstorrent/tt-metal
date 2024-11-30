@@ -16,19 +16,17 @@
 using std::vector;
 using namespace tt;
 
-using std::uint32_t;
 using std::uint16_t;
-
+using std::uint32_t;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Reference CPU implementation of transpose_HC
 //////////////////////////////////////////////////////////////////////////////////////////
 
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: tests transpose kernel for HC dimensions
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
     bool multibank = true;
 
@@ -36,15 +34,11 @@ int main(int argc, char **argv) {
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(device_id);
-
-
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -53,12 +47,13 @@ int main(int argc, char **argv) {
 
         CoreCoord core = {0, 0};
 
-        //vector<uint32_t> shape = {1, 96, 32*4, 32*5};
-        vector<uint32_t> shape = {2, 32*3, 32*5, 32*2};
-        uint32_t num_tensor_tiles = shape.at(0) * shape.at(1) * shape.at(2) * shape.at(3) / (32*32);
+        // vector<uint32_t> shape = {1, 96, 32*4, 32*5};
+        vector<uint32_t> shape = {2, 32 * 3, 32 * 5, 32 * 2};
+        uint32_t num_tensor_tiles = shape.at(0) * shape.at(1) * shape.at(2) * shape.at(3) / (32 * 32);
 
         uint32_t single_tile_bytes = 2 * 1024;
-        uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t dram_buffer_bytes =
+            single_tile_bytes * num_tensor_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t page_size = single_tile_bytes;
         if (not multibank) {
@@ -66,11 +61,10 @@ int main(int argc, char **argv) {
         }
 
         tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = dram_buffer_bytes,
-                    .page_size = page_size,
-                    .buffer_type = tt_metal::BufferType::DRAM
-        };
+            .device = device,
+            .size = dram_buffer_bytes,
+            .page_size = page_size,
+            .buffer_type = tt_metal::BufferType::DRAM};
 
         auto src0_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
@@ -82,52 +76,51 @@ int main(int argc, char **argv) {
         uint32_t src0_cb_index = 0;
         uint32_t num_buffer_tiles = 2;
         // this buffer is used in transpose_hc.cpp NCRISC kernel
-        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_bytes);
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_bytes);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         // this buffer is used in writer_unary.cpp BRISC kernel
-        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_bytes);
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_bytes);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
-        uint32_t HW = H*W;
-        uint32_t CHW = C*H*W;
+        uint32_t HW = H * W;
+        uint32_t CHW = C * H * W;
 
         auto reader_kernel = tt_metal::CreateKernel(
             program,
-            multibank ?
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc_8bank.cpp" :
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc.cpp",
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc_8bank.cpp"
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc.cpp",
             core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
-            multibank ?
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp" :
-                "tt_metal/kernels/dataflow/writer_unary.cpp",
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
+                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        vector<uint32_t> compute_kernel_args = {
-            uint(num_tensor_tiles)
-        };
+        vector<uint32_t> compute_kernel_args = {uint(num_tensor_tiles)};
 
         auto blank_binary_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
-        );
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-
-
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -136,33 +129,28 @@ int main(int argc, char **argv) {
         auto src_4f_16 = u16_from_u32_vector(src0_vec);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
-
-
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel,
             core,
-            {
-                dram_buffer_src0_addr,
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
-                W, H, C, HW, N, CHW
-            }
-        );
+            {dram_buffer_src0_addr,
+             (std::uint32_t)dram_src0_noc_xy.x,
+             (std::uint32_t)dram_src0_noc_xy.y,
+             W,
+             H,
+             C,
+             HW,
+             N,
+             CHW});
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
-            {
-                dram_buffer_dst_addr,
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tensor_tiles
-            }
-        );
-
-
+            {dram_buffer_dst_addr,
+             (std::uint32_t)dram_dst_noc_xy.x,
+             (std::uint32_t)dram_dst_noc_xy.y,
+             num_tensor_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -179,28 +167,38 @@ int main(int argc, char **argv) {
             float maxabs = fmaxf(fabsf(a), fabsf(b));
             float absdiff = fabsf(a - b);
             auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
-            if (!result)
-                absdiff *= 1.0f; // breakpoint spot
+            if (!result) {
+                absdiff *= 1.0f;  // breakpoint spot
+            }
             return result;
         };
 
         // recover a linear view of input vector for consumption by gold_ function
-        vector<uint16_t> src_linear = convert_layout<uint16_t>(src_4f_16, shape, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
-        vector<uint16_t> gold_reduced = gold_transpose_hc(src_linear, shape); // result is uint16_t untilized
+        vector<uint16_t> src_linear = convert_layout<uint16_t>(
+            src_4f_16,
+            shape,
+            tests::utils::TensorLayoutType::TILED_NFACES,
+            tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+        vector<uint16_t> gold_reduced = gold_transpose_hc(src_linear, shape);  // result is uint16_t untilized
 
         // Tilize from row major and convert to pairs (uint32_t)
         vector<uint32_t> shapeR{shape[0], shape[2], shape[1], shape[3]};
-        auto gold_16_4f = convert_layout<uint16_t>(gold_reduced, shapeR, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES);
+        auto gold_16_4f = convert_layout<uint16_t>(
+            gold_reduced,
+            shapeR,
+            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+            tests::utils::TensorLayoutType::TILED_NFACES);
         auto gold_4f_u32 = u32_from_u16_vector(gold_16_4f);
         auto u16_result = u16_from_u32_vector(result_vec);
 
         pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
-        if (!pass)
+        if (!pass) {
             log_error(LogTest, "Failure position={}", argfail);
+        }
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

@@ -23,10 +23,8 @@ static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
 template <bool MEASURE>
 FORCE_INLINE void run_loop_iteration(
     std::array<uint32_t, NUM_CHANNELS> const& channel_addrs,
-    std::array<volatile eth_channel_sync_t *, NUM_CHANNELS> const& channel_sync_addrs
-) {
+    std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& channel_sync_addrs) {
     if constexpr (MEASURE) {
-
         DeviceZoneScopedN("RECEIVER-LOOP-ITER");
         while (channel_sync_addrs[0]->bytes_sent == 0) {
         }
@@ -81,13 +79,13 @@ void kernel_main() {
     const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, NUM_CHANNELS> channel_addrs;
-    std::array<volatile eth_channel_sync_t *, NUM_CHANNELS> channel_sync_addrs;
+    std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> channel_sync_addrs;
     {
         uint32_t channel_addr = handshake_addr + sizeof(eth_channel_sync_t);
         for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
             channel_addrs[i] = channel_addr;
             channel_addr += message_size;
-            channel_sync_addrs[i] = reinterpret_cast<volatile eth_channel_sync_t *>(channel_addr);
+            channel_sync_addrs[i] = reinterpret_cast<volatile eth_channel_sync_t*>(channel_addr);
             channel_sync_addrs[i]->bytes_sent = 0;
             channel_sync_addrs[i]->receiver_ack = 0;
             channel_addr += sizeof(eth_channel_sync_t);
@@ -101,21 +99,12 @@ void kernel_main() {
 
     eth_setup_handshake(handshake_addr, false);
 
-    run_loop_iteration<false>(
-        channel_addrs,
-        channel_sync_addrs
-    );
+    run_loop_iteration<false>(channel_addrs, channel_sync_addrs);
     {
         DeviceZoneScopedN("MAIN-TEST-BODY");
         uint32_t i = 0;
         for (uint32_t i = 0; i < num_messages; i++) {
-            run_loop_iteration<true>(
-                channel_addrs,
-                channel_sync_addrs
-            );
+            run_loop_iteration<true>(channel_addrs, channel_sync_addrs);
         }
     }
-
-
-
 }

@@ -6,7 +6,6 @@
 
 namespace {
 void kernel_main() {
-
     // Get configurable number of unique and common runtime args, and increment them all by a fixed value.
     constexpr uint32_t num_unique_rt_args = get_compile_time_arg_val(0);
     constexpr uint32_t num_common_rt_args = get_compile_time_arg_val(1);
@@ -27,6 +26,5 @@ void kernel_main() {
         tt_l1_ptr std::uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)(common_rt_args_base + (i * 4));
         arg_ptr[0] = rt_arg + common_arg_incr_val;
     }
-
 }
-}
+}  // namespace

@@ -737,10 +737,7 @@ TEST_P(CreateShardedTensorWithAlignmentTests, AllocateTensor) {
     const auto& params = GetParam();
     const auto& input_shape = params.inputs.shape;
 
-    TensorLayout layout(
-        params.inputs.data_type,
-        params.inputs.page_config,
-        params.inputs.memory_config);
+    TensorLayout layout(params.inputs.data_type, params.inputs.page_config, params.inputs.memory_config);
 
     test_utils::test_tensor_on_device(input_shape, layout, device_);
 

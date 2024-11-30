@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t recv_sync_core_y = get_arg_val<uint32_t>(5);
     uint32_t local_read_addr = get_arg_val<uint32_t>(6);
 
-    volatile tt_l1_ptr uint32_t *local_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_read_addr);
+    volatile tt_l1_ptr uint32_t* local_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_read_addr);
 
     uint64_t noc_remote_send_sem_addr = get_noc_addr(send_sync_core_x, send_sync_core_y, sem_addr);
     noc_semaphore_inc(noc_remote_send_sem_addr, 1);
@@ -32,5 +32,4 @@ void kernel_main() {
 
     noc_semaphore_inc(noc_remote_recv_sem_addr, -num_inc);
     noc_async_atomic_barrier();
-
 }

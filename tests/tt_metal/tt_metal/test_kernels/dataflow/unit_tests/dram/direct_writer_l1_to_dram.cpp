@@ -5,18 +5,17 @@
 #include <cstdint>
 
 /**
- * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on NCRISC or other RISCs
- * Any two RISC processors cannot use the same CMD_BUF
- * non_blocking APIs shouldn't be mixed with slow noc.h APIs
- * explicit flushes need to be used since the calls are non-blocking
+ * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on NCRISC or
+ * other RISCs Any two RISC processors cannot use the same CMD_BUF non_blocking APIs shouldn't be mixed with slow noc.h
+ * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
-    std::uint32_t dram_buffer_dst_addr_base  = get_arg_val<uint32_t>(0);
-    std::uint32_t dram_dst_noc_x             = get_arg_val<uint32_t>(1);
-    std::uint32_t dram_dst_noc_y             = get_arg_val<uint32_t>(2);
+    std::uint32_t dram_buffer_dst_addr_base = get_arg_val<uint32_t>(0);
+    std::uint32_t dram_dst_noc_x = get_arg_val<uint32_t>(1);
+    std::uint32_t dram_dst_noc_y = get_arg_val<uint32_t>(2);
 
-    std::uint32_t l1_buffer_src_addr_base    = get_arg_val<uint32_t>(3);
-    std::uint32_t dram_buffer_size           = get_arg_val<uint32_t>(4);
+    std::uint32_t l1_buffer_src_addr_base = get_arg_val<uint32_t>(3);
+    std::uint32_t dram_buffer_size = get_arg_val<uint32_t>(4);
 
     std::uint32_t dram_buffer_dst_addr = dram_buffer_dst_addr_base;
 
@@ -25,5 +24,4 @@ void kernel_main() {
 
     noc_async_write(l1_buffer_src_addr_base, dram_buffer_dst_noc_addr, dram_buffer_size);
     noc_async_write_barrier();
-
 }

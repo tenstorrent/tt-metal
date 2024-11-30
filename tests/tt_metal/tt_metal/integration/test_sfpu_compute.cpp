@@ -23,7 +23,6 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
-
 const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
@@ -75,7 +74,8 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const stri
     }
 }
 
-bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
+bool is_close_packed_sfpu_output(
+    const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
     if (op_name == "tanh") {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
@@ -110,15 +110,14 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     tt::tt_metal::InterleavedBufferConfig dram_config{
-                    .device= cq.device(),
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+        .device = cq.device(),
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
     auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
@@ -128,7 +127,7 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1                            // per_core_block_cnt
+        1                                 // per_core_block_cnt
     };
 
     // Input
@@ -159,12 +158,14 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
     };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
-            .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
+        tt_metal::CircularBufferConfig l1_input_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
+                .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
         auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
-        tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
-            .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
+        tt_metal::CircularBufferConfig l1_output_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
+                .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
         auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateKernel(
@@ -184,15 +185,15 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
 
         std::map<string, string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
 
-	sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
-	sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
+        sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
         auto sfpu_kernel = tt_metal::CreateKernel(
             program,
@@ -206,8 +207,7 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
         int chip_id = 0;
 
         // TODO(agrebenisan): Clean this up to only use the first path once Enqueue apis supported on WH
-        for (const CoreCoord& core_coord : core_range)
-        {
+        for (const CoreCoord& core_coord : core_range) {
             SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
         }
@@ -220,20 +220,20 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
 
     EnqueueReadBuffer(cq, output_dram_buffer, dest_buffer_data, true);
 
-
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
 
 }  // namespace unit_tests::compute::sfpu
 class SingleCoreSingleCardSfpuParameterizedFixture : public CommandQueueSingleCardFixture,
-                                                       public testing::WithParamInterface<std::tuple<size_t, string>> {
-};
+                                                     public testing::WithParamInterface<std::tuple<size_t, string>> {};
 TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
-    for (Device* device_: devices_) {
+    for (Device* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") {
+            GTEST_SKIP() << "log has very high abs and relative diff";
+        }
 
         CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
@@ -275,11 +275,13 @@ class SingleCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
 TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
-    for (Device* device_: devices_) {
+    for (Device* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") {
+            GTEST_SKIP() << "log has very high abs and relative diff";
+        }
 
         CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
@@ -294,7 +296,6 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
         log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
         EXPECT_TRUE(run_sfpu_all_same_buffer(device_->command_queue(), test_config));
     }
-
 }
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
@@ -322,12 +323,13 @@ class MultiCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
 TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTileSfpuApproxCompute) {
-    for (Device* device_: devices_) {
-
+    for (Device* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") {
+            GTEST_SKIP() << "log has very high abs and relative diff";
+        }
 
         CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});

@@ -8,7 +8,6 @@
 #include <array>
 #include "ethernet/dataflow_api.h"
 
-
 struct addr_sem_pair {
     uint32_t addr;
     uint32_t sem_addr;
@@ -29,25 +28,21 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
 
 FORCE_INLINE
 void eth_send_bytes_over_channel_payload_only(
-    uint32_t src_addr,
-    uint32_t dst_addr,
-    uint32_t num_bytes,
-    volatile eth_channel_sync_t *channel_sync) {
+    uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes, volatile eth_channel_sync_t* channel_sync) {
     channel_sync->bytes_sent = num_bytes;
     channel_sync->receiver_ack = 0;
-    internal_::eth_send_packet(
-        0, src_addr >> 4, dst_addr >> 4, num_bytes >> 4);
+    internal_::eth_send_packet(0, src_addr >> 4, dst_addr >> 4, num_bytes >> 4);
 }
 
 template <bool measure>
 FORCE_INLINE void forward_ping(
-    std::array<uint32_t, NUM_CHANNELS> const &channels_addrs,
-    std::array<uint32_t, NUM_CHANNELS> const &channels_sem_addrs,
+    std::array<uint32_t, NUM_CHANNELS> const& channels_addrs,
+    std::array<uint32_t, NUM_CHANNELS> const& channels_sem_addrs,
     std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& eth_channel_syncs,
     uint32_t max_concurrent_samples,
     uint32_t page_size) {
     for (uint32_t i = 0; i < max_concurrent_samples; i++) {
-        volatile uint32_t *sem_addr = reinterpret_cast<volatile uint32_t*>(channels_sem_addrs[i]);
+        volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(channels_sem_addrs[i]);
         uint32_t buffer_addr = channels_addrs[i];
         if constexpr (DISABLE_CONTEXT_SWITCHING) {
             noc_semaphore_wait(sem_addr, 1);
@@ -55,12 +50,13 @@ FORCE_INLINE void forward_ping(
             eth_noc_semaphore_wait(sem_addr, 1);
         }
         *sem_addr = 0;
-        eth_send_bytes_over_channel_payload_only(buffer_addr, buffer_addr, page_size + sizeof(eth_channel_sync_t), eth_channel_syncs[i]);
+        eth_send_bytes_over_channel_payload_only(
+            buffer_addr, buffer_addr, page_size + sizeof(eth_channel_sync_t), eth_channel_syncs[i]);
     }
     for (uint32_t i = 0; i < max_concurrent_samples; i++) {
         if constexpr (DISABLE_CONTEXT_SWITCHING) {
             while (!eth_is_receiver_channel_send_done(i)) {
-                asm volatile ("");
+                asm volatile("");
             }
         } else {
             eth_wait_for_receiver_channel_done(i);
@@ -90,7 +86,7 @@ void kernel_main() {
         channels_syncs_addrs[i] = reinterpret_cast<volatile eth_channel_sync_t*>(channels_addrs[i] + transfer_size);
         channels_syncs_addrs[i]->bytes_sent = 0;
         channels_syncs_addrs[i]->receiver_ack = 0;
-        volatile eth_channel_sync_t *last_channel_sync_addr = channels_syncs_addrs[i];
+        volatile eth_channel_sync_t* last_channel_sync_addr = channels_syncs_addrs[i];
         channels_sem_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 
@@ -99,18 +95,18 @@ void kernel_main() {
     }
 
     {
-
-    eth_setup_handshake(handshake_addr, true);
+        eth_setup_handshake(handshake_addr, true);
     }
 
-    uint64_t receiver_start_semaphore_noc_addr = get_noc_addr(local_receiver_noc_x, local_receiver_noc_y, receiver_start_semaphore);
+    uint64_t receiver_start_semaphore_noc_addr =
+        get_noc_addr(local_receiver_noc_x, local_receiver_noc_y, receiver_start_semaphore);
     noc_semaphore_inc(receiver_start_semaphore_noc_addr, 1);
 
     // Clear the ring
     forward_ping<false>(channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, 16);
 
     for (uint32_t i = 0; i < num_samples; i++) {
-        forward_ping<true>(channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, transfer_size);
+        forward_ping<true>(
+            channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, transfer_size);
     }
-
 }

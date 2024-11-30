@@ -32,7 +32,7 @@ using std::chrono::microseconds;
 // Run ./test_pull_from_pcie --help to see usage
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void *align(void *ptr, std::size_t max_alignment) {
+void* align(void* ptr, std::size_t max_alignment) {
     const std::uintptr_t uptr = reinterpret_cast<std::uintptr_t>(ptr);
     std::uintptr_t aligned = (uptr - 1u + max_alignment) & -max_alignment;
     // Make max alignment of ptr equal to the actual specified alignment
@@ -41,13 +41,13 @@ void *align(void *ptr, std::size_t max_alignment) {
     // specified alignment to make the max alignment what was specified
     aligned = aligned & (max_alignment << 1 - 1) ? aligned : aligned + max_alignment;
 
-    return reinterpret_cast<void *>(aligned);
+    return reinterpret_cast<void*>(aligned);
 }
 
 #define INNER_LOOP 8
 
 template <bool stream_load, bool aligned_load>
-void nt_memcpy_128b(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t n) {
+void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     size_t num_lines = n / (INNER_LOOP * sizeof(__m128i));
     constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m128i);
     size_t i;
@@ -56,16 +56,16 @@ void nt_memcpy_128b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
         for (j = 0; j < INNER_LOOP; j++) {
             __m128i blk;
             if constexpr (stream_load) {
-                blk = _mm_stream_load_si128((__m128i *)src);
+                blk = _mm_stream_load_si128((__m128i*)src);
             } else {
                 if constexpr (aligned_load) {
-                    blk = _mm_load_si128((__m128i *)src);
+                    blk = _mm_load_si128((__m128i*)src);
                 } else {
-                    blk = _mm_loadu_si128((__m128i *)src);
+                    blk = _mm_loadu_si128((__m128i*)src);
                 }
             }
             /* non-temporal store */
-            _mm_stream_si128((__m128i *)dst, blk);
+            _mm_stream_si128((__m128i*)dst, blk);
 
             src += sizeof(__m128i);
             dst += sizeof(__m128i);
@@ -73,12 +73,13 @@ void nt_memcpy_128b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
         n -= inner_blk_size;
     }
 
-    if (num_lines > 0)
+    if (num_lines > 0) {
         tt_driver_atomics::sfence();
+    }
 }
 
 template <bool stream_load, bool aligned_load>
-void nt_memcpy_256b(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t n) {
+void nt_memcpy_256b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     size_t num_lines = n / (INNER_LOOP * sizeof(__m256i));
     constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m256i);
     size_t i;
@@ -88,16 +89,16 @@ void nt_memcpy_256b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
             __m256i blk;
             if constexpr (stream_load) {
                 static_assert(aligned_load);
-                blk = _mm256_stream_load_si256((__m256i *)src);
+                blk = _mm256_stream_load_si256((__m256i*)src);
             } else {
                 if constexpr (aligned_load) {
-                    blk = _mm256_load_si256((__m256i *)src);
+                    blk = _mm256_load_si256((__m256i*)src);
                 } else {
-                    blk = _mm256_loadu_si256((__m256i *)src);
+                    blk = _mm256_loadu_si256((__m256i*)src);
                 }
             }
             /* non-temporal store */
-            _mm256_stream_si256((__m256i *)dst, blk);
+            _mm256_stream_si256((__m256i*)dst, blk);
 
             src += sizeof(__m256i);
             dst += sizeof(__m256i);
@@ -105,11 +106,12 @@ void nt_memcpy_256b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
         n -= inner_blk_size;
     }
 
-    if (num_lines > 0)
+    if (num_lines > 0) {
         tt_driver_atomics::sfence();
+    }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
     std::vector<double> h2d_bandwidth;
     uint32_t num_tests = 10;
@@ -181,7 +183,7 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--addr-align", memcpy_alignment);
 
             test_args::validate_remaining_args(input_args);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
         TT_ASSERT(
@@ -212,19 +214,20 @@ int main(int argc, char **argv) {
 
         // Device setup
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         TT_ASSERT(device_id == mmio_device_id, "This test can only be run on MMIO device!");
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        void *host_hugepage_start = (void *)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
+        void* host_hugepage_start = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
         uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type)
+                                       .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;
@@ -254,7 +257,7 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             total_transfer_size + 2 * addr_align, 1000, std::chrono::system_clock::now().time_since_epoch().count());
 
-        uint32_t *start_ptr = (uint32_t *)align(src_vec.data(), addr_align);
+        uint32_t* start_ptr = (uint32_t*)align(src_vec.data(), addr_align);
         std::vector<uint32_t> result_vec;
 
         const std::string copy_mode_str = copy_mode == 0 ? "memcpy" : copy_mode == 1 ? "4 byte writes" : "nt_memcpy";
@@ -295,13 +298,13 @@ int main(int argc, char **argv) {
                 }
                 uint32_t write_size_bytes = std::min((uint32_t)space_available, transfer_size);
                 write_size_bytes = std::min(write_size_bytes, (total_transfer_size - data_written_bytes));
-                uint8_t *host_mem_ptr = (uint8_t *)host_hugepage_start + host_write_ptr;
+                uint8_t* host_mem_ptr = (uint8_t*)host_hugepage_start + host_write_ptr;
                 uint32_t src_data_offset = data_written_bytes / sizeof(uint32_t);
 
                 if (copy_mode == 0) {
                     memcpy(host_mem_ptr, start_ptr + src_data_offset, write_size_bytes);
                 } else if (copy_mode == 1) {
-                    uint32_t *host_mem_ptr4B = (uint32_t *)host_mem_ptr;
+                    uint32_t* host_mem_ptr4B = (uint32_t*)host_mem_ptr;
                     uint32_t write_size_words = write_size_bytes / sizeof(uint32_t);
 
                     for (uint32_t i = 0; i < write_size_words; i++) {
@@ -312,31 +315,29 @@ int main(int argc, char **argv) {
 
                 } else if (copy_mode == 2) {
                     TT_ASSERT(host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0);
-                    nt_memcpy_128b<true, true>(
-                        host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                    nt_memcpy_128b<true, true>(host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 3) {
                     TT_ASSERT(host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0);
                     nt_memcpy_128b<false, true>(
-                        host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                        host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 4) {
                     TT_ASSERT(host_write_ptr % 16 == 0);
                     nt_memcpy_128b<false, false>(
-                        host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                        host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 5) {
                     TT_ASSERT(host_write_ptr % 32 == 0 and data_written_bytes % 32 == 0);
-                    nt_memcpy_256b<true, true>(
-                        host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                    nt_memcpy_256b<true, true>(host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 6) {
                     TT_ASSERT(host_write_ptr % 32 == 0 and data_written_bytes % 32 == 0);
                     nt_memcpy_256b<false, true>(
-                        host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                        host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 7) {
                     TT_ASSERT(host_write_ptr % 32 == 0);
                     nt_memcpy_256b<false, false>(
-                        host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                        host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 8) {
                     TT_ASSERT(host_write_ptr % 16 == 0);
-                    memcpy_to_device<true>(host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                    memcpy_to_device<true>(host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 }
 
                 uint32_t num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
@@ -375,7 +376,7 @@ int main(int argc, char **argv) {
         }
 
         pass &= tt_metal::CloseDevice(device);
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
         log_error(LogTest, "System error message: {}", std::strerror(errno));

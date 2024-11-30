@@ -18,23 +18,19 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-
-
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -48,7 +44,7 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         log_debug(LogTest, "Moving src data to host to validate");
-        Tensor host_a = a.cpu(); // Move tensor a to host to validate
+        Tensor host_a = a.cpu();  // Move tensor a to host to validate
         Tensor g = Tensor(host_a.get_storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         Tensor golden = g.to(Layout::TILE);
         auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
@@ -56,7 +52,7 @@ int main(int argc, char **argv) {
         pass &= (result_vec == golden_vec);
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

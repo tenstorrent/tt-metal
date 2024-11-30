@@ -26,7 +26,7 @@ TEST(Host, ExtractBitArray) {
 }
 
 TEST(Host, PackBitArray) {
-    uint32_t src[8] = { 1, 2, 3, 4, 5, 6, 7, 7 };
+    uint32_t src[8] = {1, 2, 3, 4, 5, 6, 7, 7};
     uint32_t dest[8];
 
     // 1. Pack as 4-bit elements
@@ -38,7 +38,6 @@ TEST(Host, PackBitArray) {
     EXPECT_EQ(dest[0], 0x04030201);
     EXPECT_EQ(dest[1], 0x07070605);
 
-
     // 3. Pack as 16-bit elements
     pack_bit_array(src, 16, dest, 8);
     EXPECT_EQ(dest[0], 0x00020001);
@@ -46,9 +45,8 @@ TEST(Host, PackBitArray) {
     EXPECT_EQ(dest[2], 0x00060005);
     EXPECT_EQ(dest[3], 0x00070007);
 
-
     // 4. Pack as 3-bit elements
-    uint32_t expected=0;
+    uint32_t expected = 0;
     for (int i = 0; i < 8; i++) {
         expected |= (src[i] & 0x7) << (i * 3);
     }
@@ -57,7 +55,7 @@ TEST(Host, PackBitArray) {
 }
 
 TEST(Host, PackExtractBitArray) {
-    uint32_t src[8] = { 1, 2, 3, 4, 5, 6, 7, 7 };
+    uint32_t src[8] = {1, 2, 3, 4, 5, 6, 7, 7};
 
     for (uint num_pack_bits = 3; num_pack_bits <= 31; num_pack_bits++) {
         uint32_t dest[8];
@@ -71,7 +69,7 @@ TEST(Host, PackExtractBitArray) {
 }
 
 TEST(Host, ExtractPackBitArray) {
-    uint32_t src[4] = { 0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0 };
+    uint32_t src[4] = {0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0};
 
     // Compute the number of 3-bit elements that can be packed into 4 x 32-bit elements
     const uint32_t num_3_bit_elements = (4 * 32) / 3;

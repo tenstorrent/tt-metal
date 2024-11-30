@@ -8,9 +8,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 
-
-inline void tilize_activation(uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb)
-{
+inline void tilize_activation(
+    uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {
     tilize_init_short(in0_cb, in0_block_w);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -24,7 +23,6 @@ inline void tilize_activation(uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t
     }
 
     tilize_uninit(in0_cb);
-
 }
 
 inline void reblock_and_untilize(
@@ -35,8 +33,7 @@ inline void reblock_and_untilize(
     uint32_t out_block_w,
     uint32_t interm_cb_id,
     uint32_t reblock_cb_id,
-    uint32_t out_cb_id)
-{
+    uint32_t out_cb_id) {
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 
@@ -83,23 +80,22 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
 
 namespace NAMESPACE {
 void MAIN {
-
-    uint32_t in0_block_w = get_compile_time_arg_val(0); // inner block size in tiles
-    uint32_t in0_num_subblocks = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
-    uint32_t in0_block_num_tiles =  get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;
+    uint32_t in0_block_w = get_compile_time_arg_val(0);             // inner block size in tiles
+    uint32_t in0_num_subblocks = get_compile_time_arg_val(1);       // outer row block size (in inner row blocks)
+    uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);     // out_subblock_h*in0_block_w*in0_num_subblocks;
     uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
     uint32_t in0_subblock_h = get_compile_time_arg_val(4);
-    uint32_t in1_num_subblocks = get_compile_time_arg_val(5); // outer column block size (in inner column blocks)
-    uint32_t in1_block_num_tiles = get_compile_time_arg_val(6); //out_subblock_w*in0_block_w* in1_num_subblocks;
-    uint32_t in1_per_core_w = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
+    uint32_t in1_num_subblocks = get_compile_time_arg_val(5);    // outer column block size (in inner column blocks)
+    uint32_t in1_block_num_tiles = get_compile_time_arg_val(6);  // out_subblock_w*in0_block_w* in1_num_subblocks;
+    uint32_t in1_per_core_w = get_compile_time_arg_val(7);       // out_subblock_w*in1_num_subblocks
     // If I don't make this volatile, causes code size for TRISC2 to be too large if num_blocks > 1
     volatile uint32_t num_blocks_in0_h = get_compile_time_arg_val(8);  // outer inner dim (in inner dim blocks)
     volatile uint32_t num_blocks_in0_w = get_compile_time_arg_val(9);  // outer inner dim (in inner dim blocks)
     volatile uint32_t num_blocks_in1_w = get_compile_time_arg_val(10);
 
-    uint32_t out_subblock_h = get_compile_time_arg_val(11); // inner row block size in tiles
-    uint32_t out_subblock_w = get_compile_time_arg_val(12); // inner column block size in tiles
-    uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
+    uint32_t out_subblock_h = get_compile_time_arg_val(11);          // inner row block size in tiles
+    uint32_t out_subblock_w = get_compile_time_arg_val(12);          // inner column block size in tiles
+    uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
 
     uint32_t out_block_w = in1_per_core_w;
 
@@ -130,23 +126,22 @@ void MAIN {
     // interm3:
     //   if under untilize mode, this is the CB we write to so that we can
     //   reblock the output
-    uint32_t in0_cb                                   = tt::CBIndex::c_0;
-    uint32_t tilize_mode_tilized_in0_cb               = tt::CBIndex::c_24;
-    uint32_t matmul_partials_cb                       = tt::CBIndex::c_25;
-    uint32_t untilize_mode_final_matmul_partials_cb   = tt::CBIndex::c_26;
-    uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_27;
-    uint32_t out0_cb                                  = tt::CBIndex::c_16;
+    uint32_t in0_cb = tt::CBIndex::c_0;
+    uint32_t tilize_mode_tilized_in0_cb = tt::CBIndex::c_24;
+    uint32_t matmul_partials_cb = tt::CBIndex::c_25;
+    uint32_t untilize_mode_final_matmul_partials_cb = tt::CBIndex::c_26;
+    uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
+    uint32_t out0_cb = tt::CBIndex::c_16;
     mm_init();
-    for(uint32_t block_in0_h = 0; block_in0_h < num_blocks_in0_h; block_in0_h++) {
-        for(uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
+    for (uint32_t block_in0_h = 0; block_in0_h < num_blocks_in0_h; block_in0_h++) {
+        for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
-            //DPRINT << 'B' << ENDL();
-            for(uint32_t block_in0_w = 0; block_in0_w < num_blocks_in0_w; block_in0_w++)
-            {
-
-                bool last_out = block_in0_w == (num_blocks_in0_w-1);
-                if  (tilize_in) {
-                    tilize_activation(in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
+            // DPRINT << 'B' << ENDL();
+            for (uint32_t block_in0_w = 0; block_in0_w < num_blocks_in0_w; block_in0_w++) {
+                bool last_out = block_in0_w == (num_blocks_in0_w - 1);
+                if (tilize_in) {
+                    tilize_activation(
+                        in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
                     mm_init_short();
                     cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
 
@@ -160,7 +155,6 @@ void MAIN {
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-
                         acquire_dst();
 
                         if (enable_reload) {
@@ -182,10 +176,22 @@ void MAIN {
                                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                     int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                     int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                    if  (tilize_in) {
-                                        matmul_tiles(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
+                                    if (tilize_in) {
+                                        matmul_tiles(
+                                            tilize_mode_tilized_in0_cb,
+                                            tt::CBIndex::c_1,
+                                            in0_index,
+                                            in1_index,
+                                            dst_index,
+                                            false /* transpose */);
                                     } else {
-                                        matmul_tiles(in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
+                                        matmul_tiles(
+                                            in0_cb,
+                                            tt::CBIndex::c_1,
+                                            in0_index,
+                                            in1_index,
+                                            dst_index,
+                                            false /* transpose */);
                                     }
                                     in1_index_inner_dim_offset += in1_per_core_w;
                                 }
@@ -194,7 +200,7 @@ void MAIN {
                             in0_index_h_offset += in0_block_w;
                         }
                         if (last_out) {
-                            if  (not untilize_out) {
+                            if (not untilize_out) {
                                 pack_matmul_subblock(out0_cb, out_subblock_num_tiles);
                             } else {
                                 pack_matmul_subblock(untilize_mode_final_matmul_partials_cb, out_subblock_num_tiles);
@@ -217,19 +223,19 @@ void MAIN {
                                 out_block_w,
                                 untilize_mode_final_matmul_partials_cb,
                                 untilize_mode_reblock_cb,
-                                out0_cb
-                            );
+                                out0_cb);
                             mm_init_short();
                         }
                     }
 
-
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
 
-                if  (spill) enable_reload = true;
+                if (spill) {
+                    enable_reload = true;
+                }
 
-                if  (tilize_in) {
+                if (tilize_in) {
                     cb_pop_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
                 } else {
                     cb_pop_front(in0_cb, in0_block_num_tiles);
@@ -237,9 +243,6 @@ void MAIN {
                 cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);
             }
         }
-
     }
-
-
 }
-}
+}  // namespace NAMESPACE

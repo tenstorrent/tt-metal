@@ -13,8 +13,7 @@ void kernel_main() {
     constexpr uint32_t pages_per_edm_buffer = get_compile_time_arg_val(3);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    InterleavedAddrGen<dst_is_dram> dest_addr_generator = {
-        .bank_base_address = dst_addr, .page_size = page_size};
+    InterleavedAddrGen<dst_is_dram> dest_addr_generator = {.bank_base_address = dst_addr, .page_size = page_size};
 
     for (uint32_t p = 0; p < num_pages_total; p += pages_per_edm_buffer) {
         uint32_t num_pages_to_send = std::min<uint32_t>(pages_per_edm_buffer, num_pages_total - p);
@@ -30,5 +29,4 @@ void kernel_main() {
 
         cb_pop_front(cb_id_in0, num_pages_to_send);
     }
-
 }
