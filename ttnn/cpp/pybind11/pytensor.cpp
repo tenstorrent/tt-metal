@@ -1609,44 +1609,6 @@ void pytensor_module(py::module& m_tensor) {
 
                     reshaped_tensor = tt_tensor.reshape((4, -1, 32))
             )doc")
-
-
-
-
-        .def(
-            "reshape_unsafe",
-            [](Tensor& self, int N, int C, int H, int W) {
-                return self.reshape(infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
-            },
-            R"doc(
-                Reshapes TT tensor
-
-                .. code-block:: python
-
-                    reshaped_tensor = tt_tensor.reshape(N, C, H, W)
-            )doc")
-        .def(
-            "reshape_unsafe",
-            [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return self.reshape(shape); },
-            R"doc(
-                Reshapes TT tensor
-
-                .. code-block:: python
-
-                    reshaped_tensor = tt_tensor.reshape((4, 3, 32))
-            )doc")
-        .def(
-            "reshape_unsafe",
-            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
-                return self.reshape(infer_dims_for_reshape(self, shape));
-            },
-            R"doc(
-                Reshapes TT tensor
-
-                .. code-block:: python
-
-                    reshaped_tensor = tt_tensor.reshape((4, -1, 32))
-            )doc")
         .def_property(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
