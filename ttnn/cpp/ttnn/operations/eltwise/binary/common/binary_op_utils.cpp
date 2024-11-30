@@ -124,7 +124,23 @@ std::map<std::string, std::string> get_defines(
          (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::FLOAT32) ||
          (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT32) ||
          (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::UINT32))) {
+         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::UINT32) ||
+         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::BFLOAT16) ||
+         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::BFLOAT8_B) ||
+         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::FLOAT32) ||
+         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
+         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::UINT32) ||
+         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT4_B) ||
+         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::UINT16) ||
+         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT4_B) ||
+         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::INT32) ||
+         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT4_B) ||
+         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::BFLOAT16) ||
+         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::BFLOAT4_B) ||
+         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::BFLOAT8_B) ||
+         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::BFLOAT4_B) ||
+         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::FLOAT32) ||
+         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT4_B))) {
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
         auto in_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
