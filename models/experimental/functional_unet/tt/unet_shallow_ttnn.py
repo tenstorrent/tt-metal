@@ -257,7 +257,7 @@ class UNetUpblock:
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        x = ttnn.upsample(x, (2, 2, 1), memory_config=x.memory_config())
+        x = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
         x = ttnn.reshape(
             x, (1, 1, self.conv1.batch_size * self.conv1.input_height * self.conv1.input_width, x.shape[-1])
         )
