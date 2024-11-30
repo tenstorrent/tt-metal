@@ -152,10 +152,10 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord mux_core = {mux_x, mux_y};
-        CoreCoord mux_phys_core = device->worker_core_from_logical_core(mux_core);
+        CoreCoord mux_phys_core = device->translated_worker_core_from_logical_core(mux_core);
 
         CoreCoord demux_core = {demux_x, demux_y};
-        CoreCoord demux_phys_core = device->worker_core_from_logical_core(demux_core);
+        CoreCoord demux_phys_core = device->translated_worker_core_from_logical_core(demux_core);
 
         if (check_txrx_timeout) {
             defines["CHECK_TIMEOUT"] = "";
@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
         std::vector<CoreCoord> tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
-            tx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            tx_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     src_endpoint_start_id + i, // 0: src_endpoint_id
@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
         std::vector<CoreCoord> rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
             CoreCoord core = {rx_x+i, rx_y};
-            rx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            rx_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     dest_endpoint_start_id + i, // 0: dest_endpoint_id

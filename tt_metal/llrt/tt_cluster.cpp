@@ -396,6 +396,11 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &core) const {
     this->driver_->assert_risc_reset_at_core(umd_core);
 }
 
+// void CLuster::write_to_dram_bank(std::vector<uint32_t> &vec, chip_id_t chip, uint32_t bank_id, uint64_t addr, bool small_access) const {
+//     tt_cxy_pair dram_core = tt_cxy_pair(chip, this->get_soc_desc(chip).get_preferred_worker_core_for_dram_channel(bank_id))
+
+// }
+
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;

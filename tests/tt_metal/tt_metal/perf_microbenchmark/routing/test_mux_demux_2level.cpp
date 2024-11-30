@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+(i%8), tx_y+(i/8)};
             tx_core.push_back(core);
-            tx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            tx_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         constexpr uint32_t rx_x = 0;
@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
             CoreCoord core = {rx_x+(i%8), rx_y+(i/8)};
             rx_core.push_back(core);
-            rx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            rx_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         constexpr uint32_t mux_l1_x = 0;
@@ -123,18 +123,18 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < num_mux_l1; i++) {
             CoreCoord core = {mux_l1_x+i, mux_l1_y};
             mux_l1_core.push_back(core);
-            mux_l1_phys_core.push_back(device->worker_core_from_logical_core(core));
+            mux_l1_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         constexpr uint32_t mux_l2_x = 4;
         constexpr uint32_t mux_l2_y = 2;
         CoreCoord mux_l2_core = {mux_l2_x, mux_l2_y};
-        CoreCoord mux_l2_phys_core = device->worker_core_from_logical_core(mux_l2_core);
+        CoreCoord mux_l2_phys_core = device->translated_worker_core_from_logical_core(mux_l2_core);
 
         constexpr uint32_t demux_l1_x = 0;
         constexpr uint32_t demux_l1_y = 3;
         CoreCoord demux_l1_core = {demux_l1_x, demux_l1_y};
-        CoreCoord demux_l1_phys_core = device->worker_core_from_logical_core(demux_l1_core);
+        CoreCoord demux_l1_phys_core = device->translated_worker_core_from_logical_core(demux_l1_core);
 
         constexpr uint32_t demux_l2_x = 1;
         constexpr uint32_t demux_l2_y = 3;
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < num_demux_l2; i++) {
             CoreCoord core = {demux_l2_x+i, demux_l2_y};
             demux_l2_core.push_back(core);
-            demux_l2_phys_core.push_back(device->worker_core_from_logical_core(core));
+            demux_l2_phys_core.push_back(device->translated_worker_core_from_logical_core(core));
         }
 
         for (uint32_t i = 0; i < num_src_endpoints; i++) {

@@ -129,7 +129,7 @@ DeviceData::DeviceData(Device *device,
     auto num_banks = device->num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->dram_core_from_dram_channel(dram_channel);
+        CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
@@ -144,7 +144,7 @@ DeviceData::DeviceData(Device *device,
         num_banks = device->num_banks(BufferType::L1);
         for (int bank_id = 0; bank_id < num_banks; bank_id++) {
             CoreCoord core = device->logical_core_from_bank_id(bank_id);
-            CoreCoord phys_core = device->worker_core_from_logical_core(core);
+            CoreCoord phys_core = device->translated_worker_core_from_logical_core(core);
             int32_t bank_offset = device->bank_offset(BufferType::L1, bank_id);
             this->all_data[core][bank_id] = one_core_data_t();
             this->all_data[core][bank_id].logical_core = core;
@@ -157,7 +157,7 @@ DeviceData::DeviceData(Device *device,
         for (uint32_t y = workers.start_coord.y; y <= workers.end_coord.y; y++) {
             for (uint32_t x = workers.start_coord.x; x <= workers.end_coord.x; x++) {
                 CoreCoord core = {x, y};
-                CoreCoord phys_core = device->worker_core_from_logical_core(core);
+                CoreCoord phys_core = device->translated_worker_core_from_logical_core(core);
                 this->all_data[core][0] = one_core_data_t();
                 this->all_data[core][0].logical_core = core;
                 this->all_data[core][0].phys_core = phys_core;
@@ -179,7 +179,7 @@ void DeviceData::prepopulate_dram(Device *device, uint32_t size_words) {
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         auto offset = device->bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
+        auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
         // Generate random or coherent data per bank of specific size.
@@ -197,9 +197,7 @@ void DeviceData::prepopulate_dram(Device *device, uint32_t size_words) {
         }
 
         // Write to device once per bank (appropriate core and offset)
-        tt::Cluster::instance().write_core(static_cast<const void*>(&data.data[0]),
-            data.data.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), bank_core),
-            this->base_data_addr[static_cast<int>(CoreType::DRAM)] + offset);;
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, this->base_data_addr[static_cast<int>(CoreType::DRAM)], data.data);
 
         this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] =
             this->base_data_addr[static_cast<int>(CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
@@ -367,8 +365,13 @@ inline bool DeviceData::validate_one_core(Device *device,
     }
 
     // Read results from device and compare to expected for this core.
-    result_addr += bank_offset;
-    std::vector<uint32_t> results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+    std::vector<uint32_t> results;
+    if (core_type == CoreType::DRAM) {
+        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
+    } else {
+        result_addr += bank_offset;
+        results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+    }
 
     log_info(tt::LogTest, "Validating {} bytes from {} bank {} log_core {}: phys_core: {} at addr: 0x{:x}",
              size_bytes, core_string, bank_id, logical_core.str(), phys_core.str(), result_addr);
@@ -488,13 +491,13 @@ void configure_kernel_variant(
     NOC downstream_noc_index) {
 
     const auto& grid_size = device->grid_size();
-
+    NOC upstream_noc = device->arch() == tt::ARCH::WORMHOLE_B0 ? NOC::NOC_0 : upstream_noc_index;
     std::map<string, string> defines = {
         {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, phys_my_core.x))},
         {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, phys_my_core.y))},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, phys_upstream_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc, grid_size.x, phys_upstream_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc, grid_size.y, phys_upstream_core.y))},
         {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
         {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, 0xff))},
@@ -602,7 +605,7 @@ inline void generate_random_paged_payload(Device *device,
 
         if (is_dram) {
             auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-            bank_core = device->dram_core_from_dram_channel(dram_channel);
+            bank_core = device->logical_core_from_dram_channel(dram_channel);
         } else {
             bank_core = device->logical_core_from_bank_id(bank_id);
         }

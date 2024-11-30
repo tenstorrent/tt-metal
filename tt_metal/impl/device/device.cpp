@@ -3119,19 +3119,6 @@ CoreCoord Device::translated_worker_core_from_logical_core(const CoreCoord &logi
     return this->translated_coords_from_logical_coords(logical_core, CoreType::WORKER);
 }
 
-CoreCoord Device::dram_core_from_logical_core(const CoreCoord &logical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_dram_core_from_logical(logical_core);
-}
-
-std::vector<CoreCoord> Device::dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> dram_cores(logical_cores.size());
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        dram_cores[idx] = dram_core_from_logical_core(logical_cores[idx]);
-
-    return dram_cores;
-}
-
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
     return tt::Cluster::instance().ethernet_core_from_logical_core(id_, logical_core);
 }

@@ -112,9 +112,8 @@ class Cluster {
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
         tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
-        const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
-        tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
-        return device->get_static_tlb_writer(virtual_target);
+        tt_cxy_pair umd_target = this->virtual_to_umd_coord_mapping_.at(target);
+        return device->get_static_tlb_writer(umd_target);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {

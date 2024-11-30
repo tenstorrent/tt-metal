@@ -333,21 +333,12 @@ void initialize_dram_banks(Device *device)
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-    auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-    auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-    auto bank_core = device->dram_core_from_dram_channel(dram_channel);
-    log_info(
-        tt::LogTest,
-        "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}",
-        bank_size,
-        bank_id,
-        bank_core,
-        offset);
-    tt::Cluster::instance().write_core(
-        static_cast<const void*>(fill.data()),
-        fill.size() * sizeof(uint32_t),
-        tt_cxy_pair(device->id(), bank_core),
-        offset);
+        log_info(
+            tt::LogTest,
+            "Initializing DRAM {} bytes for bank_id: {}",
+            bank_size,
+            bank_id);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
 
@@ -379,8 +370,8 @@ int main(int argc, char **argv) {
         CoreCoord spoof_prefetch_core = {0, 0};
         CoreCoord dispatch_core = {4, 0};
 
-        CoreCoord phys_spoof_prefetch_core = device->worker_core_from_logical_core(spoof_prefetch_core);
-        CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
+        CoreCoord phys_spoof_prefetch_core = device->translated_worker_core_from_logical_core(spoof_prefetch_core);
+        CoreCoord phys_dispatch_core = device->translated_worker_core_from_logical_core(dispatch_core);
 
         uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
