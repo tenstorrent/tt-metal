@@ -26,6 +26,7 @@
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "debug/assert.h"
 #include "dev_msgs.h"
+#include "debug/dprint.h"
 
 #if defined(KERNEL_BUILD)
 constexpr uint8_t noc_index = NOC_INDEX;
@@ -84,6 +85,17 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 FORCE_INLINE
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
+
+// TODO: move it to perf model related file
+FORCE_INLINE
+uint32_t get_noc_x(uint32_t noc_xy) {
+    return (noc_xy >> NOC_COORD_REG_OFFSET) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+}
+
+FORCE_INLINE
+uint32_t get_noc_y(uint32_t noc_xy) {
+    return (noc_xy >> (NOC_COORD_REG_OFFSET + NOC_ADDR_NODE_ID_BITS));
+}
 
 namespace interleaved_addr_gen {
 
@@ -299,6 +311,7 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
  */
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
+    DPRINT << "cb_push_back, " << operand << ", " << num_pages << ENDL();
 
     uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
 
@@ -340,6 +353,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  */
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
+    DPRINT << "cb_pop_front, " << operand << ", " << num_pages << ENDL();
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -487,6 +501,8 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
  */
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
+    DPRINT << "cb_reserve_back, " << operand << ", " << num_pages << ENDL();
+
     uint32_t pages_acked_ptr = (uint32_t) get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
@@ -1066,6 +1082,10 @@ struct InterleavedAddrGenFast {
         while (!noc_cmd_buf_ready(noc, read_cmd_buf));
         WAYPOINT("NRTD");
 
+        uint32_t src_noc_x = get_noc_x(src_noc_xy);
+        uint32_t src_noc_y = get_noc_y(src_noc_xy);
+        DPRINT << "noc_async_read, " << dest_addr << ", " << src_addr << ", " << src_noc_x << ", " << src_noc_y << ", " << this->page_size << ENDL();
+
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);      // (uint32_t)src_addr
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);   // src_addr >> 32
@@ -1583,6 +1603,7 @@ void noc_async_write_multicast_exclude_region(
  * Return value: None
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
+    DPRINT << "noc_async_read_barrier, " << static_cast<uint32_t>(noc) << ENDL();
     WAYPOINT("NRBW");
     // BH cache is write-through so reader must invalidate if reading any address that was previously read
     do {
