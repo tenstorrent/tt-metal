@@ -94,7 +94,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                 segregated_item_index = j;
                 break;
             } else if (
-                block_size_[block_index] > alloc_size &&
+                block_size_[block_index] >= alloc_size &&
                 (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
                 target_block_index = block_index;
                 segregated_list = &free_blocks;
