@@ -150,14 +150,6 @@ inline uint32_t DebugPrintStrLen(const char* val) {
     return uint32_t(end - val) + 1;
 }
 
-inline uint32_t DebugPrintStrCopy(volatile char* dst, const char* src) {
-    uint32_t len = DebugPrintStrLen(src);
-    for (uint32_t j = 0; j < len; j++) {
-        dst[j] = src[j];
-    }
-    return len;
-}
-
 // Extend with new type id here, each new type needs specializations for 1 (or 3) of these functions below:
 // This template instantiation maps from type to type id to send over our comm channel
 template <typename T>
@@ -381,13 +373,6 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
             // Another possibility is to wait for the device to flush and print the string piecemeal.
             // As a negative side effect,
             // unfortunately this special case increases the code size generated for each instance of <<.
-            // payload_sz = DebugPrintStrCopy(
-            //     reinterpret_cast<volatile char*>(printbuf + code_sz + sz_sz), debug_print_overflow_error_message);
-            // printbuf[0] = DPrintCSTR;
-            // printbuf[code_sz] = payload_sz;
-            // wpos = payload_sz + sz_sz + code_sz;
-            // dprint_buffer->aux.wpos = wpos;
-            // return;
 
             volatile uint8_t* printbuf = dprint_buffer->data;
             uint32_t remaining_payload_size = payload_sz;
