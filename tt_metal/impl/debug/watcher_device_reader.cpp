@@ -304,7 +304,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // Watcher only treats ethernet + worker cores.
     bool is_eth_core = (logical_core.type == CoreType::ETH);
     CoreDescriptor core;
-    core.coord = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
+    core.coord = device->translated_coords_from_logical_coords(logical_core.coord, logical_core.type);
     core.type = logical_core.type;
 
     // Print device id, core coords (logical)

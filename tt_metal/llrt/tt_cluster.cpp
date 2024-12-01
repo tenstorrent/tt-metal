@@ -333,7 +333,9 @@ bool Cluster::is_worker_core(const CoreCoord &core, chip_id_t chip_id) const {
 }
 
 bool Cluster::is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) const {
-    return this->virtual_eth_cores_.at(chip_id).find(core) != this->virtual_eth_cores_.at(chip_id).end();
+
+    return this->virtual_eth_cores_.find(chip_id) != this->virtual_eth_cores_.end() and
+           this->virtual_eth_cores_.at(chip_id).find(core) != this->virtual_eth_cores_.at(chip_id).end();
 }
 
 CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const {

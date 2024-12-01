@@ -143,7 +143,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         std::vector<uint32_t> read_vec;
 
         CoreCoord worker_core = fixture->delayed_cores[CoreType::WORKER][0]; // Just check that the first delayed core has the feedback set
-        CoreCoord phys_core = device->physical_core_from_logical_core({0,0}, CoreType::WORKER);
+        CoreCoord phys_core = device->translated_coords_from_logical_coords({0, 0}, CoreType::WORKER);
         read_vec = tt::llrt::read_hex_vec_from_core (
             device->id(),
             phys_core,
