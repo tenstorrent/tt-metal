@@ -231,16 +231,8 @@ ttnn::Tensor ExecutePermute::invoke(
     if (input_rank < 4) {
         const auto shape = output_tensor.get_shape();
         const auto full_shape = output_tensor.get_shape().with_tile_padding();
-        SmallVector<uint32_t> shape_vec{};
-        SmallVector<uint32_t> full_shape_vec{};
-        int i = 0;
-        while (i < 3 and shape[i] == 1) {
-            i++;
-        }
-        for (; i < shape.rank(); i++) {
-            shape_vec.push_back(shape[i]);
-            full_shape_vec.push_back(full_shape[i]);
-        }
+        SmallVector<uint32_t> shape_vec{shape.value.end() - input_rank, shape.value.end()};
+        SmallVector<uint32_t> full_shape_vec{full_shape.value.end() - input_rank, full_shape.value.end()};
         output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(shape_vec, full_shape_vec));
     }
 
