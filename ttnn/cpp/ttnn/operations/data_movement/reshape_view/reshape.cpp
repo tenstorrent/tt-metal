@@ -37,7 +37,8 @@ ttnn::Tensor convert_tile_to_rm(
     const PadValue &pad_value
 ) {
     //Convert the 3D->3D reshaping to row major and back to tile
-    auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    auto rm_tensor =
+        ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, tensor.get_dtype(), std::nullopt, (Device*)nullptr);
     rm_tensor = ReshapeViewOperation::invoke(
         rm_tensor,
         shape,
@@ -45,7 +46,7 @@ ttnn::Tensor convert_tile_to_rm(
         queue_id,
         pad_value
     );
-    rm_tensor = ttnn::to_layout(rm_tensor, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    rm_tensor = ttnn::to_layout(rm_tensor, ttnn::TILE_LAYOUT, rm_tensor.get_dtype(), memory_config, (Device*)nullptr);
     return rm_tensor;
 }
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
