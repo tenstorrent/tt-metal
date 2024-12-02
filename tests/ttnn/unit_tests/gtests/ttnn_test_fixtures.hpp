@@ -21,7 +21,7 @@
 namespace ttnn {
 
 class TTNNFixture : public ::testing::Test {
-   protected:
+protected:
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -35,7 +35,7 @@ class TTNNFixture : public ::testing::Test {
 };
 
 class TTNNFixtureWithDevice : public TTNNFixture {
-   protected:
+protected:
     tt::tt_metal::Device* device_ = nullptr;
 
     void SetUp() override {
@@ -53,11 +53,10 @@ class TTNNFixtureWithDevice : public TTNNFixture {
 
 }  // namespace ttnn
 
-
 namespace ttnn::distributed::test {
 
 class T3kMultiDeviceFixture : public ::testing::Test {
-   protected:
+protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -68,8 +67,7 @@ class T3kMultiDeviceFixture : public ::testing::Test {
         if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
-        mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(MeshShape{2, 4}, MeshType::Ring));
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}, MeshType::Ring));
     }
 
     void TearDown() override {

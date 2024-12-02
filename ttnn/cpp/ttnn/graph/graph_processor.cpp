@@ -95,9 +95,8 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
 }
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
-    auto buf_id = add_buffer(buffer);
+    auto buffer_id = add_buffer(buffer);
 
-    auto alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
     auto counter = graph.size();
 
     std::unordered_map<std::string, std::string> params = {
@@ -113,7 +112,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
             .counter = counter,
             .node_type = kNodeBufferAllocate,
             .params = params,
-            .connections = {buf_id}
+            .connections = {buffer_id}
         });
         graph[current_op_id.top()].connections.push_back(counter);
     }
@@ -121,7 +120,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
 
 void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
-    auto buffer_idx = add_buffer(buffer);
+    auto buffer_id = add_buffer(buffer);
     auto counter = graph.size();
     std::unordered_map<std::string, std::string> params = {
             {kSize, std::to_string(buffer->size())},
@@ -135,7 +134,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
             .counter = counter,
             .node_type = kNodeBufferDeallocate,
             .params = params,
-            .connections = {buffer_idx}
+            .connections = {buffer_id}
         });
         graph[current_op_id.top()].connections.push_back(counter);
     }
@@ -286,21 +285,21 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     } else {
         tensor_id = t.tensor_id.value();
     }
-    auto tensor_counter = id_to_counter.count(tensor_id) > 0 ? id_to_counter[tensor_id] : graph.size();
+    auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.get_shape();
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},
         {kTensorId, fmt::format("{}", tensor_id)},
     };
 
-    if (id_to_counter.count(tensor_id) == 0) {
+    if (tensor_id_to_counter.count(tensor_id) == 0) {
         graph.push_back(Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .connections = {}});
-        id_to_counter[tensor_id] = tensor_counter;
+        tensor_id_to_counter[tensor_id] = tensor_counter;
     }
 
     if (buffer) {
-        auto buffer_idx = add_buffer(buffer);
-        graph[buffer_idx].connections.push_back(tensor_counter);
+        auto buffer_id = add_buffer(buffer);
+        graph[buffer_id].connections.push_back(tensor_counter);
     } else {
         tt::log_info("Tensor doesn't have buffer, but storage is {}", demangle(get_type_in_var(t.get_storage()).name()));
     }
@@ -308,9 +307,9 @@ int GraphProcessor::add_tensor(const Tensor& t) {
 }
 
 int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
-    auto buffer_alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
-    auto counter = id_to_counter.count(buffer_alloc_id) > 0 ? id_to_counter[buffer_alloc_id] : graph.size();
-    if (id_to_counter.count(buffer_alloc_id) == 0) {
+    auto buffer_id = buffer->unique_id();
+    auto counter = buffer_id_to_counter.count(buffer_id) > 0 ? buffer_id_to_counter[buffer_id] : graph.size();
+    if (buffer_id_to_counter.count(buffer_id) == 0) {
         std::unordered_map<std::string, std::string> params = {
             {kSize, std::to_string(buffer->size())},
             {kType, buffer->is_dram() ? "DRAM" : "L1"},
@@ -324,10 +323,10 @@ int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
             .connections = {}
         });
         graph[current_op_id.top()].connections.push_back(counter);
-        id_to_counter[buffer_alloc_id] = counter;
+        buffer_id_to_counter[buffer_id] = counter;
         return counter;
     }
-    return id_to_counter[buffer_alloc_id];
+    return buffer_id_to_counter[buffer_id];
 }
 
 
@@ -428,7 +427,8 @@ void GraphProcessor::end_function_process_optional_tensor(const std::any& any_va
 void GraphProcessor::begin_capture(RunMode mode) {
     const std::lock_guard<std::mutex> lock(mutex);
     graph.clear();
-    id_to_counter.clear();
+    buffer_id_to_counter.clear();
+    tensor_id_to_counter.clear();
     graph.push_back(Vertex{
         .counter = 0,
         .node_type = kNodeCaptureStart,

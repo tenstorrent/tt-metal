@@ -67,7 +67,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     log_info(LogTest, "CB size: {}", block_size_bytes * num_blocks_in_CB);
 
     // source and destination buffers
-    uint32_t buffer_size = single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t buffer_size =
+        single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t total_bytes_moved = buffer_size * num_repetitions;
     log_info(LogTest, "total_bytes_moved: {}", total_bytes_moved);
 
@@ -77,8 +78,9 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     uint32_t cb_size_bytes = cb_size_tiles * single_tile_size;
 
     for (auto core : cores) {
-        tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig cb_config =
+            tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_index, single_tile_size);
         auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
@@ -87,13 +89,10 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     uint32_t dst_address;
     CoreCoord dst_noc_xy;
 
-    tt_metal::BufferType buff_type = test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
+    tt_metal::BufferType buff_type =
+        test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
     tt_metal::InterleavedBufferConfig buff_config{
-                    .device= device,
-                    .size = buffer_size,
-                    .page_size = buffer_size,
-                    .buffer_type = buff_type
-        };
+        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = buff_type};
 
     auto src_buffer = CreateBuffer(buff_config);
     auto dst_buffer = CreateBuffer(buff_config);
@@ -174,7 +173,11 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 program,
                 receiver_kernels.at(core_id),
                 core,
-                {src_address, (uint32_t)src_noc_xy.x, (uint32_t)src_noc_xy.y, (uint32_t)num_tiles, (uint32_t)num_repetitions});
+                {src_address,
+                 (uint32_t)src_noc_xy.x,
+                 (uint32_t)src_noc_xy.y,
+                 (uint32_t)num_tiles,
+                 (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
@@ -193,7 +196,11 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 program,
                 sender_kernels.at(core_id),
                 core,
-                {dst_address, (uint32_t)dst_noc_xy.x, (uint32_t)dst_noc_xy.y, (uint32_t)num_tiles, (uint32_t)num_repetitions});
+                {dst_address,
+                 (uint32_t)dst_noc_xy.x,
+                 (uint32_t)dst_noc_xy.y,
+                 (uint32_t)num_tiles,
+                 (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
@@ -215,7 +222,6 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     // send input data to the device
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
 
     log_info(LogTest, "Writing to device buffer->..");
     tt_metal::detail::WriteToBuffer(src_buffer, src_vec);
