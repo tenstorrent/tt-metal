@@ -93,7 +93,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 going to try using the model demos, we highly recommend you install from
 source.
 
-### Option 1: From source
+#### Option 1: From source
 
 We use CMake for our build flows.
 
@@ -127,7 +127,7 @@ depending on your Tenstorrent card type.
 > use Pip 20.1.1 or lower to install this project. This is the highest version
 > of Pip that supports editable installs in the way that we use it.
 
-### Option 2: From wheel
+#### Option 2: From wheel
 
 Download the latest wheel from our
 [releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
@@ -141,7 +141,7 @@ to install with `pip`:
 pip install <wheel_file.whl>
 ```
 
-4. (For models users only) Set up environment for models
+1. (For models users only) Set up environment for models
 
 If you are going to try our pre-built models in `models/`, then you must execute
 the following to:
@@ -157,7 +157,7 @@ sudo apt-get install cpufrequtils
 sudo cpupower frequency-set -g performance
 ```
 
-5. Start coding
+2. Start coding
 
 To verify your installation, try the executing an example:
 
