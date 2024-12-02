@@ -68,9 +68,12 @@ Other useful resources:
 <div align="center">
 <img src="decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
 </div> <br>
-If the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward. According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass. Only thing to worry about is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM. <br><br> Decode forward pass implementation below follows diagram above and has nothing that is not already explained in previous sections. Also, it's crucial to deallocate tensors after their usage to optimize memory. However, in this explanation, tensor deallocation has been omitted for clarity and to keep the code as straightforward as possible.
+If the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward. According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass. Only thing to worry about is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM. <br><br> Decode forward pass implementation below follows diagram above and has nothing that is not already explained in previous sections. Also, it's crucial to deallocate tensors after their usage to optimize memory. Keep in mind to always deallocate tensors as shown in the example below.
 
-<br><br><br>
+<br>
+
+To optimize performance in decode mode, we maintain the residual stream in L1 and shard it across cores and devices. However, determining the optimal number of cores for sharding can be challenging, especially for operations like DRAM-sharded matmuls. When it’s not feasible to keep the streams sharded, we use interleave_to_sharded, and conversely, switch back as needed. In our implementation of Llama3.1 there are some ops that require interleaved tensors and resharding. 
+<br><br>
 
 ```py
 def forward(
@@ -88,10 +91,10 @@ def forward(
         elif mode == 'decode':
             skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
         # Attention RMSNorm
-        attn_norm = self.attention_norm(x)
+        attn_in = self.attention_norm(x)
         # Attention
-        r = self.attention.forward(
-            attn_norm,
+        attn_out = self.attention.forward(
+            attn_in,
             current_pos,
             rot_mat,
             transformation_mats,
@@ -99,18 +102,25 @@ def forward(
             mode,
             page_table,
         )
+        ttnn.deallocate(attn_in)
         # Residual add of inputs and attention output
-        h = ttnn.add(x, r, memory_config=skip_mem_cfg)
+        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
+        ttnn.deallocate(attn_out)
         # MLP and RMSNorm
-        r = self.feed_forward.forward(self.ffn_norm(h), mode)
+        ff_out = self.feed_forward.forward(self.ffn_norm(h), mode)
         # Residual add of attention output and mlp output
-        out = ttnn.add(h, r, memory_config=skip_mem_cfg)
+        out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
+        
+        ttnn.deallocate(ff_out)
+        ttnn.deallocate(h)
 
         return out
 ```
 
+
+
 ### 2.7 LM Head
-The LMHead is specific because LLMs typically have large ```vocab_size```, which is independent of the model size (e.g., 1B, 2B, 8B, 405B parameters). As a result, the LMHead always has a large last_dim in its weight matrix. Given the substantial size of LMHead weights and the memory limitations of hardware, these weights must be distributed across multiple devices and processed in iterations, while activations are replicated across devices.
+The LMHead is unique because LLMs typically have large ```vocab_size```, which is independent of the model size (e.g., 1B, 2B, 8B, 405B parameters). As a result, the LMHead always has a large last_dim in its weight matrix. Given the substantial size of LMHead weights and the memory limitations of hardware, these weights must be distributed across multiple devices and processed in iterations, while activations are replicated across devices.
 
 The number of iterations required depends on the size of the weights and the number of devices available, which can range from 1 to several iterations. For example, in Llama 3.1’s decode mode, the LMHead matrix multiplication involves shapes ```(32, 8K) x (8K, 128K)```.
 
@@ -162,7 +172,7 @@ for i, split_size in enumerate(split_sizes):
         )
     )
 ```
-We use dram-sharded matmul for LMHead with ```program_config``` and ```memory_config``` generated in code below. If you want to learn why we decided to use them check out section 4.4. The primary reason for having multiple program_configs is that the weight shapes may result in unequal split sizes. This variability means the same configuration cannot be used for every matrix multiplication.
+We use dram-sharded matmul for LMHead with ```program_config``` and ```memory_config``` generated in code below. If you want to learn why we decided to use them check out [Section: Op Configs](#4-4-op-configs). The primary reason for having multiple program_configs is that the weight shapes may result in unequal split sizes. This variability means the same configuration cannot be used for every matrix multiplication.
 ```py
 # Generate dram-sharded memory_config
 memory_config = args.create_dram_sharded_mem_config(
@@ -197,7 +207,7 @@ def forward(self, x: ttnn.Tensor):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
         )
-        outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        outputs.append(output)
 
     # Concatenate the outputs
     output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -212,7 +222,7 @@ def forward(self, x: ttnn.Tensor):
 
 Once the model components are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in an earlier section, so they are not included within the model class itself.
 
-The model’s constructor initializes 80 decoders, an RMSNorm object, and the LMHead, ensuring that weights for all components are loaded onto the appropriate devices.
+The model’s constructor initializes N decoders (80 for Llama3.1-70b), an RMSNorm object, and the LMHead, ensuring that weights for all components are loaded onto the appropriate devices.
 
 During the forward pass, the decoders are executed sequentially, followed by normalization and the LMHead computation at the end. A specific optimization is applied for the prefill mode: since only the last token is relevant, the LMHead is executed only on the final tile in this mode.
 
