@@ -137,6 +137,7 @@ inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_id
 class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using ValidRegAddrFunc = std::function<bool(uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -151,6 +152,7 @@ private:
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
+    ValidRegAddrFunc valid_reg_addr_func_;
 
 public:
     Hal();
@@ -199,6 +201,8 @@ public:
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
         return relocate_func_(addr, local_init_addr);
     }
+
+    uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
