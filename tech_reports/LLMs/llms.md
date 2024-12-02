@@ -72,7 +72,7 @@ If the components explained in previous sections (MLP, Attention, RMSNorm) are i
 
 <br>
 
-To optimize performance in decode mode, we maintain the residual stream in L1 and shard it across cores and devices. However, determining the optimal number of cores for sharding can be challenging, especially for operations like DRAM-sharded matmuls. When it’s not feasible to keep the streams sharded, we use interleave_to_sharded, and conversely, switch back as needed. In our implementation of Llama3.1 there are some ops that require interleaved tensors and resharding. 
+To optimize performance in decode mode, we maintain the residual stream in L1 and shard it across cores and devices. However, determining the optimal number of cores for sharding can be challenging, especially for operations like DRAM-sharded matmuls. Here is the [link](https://github.com/tenstorrent/tt-metal/blob/53c32c0c0da926f97bd0eb042e70fd54c2866f44/models/demos/llama3/tt/model_config.py#L931) to the code which produces core grid that will divide the N and K dims of a matmul evenly. When it’s not feasible to keep the streams sharded, we use interleave_to_sharded, and conversely, switch back as needed. In our implementation of Llama3.1 there are some ops that require interleaved tensors and resharding. 
 <br><br>
 
 ```py
