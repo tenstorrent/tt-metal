@@ -1872,9 +1872,15 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     optional_output_tensor = ttnn.from_torch(torch_opt_output_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    pre_exection_optional_output_tensor = optional_output_tensor
     output = ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(optional_output_tensor, output, 0.999)
+    assert (
+        optional_output_tensor is pre_exection_optional_output_tensor
+    ), "optional_output_tensor & pre_exection_optional_output_tensor are not same object anymore!"

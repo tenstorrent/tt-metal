@@ -1045,16 +1045,16 @@ Tensor matmul(
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    const bool opt_output_empty = !optional_output_tensor.has_value();
+    const bool is_optional_output_tensor_empty = !optional_output_tensor.has_value();
 
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
-        if (opt_output_empty)
+        if (is_optional_output_tensor_empty)
             output_tensors = {
                 Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
         optional_input_tensors.push_back(std::nullopt);
-        if (opt_output_empty)
+        if (is_optional_output_tensor_empty)
             output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
@@ -1082,7 +1082,8 @@ Tensor matmul(
 
 void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -1112,6 +1113,13 @@ void Matmul::validate(
         "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} height={}",
         a_shape[-1],
         b_shape[-2]);
+
+    const bool is_optional_output_tensor_empty = !optional_output_tensors.empty() && !optional_output_tensors.at(0).has_value();
+    if (!is_optional_output_tensor_empty) {
+        const auto& optional_output_tensor_c = optional_output_tensors.at(0);
+        const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
+        TT_FATAL(optional_output_tensor_shape == this->compute_output_shapes(input_tensors).at(0), "Shape of Optional Output Tensor showld match Output Tensor");
+    }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
     TT_FATAL(this->output_tile.has_value(), "Error: output_tile field should have been automatically populated");
