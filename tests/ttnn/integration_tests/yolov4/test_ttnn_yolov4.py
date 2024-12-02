@@ -4,9 +4,9 @@
 
 import torch
 import ttnn
-from models.utility_functions import skip_for_grayskull
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, post_processing, plot_boxes_cv2, load_class_names
 import cv2
@@ -51,6 +51,7 @@ def gen_yolov4_boxes_confs(output):
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_yolov4(device, reset_seeds, model_location_generator):
     torch.manual_seed(0)

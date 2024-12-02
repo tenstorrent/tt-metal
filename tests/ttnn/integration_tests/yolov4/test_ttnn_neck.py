@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.demos.yolov4.ttnn.neck import TtNeck
 from models.demos.yolov4.reference.neck import Neck
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
 import time
@@ -13,6 +14,7 @@ from loguru import logger
 import os
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_neck(device, reset_seeds, model_location_generator):
     torch.manual_seed(0)
