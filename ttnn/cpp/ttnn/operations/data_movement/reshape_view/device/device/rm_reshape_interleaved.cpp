@@ -45,15 +45,13 @@ void kernel_main() {
     const uint32_t read_end_page            = get_arg_val<uint32_t>(6);
     const uint32_t write_start_page         = get_arg_val<uint32_t>(7);
     const uint32_t write_start_offset       = get_arg_val<uint32_t>(8);
-    //cb_id_in0 is a circular buffer with 1 source_page_size_bytes page if no alignment needed
-    //source_read_size_bytes otherwise
-    const uint32_t cb_id_in0                = get_arg_val<uint32_t>(9);
-    //cb_id_in1 is a circular buffer with 1 dest_page_size_bytes+16 (rounded up to next 64B) page
-    const uint32_t cb_id_in1                = get_arg_val<uint32_t>(10);
-    const uint32_t nop                      = get_arg_val<uint32_t>(11);
-    constexpr bool tensor_is_dram                   = get_compile_time_arg_val(0) == 1;
-    #define src_aligned_to_64                       get_compile_time_arg_val<uint32_t>(1) == 1
-    #define src_aligned_to_16                       get_compile_time_arg_val<uint32_t>(2) == 1
+    const uint32_t nop = get_arg_val<uint32_t>(9);
+
+    constexpr bool tensor_is_dram = get_compile_time_arg_val(0) == 1;
+#define src_aligned_to_64 get_compile_time_arg_val(1) == 1
+#define src_aligned_to_16 get_compile_time_arg_val(2) == 1
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
     //Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this core
     if (nop == 1)
     {

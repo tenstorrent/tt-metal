@@ -64,21 +64,33 @@ operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const T
     }
     const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
     uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+
+    const uint32_t cb_size0 = source_read_size_bytes;
+    const uint32_t cb_size1 = ((dest_page_size_bytes - 1) & MASK_64) + 80;
+
+    uint32_t src0_cb_index = 0;
+    uint32_t src1_cb_index = 1;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(cb_size0 * 2, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, cb_size0);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, cb_size1);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t) src0_is_dram,
-        (std::uint32_t) (source_page_size_bytes%64==0) ? 1 : 0,
-        (std::uint32_t) (source_page_size_bytes%16==0) ? 1 : 0
-    };
+        (std::uint32_t)src0_is_dram,
+        (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
+        (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,
+        src0_cb_index,
+        src1_cb_index};
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args)
-    );
-
-    const uint32_t cb_size0 = source_read_size_bytes;
-    const uint32_t cb_size1 = ((dest_page_size_bytes-1)&MASK_64) + 80;
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
     for (int core_x = 0; core_x < num_cores_x; core_x++) {
         for (int core_y = 0; core_y < num_cores_y; core_y++) {
@@ -94,24 +106,13 @@ operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const T
                     0,
                     0,
                     0,
-                    0,
-                    1,
                     1
 
                 };
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             } else {
                 // Create the circular buffers
-                uint32_t src0_cb_index = 0;
-                uint32_t src1_cb_index = 1;
-                tt::tt_metal::CircularBufferConfig cb_src0_config =
-                    tt::tt_metal::CircularBufferConfig(cb_size0 * 2, {{src0_cb_index, cb_data_format}})
-                        .set_page_size(src0_cb_index, cb_size0);
-                auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-                tt::tt_metal::CircularBufferConfig cb_src1_config =
-                    tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
-                        .set_page_size(src1_cb_index, cb_size1);
-                auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+
                 // set the runtime args
                 // set the compile time args
                 uint32_t start_of_read = read_start_page;
@@ -127,8 +128,6 @@ operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const T
                     end_of_read,
                     write_start_page,
                     0,
-                    src0_cb_index,
-                    src1_cb_index,
                     done
 
                 };
