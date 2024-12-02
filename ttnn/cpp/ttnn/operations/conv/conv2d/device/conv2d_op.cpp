@@ -22,6 +22,7 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 using namespace tt::constants;
@@ -277,21 +278,25 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
 }
 
 std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(DataType input_dtype, DataType weights_dtype, DataType output_dtype, DataType accum_dtype, bool enable_bias) const {
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t batch_size = output_shape[0];
+    uint32_t conv_output_h = output_shape[1];
+    uint32_t conv_output_w = output_shape[2];
+
+    uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
+    uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
+    uint32_t bias_tile_size = 0;
+    if(enable_bias) {
+        bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
+    }
+    uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
+    uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(accum_dtype));
+
     if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
     {
-        uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
-        uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
-        uint32_t bias_tile_size = 0;
-        if(enable_bias) {
-            bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
-        }
-        uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
-        uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(accum_dtype));
 
-        auto output_shape = sliding_window_config.get_output_shape();
-        uint32_t batch_size = output_shape[0];
-        uint32_t conv_output_h = output_shape[1];
-        uint32_t conv_output_w = output_shape[2];
+
+
         uint32_t conv_output_c_per_core = this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH;
 
         uint32_t output_size_per_core_in_bytes = this->parallelization_config.per_core_out_matrix_width_ntiles * this->parallelization_config.per_core_out_matrix_height_ntiles * tt::tile_size(datatype_to_dataformat_converter(this->dtype));
@@ -338,6 +343,8 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(DataType input_
         tt::log_debug(tt::LogOp, "Total CB Size: {}", total_CB_size);
 
         return {output_size_per_core_in_bytes, total_CB_size};
+    } else if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+
     }
     return {0, 0};
 
