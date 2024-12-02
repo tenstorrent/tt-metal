@@ -174,7 +174,7 @@ class TtModelArgs:
         # Default folder location for weights and cached files
         # FIXME: Setup the max cache size accordingly depending on the target model, architecture and test type.
         if (
-            self.num_devices <= 2
+            0 < self.num_devices <= 2
         ):  # for 1-chip or 2-chip devices limit the seqlen to 4K (to avoid OoO on N150/N300 CI tests)
             self.max_seq_len = 1024 * 4
             self.kv_seq_len = 1024 * 4
