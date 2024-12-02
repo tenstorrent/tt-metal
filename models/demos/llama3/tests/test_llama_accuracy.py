@@ -108,7 +108,7 @@ def test_tt_model_accuracy(
     optimizations,
     mesh_device,
     use_program_cache,
-    reset_seeds, 
+    reset_seeds,
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
@@ -116,7 +116,9 @@ def test_tt_model_accuracy(
     mesh_device.enable_async(True)
 
     # Load model args and tokenizer
-    model_args = TtModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(
+        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len
+    )
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
