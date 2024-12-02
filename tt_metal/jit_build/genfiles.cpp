@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -460,7 +460,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     uint32_t allocator_alignment) {
     stringstream ss;
 
-    ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
+    ss << "// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc." << endl;
     ss << "//" << endl;
     ss << "// SPDX-License-Identifier: Apache-2.0" << endl;
     ss << endl;

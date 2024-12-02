@@ -56,7 +56,7 @@ The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_ex
 ..  code-block:: c++
     :linenos:
 
-    // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+    // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
     //
     // SPDX-License-Identifier: Apache-2.0
 
