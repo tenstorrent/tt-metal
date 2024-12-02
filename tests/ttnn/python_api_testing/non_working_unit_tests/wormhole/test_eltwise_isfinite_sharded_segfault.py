@@ -46,6 +46,8 @@ def run_tests(
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
     )
 
+    # print(f"sharded_config.shard_spec {sharded_config.shard_spec}")
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=dtype,
@@ -63,7 +65,7 @@ def run_tests(
 
 test_sweep_args = [
     (
-        (1, 1, 25088, 2),
+        (1, 1, 1024, 32),
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ShardStrategy.BLOCK,
