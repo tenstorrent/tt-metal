@@ -75,7 +75,7 @@ def test_reshape_rope_t3k(
 
     pt_out = pt_input.reshape(shape[0], shape[1], shape[2], shape[3])
 
-    tt_out = ttnn.reshape(tt_input, shape)
+    tt_out = ttnn.experimental.reshape(tt_input, shape)
     tt_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=-1))[..., : shape[3]]
 
     logger.info(f"pt_out shape: {pt_out.shape}")
