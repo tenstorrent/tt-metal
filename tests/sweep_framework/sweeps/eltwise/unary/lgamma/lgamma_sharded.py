@@ -11,7 +11,13 @@ import random
 import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
-from tests.sweep_framework.sweep_utils.sharding_utils import gen_sharded_spec_unary, parse_sharding_spec
+from tests.sweep_framework.sweep_utils.sharding_utils import (
+    gen_sharded_spec_unary,
+    parse_sharding_spec,
+    invalidate_vector_sharding,
+    roundup,
+    divup,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
