@@ -78,7 +78,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     tt::log_info(tt::LogOp, "Allocation Stats before Op: {}", stats);
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height]
+        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height, stats]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 using ttnn::operations::experimental::auto_format::FormatParams;
                 auto& a = input_tensors.at(0);
@@ -96,9 +96,27 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
                 auto arch = is_tensor_on_device_or_multidevice(a) ? a.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
                 bool fp32_accum = a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
+                auto optimized_conv_op =  OptimizedConvNew(sliding_window_config,
+                                  output_channels,
+                                  groups,
+                                  untilize_out,
+                                  bias.has_value(),
+                                  fuse_relu,
+                                  parallelization_config,
+                                  block_config,
+                                  memory_config,
+                                  dtype,
+                                  input_tensor_shape,
+                                  use_shallow_conv_variant,
+                                  compute_kernel_config,
+                                  enable_act_double_buffer,
+                                  enable_weights_double_buffer,
+                                  enable_split_reader,
+                                  enable_subblock_padding,
+                                  use_non_tile_height);
+                optimized_conv_op.pre_op_l1_allocation_size_bytes = stats.total_allocated_bytes;
                 return operation::run_without_autoformat(
-                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height
-                    ),
+                    optimized_conv_op,
                     input_tensors,
                     optional_input_tensors);
             }, {a, b}, output_tensors, {std::move(bias)});
@@ -219,8 +237,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     tt::tt_metal::Device* device = input_tensor_a.device();
-    auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
-    tt::log_info(tt::LogOp, "Allocation Stats with Input/Tensors: {}", stats);
     bool fp32_accum = get_fp32_dest_acc_en(compute_kernel_config);
 
     auto program_with_cbs =  multi_core_optimized_conv_sharded_v2_new(
@@ -242,10 +258,9 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         enable_subblock_padding,
         use_non_tile_height);
 
-    program_with_cbs.program.set_pre_exec_callback([this,input_tensor_a,input_tensor_b,output_tensor,input_tensor_bias,device,fp32_accum](Program *program) {
-        auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
+    program_with_cbs.program.set_pre_exec_callback([this, input_tensor_a, input_tensor_b, output_tensor, input_tensor_bias, device, fp32_accum](Program *program) {
+        const uint32_t post_op_l1_stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
         auto actual_cb_size = program->get_max_cb_memory_usage(device);
-        tt::log_info(tt::LogOp, "Allocation Stats after CB Allocation: CB Size = {} L1 Allocation =  {}", actual_cb_size, stats);
         DataType accum_dtype = fp32_accum ? DataType::FLOAT32 : DataType::BFLOAT16;
 
         auto [calc_output_size, calc_CB_size] = this->estimate_L1_usage(input_tensor_a.dtype(), input_tensor_b.dtype(), output_tensor.dtype(), accum_dtype, input_tensor_bias.has_value());
@@ -253,6 +268,10 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
             if(calc_CB_size != actual_cb_size)
             tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
         }
+        if(post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
+            tt::log_error(tt::LogOp, "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
+        }
+
     });
     return program_with_cbs;
 }
