@@ -8,6 +8,10 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "debug/dprint.h"
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::UNINITIALIZED_VALUE_U16;
@@ -531,11 +535,49 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
     cb_push_back(cb_id, num_pages);
 }
 
+
+
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
+    uint32_t curr_page_idx,
+    const uint32_t offset_into_worker_slice,
+    const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const AddrGen& address_generator,
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape) {
+    if constexpr (TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+        uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, address_generator);
+        return {dst_noc_addr, 1};
+    } else {
+        static_assert(
+            TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
+            TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED);
+        if constexpr (MEM_LAYOUT == tt::tt_metal::Layout::ROW_MAJOR) {
+            ASSERT(false);  // unimplemented
+            return {0, 0};
+        } else {
+            static_assert(MEM_LAYOUT == tt::tt_metal::Layout::TILE);
+            // TODO: Make d.get_noc_addr work on host + device
+            auto const&[noc_yx, page_offset, contig_pages_] = address_generator.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
+            /*
+            * Shared with `read_wrapped_chunk_from_output_tensor`
+            */
+            // uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
+            uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
+            uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
+
+            size_t contig_pages = std::min<int32_t>(contig_pages_, contig_until_edge_of_tensor_slice);
+            uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, address_generator.bank_base_address + (page_offset * address_generator.page_size) + 0);
+            return {dst_noc_addr, contig_pages};
+        }
+    }
+}
+
 template <typename AddrGen>
 FORCE_INLINE void write_wrapped_chunk(
     uint32_t& curr_page_idx,
     uint32_t& offset_into_worker_slice,
-     ttnn::ccl::coord_t& offset_worker_slice,
+    const  ttnn::ccl::coord_t& offset_worker_slice,
     const  ttnn::ccl::coord_t& worker_slice_shape,
 
     // In tiles for tile layout

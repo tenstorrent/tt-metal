@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ccl_common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cstdint>
 #include <cmath>
@@ -12,6 +12,59 @@
 
 namespace ttnn {
 namespace ccl {
+
+
+void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
+    this->sem_ids.push_back(sem_id);
+    this->wait_counts.push_back(wait_count);
+    this->num_signals++;
+}
+
+LineTopology::LineTopology(
+    size_t line_size,
+    size_t line_index) : _line_size(line_size), _line_index(line_index) {}
+
+bool LineTopology::is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
+        return _line_index == 0;
+    } else {
+        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+        return _line_index == _line_size - 1;
+    }
+}
+bool LineTopology::is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) {
+        return _line_index == 0;
+    } else {
+        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        return _line_index == _line_size - 1;
+    }
+}
+
+bool LineTopology::is_at_end_of_line() const {
+    return _line_index == 0 || _line_index == _line_size - 1;
+}
+
+size_t LineTopology::line_size() const {
+    return _line_size;
+}
+
+size_t LineTopology::line_index() const {
+    return _line_index;
+}
+
+size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
+        return (_line_size - _line_index) - 1;
+    } else {
+        return _line_index;
+    }
+}
+
+ttnn::ccl::Topology LineTopology::topology() const {
+    return ttnn::ccl::Topology::Linear;
+}
+
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,
@@ -858,6 +911,239 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     }
 
     return slices;
+}
+
+
+/*
+ * @brief: Given a tensor shape, evenly break it into pieces along a given dimension and generate the slices accordingly.
+ * This can be fed into a CCL Send command generator
+ */
+std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
+    TensorSlice::ords_t tensor_shape,
+    TensorSlice::ords_t worker_slice_shape,
+    TensorSlice::ords_t worker_slice_offset,
+    std::size_t fracture_dim,
+    std::size_t num_slices,
+    std::int64_t start_slice_index,
+    std::int64_t end_slice_index_exclusive,
+    std::size_t worker_index
+) {
+    static_assert(std::is_same_v<TensorSlice::ords_t, tt_xy_pair>, "generate_slice_sequence_on_dim_v2 not yet implemented for type not of tt_xy_pair");
+    // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some cases
+    // so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
+    if (fracture_dim == 3) {
+        fracture_dim -= 2;
+    } else {
+        // dims are
+        fracture_dim = 0;
+    }
+
+    TT_ASSERT(worker_slice_shape.y == 1);
+
+    std::vector<TensorSlice> slices;
+    auto dim_size = fracture_dim == 1 ? tensor_shape.x : tensor_shape.y;
+    TT_ASSERT(dim_size % num_slices == 0);
+    auto slice_size_on_dim = dim_size / num_slices;
+    auto slice_shape = fracture_dim == 0 ? tt_xy_pair{tensor_shape.x, slice_size_on_dim} : tt_xy_pair{slice_size_on_dim, tensor_shape.y};
+
+    auto dim_start_offset = start_slice_index * slice_size_on_dim;
+    TensorSlice::ords_t tensor_slice_offset = fracture_dim == 0 ? tt_xy_pair{0, dim_start_offset} : tt_xy_pair{dim_start_offset, 0};
+
+    bool forward_direction = start_slice_index > end_slice_index_exclusive; // only for debug
+    auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
+    if (forward_direction) {
+        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
+        log_trace(tt::LogOp, "worker_index {}", worker_index);
+    }
+
+    auto worker_slice_start_offset = worker_slice_offset;
+
+    auto generate_slice = [forward_direction,incr, &slices, &tensor_shape, &slice_shape, &worker_slice_shape, tensor_slice_offset, &worker_slice_start_offset, fracture_dim, dim_start_offset, slice_size_on_dim](std::int64_t i){
+        auto tensor_slice_offset_adjusted = tensor_slice_offset;
+        if (fracture_dim == 0) {
+            tensor_slice_offset_adjusted.y = slice_size_on_dim * i;
+        } else {
+            tensor_slice_offset_adjusted.x = slice_size_on_dim * i;
+        }
+        TT_ASSERT(tensor_shape.x > 0, "Invalid tensor shape. x = 0 but it must be > 0");
+        TT_ASSERT(tensor_shape.y > 0, "Invalid tensor shape. y = 0 but it must be > 0");
+        TT_ASSERT(slice_shape.x > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
+        TT_ASSERT(slice_shape.y > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
+        TT_ASSERT(tensor_slice_offset_adjusted.x < tensor_shape.x, "Invalid tensor slice offset. x = {} but it must be < tensor shape x={}. slice_offset: (y={},x={}), tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}", tensor_slice_offset_adjusted.x, tensor_shape.x, tensor_slice_offset_adjusted.y, tensor_slice_offset_adjusted.x, tensor_shape.y, tensor_shape.x, slice_size_on_dim, i);
+        TT_ASSERT(tensor_slice_offset_adjusted.y < tensor_shape.y, "Invalid tensor slice offset. y = {} but it must be < tensor shape y={}. slice_offset: (y={},x={}), tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}", tensor_slice_offset_adjusted.y, tensor_shape.y, tensor_slice_offset_adjusted.y, tensor_slice_offset_adjusted.x, tensor_shape.y, tensor_shape.x, slice_size_on_dim, i);
+        TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
+        TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
+
+        auto const& tensor_slice = TensorSlice(tensor_shape, slice_shape, tensor_slice_offset_adjusted, worker_slice_shape, worker_slice_start_offset, fracture_dim);
+        if (forward_direction) {
+        log_trace(
+            tt::LogOp,
+            "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: (y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: {}\n\tslice_size_on_dim: {}\n",
+            i,
+            tensor_slice.tensor_shape.y,
+            tensor_slice.tensor_shape.x,
+            tensor_slice.tensor_slice_shape.y,
+            tensor_slice.tensor_slice_shape.x,
+            tensor_slice.tensor_slice_offset.y,
+            tensor_slice.tensor_slice_offset.x,
+            tensor_slice.worker_slice_shape.y,
+            tensor_slice.worker_slice_shape.x,
+            tensor_slice.worker_slice_offset.y,
+            tensor_slice.worker_slice_offset.x,
+            fracture_dim,
+            dim_start_offset,
+            slice_size_on_dim);
+        }
+
+        slices.push_back(tensor_slice);
+    };
+
+    for (int i = start_slice_index; i != end_slice_index_exclusive; i += incr) {
+        generate_slice(i);
+    }
+
+    return slices;
+}
+
+
+GenericWrappedTensorSlicer::GenericWrappedTensorSlicer(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    int slice_dim,
+    uint32_t partition_index,
+    uint32_t partition_size,
+    uint32_t total_num_workers,
+    uint32_t max_slice_size_in_bytes,
+    uint32_t half_cb_n_pages)
+{
+    this->initialize(input_tensor, output_tensor, slice_dim, partition_index, partition_size, total_num_workers, max_slice_size_in_bytes, half_cb_n_pages);
+}
+
+tt_xy_pair GenericWrappedTensorSlicer::calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size) {
+    const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / tt::constants::TILE_HEIGHT);
+    for (std::size_t i = 0; input_tensor.get_legacy_shape().rank() > 2 && i < input_tensor.get_legacy_shape().rank() - 2; i++) {
+        num_tiles_y *= input_tensor.get_legacy_shape()[i];
+    }
+    TT_ASSERT(num_tiles_x >= partition_size);
+    tt_xy_pair tensor_slice_shape;
+    tensor_slice_shape.x = slice_dim == 3 ? (num_tiles_x / partition_size) : num_tiles_x;
+    tensor_slice_shape.y = slice_dim != 3 ? num_tiles_y / partition_size : num_tiles_y;
+    return tensor_slice_shape;
+}
+
+void GenericWrappedTensorSlicer::initialize(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    int slice_dim,
+    uint32_t partition_index,
+    uint32_t partition_size,
+    uint32_t total_num_workers,
+    uint32_t max_slice_size_in_bytes,
+    uint32_t half_cb_n_pages)
+{
+    // Configure layout parameters
+    this->row_major = (input_tensor.get_layout() == Layout::ROW_MAJOR);
+    this->input_page_size = input_tensor.buffer()->page_size();
+    this->partition_index = partition_index;
+    this->partition_size = partition_size;
+
+    // Assume everything in Tile layout for now, row major not supported yet
+    TT_FATAL(!this->row_major, "Row major not supported yet");
+
+    this->tensor_slice_shape = calculate_tensor_slice_shape(input_tensor, slice_dim, partition_size);
+
+    // Calculate worker slice shapes (tile layout)
+    this->worker_slice_shapes = create_worker_slice_shapes_for_tile_layout(
+        input_tensor.get_legacy_shape(),
+        this->tensor_slice_shape,
+        total_num_workers,
+        max_slice_size_in_bytes / this->input_page_size,
+        half_cb_n_pages
+    );
+
+    // Flattened tensor shape (tile layout)
+    this->flattened_tensor_shape = tt_xy_pair{
+                input_tensor.get_legacy_shape()[3] /tt::constants::TILE_WIDTH,
+                (input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
+                    input_tensor.get_legacy_shape()[2]) /
+                tt::constants::TILE_HEIGHT};
+
+    this->worker_slice_offsets = compute_worker_slice_offsets(this->worker_slice_shapes, this->tensor_slice_shape);
+}
+
+ccl::InterleavedTensorWorkerSlice GenericWrappedTensorSlicer::get_worker_slice(std::size_t global_worker_index) {
+    assert(global_worker_index < this->worker_slice_shapes.size());
+    assert(global_worker_index < this->worker_slice_offsets.size());
+    return ccl::InterleavedTensorWorkerSlice(
+        this->flattened_tensor_shape,
+        this->tensor_slice_shape,
+        this->worker_slice_shapes[global_worker_index],
+        this->worker_slice_offsets[global_worker_index],
+        true // wrapped
+    );
+}
+
+std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets(
+    std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
+        return compute_worker_slice_offsets_for_wrapped_tensor_slicer(worker_slice_shapes, tensor_slice_shape);
+}
+
+std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
+        tt::tt_metal::LegacyShape const& tensor_shape,
+        tt_xy_pair const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers,
+        uint32_t max_slice_size_in_pages,
+        uint32_t half_cb_n_pages)
+{
+    log_trace(tt::LogOp, "\tmax_slice_size_in_pages={}", max_slice_size_in_pages);
+    TT_ASSERT(max_slice_size_in_pages > 0);
+    std::vector<tt_xy_pair> worker_slice_shapes;
+    worker_slice_shapes.reserve(num_workers);
+    const uint32_t total_num_tiles = tensor_slice_shape_in_tiles.x * tensor_slice_shape_in_tiles.y;
+    if (num_workers > total_num_tiles) {
+        log_warning(
+            tt::LogOp,
+            "Reduce Scatter more workers instantiated than is work to be done. Some workers will be idle and do "
+            "nothing");
+        for (uint32_t w = 0; w < total_num_tiles; ++w) {
+            worker_slice_shapes.emplace_back(1, 1);
+        }
+        for (uint32_t w = total_num_tiles; w < num_workers; ++w) {
+            worker_slice_shapes.emplace_back(0, 0);
+        }
+        return worker_slice_shapes;
+    }
+
+    std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
+
+    // Assign slices by assuming that the input tensor is flattened into a 1D Shape
+    std::size_t optim_worker_slice_len_tiles = std::ceil(static_cast<float>(total_num_tiles) / num_workers); // Ceil so that the remainder worker will have a smaller slice
+
+    log_trace(tt::LogOp, "---- GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout ---- ");
+    log_trace(tt::LogOp, "total_num_tiles: {}", total_num_tiles);
+    log_trace(tt::LogOp, "num_workers: {}", num_workers);
+    log_trace(tt::LogOp, "optim_worker_slice_len_tiles: {}", optim_worker_slice_len_tiles);
+
+    if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) { // Each worker will have a full slice
+        for (uint32_t w = 0; w < num_workers; ++w) {
+            worker_slice_shapes.emplace_back(max_slice_size_in_tiles, 1);
+        }
+    } else { // Each worker will only have one slice
+        uint32_t remainder_worker_len_tiles = total_num_tiles % optim_worker_slice_len_tiles;
+
+        for (uint32_t w = 0; w < num_workers; ++w) {
+            worker_slice_shapes.emplace_back(optim_worker_slice_len_tiles, 1);
+        }
+        // If there is a remainder worker, we need to adjust the last worker's slice shape to be smaller
+        if (remainder_worker_len_tiles > 0) {
+            worker_slice_shapes.back() = tt_xy_pair{remainder_worker_len_tiles, 1};
+        }
+    }
+
+    log_trace(tt::LogOp, "--------------------------------");
+
+    return worker_slice_shapes;
 }
 
 }  // namespace ccl

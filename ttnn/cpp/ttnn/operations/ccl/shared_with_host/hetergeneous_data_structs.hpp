@@ -8,6 +8,7 @@
 // #include <type_traits>
 #include <limits>
 #include <vector>
+#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
@@ -55,6 +56,7 @@ struct WorkerXY {
     constexpr WorkerXY(uint16_t x, uint16_t y) : x(x), y(y) {}
 
     constexpr uint32_t to_uint32() const { return (y << 16) | x; }
+    static constexpr WorkerXY from_uint32(uint32_t v) { return WorkerXY(v & 0xFFFF, (v >> 16) & 0xFFFF); }
 
     constexpr bool operator==(const WorkerXY &rhs) const { return x == rhs.x && y == rhs.y; }
     constexpr bool operator!=(const WorkerXY &rhs) const { return !(*this == rhs); }
@@ -114,7 +116,53 @@ inline coord_t advance_wrapped_slice_row_major(
     return coord_t(next_offset_x, next_offset_y);
 }
 
+namespace v2 {
+inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const ttnn::ccl::Shape4D<uint32_t>& index) {
+    return index.w * (shape.z * shape.y * shape.x) + index.z * (shape.y * shape.x) + index.y * shape.x + index.x;
+}
 
+// Increments the index into the input (global) tensor, while respecting the tensor slice, for wrapped worker slice
+// that is internal to the tensor slice.
+inline void advance_worker_global_page (
+    uint32_t &curr_page_idx,
+    uint32_t &offset_into_worker_slice, // local to the worker chunk
+    ttnn::ccl::Shape4D<uint32_t> const& offset_worker_slice, // local to the tensor slice
+
+    ttnn::ccl::Shape4D<uint32_t> const &worker_slice_shape, // worker chunk shape
+    ttnn::ccl::Shape4D<uint32_t> const &tensor_slice_shape, // tensor slice shape (per device)
+
+    ttnn::ccl::Shape4D<uint32_t> const &tensor_shape, // full tensor shape
+
+    const uint32_t stride,
+    bool &last_page_of_worker
+  ) {
+
+    uint32_t prev_offset_into_worker_slice = offset_into_worker_slice;
+    offset_into_worker_slice += stride;
+
+    uint32_t flattened_offset_worker_slice = flattened_index(tensor_slice_shape, offset_worker_slice);
+
+    // Calculate the number of wrap arounds (cast to uint32_t to **round down**)
+    uint32_t prev_num_wrap_around = (flattened_offset_worker_slice + prev_offset_into_worker_slice) / tensor_slice_shape.x;
+    uint32_t curr_num_wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) / tensor_slice_shape.x;
+    uint32_t num_wrap_around = curr_num_wrap_around - prev_num_wrap_around;
+
+    bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_shape.volume();//worker_slice_shape.x * worker_slice_shape.y;
+    if (end_of_worker_slice_row) {
+        offset_into_worker_slice = 0;
+        last_page_of_worker = true;
+    } else {
+        // Check for wrap around
+        if (num_wrap_around > 0) { // wrap around wrt to global tensor
+            curr_page_idx += num_wrap_around * (tensor_shape.x - tensor_slice_shape.x) + stride;
+        } else {
+            curr_page_idx += stride;
+        }
+    }
+
+}
+
+}
 // Increments the index into the input (global) tensor, while respecting the tensor slice, for wrapped worker slice
 // that is internal to the tensor slice.
 inline void advance_worker_global_page_interleaved (
