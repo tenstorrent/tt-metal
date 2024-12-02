@@ -18,8 +18,6 @@ constexpr uint32_t rx_queue_start_addr_words = get_compile_time_arg_val(1);
 constexpr uint32_t rx_queue_size_words = get_compile_time_arg_val(2);
 constexpr uint32_t rx_queue_size_bytes = rx_queue_size_words*PACKET_WORD_SIZE_BYTES;
 
-static_assert(is_power_of_2(rx_queue_size_words), "rx_queue_size_words must be a power of 2");
-
 constexpr uint32_t mux_fan_in = get_compile_time_arg_val(3);
 
 // FIXME imatosevic - is there a way to do this without explicit indexes?
@@ -62,8 +60,6 @@ constexpr DispatchRemoteNetworkType remote_rx_network_type[MAX_SWITCH_FAN_IN] =
 
 constexpr uint32_t remote_tx_queue_start_addr_words = get_compile_time_arg_val(8);
 constexpr uint32_t remote_tx_queue_size_words = get_compile_time_arg_val(9);
-
-static_assert(is_power_of_2(remote_tx_queue_size_words), "remote_tx_queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_tx_x = get_compile_time_arg_val(10);
 constexpr uint32_t remote_tx_y = get_compile_time_arg_val(11);

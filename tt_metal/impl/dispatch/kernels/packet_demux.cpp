@@ -16,8 +16,6 @@ constexpr uint32_t rx_queue_start_addr_words = get_compile_time_arg_val(1);
 constexpr uint32_t rx_queue_size_words = get_compile_time_arg_val(2);
 constexpr uint32_t rx_queue_size_bytes = rx_queue_size_words*PACKET_WORD_SIZE_BYTES;
 
-static_assert(is_power_of_2(rx_queue_size_words), "rx_queue_size_words must be a power of 2");
-
 constexpr uint32_t demux_fan_out = get_compile_time_arg_val(3);
 
 // FIXME imatosevic - is there a way to do this without explicit indexes?
@@ -73,11 +71,6 @@ constexpr uint32_t remote_tx_queue_size_words[MAX_SWITCH_FAN_OUT] =
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(15)
     };
-
-static_assert(is_power_of_2(remote_tx_queue_size_words[0]), "remote_tx_queue_size_words must be a power of 2");
-static_assert((demux_fan_out < 2) || is_power_of_2(remote_tx_queue_size_words[1]), "remote_tx_queue_size_words must be a power of 2");
-static_assert((demux_fan_out < 3) || is_power_of_2(remote_tx_queue_size_words[2]), "remote_tx_queue_size_words must be a power of 2");
-static_assert((demux_fan_out < 4) || is_power_of_2(remote_tx_queue_size_words[3]), "remote_tx_queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_rx_x = get_compile_time_arg_val(16);
 constexpr uint32_t remote_rx_y = get_compile_time_arg_val(17);

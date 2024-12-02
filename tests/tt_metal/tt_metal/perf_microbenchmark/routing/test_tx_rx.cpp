@@ -100,9 +100,6 @@ int main(int argc, char **argv) {
         uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
         uint32_t tx_data_sent_per_iter_high = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
 
-        assert(is_power_of_2(tx_queue_size_bytes) && (tx_queue_size_bytes >= 1024));
-        assert(is_power_of_2(rx_queue_size_bytes) && (rx_queue_size_bytes >= 1024));
-
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord traffic_gen_tx_core = {tx_x, tx_y};
