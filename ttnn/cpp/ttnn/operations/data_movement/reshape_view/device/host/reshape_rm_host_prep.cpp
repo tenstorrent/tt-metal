@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const T
         for (int core_y = 0; core_y < num_cores_y; core_y++) {
             CoreCoord core = {core_x, core_y};
             if (done == 1) {
-                std::vector<uint32_t> reader_runtime_args = {
+                const std::vector<uint32_t> reader_runtime_args = {
                     src_buffer->address(),
                     dst_buffer->address(),
                     source_page_size_bytes,
@@ -115,10 +115,10 @@ operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const T
 
                 // set the runtime args
                 // set the compile time args
-                uint32_t start_of_read = read_start_page;
-                uint32_t end_of_read = read_start_page + responsibility;
+                const uint32_t start_of_read = read_start_page;
+                const uint32_t end_of_read = read_start_page + responsibility;
 
-                std::vector<uint32_t> reader_runtime_args = {
+                const std::vector<uint32_t> reader_runtime_args = {
                     src_buffer->address(),
                     dst_buffer->address(),
                     source_page_size_bytes,
@@ -138,6 +138,80 @@ operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const T
             }
         }
     }
-    return {.program=std::move(program)};
+    auto override_runtime_args_callback = [reader_kernel_id, compute_with_storage_grid_size](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input = input_tensors.at(0);
+        auto output = output_tensors.at(0);
+        const uint32_t data_size = input.element_size();
+        tt::tt_metal::Buffer* src_buffer = input.buffer();
+        tt::tt_metal::Buffer* dst_buffer = output.buffer();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        uint32_t num_cores_total = num_cores_x * num_cores_y;
+        ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
+        ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
+        uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
+        uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
+        uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
+        uint32_t read_start_page = 0;
+        uint32_t write_start_page = 0;
+        uint32_t responsibility = (input_log_shape[-2] - 1) / num_cores_total + 1;
+        while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
+            responsibility++;
+        }
+        const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
+        uint32_t done = 0;
+        for (int core_x = 0; core_x < num_cores_x; core_x++) {
+            for (int core_y = 0; core_y < num_cores_y; core_y++) {
+                CoreCoord core = {core_x, core_y};
+                if (done == 1) {
+                    const std::vector<uint32_t> reader_runtime_args = {
+                        src_buffer->address(),
+                        dst_buffer->address(),
+                        source_page_size_bytes,
+                        dest_page_size_bytes,
+                        source_read_size_bytes,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1
+
+                    };
+                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+                } else {
+                    // Create the circular buffers
+
+                    // set the runtime args
+                    // set the compile time args
+                    const uint32_t start_of_read = read_start_page;
+                    const uint32_t end_of_read = read_start_page + responsibility;
+
+                    const std::vector<uint32_t> reader_runtime_args = {
+                        src_buffer->address(),
+                        dst_buffer->address(),
+                        source_page_size_bytes,
+                        dest_page_size_bytes,
+                        source_read_size_bytes,
+                        start_of_read,
+                        end_of_read,
+                        write_start_page,
+                        0,
+                        done
+
+                    };
+                    write_start_page += write_jump;
+                    read_start_page = end_of_read;
+                    done = (end_of_read == input_log_shape[-2]) ? 1 : 0;
+                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+                }
+            }
+        }
+    };
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 }; // namespace ttnn::operations::data_movement::rm_reshape
