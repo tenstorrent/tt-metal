@@ -47,6 +47,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
+    model_args.max_seq_len = text_seq_len
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -92,12 +93,15 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
     """
     pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
-    pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache]
+    # slice out repeated KV heads
+    pt_xattn_cache_chunks = [
+        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+    ]
 
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
-            torch.zeros(batch, n_heads, vision_seq_len, head_dim),
+            torch.zeros(batch, n_kv_heads, vision_seq_len, head_dim),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -160,9 +164,9 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
                     force_replicated=True,
                 )
                 tt_xattn_mask = ttnn.from_torch(
-                    xattn_mask_expand[b : b + 1],
+                    xattn_mask[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -170,7 +174,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
                 tt_full_text_mask = ttnn.from_torch(
                     full_text_mask_expand[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -201,7 +205,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
                 device=mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -218,7 +222,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             tt_full_text_mask = ttnn.from_torch(
                 full_text_mask_expand,
                 device=mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -251,7 +255,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,
-                    n_heads,
+                    n_kv_heads,
                     vision_seq_len,
                     head_dim,
                 )

@@ -12,6 +12,7 @@ import llama_models.llama3.reference_impl.generation as llama_reference_generati
 from llama_models.llama3.api.tokenizer import Tokenizer
 from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
+from models.demos.llama3.demo.tiny_demo import load_inputs
 
 from pkg_resources import resource_filename
 
@@ -99,16 +100,22 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     (1, 2, 4, 8, 16, 32),
     ids=["batch1", "batch2", "batch4", "batch8", "batch16", "batch32"],
 )
+@pytest.mark.parametrize(
+    "test_type,max_seq_len",
+    (("normal", 512), ("long", 128 * 1024)),
+    ids=["normal", "long"],
+)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 def test_llama_multimodal_demo_text(
     mesh_device,
     warmup_iters,
     enable_trace,
     max_batch_size,
+    test_type,
+    max_seq_len,
     temperature: float = 0,
     top_p: float = 0.9,
-    max_seq_len: int = 512,
-    max_gen_len: Optional[int] = 200,
+    max_gen_len: Optional[int] = 500,
     model_parallel_size: Optional[int] = None,
 ):
     if max_batch_size != 32 and enable_trace:
@@ -140,15 +147,35 @@ def test_llama_multimodal_demo_text(
     with open(IMG_PATH / "clutter.jpeg", "rb") as f:
         clutter = PIL_Image.open(f).convert("RGB")
 
-    dialogs = [
-        # image understanding
-        [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-        [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-        [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
-    ]
-    if len(dialogs) < max_batch_size:
-        dialogs *= max_batch_size // len(dialogs)
+    if test_type == "normal":
+        dialogs = [
+            # image understanding
+            [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
+            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
+            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+        ]
+        if len(dialogs) < max_batch_size:
+            dialogs *= max_batch_size // len(dialogs)
+    else:
+        assert max_batch_size == 1
+        # Slice out approximately the last 32k tokens of the context
+        # max_context_chars = 140000
+        max_context_chars = 50000
+        dialogs = [
+            [
+                UserMessage(
+                    content=[
+                        ImageMedia(image=img),
+                        "The following is context for a question which will be asked at the end. After answering the question, you will be asked to write a haiku for the image. "
+                        + load_inputs("models/demos/llama3/demo/input_data_long.json", max_batch_size)[0][
+                            -max_context_chars:
+                        ]
+                        + " Then, write a haiku for the image.",
+                    ]
+                )
+            ],
+        ]
 
     assert len(dialogs) % max_batch_size == 0
     num_batches = len(dialogs) // max_batch_size
@@ -162,7 +189,6 @@ def test_llama_multimodal_demo_text(
             for dialog in batch_dialogs:
                 for msg in dialog:
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
-
             batch_model_input = [
                 formatter.encode_dialog_prompt(dialog, tool_prompt_format=False) for dialog in batch_dialogs
             ]

@@ -244,7 +244,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             [
                 ttnn.from_torch(
                     torch.zeros(
-                        max_batch_size, self.configuration.n_heads, vision_seq_len, self.configuration.head_dim
+                        max_batch_size, self.configuration.n_kv_heads, vision_seq_len, self.configuration.head_dim
                     ),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
