@@ -28,8 +28,6 @@ inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregate
     // 128MB as the last seggregated class size should be enough
     // avoid having too many classes as iterating them is not free
     ssize_t max_count = intlg2(128 * 1024 * 1024 / size_segregated_base);
-    // -1 because that's usually the entry for the memory (or half of it) which is not useful
-    // Limit max to
     return std::clamp(count, ssize_t{2}, max_count);
 }
 
