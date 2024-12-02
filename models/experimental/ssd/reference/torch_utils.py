@@ -86,16 +86,10 @@ class ConvNormActivation(torch.nn.Sequential):
             if isinstance(kernel_size, int) and isinstance(dilation, int):
                 padding = (kernel_size - 1) // 2 * dilation
             else:
-                _conv_dim = (
-                    len(kernel_size)
-                    if isinstance(kernel_size, Sequence)
-                    else len(dilation)
-                )
+                _conv_dim = len(kernel_size) if isinstance(kernel_size, Sequence) else len(dilation)
                 kernel_size = _make_ntuple(kernel_size, _conv_dim)
                 dilation = _make_ntuple(dilation, _conv_dim)
-                padding = tuple(
-                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
-                )
+                padding = tuple((kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim))
         if bias is None:
             bias = norm_layer is None
 
@@ -294,10 +288,7 @@ class DefaultBoxGenerator(nn.Module):
         if scales is None:
             if num_outputs > 1:
                 range_ratio = max_ratio - min_ratio
-                self.scales = [
-                    min_ratio + range_ratio * k / (num_outputs - 1.0)
-                    for k in range(num_outputs)
-                ]
+                self.scales = [min_ratio + range_ratio * k / (num_outputs - 1.0) for k in range(num_outputs)]
                 self.scales.append(1.0)
             else:
                 self.scales = [min_ratio, max_ratio]
@@ -355,15 +346,9 @@ class DefaultBoxGenerator(nn.Module):
             shift_x = shift_x.reshape(-1)
             shift_y = shift_y.reshape(-1)
 
-            shifts = torch.stack(
-                (shift_x, shift_y) * len(self._wh_pairs[k]), dim=-1
-            ).reshape(-1, 2)
+            shifts = torch.stack((shift_x, shift_y) * len(self._wh_pairs[k]), dim=-1).reshape(-1, 2)
             # Clipping the default boxes while the boxes are encoded in format (cx, cy, w, h)
-            _wh_pair = (
-                self._wh_pairs[k].clamp(min=0, max=1)
-                if self.clip
-                else self._wh_pairs[k]
-            )
+            _wh_pair = self._wh_pairs[k].clamp(min=0, max=1) if self.clip else self._wh_pairs[k]
             wh_pairs = _wh_pair.repeat((f_k[0] * f_k[1]), 1)
 
             default_box = torch.cat((shifts, wh_pairs), dim=1)
@@ -383,9 +368,7 @@ class DefaultBoxGenerator(nn.Module):
         )
         return s
 
-    def forward(
-        self, image_list: ImageList, feature_maps: List[Tensor]
-    ) -> List[Tensor]:
+    def forward(self, image_list: ImageList, feature_maps: List[Tensor]) -> List[Tensor]:
         grid_sizes = [feature_map.shape[-2:] for feature_map in feature_maps]
         image_size = image_list.tensors.shape[-2:]
         dtype, device = feature_maps[0].dtype, feature_maps[0].device
@@ -393,9 +376,7 @@ class DefaultBoxGenerator(nn.Module):
         default_boxes = default_boxes.to(device)
 
         dboxes = []
-        x_y_size = torch.tensor(
-            [image_size[1], image_size[0]], device=default_boxes.device
-        )
+        x_y_size = torch.tensor([image_size[1], image_size[0]], device=default_boxes.device)
         for _ in image_list.image_sizes:
             dboxes_in_image = default_boxes
             dboxes_in_image = torch.cat(
@@ -456,9 +437,7 @@ class Weights:
         if self.meta != other.meta:
             return False
 
-        if isinstance(self.transforms, partial) and isinstance(
-            other.transforms, partial
-        ):
+        if isinstance(self.transforms, partial) and isinstance(other.transforms, partial):
             return (
                 self.transforms.func == other.transforms.func
                 and self.transforms.args == other.transforms.args
@@ -492,9 +471,7 @@ V = TypeVar("V")
 def _ovewrite_value_param(param: str, actual: Optional[V], expected: V) -> V:
     if actual is not None:
         if actual != expected:
-            raise ValueError(
-                f"The parameter '{param}' expected value {expected} but got {actual} instead."
-            )
+            raise ValueError(f"The parameter '{param}' expected value {expected} but got {actual} instead.")
     return expected
 
 
@@ -520,11 +497,7 @@ def _topk_min(input: Tensor, orig_kval: int, axis: int) -> int:
     if not torch.jit.is_tracing():
         return min(orig_kval, input.size(axis))
     axis_dim_val = torch._shape_as_tensor(input)[axis].unsqueeze(0)
-    min_kval = torch.min(
-        torch.cat(
-            (torch.tensor([orig_kval], dtype=axis_dim_val.dtype), axis_dim_val), 0
-        )
-    )
+    min_kval = torch.min(torch.cat((torch.tensor([orig_kval], dtype=axis_dim_val.dtype), axis_dim_val), 0))
     return min_kval
 
 

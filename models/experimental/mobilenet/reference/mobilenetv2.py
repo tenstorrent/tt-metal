@@ -42,15 +42,11 @@ def assign_weight_batchnorm(norm: nn.BatchNorm2d, state_dict, key_w: str):
     norm.bias = nn.Parameter(state_dict[f"{key_w}.bias"])
     norm.running_mean = nn.Parameter(state_dict[f"{key_w}.running_mean"])
     norm.running_var = nn.Parameter(state_dict[f"{key_w}.running_var"])
-    norm.num_batches_tracked = nn.Parameter(
-        state_dict[f"{key_w}.num_batches_tracked"], requires_grad=False
-    )
+    norm.num_batches_tracked = nn.Parameter(state_dict[f"{key_w}.num_batches_tracked"], requires_grad=False)
     norm.eval()
 
 
-def make_divisible(
-    value: int, divisor: int = 8, min_value: Optional[int] = None
-) -> int:
+def make_divisible(value: int, divisor: int = 8, min_value: Optional[int] = None) -> int:
     """
     Ensure that all layers have a channel count that is divisible by `divisor`. This function is taken from the
     original TensorFlow repo. It can be seen here:
@@ -73,9 +69,7 @@ def apply_depth_multiplier(config, channels: int) -> int:
     )
 
 
-def apply_tf_padding(
-    features: torch.Tensor, stride, kernel_size, dilation
-) -> torch.Tensor:
+def apply_tf_padding(features: torch.Tensor, stride, kernel_size, dilation) -> torch.Tensor:
     """
     Apply TensorFlow-style "SAME" padding to a convolution layer. See the notes at:
     https://www.tensorflow.org/api_docs/python/tf/nn#notes_on_padding_2
@@ -138,13 +132,9 @@ class MobileNetV2ConvLayer(nn.Module):
         self.kernel_size = kernel_size
         self.dilation = dilation
         if in_channels % groups != 0:
-            raise ValueError(
-                f"Input channels ({in_channels}) are not divisible by {groups} groups."
-            )
+            raise ValueError(f"Input channels ({in_channels}) are not divisible by {groups} groups.")
         if out_channels % groups != 0:
-            raise ValueError(
-                f"Output channels ({out_channels}) are not divisible by {groups} groups."
-            )
+            raise ValueError(f"Output channels ({out_channels}) are not divisible by {groups} groups.")
 
         padding = 0 if config.tf_padding else int((kernel_size - 1) / 2) * dilation
 
@@ -160,9 +150,7 @@ class MobileNetV2ConvLayer(nn.Module):
             dilation,
             groups,
         ]
-        if not disable_conv_on_tt_device and is_conv_supported_on_device(
-            self.conv_params
-        ):
+        if not disable_conv_on_tt_device and is_conv_supported_on_device(self.conv_params):
             conv_weight = state_dict[f"{base_address}.convolution.weight"]
             conv_bias = None
             if bias:
@@ -185,9 +173,7 @@ class MobileNetV2ConvLayer(nn.Module):
                 bias=bias,
                 padding_mode="zeros",
             )
-            assign_weight_conv(
-                self.convolution, state_dict, f"{base_address}.convolution"
-            )
+            assign_weight_conv(self.convolution, state_dict, f"{base_address}.convolution")
 
         if use_normalization:
             self.normalization = nn.BatchNorm2d(
@@ -197,9 +183,7 @@ class MobileNetV2ConvLayer(nn.Module):
                 affine=True,
                 track_running_stats=True,
             )
-            assign_weight_batchnorm(
-                self.normalization, state_dict, f"{base_address}.normalization"
-            )
+            assign_weight_batchnorm(self.normalization, state_dict, f"{base_address}.normalization")
         else:
             self.normalization = None
 
@@ -215,9 +199,7 @@ class MobileNetV2ConvLayer(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         if self.config.tf_padding:
-            features = apply_tf_padding(
-                features, self.conv_stride, self.kernel_size, self.dilation
-            )
+            features = apply_tf_padding(features, self.conv_stride, self.kernel_size, self.dilation)
         features = self.convolution(features)
         if self.normalization is not None:
             features = self.normalization(features)
@@ -496,9 +478,7 @@ class MobileNetV2Model(nn.Module):
         output_hidden_states: Optional[bool] = None,
     ) -> tuple:
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         # return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -522,8 +502,4 @@ class MobileNetV2Model(nn.Module):
         else:
             pooled_output = None
 
-        return tuple(
-            v
-            for v in [last_hidden_state, pooled_output, all_hidden_states]
-            if v is not None
-        )
+        return tuple(v for v in [last_hidden_state, pooled_output, all_hidden_states] if v is not None)

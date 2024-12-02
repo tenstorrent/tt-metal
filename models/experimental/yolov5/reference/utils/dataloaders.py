@@ -50,12 +50,8 @@ VID_FORMATS = (
 
 class LoadImages:
     # YOLOv5 image/video dataloader, i.e. `python detect.py --source image.jpg/vid.mp4`
-    def __init__(
-        self, path, img_size=640, stride=32, auto=True, transforms=None, vid_stride=1
-    ):
-        if (
-            isinstance(path, str) and Path(path).suffix == ".txt"
-        ):  # *.txt file with img/vid/dir on each line
+    def __init__(self, path, img_size=640, stride=32, auto=True, transforms=None, vid_stride=1):
+        if isinstance(path, str) and Path(path).suffix == ".txt":  # *.txt file with img/vid/dir on each line
             path = Path(path).read_text().rsplit()
         files = []
         for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
@@ -129,9 +125,7 @@ class LoadImages:
         if self.transforms:
             im = self.transforms(im0)  # transforms
         else:
-            im = letterbox(im0, self.img_size, stride=self.stride, auto=self.auto)[
-                0
-            ]  # padded resize
+            im = letterbox(im0, self.img_size, stride=self.stride, auto=self.auto)[0]  # padded resize
             im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
             im = np.ascontiguousarray(im)  # contiguous
 
@@ -142,9 +136,7 @@ class LoadImages:
         self.frame = 0
         self.cap = cv2.VideoCapture(path)
         self.frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.vid_stride)
-        self.orientation = int(
-            self.cap.get(cv2.CAP_PROP_ORIENTATION_META)
-        )  # rotation degrees
+        self.orientation = int(self.cap.get(cv2.CAP_PROP_ORIENTATION_META))  # rotation degrees
 
     def _cv2_rotate(self, im):
         # Rotate a cv2 video manually

@@ -10,12 +10,8 @@ from loguru import logger
 def test_cpu_demo(hf_cat_image_sample_input):
     image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained(
-        "facebook/deit-base-distilled-patch16-224"
-    )
-    model = DeiTForImageClassificationWithTeacher.from_pretrained(
-        "facebook/deit-base-distilled-patch16-224"
-    )
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
 
     inputs = image_processor(images=image, return_tensors="pt")

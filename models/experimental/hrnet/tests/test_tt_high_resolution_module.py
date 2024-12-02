@@ -52,15 +52,10 @@ def test_hrnet_module_inference(device, model_name, pcc, reset_seeds):
 
     torch_outputs = torch_model(inputs)
 
-    tt_inputs = [
-        torch_to_tt_tensor_rm(inputs[i], device, put_on_device=False)
-        for i in range(len(inputs))
-    ]
+    tt_inputs = [torch_to_tt_tensor_rm(inputs[i], device, put_on_device=False) for i in range(len(inputs))]
     tt_outputs = tt_model(tt_inputs)
 
-    tt_outputs_torch = [
-        tt_to_torch_tensor(tt_outputs[i]) for i in range(len(tt_outputs))
-    ]
+    tt_outputs_torch = [tt_to_torch_tensor(tt_outputs[i]) for i in range(len(tt_outputs))]
 
     does_pass_list = []
     for i in range(len(tt_outputs_torch)):

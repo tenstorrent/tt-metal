@@ -19,9 +19,7 @@ def fitness(x):
     return (x[:, :4] * w).sum(1)
 
 
-def ap_per_class(
-    tp, conf, pred_cls, target_cls, v5_metric=False, plot=False, save_dir=".", names=()
-):
+def ap_per_class(tp, conf, pred_cls, target_cls, v5_metric=False, plot=False, save_dir=".", names=()):
     """Compute the average precision, given the recall and precision curves.
     Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
     # Arguments
@@ -60,9 +58,7 @@ def ap_per_class(
 
             # Recall
             recall = tpc / (n_l + 1e-16)  # recall curve
-            r[ci] = np.interp(
-                -px, -conf[i], recall[:, 0], left=0
-            )  # negative x, xp because xp decreases
+            r[ci] = np.interp(-px, -conf[i], recall[:, 0], left=0)  # negative x, xp because xp decreases
 
             # Precision
             precision = tpc / (tpc + fpc)  # precision curve
@@ -70,9 +66,7 @@ def ap_per_class(
 
             # AP from recall-precision curve
             for j in range(tp.shape[1]):
-                ap[ci, j], mpre, mrec = compute_ap(
-                    recall[:, j], precision[:, j], v5_metric=v5_metric
-                )
+                ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j], v5_metric=v5_metric)
                 if plot and j == 0:
                     py.append(np.interp(px, mrec, mpre))  # precision at mAP@0.5
 
@@ -145,11 +139,7 @@ class ConfusionMatrix:
 
         x = torch.where(iou > self.iou_thres)
         if x[0].shape[0]:
-            matches = (
-                torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1)
-                .cpu()
-                .numpy()
-            )
+            matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
                 matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
@@ -179,16 +169,12 @@ class ConfusionMatrix:
         try:
             import seaborn as sn
 
-            array = self.matrix / (
-                self.matrix.sum(0).reshape(1, self.nc + 1) + 1e-6
-            )  # normalize
+            array = self.matrix / (self.matrix.sum(0).reshape(1, self.nc + 1) + 1e-6)  # normalize
             array[array < 0.005] = np.nan  # don't annotate (would appear as 0.00)
 
             fig = plt.figure(figsize=(12, 9), tight_layout=True)
             sn.set(font_scale=1.0 if self.nc < 50 else 0.8)  # for label size
-            labels = (0 < len(names) < 99) and len(
-                names
-            ) == self.nc  # apply names to ticklabels
+            labels = (0 < len(names) < 99) and len(names) == self.nc  # apply names to ticklabels
             sn.heatmap(
                 array,
                 annot=self.nc < 30,
@@ -220,9 +206,7 @@ def plot_pr_curve(px, py, ap, save_dir="pr_curve.png", names=()):
 
     if 0 < len(names) < 21:  # display per-class legend if < 21 classes
         for i, y in enumerate(py.T):
-            ax.plot(
-                px, y, linewidth=1, label=f"{names[i]} {ap[i, 0]:.3f}"
-            )  # plot(recall, precision)
+            ax.plot(px, y, linewidth=1, label=f"{names[i]} {ap[i, 0]:.3f}")  # plot(recall, precision)
     else:
         ax.plot(px, py, linewidth=1, color="grey")  # plot(recall, precision)
 
@@ -241,9 +225,7 @@ def plot_pr_curve(px, py, ap, save_dir="pr_curve.png", names=()):
     fig.savefig(Path(save_dir), dpi=250)
 
 
-def plot_mc_curve(
-    px, py, save_dir="mc_curve.png", names=(), xlabel="Confidence", ylabel="Metric"
-):
+def plot_mc_curve(px, py, save_dir="mc_curve.png", names=(), xlabel="Confidence", ylabel="Metric"):
     # Metric-confidence curve
     fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
 

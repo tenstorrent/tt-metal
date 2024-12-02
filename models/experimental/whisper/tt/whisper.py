@@ -23,9 +23,7 @@ def run_for_conditional_generation():
     processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en")
     model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
 
-    ds = load_dataset(
-        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
-    )
+    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
 
     inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")
     input_features = inputs.input_features
@@ -92,9 +90,7 @@ def run_HF_whisper_for_audio_classification():
     state_dict = model.state_dict()
     logger.debug(state_dict)
 
-    ds = load_dataset(
-        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
-    )
+    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
 
     # Process audio data
     inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")

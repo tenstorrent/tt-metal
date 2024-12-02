@@ -48,9 +48,7 @@ from models.experimental.yolov5.reference.utils.plots import (
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     # Pad to 'same' shape outputs
     if d > 1:
-        k = (
-            d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
-        )  # actual kernel-size
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
@@ -62,17 +60,9 @@ class Conv(nn.Module):
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
-        self.conv = nn.Conv2d(
-            c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False
-        )
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
-        self.act = (
-            self.default_act
-            if act is True
-            else act
-            if isinstance(act, nn.Module)
-            else nn.Identity()
-        )
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
@@ -83,17 +73,13 @@ class Conv(nn.Module):
 
 class DWConv(Conv):
     # Depth-wise convolution
-    def __init__(
-        self, c1, c2, k=1, s=1, d=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, dilation, activation
+    def __init__(self, c1, c2, k=1, s=1, d=1, act=True):  # ch_in, ch_out, kernel, stride, dilation, activation
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
 
 class DWConvTranspose2d(nn.ConvTranspose2d):
     # Depth-wise transpose convolution
-    def __init__(
-        self, c1, c2, k=1, s=1, p1=0, p2=0
-    ):  # ch_in, ch_out, kernel, stride, padding, padding_out
+    def __init__(self, c1, c2, k=1, s=1, p1=0, p2=0):  # ch_in, ch_out, kernel, stride, padding, padding_out
         super().__init__(c1, c2, k, s, p1, p2, groups=math.gcd(c1, c2))
 
 
@@ -122,9 +108,7 @@ class TransformerBlock(nn.Module):
         if c1 != c2:
             self.conv = Conv(c1, c2)
         self.linear = nn.Linear(c2, c2)  # learnable position embedding
-        self.tr = nn.Sequential(
-            *(TransformerLayer(c2, num_heads) for _ in range(num_layers))
-        )
+        self.tr = nn.Sequential(*(TransformerLayer(c2, num_heads) for _ in range(num_layers)))
         self.c2 = c2
 
     def forward(self, x):
@@ -137,9 +121,7 @@ class TransformerBlock(nn.Module):
 
 class Bottleneck(nn.Module):
     # Standard bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -152,9 +134,7 @@ class Bottleneck(nn.Module):
 
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -163,9 +143,7 @@ class BottleneckCSP(nn.Module):
         self.cv4 = Conv(2 * c_, c2, 1, 1)
         self.bn = nn.BatchNorm2d(2 * c_)  # applied to cat(cv2, cv3)
         self.act = nn.SiLU()
-        self.m = nn.Sequential(
-            *(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n))
-        )
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
         y1 = self.cv3(self.m(self.cv1(x)))
@@ -189,17 +167,13 @@ class CrossConv(nn.Module):
 
 class C3(nn.Module):
     # CSP Bottleneck with 3 convolutions
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.Sequential(
-            *(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n))
-        )
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
@@ -210,9 +184,7 @@ class C3x(C3):
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
-        self.m = nn.Sequential(
-            *(CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n))
-        )
+        self.m = nn.Sequential(*(CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)))
 
 
 class C3TR(C3):
@@ -246,9 +218,7 @@ class SPP(nn.Module):
         c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
-        self.m = nn.ModuleList(
-            [nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k]
-        )
+        self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
 
     def forward(self, x):
         x = self.cv1(x)
@@ -277,9 +247,7 @@ class SPPF(nn.Module):
 
 class Focus(nn.Module):
     # Focus wh information into c-space
-    def __init__(
-        self, c1, c2, k=1, s=1, p=None, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = Conv(c1 * 4, c2, k, s, p, g, act=act)
         # self.contract = Contract(gain=2)
@@ -301,9 +269,7 @@ class Focus(nn.Module):
 
 class GhostConv(nn.Module):
     # Ghost Convolution https://github.com/huawei-noah/ghostnet
-    def __init__(
-        self, c1, c2, k=1, s=1, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, groups
+    def __init__(self, c1, c2, k=1, s=1, g=1, act=True):  # ch_in, ch_out, kernel, stride, groups
         super().__init__()
         c_ = c2 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, k, s, None, g, act=act)
@@ -325,11 +291,7 @@ class GhostBottleneck(nn.Module):
             GhostConv(c_, c2, 1, 1, act=False),
         )  # pw-linear
         self.shortcut = (
-            nn.Sequential(
-                DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)
-            )
-            if s == 2
-            else nn.Identity()
+            nn.Sequential(DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)) if s == 2 else nn.Identity()
         )
 
     def forward(self, x):
@@ -445,9 +407,7 @@ class DetectMultiBackend(nn.Module):
             triton,
         ) = self._model_type(w)
         fp16 &= pt or jit or onnx or engine or triton  # FP16
-        nhwc = (
-            coreml or saved_model or pb or tflite or edgetpu
-        )  # BHWC formats (vs torch BCWH)
+        nhwc = coreml or saved_model or pb or tflite or edgetpu  # BHWC formats (vs torch BCWH)
         stride = 32  # default stride
         cuda = torch.cuda.is_available() and device.type != "cpu"  # use CUDA
         if not (pt or triton):
@@ -461,9 +421,7 @@ class DetectMultiBackend(nn.Module):
                 fuse=fuse,
             )
             stride = max(int(model.stride.max()), 32)  # model stride
-            names = (
-                model.module.names if hasattr(model, "module") else model.names
-            )  # get class names
+            names = model.module.names if hasattr(model, "module") else model.names  # get class names
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
         elif jit:  # TorchScript
@@ -474,9 +432,7 @@ class DetectMultiBackend(nn.Module):
             if extra_files["config.txt"]:  # load metadata dict
                 d = json.loads(
                     extra_files["config.txt"],
-                    object_hook=lambda d: {
-                        int(k) if k.isdigit() else k: v for k, v in d.items()
-                    },
+                    object_hook=lambda d: {int(k) if k.isdigit() else k: v for k, v in d.items()},
                 )
                 stride, names = int(d["stride"]), d["names"]
         elif dnn:  # ONNX OpenCV DNN
@@ -486,11 +442,7 @@ class DetectMultiBackend(nn.Module):
             logger.info(f"Loading {w} for ONNX Runtime inference...")
             import onnxruntime
 
-            providers = (
-                ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                if cuda
-                else ["CPUExecutionProvider"]
-            )
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if cuda else ["CPUExecutionProvider"]
             session = onnxruntime.InferenceSession(w, providers=providers)
             output_names = [x.name for x in session.get_outputs()]
             meta = session.get_modelmeta().custom_metadata_map  # metadata
@@ -502,28 +454,20 @@ class DetectMultiBackend(nn.Module):
 
             ie = Core()
             if not Path(w).is_file():  # if not *.xml
-                w = next(
-                    Path(w).glob("*.xml")
-                )  # get *.xml file from *_openvino_model dir
+                w = next(Path(w).glob("*.xml"))  # get *.xml file from *_openvino_model dir
             network = ie.read_model(model=w, weights=Path(w).with_suffix(".bin"))
             if network.get_parameters()[0].get_layout().empty:
                 network.get_parameters()[0].set_layout(Layout("NCHW"))
             batch_dim = get_batch(network)
             if batch_dim.is_static:
                 batch_size = batch_dim.get_length()
-            executable_network = ie.compile_model(
-                network, device_name="CPU"
-            )  # device_name="MYRIAD" for Intel NCS2
-            stride, names = self._load_metadata(
-                Path(w).with_suffix(".yaml")
-            )  # load metadata
+            executable_network = ie.compile_model(network, device_name="CPU")  # device_name="MYRIAD" for Intel NCS2
+            stride, names = self._load_metadata(Path(w).with_suffix(".yaml"))  # load metadata
         elif engine:  # TensorRT
             logger.info(f"Loading {w} for TensorRT inference...")
             import tensorrt as trt  # https://developer.nvidia.com/nvidia-tensorrt-download
 
-            check_version(
-                trt.__version__, "7.0.0", hard=True
-            )  # require tensorrt>=7.0.0
+            check_version(trt.__version__, "7.0.0", hard=True)  # require tensorrt>=7.0.0
             if device.type == "cpu":
                 device = torch.device("cuda:0")
             Binding = namedtuple("Binding", ("name", "dtype", "shape", "data", "ptr"))
@@ -541,9 +485,7 @@ class DetectMultiBackend(nn.Module):
                 if model.binding_is_input(i):
                     if -1 in tuple(model.get_binding_shape(i)):  # dynamic
                         dynamic = True
-                        context.set_binding_shape(
-                            i, tuple(model.get_profile_shape(0, i)[2])
-                        )
+                        context.set_binding_shape(i, tuple(model.get_profile_shape(0, i)[2]))
                     if dtype == np.float16:
                         fp16 = True
                 else:  # output
@@ -552,9 +494,7 @@ class DetectMultiBackend(nn.Module):
                 im = torch.from_numpy(np.empty(shape, dtype=dtype)).to(device)
                 bindings[name] = Binding(name, dtype, shape, im, int(im.data_ptr()))
             binding_addrs = OrderedDict((n, d.ptr) for n, d in bindings.items())
-            batch_size = bindings["images"].shape[
-                0
-            ]  # if dynamic, this is instead max batch size
+            batch_size = bindings["images"].shape[0]  # if dynamic, this is instead max batch size
         elif coreml:  # CoreML
             logger.info(f"Loading {w} for CoreML inference...")
             import coremltools as ct
@@ -566,16 +506,12 @@ class DetectMultiBackend(nn.Module):
 
             keras = False  # assume TF1 saved_model
             model = tf.keras.models.load_model(w) if keras else tf.saved_model.load(w)
-        elif (
-            pb
-        ):  # GraphDef https://www.tensorflow.org/guide/migrate#a_graphpb_or_graphpbtxt
+        elif pb:  # GraphDef https://www.tensorflow.org/guide/migrate#a_graphpb_or_graphpbtxt
             logger.info(f"Loading {w} for TensorFlow GraphDef inference...")
             import tensorflow as tf
 
             def wrap_frozen_graph(gd, inputs, outputs):
-                x = tf.compat.v1.wrap_function(
-                    lambda: tf.compat.v1.import_graph_def(gd, name=""), []
-                )  # wrapped
+                x = tf.compat.v1.wrap_function(lambda: tf.compat.v1.import_graph_def(gd, name=""), [])  # wrapped
                 ge = x.graph.as_graph_element
                 return x.prune(
                     tf.nest.map_structure(ge, inputs),
@@ -587,19 +523,13 @@ class DetectMultiBackend(nn.Module):
                 for node in gd.node:  # tensorflow.core.framework.node_def_pb2.NodeDef
                     name_list.append(node.name)
                     input_list.extend(node.input)
-                return sorted(
-                    f"{x}:0"
-                    for x in list(set(name_list) - set(input_list))
-                    if not x.startswith("NoOp")
-                )
+                return sorted(f"{x}:0" for x in list(set(name_list) - set(input_list)) if not x.startswith("NoOp"))
 
             gd = tf.Graph().as_graph_def()  # TF GraphDef
             with open(w, "rb") as f:
                 gd.ParseFromString(f.read())
             frozen_func = wrap_frozen_graph(gd, inputs="x:0", outputs=gd_outputs(gd))
-        elif (
-            tflite or edgetpu
-        ):  # https://www.tensorflow.org/lite/guide/python#install_tensorflow_lite_for_python
+        elif tflite or edgetpu:  # https://www.tensorflow.org/lite/guide/python#install_tensorflow_lite_for_python
             try:  # https://coral.ai/docs/edgetpu/tflite-python/#update-existing-tf-lite-code-for-the-edge-tpu
                 from tflite_runtime.interpreter import Interpreter, load_delegate
             except ImportError:
@@ -616,9 +546,7 @@ class DetectMultiBackend(nn.Module):
                     "Darwin": "libedgetpu.1.dylib",
                     "Windows": "edgetpu.dll",
                 }[platform.system()]
-                interpreter = Interpreter(
-                    model_path=w, experimental_delegates=[load_delegate(delegate)]
-                )
+                interpreter = Interpreter(model_path=w, experimental_delegates=[load_delegate(delegate)])
             else:  # TFLite
                 logger.info(f"Loading {w} for TensorFlow Lite inference...")
                 interpreter = Interpreter(model_path=w)  # load TFLite model
@@ -638,9 +566,7 @@ class DetectMultiBackend(nn.Module):
             import paddle.inference as pdi
 
             if not Path(w).is_file():  # if not *.pdmodel
-                w = next(
-                    Path(w).rglob("*.pdmodel")
-                )  # get *.pdmodel file from *_paddle_model dir
+                w = next(Path(w).rglob("*.pdmodel"))  # get *.pdmodel file from *_paddle_model dir
             weights = Path(w).with_suffix(".pdiparams")
             config = pdi.Config(str(w), str(weights))
             if cuda:
@@ -659,15 +585,9 @@ class DetectMultiBackend(nn.Module):
 
         # class names
         if "names" not in locals():
-            names = (
-                yaml_load(data)["names"]
-                if data
-                else {i: f"class{i}" for i in range(999)}
-            )
+            names = yaml_load(data)["names"] if data else {i: f"class{i}" for i in range(999)}
         if names[0] == "n01440764" and len(names) == 1000:  # ImageNet
-            names = yaml_load(ROOT / "data/ImageNet.yaml")[
-                "names"
-            ]  # human-readable names
+            names = yaml_load(ROOT / "data/ImageNet.yaml")["names"]  # human-readable names
 
         self.__dict__.update(locals())  # assign all variables to self
 
@@ -680,11 +600,7 @@ class DetectMultiBackend(nn.Module):
             im = im.permute(0, 2, 3, 1)  # torch BCHW to numpy BHWC shape(1,320,192,3)
 
         if self.pt:  # PyTorch
-            y = (
-                self.model(im, augment=augment, visualize=visualize)
-                if augment or visualize
-                else self.model(im)
-            )
+            y = self.model(im, augment=augment, visualize=visualize) if augment or visualize else self.model(im)
         elif self.jit:  # TorchScript
             y = self.model(im)
         elif self.dnn:  # ONNX OpenCV DNN
@@ -693,9 +609,7 @@ class DetectMultiBackend(nn.Module):
             y = self.net.forward()
         elif self.onnx:  # ONNX Runtime
             im = im.cpu().numpy()  # torch to numpy
-            y = self.session.run(
-                self.output_names, {self.session.get_inputs()[0].name: im}
-            )
+            y = self.session.run(self.output_names, {self.session.get_inputs()[0].name: im})
         elif self.xml:  # OpenVINO
             im = im.cpu().numpy()  # FP32
             y = list(self.executable_network([im]).values())
@@ -703,18 +617,12 @@ class DetectMultiBackend(nn.Module):
             if self.dynamic and im.shape != self.bindings["images"].shape:
                 i = self.model.get_binding_index("images")
                 self.context.set_binding_shape(i, im.shape)  # reshape if dynamic
-                self.bindings["images"] = self.bindings["images"]._replace(
-                    shape=im.shape
-                )
+                self.bindings["images"] = self.bindings["images"]._replace(shape=im.shape)
                 for name in self.output_names:
                     i = self.model.get_binding_index(name)
-                    self.bindings[name].data.resize_(
-                        tuple(self.context.get_binding_shape(i))
-                    )
+                    self.bindings[name].data.resize_(tuple(self.context.get_binding_shape(i)))
             s = self.bindings["images"].shape
-            assert (
-                im.shape == s
-            ), f"input size {im.shape} {'>' if self.dynamic else 'not equal to'} max model size {s}"
+            assert im.shape == s, f"input size {im.shape} {'>' if self.dynamic else 'not equal to'} max model size {s}"
             self.binding_addrs["images"] = int(im.data_ptr())
             self.context.execute_v2(list(self.binding_addrs.values()))
             y = [self.bindings[x].data for x in sorted(self.output_names)]
@@ -725,22 +633,15 @@ class DetectMultiBackend(nn.Module):
             y = self.model.predict({"image": im})  # coordinates are xywh normalized
             if "confidence" in y:
                 box = xywh2xyxy(y["coordinates"] * [[w, h, w, h]])  # xyxy pixels
-                conf, cls = y["confidence"].max(1), y["confidence"].argmax(1).astype(
-                    np.float
-                )
+                conf, cls = y["confidence"].max(1), y["confidence"].argmax(1).astype(np.float)
                 y = np.concatenate((box, conf.reshape(-1, 1), cls.reshape(-1, 1)), 1)
             else:
-                y = list(
-                    reversed(y.values())
-                )  # reversed for segmentation models (pred, proto)
+                y = list(reversed(y.values()))  # reversed for segmentation models (pred, proto)
         elif self.paddle:  # PaddlePaddle
             im = im.cpu().numpy().astype(np.float32)
             self.input_handle.copy_from_cpu(im)
             self.predictor.run()
-            y = [
-                self.predictor.get_output_handle(x).copy_to_cpu()
-                for x in self.output_names
-            ]
+            y = [self.predictor.get_output_handle(x).copy_to_cpu() for x in self.output_names]
         elif self.triton:  # NVIDIA Triton Inference Server
             y = self.model(im)
         else:  # TensorFlow (SavedModel, GraphDef, Lite, Edge TPU)
@@ -768,11 +669,7 @@ class DetectMultiBackend(nn.Module):
             y[0][..., :4] *= [w, h, w, h]  # xywh normalized to pixels
 
         if isinstance(y, (list, tuple)):
-            return (
-                self.from_numpy(y[0])
-                if len(y) == 1
-                else [self.from_numpy(x) for x in y]
-            )
+            return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]
         else:
             return self.from_numpy(y)
 
@@ -811,9 +708,7 @@ class DetectMultiBackend(nn.Module):
         url = urlparse(p)  # if url may be Triton inference server
         types = [s in Path(p).name for s in sf]
         types[8] &= not types[9]  # tflite &= not edgetpu
-        triton = not any(types) and all(
-            [any(s in url.scheme for s in ["http", "grpc"]), url.netloc]
-        )
+        triton = not any(types) and all([any(s in url.scheme for s in ["http", "grpc"]), url.netloc])
         return types + [triton]
 
     @staticmethod
@@ -830,10 +725,7 @@ class Detections:
     def __init__(self, ims, pred, files, times=(0, 0, 0), names=None, shape=None):
         super().__init__()
         d = pred[0].device  # device
-        gn = [
-            torch.tensor([*(im.shape[i] for i in [1, 0, 1, 0]), 1, 1], device=d)
-            for im in ims
-        ]  # normalizations
+        gn = [torch.tensor([*(im.shape[i] for i in [1, 0, 1, 0]), 1, 1], device=d) for im in ims]  # normalizations
         self.ims = ims  # list of images as numpy arrays
         self.pred = pred  # list of tensors pred[0] = (xyxy, conf, cls)
         self.names = names  # class names
@@ -870,14 +762,7 @@ class Detections:
                     for *box, conf, cls in reversed(pred):  # xyxy, confidence, class
                         label = f"{self.names[int(cls)]} {conf:.2f}"
                         if crop:
-                            file = (
-                                save_dir
-                                / "crops"
-                                / self.names[int(cls)]
-                                / self.files[i]
-                                if save
-                                else None
-                            )
+                            file = save_dir / "crops" / self.names[int(cls)] / self.files[i] if save else None
                             crops.append(
                                 {
                                     "box": box,
@@ -888,18 +773,12 @@ class Detections:
                                 }
                             )
                         else:  # all others
-                            annotator.box_label(
-                                box, label if labels else "", color=colors(cls)
-                            )
+                            annotator.box_label(box, label if labels else "", color=colors(cls))
                     im = annotator.im
             else:
                 s += "(no detections)"
 
-            im = (
-                Image.fromarray(im.astype(np.uint8))
-                if isinstance(im, np.ndarray)
-                else im
-            )  # from np
+            im = Image.fromarray(im.astype(np.uint8)) if isinstance(im, np.ndarray) else im  # from np
             if show:
                 if is_jupyter():
                     from IPython.display import display
@@ -911,17 +790,12 @@ class Detections:
                 f = self.files[i]
                 im.save(save_dir / f)  # save
                 if i == self.n - 1:
-                    logger.info(
-                        f"Saved {self.n} image{'s' * (self.n > 1)} to {colorstr('bold', save_dir)}"
-                    )
+                    logger.info(f"Saved {self.n} image{'s' * (self.n > 1)} to {colorstr('bold', save_dir)}")
             if render:
                 self.ims[i] = np.asarray(im)
         if pprint:
             s = s.lstrip("\n")
-            return (
-                f"{s}\nSpeed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {self.s}"
-                % self.t
-            )
+            return f"{s}\nSpeed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {self.s}" % self.t
         if crop:
             if save:
                 logger.info(f"Saved results to {save_dir}\n")
@@ -964,10 +838,7 @@ class Detections:
             "name",
         )  # xywh columns
         for k, c in zip(["xyxy", "xyxyn", "xywh", "xywhn"], [ca, ca, cb, cb]):
-            a = [
-                [x[:5] + [int(x[5]), self.names[int(x[5])]] for x in x.tolist()]
-                for x in getattr(self, k)
-            ]  # update
+            a = [[x[:5] + [int(x[5]), self.names[int(x[5])]] for x in x.tolist()] for x in getattr(self, k)]  # update
             setattr(new, k, [pd.DataFrame(x, columns=c) for x in a])
         return new
 

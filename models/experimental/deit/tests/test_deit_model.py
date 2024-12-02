@@ -15,6 +15,7 @@ from models.utility_functions import (
     comp_allclose_and_pcc,
 )
 
+
 def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
     head_mask = None
     output_attentions = None
@@ -24,18 +25,14 @@ def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
 
     with torch.no_grad():
         # setup pytorch model
-        model = DeiTForImageClassification.from_pretrained(
-            "facebook/deit-base-distilled-patch16-224"
-        )
+        model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
         model.eval()
         state_dict = model.state_dict()
         base_address = "deit"
 
         # synthesize the input
         image = hf_cat_image_sample_input
-        image_processor = AutoImageProcessor.from_pretrained(
-            "facebook/deit-base-distilled-patch16-224"
-        )
+        image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
         input_image = image_processor(images=image, return_tensors="pt")
         input_image = input_image["pixel_values"]
 

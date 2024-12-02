@@ -24,6 +24,7 @@ from models.experimental.yolov3.reference.utils.plots import (
 
 f = f"{Path(__file__).parent}"
 
+
 def test_cpu_demo(model_location_generator):
     torch.manual_seed(1234)
 
@@ -37,9 +38,7 @@ def test_cpu_demo(model_location_generator):
     weights_loc = str(model_path / "yolov3.pt")
 
     # Load model
-    torch_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    torch_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
     torch_model.eval()
 
     # Load data
@@ -64,9 +63,7 @@ def test_cpu_demo(model_location_generator):
             conf_thres, iou_thres = 0.25, 0.45
             classes = None  # filter by class
             agnostic_nms = False
-            pred = non_max_suppression(
-                pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=1000
-            )
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=1000)
 
             # Process predictions
             for i, det in enumerate(pred):  # per image
@@ -84,9 +81,7 @@ def test_cpu_demo(model_location_generator):
 
                 if len(det):
                     # Rescale boxes from img_size to im0 size
-                    det[:, :4] = scale_boxes(
-                        im.shape[2:], det[:, :4], im0.shape
-                    ).round()
+                    det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                     # Print results
                     for c in det[:, 5].unique():
@@ -96,11 +91,7 @@ def test_cpu_demo(model_location_generator):
                     # Write results
                     for *xyxy, conf, cls in reversed(det):
                         if True:  # Write to file
-                            xywh = (
-                                (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn)
-                                .view(-1)
-                                .tolist()
-                            )  # normalized xywh
+                            xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                             line = (cls, *xywh)  # label format
                         # Add bbox to image
                         c = int(cls)  # integer class
