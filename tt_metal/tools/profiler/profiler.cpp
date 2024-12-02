@@ -231,12 +231,6 @@ void DeviceProfiler::readRiscProfilerResults(
         riscNum ++;
     }
 
-    // add trailing ] to close off JSON
-    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
-    std::ofstream log_file(log_path, std::ios_base::app);
-    log_file << "]" << std::endl;
-    log_file.close();
-
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
 
@@ -296,13 +290,13 @@ void DeviceProfiler::dumpResultToFile(
     KernelProfilerEventMetadata ev_md(data);
 
     log_file << fmt::format(
-        R"({{ "proc":"{}",  "sx":{},  "sy":{},  "dx":{},  "dy":{},  "flits":{},  "type":"{}", "timestamp":{} }},)",
+        R"({{ "proc":"{}",  "sx":{},  "sy":{},  "dx":{},  "dy":{},  "num_bytes":{},  "type":"{}", "timestamp":{} }},)",
         tracy::riscName[risc_num],
         core.x,
         core.y,
         ev_md.dst_x,
         ev_md.dst_y,
-        ev_md.noc_xfer_flits,
+        ev_md.num_bytes,
         magic_enum::enum_name(ev_md.noc_xfer_type),
         timestamp - smallest_timestamp,
         delta);
@@ -445,6 +439,12 @@ void DeviceProfiler::dumpResults (
                 worker_core);
 
         }
+
+        // add trailing ] to close off JSON
+        std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+        std::ofstream log_file(log_path, std::ios_base::app);
+        log_file << "]" << std::endl;
+        log_file.close();
     }
     else
     {

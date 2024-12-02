@@ -24,19 +24,7 @@ struct alignas(uint64_t) KernelProfilerEventMetadata {
     uint8_t dst_y = 0;
     NocXferType noc_xfer_type = NocXferType::UNDEF;
     NocType noc_type = NocType::UNDEF;
-    uint16_t noc_xfer_flits = 0;
-
-    // functions for handling packing byte count into flits
-    static constexpr uint32_t BYTES_PER_FLIT = 32;
-    static constexpr uint32_t LOG2_BYTES_PER_FLIT = 5;
-    void setFlitsFromBytes(uint32_t num_bytes) {
-        // assumes a flit is 32 bytes, and rounds up!
-        noc_xfer_flits = (num_bytes + (BYTES_PER_FLIT - 1)) >> LOG2_BYTES_PER_FLIT;
-    }
-    uint32_t getNumBytes() const {
-        // assumes a flit is 32 bytes, and rounds up!
-        return BYTES_PER_FLIT * noc_xfer_flits;
-    }
+    uint32_t num_bytes = 0;
 
     uint64_t asU64() {
         uint64_t ret;

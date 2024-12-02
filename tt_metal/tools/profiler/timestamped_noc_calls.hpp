@@ -50,7 +50,7 @@ inline void recordTimestampedEvent(
     ev_md.noc_xfer_type = noc_xfer_type;
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerEventMetadata::NocType::NOC_1 : KernelProfilerEventMetadata::NocType::NOC_0;
-    ev_md.setFlitsFromBytes(num_bytes);
+    ev_md.num_bytes = num_bytes;
 
     // not actually using the const id here for now
     DeviceTimestampedData(STATIC_ID, ev_md.asU64());
