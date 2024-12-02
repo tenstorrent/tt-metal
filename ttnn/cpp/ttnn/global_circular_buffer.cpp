@@ -19,7 +19,7 @@ MultiDeviceGlobalCircularBuffer::MultiDeviceGlobalCircularBuffer(MeshDevice* mes
 
 GlobalCircularBuffer create_global_circular_buffer(
     Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -29,7 +29,7 @@ GlobalCircularBuffer create_global_circular_buffer(
 
 MultiDeviceGlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {

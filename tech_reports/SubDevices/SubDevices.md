@@ -159,7 +159,7 @@ These can be configured as remote circular buffers which provides access to APIs
 
 The following is the python API for creating a global circular buffer.
 
-* `ttnn.create_global_circular_buffer(device=device, sender_receiver_core_mapping={sender_core : receiver_cores}, size=2048, buffer_type=ttnn.BufferType.L1, sub_device_ids=[])`
+* `ttnn.create_global_circular_buffer(device=device, sender_receiver_core_mapping=[(sender_core, receiver_cores)], size=2048, buffer_type=ttnn.BufferType.L1, sub_device_ids=[])`
 
   This will create a global circular buffer object on the specified device with the specified mapping of sender cores to receiver cores using the specified L1 buffer type. The size specified is the amount of memory allocated on each core for the circular buffer. It will issue a device stall on the specified sub-device ids before writing the circular buffer configurations to device. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
 

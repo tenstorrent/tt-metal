@@ -66,6 +66,24 @@ run_tg_llama3.1-70b_tests() {
   fi
 }
 
+run_tg_prefetcher_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_prefetcher_tests"
+
+  pytest -n auto tests/ttnn/unit_tests/operations/test_prefetcher_TG.py --timeout 1200; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_prefetcher_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_tests() {
   if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running run_tg_unit_tests"
@@ -80,6 +98,9 @@ run_tg_tests() {
 
   elif [[ "$1" == "llama3-small" ]]; then
     run_tg_llama3-small_tests
+
+  elif [[ "$1" == "prefetcher" ]]; then
+    run_tg_prefetcher_tests
 
   else
     echo "LOG_METAL: Unknown model type: $1"

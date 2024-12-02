@@ -453,6 +453,19 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
 }
 
 template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::vector<std::pair<K, V>>& vec) {
+    os << "{";
+    for (auto it = vec.begin(); it != vec.end(); ++it) {
+        os << it->first << ": " << it->second;
+        if (it != vec.end()) {
+            os << ", ";
+        }
+    }
+    os << "}";
+    return os;
+}
+
+template <typename K, typename V>
 std::ostream& operator<<(std::ostream& os, const std::map<K, V>& map) {
     os << "{";
     for (auto it = map.begin(); it != map.end(); ++it) {
@@ -1144,14 +1157,25 @@ inline hash_t hash_object(const T& object) noexcept {
         }(std::make_index_sequence<num_elements>{});
         return hash;
     } else if constexpr (is_specialization_v<T, std::vector>) {
-        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
+        if constexpr (is_specialization_v<typename T::value_type, std::pair>) {
+            if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+                fmt::print("Hashing std::vector<std::pair> of type {}: {}\n", get_type_name<T>(), object);
+            }
+            hash_t hash = 0;
+            for (const auto& [key, value] : object) {
+                hash = hash_objects(hash, key, value);
+            }
+            return hash;
+        } else {
+            if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+                fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
+            }
+            hash_t hash = 0;
+            for (const auto& element : object) {
+                hash = hash_objects(hash, element);
+            }
+            return hash;
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
     } else if constexpr (is_specialization_v<T, std::set>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
