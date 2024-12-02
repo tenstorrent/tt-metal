@@ -29,9 +29,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=14 * 1024, layouts=["TILE_LAYOUT"]),
-        "input_a_dtype": [ttnn.bfloat16],
-        "eps": [0.2],  # 0, 10e-6, 10e-4, 10e-2,
+        "input_spec": gen_sharded_spec_unary(16, 4),
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
 
@@ -40,14 +39,21 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, X, Y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
-    pre_sharded_height = math.prod(input_shape[:-1])
-    pre_sharded_width = input_shape[-1]
+    input_spec = parse_sharding_spec(test_vector["input_spec"])
+    (
+        input_shape,
+        core_grid_size,
+        shard_orientation,
+        sharding_strategy,
+        tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
+        input_layout,
+    ) = input_spec
+    invlidated, output_str = invalidate_vector_sharding(*input_spec)
+    if invlidated:
+        return invlidated, output_str
 
-    if input_layout == "ROW_MAJOR_LAYOUT":
-        return True, "Input to eltwise binary must be tilized"
-
-    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
 
     return False, None
@@ -60,7 +66,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_spec,
     input_a_dtype,
-    eps,
     *,
     device,
 ) -> list:
@@ -69,12 +74,24 @@ def run(
 
     (
         input_shape,
-        core_grid,
-        sharding_strategy,
+        core_grid_size,
         shard_orientation,
+        sharding_strategy,
         tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
         input_layout,
     ) = parse_sharding_spec(input_spec)
+    y, x = core_grid_size
+    device_grid_size = ttnn.CoreGrid(y=y, x=x)
+
+    sharded_config = ttnn.create_sharded_memory_config_(
+        shape=input_shape,
+        core_grid=device_grid_size,
+        strategy=sharding_strategy,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+        tile_layout=True,
+    )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
@@ -83,14 +100,6 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_output_tensor = torch.logit(torch_input_tensor_a, eps)
-
-    sharded_config = ttnn.create_sharded_memory_config_(
-        shape=input_shape,
-        core_grid=core_grid,
-        strategy=sharding_strategy,
-        orientation=shard_orientation,
-        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
-    )
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
