@@ -232,12 +232,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 
         llrt::write_hex_vec_to_core(
             sender_device->id(),
-            sender_device->ethernet_core_from_logical_core(eth_sender_core),
+            sender_device->translated_ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
             src_eth_l1_byte_address + i * byte_size_per_device);
         llrt::write_hex_vec_to_core(
             sender_device->id(),
-            sender_device->ethernet_core_from_logical_core(eth_sender_core),
+            sender_device->translated_ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
@@ -255,12 +255,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 
         llrt::write_hex_vec_to_core(
             receiver_device->id(),
-            receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+            receiver_device->translated_ethernet_core_from_logical_core(eth_receiver_core),
             all_zeros,
             dst_eth_l1_byte_address);
         llrt::write_hex_vec_to_core(
             receiver_device->id(),
-            receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+            receiver_device->translated_ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
             sem_l1_byte_address);
         auto eth_receiver_kernel = tt_metal::CreateKernel(
@@ -298,7 +298,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         const auto& core = std::get<2>(sender_receivers[i]);
         auto readback_vec = llrt::read_hex_vec_from_core(
             device->id(),
-            device->ethernet_core_from_logical_core(core),
+            device->translated_ethernet_core_from_logical_core(core),
             src_eth_l1_byte_address,
             byte_size_per_device * sender_receivers.size());
         auto a = std::mismatch(full_input.begin(), full_input.end(), readback_vec.begin());
@@ -391,10 +391,16 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});
         llrt::write_hex_vec_to_core(
-            device->id(), device->ethernet_core_from_logical_core(eth_sender_core), std::vector{INVALID}, sem_l1_byte_address);
+            device->id(),
+            device->translated_ethernet_core_from_logical_core(eth_sender_core),
+            std::vector{INVALID},
+            sem_l1_byte_address);
 
         llrt::write_hex_vec_to_core(
-            device->id(), device->ethernet_core_from_logical_core(eth_receiver_core), std::vector{INVALID}, sem_l1_byte_address);
+            device->id(),
+            device->translated_ethernet_core_from_logical_core(eth_receiver_core),
+            std::vector{INVALID},
+            sem_l1_byte_address);
 
         auto eth_receiver_kernel = tt_metal::CreateKernel(
             program,

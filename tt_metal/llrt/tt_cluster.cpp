@@ -181,6 +181,7 @@ void Cluster::initialize_device_drivers() {
     tt_device_params default_params;
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
+    this->generate_logical_to_virtual_coord_mapping();
 }
 
 void Cluster::assert_risc_reset() {
@@ -338,10 +339,33 @@ bool Cluster::is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) const {
            this->virtual_eth_cores_.at(chip_id).find(core) != this->virtual_eth_cores_.at(chip_id).end();
 }
 
+void Cluster::generate_logical_to_virtual_coord_mapping() {
+    auto& soc_desc = this->get_soc_desc(0);
+    for (auto x_coords : soc_desc.worker_log_to_routing_x) {
+        CoreCoord phys_core = soc_desc.get_physical_core_from_logical_core(CoreCoord(x_coords.first, 0), CoreType::WORKER);
+        CoreCoord translated_coords = this->get_translated_coordinate_from_physical_coordinates(0, phys_core, CoreType::WORKER);
+        this->worker_logical_to_virtual_x_.insert({x_coords.first, translated_coords.x});
+    }
+    for (auto y_coords : soc_desc.worker_log_to_routing_y) {
+        CoreCoord phys_core = soc_desc.get_physical_core_from_logical_core(CoreCoord(0, y_coords.first), CoreType::WORKER);
+        CoreCoord translated_coords = this->get_translated_coordinate_from_physical_coordinates(0, phys_core, CoreType::WORKER);
+        this->worker_logical_to_virtual_y_.insert({y_coords.first, translated_coords.y});
+    }
+    for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.physical_ethernet_cores.size(); log_eth_core_y++) {
+        CoreCoord logical_eth_core = {0, log_eth_core_y};
+        CoreCoord translated_coords = this->get_translated_coordinate_from_physical_coordinates(0, soc_desc.physical_ethernet_cores.at(log_eth_core_y), CoreType::ETH);
+        this->eth_logical_to_virtual_.insert({logical_eth_core, translated_coords});
+    }
+}
+
 CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+    if (core_type == CoreType::WORKER) {
+        return CoreCoord(this->worker_logical_to_virtual_x_.at(logical_coord.x), this->worker_logical_to_virtual_y_.at(logical_coord.y));
+    } else if (core_type == CoreType::ETH) {
+        return this->eth_logical_to_virtual_.at(logical_coord);
+    }
     auto& soc_desc = this->get_soc_desc(chip_id);
-    CoreCoord physical_coord = soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
-    return this->get_translated_coordinate_from_physical_coordinates(chip_id, physical_coord, core_type);
+    return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 
 CoreCoord Cluster::get_translated_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord, const CoreType& core_type) const {

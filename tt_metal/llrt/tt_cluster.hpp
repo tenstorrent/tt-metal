@@ -218,6 +218,8 @@ class Cluster {
     bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
+    const std::unordered_map<int, int>& get_worker_logical_to_virtual_x() const { return this->worker_logical_to_virtual_x_; };
+    const std::unordered_map<int, int>& get_worker_logical_to_virtual_y() const { return this->worker_logical_to_virtual_y_; };
 
    private:
     Cluster();
@@ -236,6 +238,8 @@ class Cluster {
         const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
         const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
     void generate_virtual_to_umd_coord_mapping();
+    void generate_logical_to_virtual_coord_mapping();
+
     // Reserves ethernet cores in cluster for tunneling
     void reserve_ethernet_cores_for_tunneling();
     // Returns map of connected chip ids to active ethernet cores
@@ -268,6 +272,10 @@ class Cluster {
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
+    std::unordered_map<int, int> worker_logical_to_virtual_x_;
+    std::unordered_map<int, int> worker_logical_to_virtual_y_;
+    std::unordered_map<CoreCoord, CoreCoord> eth_logical_to_virtual_;
+
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     bool is_tg_cluster_;

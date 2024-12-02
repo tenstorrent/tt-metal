@@ -104,8 +104,8 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
         num_samples,
         max_concurrent_samples,
         sample_page_size,
-        static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
-        static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
+        static_cast<uint32_t>(device->translated_ethernet_core_from_logical_core(eth_sender_core).x),
+        static_cast<uint32_t>(device->translated_ethernet_core_from_logical_core(eth_sender_core).y),
         start_semaphore,
         init_handshake_core_x,
         init_handshake_core_y,
@@ -270,12 +270,25 @@ void build_and_run_roundtrip_latency_test(
 
 
         log_trace(tt::LogOp, "-------------Hop: {}, Device: {}:", i, device->id());
-        log_trace(tt::LogOp, "Receiver Kernel Info: Receives from {} on core[logical]: (x={},y={}), [noc]: (x={},y={}):", devices.at(previous_hop)->id(), eth_receiver_core.x, eth_receiver_core.y, device->ethernet_core_from_logical_core(eth_receiver_core).x, device->ethernet_core_from_logical_core(eth_receiver_core).y);
+        log_trace(
+            tt::LogOp,
+            "Receiver Kernel Info: Receives from {} on core[logical]: (x={},y={}), [noc]: (x={},y={}):",
+            devices.at(previous_hop)->id(),
+            eth_receiver_core.x,
+            eth_receiver_core.y,
+            device->translated_ethernet_core_from_logical_core(eth_receiver_core).x,
+            device->translated_ethernet_core_from_logical_core(eth_receiver_core).y);
         log_trace(tt::LogOp, "- RT Args ({})", receiver_eth_rt_args.size());
         for (std::size_t i = 0; i < receiver_eth_rt_args.size(); i++) {
             log_trace(tt::LogOp, "  - {}: {}", i, receiver_eth_rt_args.at(i));
         }
-        log_trace(tt::LogOp, "Sender Kernel Info: on core[logical]: (x={},y={}), [noc]: (x={},y={}):", eth_sender_core.x, eth_sender_core.y, device->ethernet_core_from_logical_core(eth_sender_core).x, device->ethernet_core_from_logical_core(eth_sender_core).y);
+        log_trace(
+            tt::LogOp,
+            "Sender Kernel Info: on core[logical]: (x={},y={}), [noc]: (x={},y={}):",
+            eth_sender_core.x,
+            eth_sender_core.y,
+            device->translated_ethernet_core_from_logical_core(eth_sender_core).x,
+            device->translated_ethernet_core_from_logical_core(eth_sender_core).y);
         for (std::size_t i = 0; i < sender_eth_rt_args.size(); i++) {
             log_trace(tt::LogOp, "  - {}: {}", i, sender_eth_rt_args.at(i));
         }

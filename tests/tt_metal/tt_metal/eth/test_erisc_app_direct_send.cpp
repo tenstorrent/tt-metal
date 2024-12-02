@@ -70,7 +70,7 @@ bool eth_direct_sender_receiver_kernels(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     llrt::write_hex_vec_to_core(
         sender_device->id(),
-        sender_device->ethernet_core_from_logical_core(eth_sender_core),
+        sender_device->translated_ethernet_core_from_logical_core(eth_sender_core),
         inputs,
         src_eth_l1_byte_address);
 
@@ -78,7 +78,7 @@ bool eth_direct_sender_receiver_kernels(
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     llrt::write_hex_vec_to_core(
         receiver_device->id(),
-        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        receiver_device->translated_ethernet_core_from_logical_core(eth_receiver_core),
         all_zeros,
         dst_eth_l1_byte_address);
 
@@ -147,7 +147,7 @@ bool eth_direct_sender_receiver_kernels(
 
     auto readback_vec = llrt::read_hex_vec_from_core(
         receiver_device->id(),
-        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        receiver_device->translated_ethernet_core_from_logical_core(eth_receiver_core),
         dst_eth_l1_byte_address,
         byte_size);
     pass &= (readback_vec == inputs);

@@ -61,7 +61,7 @@ bool reader_kernel_no_send(
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
     auto dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
+    auto eth_noc_xy = device->translated_ethernet_core_from_logical_core(eth_reader_core);
     log_debug(
         tt::LogTest,
         "Device {}: reading {} bytes from dram {} addr {} to ethernet core {} addr {}",
@@ -134,7 +134,7 @@ bool writer_kernel_no_receive(
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
     auto dram_noc_xy = output_dram_buffer->noc_coordinates();
-    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
+    auto eth_noc_xy = device->translated_ethernet_core_from_logical_core(eth_writer_core);
     log_debug(
         tt::LogTest,
         "Device {}: writing {} bytes from ethernet core {} addr {} to dram {} addr {}",
@@ -228,7 +228,7 @@ bool noc_reader_and_writer_kernels(
         writer_dram_noc_xy.str(),
         writer_dram_buffer->address());
 
-    auto eth_noc_xy = device->ethernet_core_from_logical_core(logical_eth_core);
+    auto eth_noc_xy = device->translated_ethernet_core_from_logical_core(logical_eth_core);
 
     auto eth_reader_kernel = tt_metal::CreateKernel(
         program,

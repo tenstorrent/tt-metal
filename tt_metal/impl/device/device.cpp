@@ -237,8 +237,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
-         .worker_log_to_physical_routing_x = soc_desc.worker_log_to_physical_routing_x,
-         .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
+         .worker_log_to_physical_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(),
+         .worker_log_to_physical_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
@@ -260,16 +260,16 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
-        const auto noc_coord = this->worker_core_from_logical_core(core);
+        const auto noc_coord = this->translated_worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
     for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->storage_only_cores_.insert(core);
-        const auto noc_coord = this->worker_core_from_logical_core(core);
+        const auto noc_coord = this->translated_worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
     for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
-        const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
+        const auto noc_coord = this->translated_coords_from_logical_coords(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const auto &core : soc_desc.get_logical_ethernet_cores()) {

@@ -30,7 +30,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     Program program = Program();
     CoreCoord phys_core;
     if (is_eth_core)
-        phys_core = device->ethernet_core_from_logical_core(core);
+        phys_core = device->translated_ethernet_core_from_logical_core(core);
     else
         phys_core = device->worker_core_from_logical_core(core);
     log_info(LogTest, "Running test on device {} core {}...", device->id(), phys_core.str());

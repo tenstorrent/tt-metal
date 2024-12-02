@@ -29,7 +29,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(eth_core);
             tt::llrt::write_hex_vec_to_core(device->id(), phys_core, reset_val, eth_l1_mem::address_map::RETRAIN_FORCE_ADDR);
         }
     }
@@ -38,7 +38,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     std::this_thread::sleep_for(std::chrono::seconds(5));
     vector<string> expected_strings;
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
-        CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+        CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(eth_core);
         expected_strings.push_back(fmt::format(
             "\tDevice {} Ethernet Core {} retraining events: {}", device->id(), phys_core, (eth_core.y % 2) ? 1 : 0));
     }

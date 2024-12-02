@@ -302,9 +302,8 @@ bool RunWriteBWTest(
         // worker L1 semaphore address. Sender writes to this address to signal the worker
         // that the buffer is empty and available to write into
         chip0_worker_semaphore_id,
-        uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).x),
-        uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).y)
-        };
+        uint32_t(sender_device->translated_ethernet_core_from_logical_core(eth_sender_core).x),
+        uint32_t(sender_device->translated_ethernet_core_from_logical_core(eth_sender_core).y)};
     // TODO
     std::vector<uint32_t> chip0_sender_worker_reader_compile_args{
         input_is_dram,
@@ -485,8 +484,8 @@ bool RunWriteBWTest(
         num_pages_per_l1_buffer,
         num_pages,
         input_buffer_page_size,
-        (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).x,
-        (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).y,
+        (uint32_t)receiver_device->translated_ethernet_core_from_logical_core(eth_receiver_core).x,
+        (uint32_t)receiver_device->translated_ethernet_core_from_logical_core(eth_receiver_core).y,
         chip1_worker_semaphore_id};
 
     CBHandle cb_src0_receiver_workers = CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
