@@ -141,6 +141,8 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
+    // works only for AdamW
+    bool use_kahan_summation = false;
     std::string model_path;
     std::string data_path;
     ttml::models::gpt2::TransformerConfig transformer_config;
@@ -157,6 +159,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.learning_rate = training_config["learning_rate"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
+    config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.model_path = training_config["model_path"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
@@ -295,9 +298,11 @@ int main(int argc, char **argv) {
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
+    adamw_params.use_kahan_summation = config.use_kahan_summation;
     fmt::print("AdamW configuration:\n");
     fmt::print("    Learning rate: {}\n", adamw_params.lr);
     fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
+    fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
     auto optimizer = ttml::optimizers::AdamW(model->parameters(), adamw_params);
 
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
