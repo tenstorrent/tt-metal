@@ -254,3 +254,71 @@ def test_simple_conv_t2d(
         shard_layout=shard_layout,
         auto_shard=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
+    (
+        (1, 30, 40, 512, 256, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 60, 80, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 120, 160, 128, 64, 2, 2, 2, 2, 0, 0, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # (1, 240, 320, 64, 32, 2, 2, 2, 2, 0, 0, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED), #OOM
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+def test_vanilla_unet(
+    device,
+    use_program_cache,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    config,
+    shard_layout,
+):
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        config_override=config,
+        shard_layout=shard_layout,
+        auto_shard=True,
+    )
