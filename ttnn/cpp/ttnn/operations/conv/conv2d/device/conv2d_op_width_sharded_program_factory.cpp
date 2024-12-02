@@ -77,16 +77,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt::DataFormat bias_df =
         has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat tilized_act_df = out_df;
-     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
-    tt::DataFormat interm0_df =
-        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
+
 
     log_debug(LogOp, "act_df: {}", act_df);
     log_debug(LogOp, "weight_df: {}", weight_df);
     log_debug(LogOp, "out_df: {}", out_df);
     log_debug(LogOp, "bias_df: {}", bias_df);
     log_debug(LogOp, "tilized_act_df: {}", tilized_act_df);
-    log_debug(LogOp, "interm0_df: {}", interm0_df);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -309,6 +306,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         "Number of Act Blocks along the Width {} should be divisible by the number of cores {}",
         num_blocks_act_w,
         input_num_cores);
+    bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
+    tt::DataFormat interm0_df =
+        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
+    log_debug(LogOp, "interm0_df: {}", interm0_df);
+
+    TT_FATAL(num_blocks_act_w % input_num_cores == 0, "Number of Act Blocks along the Width {} should be divisible by the number of cores {}", num_blocks_act_w, input_num_cores);
     uint32_t per_core_num_blocks_act_w = num_blocks_act_w / input_num_cores;
 
     // act block info
