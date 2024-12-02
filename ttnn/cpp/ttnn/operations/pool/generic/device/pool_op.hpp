@@ -18,12 +18,15 @@
 namespace ttnn::operations {
 namespace pool {
 
-inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) { return (uint32_t)std::ceil((float)n / m) * m; }
+enum class Pool2DType {
+    MAX_POOL2D,
+};
 
-// new maxpool uop -- called from the macro-op
-struct MaxPool2D {
+// Generic pool uop -- called from the macro-ops
+struct Pool2D {
     struct operation_attributes_t {
         sliding_window::SlidingWindowConfig sliding_window_config_;
+        Pool2DType pool_type_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
     };
@@ -72,6 +75,7 @@ struct MaxPool2D {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
+        Pool2DType pool_type,
         DataType output_dtype,
         MemoryConfig memory_config);
 };
@@ -80,5 +84,5 @@ struct MaxPool2D {
 }  // namespace ttnn::operations
 
 namespace ttnn::prim {
-constexpr auto max_pool2d = ttnn::register_operation<"ttnn::prim::max_pool2d", ttnn::operations::pool::MaxPool2D>();
+constexpr auto pool2d = ttnn::register_operation<"ttnn::prim::pool2d", ttnn::operations::pool::Pool2D>();
 }  // namespace ttnn::prim

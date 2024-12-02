@@ -2,20 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "max_pool2d_device_op.hpp"
+#include "pool_op.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
+#include "tt_metal/common/math.hpp"
 
 /**
- * New maxpool2d implementation that uses the new sliding window infrastructure.
+ * Generic pool implementation that uses the new sliding window infrastructure.
  */
 
 namespace ttnn::operations::pool {
 
-MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_v2_impl_new(
+Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
     const Tensor& input,
     const Tensor& reader_indices,
     Tensor& output,
+    Pool2DType pool_type,
     uint32_t in_n,
     uint32_t in_h,
     uint32_t in_w,
@@ -32,6 +34,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
+    TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Currently only support max pool2d (#12151)");
+
     // This should allocate a DRAM buffer on the device
     Device* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -54,7 +58,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t indices_nbytes = datum_size(indices_df);
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
-    uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, tt::constants::TILE_HEIGHT);
+    uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
@@ -170,7 +174,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     // reader output == input to tilize
     uint32_t in_cb_id_0 = tt::CBIndex::c_0;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_id_1 = tt::CBIndex::c_1;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_page_padded = ceil_multiple_of(
+    uint32_t in_cb_page_padded = tt::round_up(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
@@ -320,15 +324,15 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     std::string reader_kernel_fname;
     if (is_large_kernel) {
         reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
     } else if (is_wide_reduction) {
         reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_max_pool_2d_multi_core_sharded_with_halo_wide.cpp";
     } else {
         reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp";
     }
 
@@ -374,10 +378,10 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     std::string compute_kernel_fname;
     if (is_large_kernel) {
         compute_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
     } else {
         // both regular and wide reductions
-        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp";
+        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core.cpp";
     }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
@@ -392,11 +396,12 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
          .ncores_w = ncores_w}};
 }
 
-MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(
+Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input_tensor_;
-    auto& sliding_window_config = op_attr.sliding_window_config_;
-    auto& out_mem_config = op_attr.memory_config_;
+    const auto& sliding_window_config = op_attr.sliding_window_config_;
+    const auto& pool_type = op_attr.pool_type_;
+    const auto& out_mem_config = op_attr.memory_config_;
 
     tt::tt_metal::Program program{};
 
@@ -438,11 +443,12 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
 
-    return max_pool_2d_multi_core_sharded_with_halo_v2_impl_new(
+    return pool2d_multi_core_sharded_with_halo_v2_impl_new(
         program,
         input,
         reader_indices_on_device,
         output_tensor,
+        pool_type,
         in_n,
         in_h,
         in_w,
@@ -461,7 +467,7 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(
         1);
 }
 
-void MaxPool2D::MultiCore::override_runtime_arguments(
+void Pool2D::MultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
