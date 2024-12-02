@@ -172,15 +172,23 @@ on:
           - eltwise.binary_complex.add_bw.add_bw
           - eltwise.binary_complex.sub_bw.sub_bw
           - eltwise.binary_complex.mul_bw.mul_bw
-          - eltwise.unary.lgamma
-          - eltwise.unary.logit
-          - eltwise.unary.mish
-          - eltwise.unary.multigammaln
-          - eltwise.unary.isfinite
-          - eltwise.unary.isinf
-          - eltwise.unary.isnan
-          - eltwise.unary.isneginf
-          - eltwise.unary.isposinf
+          - eltwise.unary.lgamma.lgamma
+          - eltwise.unary.lgamma.lgamma_sharded
+          - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_sharded
+          - eltwise.unary.mish.mish
+          - eltwise.unary.mish.mish_sharded
+          - eltwise.unary.multigammaln.multigammaln
+          - eltwise.unary.isfinite.isfinite
+          - eltwise.unary.isfinite.isfinite_sharded
+          - eltwise.unary.isinf.isinf
+          - eltwise.unary.isinf.isinf_sharded
+          - eltwise.unary.isnan.isnan
+          - eltwise.unary.isnan.isnan_sharded
+          - eltwise.unary.isneginf.isneginf
+          - eltwise.unary.isneginf.isneginf_sharded
+          - eltwise.unary.isposinf.isposinf
+          - eltwise.unary.isposinf.isposinf_sharded
           - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
