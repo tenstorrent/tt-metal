@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -79,6 +80,7 @@ struct OptimizedConvNew {
     bool enable_split_reader;
     bool enable_subblock_padding;
     bool use_non_tile_height;
+    uint32_t pre_op_l1_allocation_size_bytes;
     OptimizedConvNew(const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels, uint32_t groups,
         bool untile_out,
