@@ -25,7 +25,7 @@ namespace ttml::optimizers {
 MorehAdamW::MorehAdamW(autograd::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     if (m_config.use_kahan_summation) {
-        throw std::runtime_error("MorehAdamW: Kahan summation is not supported.");
+        throw std::runtime_error("MorehAdamW: Kahan summation is not supported. Use default AdamW instead.");
     }
 
     for (const auto& [key, tensor_ptr] : m_parameters) {
