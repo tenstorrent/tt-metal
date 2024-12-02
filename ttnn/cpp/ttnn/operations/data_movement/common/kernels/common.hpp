@@ -15,32 +15,43 @@
 
 namespace tt::data_movement::common {
 
-template <bool guaranteed_16B_alligned, bool copy_async>
-FORCE_INLINE
-void tt_memmove (
-    const uint32_t dst_l1_addr,
-    const uint64_t src_l1_addr,
-    const uint32_t bytes)
-{
+template <bool guaranteed_16B_alligned, bool copy_async, bool use_read_datamover>
+FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     //Function performs a memory copy between two l1 addresses in the local core
     //Uses noc_async_read when possible to copy the data over
     //Set guaranteed 16B alligned to true if the source and destination are externally guaranteed to be 16B alligned (dangerous)
     //Set copy_async to true if you wish to perform the operation asynchronously, in this case you can add a noc_async_read_barrier to synchronize later
-    if constexpr (guaranteed_16B_alligned)
-    {
-        noc_async_read(get_noc_addr(src_l1_addr),dst_l1_addr, bytes);
-        if constexpr (!copy_async) {noc_async_read_barrier();}
-    }
-    else
-    {
-        if ((dst_l1_addr&OFFSET_16) == (src_l1_addr&OFFSET_16))
-        {
-            noc_async_read(get_noc_addr(src_l1_addr),dst_l1_addr, bytes);
-            if constexpr (!copy_async) {noc_async_read_barrier();}
+    if constexpr (use_read_datamover) {
+        if constexpr (guaranteed_16B_alligned) {
+            noc_async_read(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
+            if constexpr (!copy_async) {
+                noc_async_read_barrier();
+            }
+        } else {
+            if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
+                noc_async_read(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
+                if constexpr (!copy_async) {
+                    noc_async_read_barrier();
+                }
+            } else {
+                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+            }
         }
-        else
-        {
-            memmove((void *)(dst_l1_addr), (void *)(src_l1_addr), (size_t) (bytes));
+    } else {
+        if constexpr (guaranteed_16B_alligned) {
+            noc_async_write(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
+            if constexpr (!copy_async) {
+                noc_async_write_barrier();
+            }
+        } else {
+            if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
+                noc_async_write(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
+                if constexpr (!copy_async) {
+                    noc_async_write_barrier();
+                }
+            } else {
+                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+            }
         }
     }
 }
