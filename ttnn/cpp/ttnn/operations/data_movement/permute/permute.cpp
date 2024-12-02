@@ -157,7 +157,7 @@ ttnn::Tensor permute_launch(
             const std::vector<ttnn::Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable
-            -> std::vector<ttnn::Tensor> {
+        -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             SmallVector<uint32_t> normalized_dims(dims.size());
             std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {

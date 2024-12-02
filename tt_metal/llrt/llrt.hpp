@@ -13,7 +13,7 @@
 
 // clang-format off
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/tt_xy_pair.h"
 #include "llrt/tt_memory.h"
 // clang-format on
 
@@ -51,11 +51,18 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-ll_api::memory get_risc_binary(string const &path,
-    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
+// Return a reference to a potentially shared binary image.
+// The images are cached by path name, which is never erased.
+// TODO: Remove core_type_idx, processor_class_idx,
+// processor_type_idx -- the information they provide can be
+// obtained directly from the binary image.
+ll_api::memory const& get_risc_binary(
+    string const& path,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx,
     ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
     ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
-
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
@@ -107,8 +114,13 @@ uint32_t generate_risc_startup_addr(bool is_eth_core);
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
 bool test_load_write_read_risc_binary(
-    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx);
-void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address);
+    ll_api::memory const& mem,
+    chip_id_t chip_id,
+    const CoreCoord& core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx);
+void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address);
 
 // subchannel hard-coded to 0 for now
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);

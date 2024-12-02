@@ -27,13 +27,21 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
 
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
+        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
-    ShardedBufferConfig shard_config_1 = {nullptr, sharded_cores_1.num_cores() * page_size_1, page_size_1, BufferType::L1, TensorMemoryLayout::HEIGHT_SHARDED, shard_spec_buffer_1};
-    auto input_1 = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
+    ShardedBufferConfig shard_config_1 = {
+        nullptr,
+        sharded_cores_1.num_cores() * page_size_1,
+        page_size_1,
+        BufferType::L1,
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        shard_spec_buffer_1};
+    auto input_1 =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
 
     std::array sub_device_ids_to_block = {SubDeviceId{0}};
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
 
         shard_config_1.device = device;
@@ -68,8 +76,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
         EXPECT_EQ(input_1, output_1);
         auto input_1_it = input_1.begin();
         for (const auto& physical_core : physical_cores_1) {
-            auto readback = tt::llrt::read_hex_vec_from_core(
-                device->id(), physical_core, buffer_1->address(), page_size_1);
+            auto readback =
+                tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer_1->address(), page_size_1);
             EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
             input_1_it += page_size_1 / sizeof(uint32_t);
         }
@@ -86,11 +94,12 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     uint32_t num_iters = 5;
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         device->load_sub_device_manager(sub_device_manager);
 
-        auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_sync_program(device, sub_device_1, sub_device_2);
+        auto [waiter_program, syncer_program, incrementer_program, global_sem] =
+            create_basic_sync_program(device, sub_device_1, sub_device_2);
 
         for (uint32_t i = 0; i < num_iters; i++) {
             EnqueueProgram(device->command_queue(), waiter_program, false);
@@ -105,16 +114,20 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
 TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     uint32_t num_iters = 5;
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id() << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
         }
         auto eth_core = *device->get_active_ethernet_cores(true).begin();
-        SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}), CoreRangeSet(CoreRange(eth_core, eth_core))});
+        SubDevice sub_device_2(std::array{
+            CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}),
+            CoreRangeSet(CoreRange(eth_core, eth_core))});
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         device->load_sub_device_manager(sub_device_manager);
 
-        auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_eth_sync_program(device, sub_device_1, sub_device_2);
+        auto [waiter_program, syncer_program, incrementer_program, global_sem] =
+            create_basic_eth_sync_program(device, sub_device_1, sub_device_2);
 
         for (uint32_t i = 0; i < num_iters; i++) {
             EnqueueProgram(device->command_queue(), waiter_program, false);

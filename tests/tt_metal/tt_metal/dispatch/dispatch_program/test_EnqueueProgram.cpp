@@ -15,7 +15,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -44,26 +44,29 @@ namespace local_test_functions {
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+        program,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto dummy_writer_kernel = CreateKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+        program,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
-void initialize_dummy_semaphores(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values)
-{
-    for (uint32_t i = 0; i < init_values.size(); i++)
-    {
+void initialize_dummy_semaphores(
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values) {
+    for (uint32_t i = 0; i < init_values.size(); i++) {
         CreateSemaphore(program, core_ranges, init_values[i]);
     }
 }
 
-std::vector<CBHandle> initialize_dummy_circular_buffers(Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs)
-{
+std::vector<CBHandle> initialize_dummy_circular_buffers(
+    Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
     for (uint32_t i = 0; i < cb_configs.size(); i++) {
         const CBConfig& cb_config = cb_configs[i];
@@ -72,14 +75,15 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(Program& program, const 
         const uint32_t page_size = cb_config.page_size;
         const uint32_t cb_size = cb_num_pages * page_size;
         const tt::DataFormat data_format = cb_config.data_format;
-        const CircularBufferConfig circular_buffer_config = CircularBufferConfig(cb_size, {{cb_id, data_format}}).set_page_size(cb_id, page_size);
+        const CircularBufferConfig circular_buffer_config =
+            CircularBufferConfig(cb_size, {{cb_id, data_format}}).set_page_size(cb_id, page_size);
         const CBHandle cb_handle = CreateCircularBuffer(program, cr_set, circular_buffer_config);
         cb_handles.push_back(cb_handle);
     }
     return cb_handles;
 }
 
-bool cb_config_successful(Device* device, Program &program, const DummyProgramMultiCBConfig & program_config){
+bool cb_config_successful(Device* device, Program& program, const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
@@ -90,9 +94,12 @@ bool cb_config_successful(Device* device, Program &program, const DummyProgramMu
     uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord,
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device,
+                core_coord,
                 program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
-                cb_config_buffer_size, cb_config_vector);
+                cb_config_buffer_size,
+                cb_config_vector);
 
             uint32_t cb_addr = l1_unreserved_base;
             for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
@@ -119,9 +126,10 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
 
     constexpr uint32_t num_runtime_args0 = 9;
     constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-    std::map<string, string> dummy_defines0 = {{"DATA_MOVEMENT", "1"},
-                                               {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
-                                               {"RESULTS_ADDR", std::to_string(rta_base0)}};
+    std::map<string, string> dummy_defines0 = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
+        {"RESULTS_ADDR", std::to_string(rta_base0)}};
     auto dummy_kernel0 = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
@@ -159,10 +167,12 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
     return cb_config_successful(device, program, program_config);
 }
 
-bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs_update_size(
+    Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
     Program program;
 
-    const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
+    const std::vector<CBHandle>& cb_handles =
+        initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
     EnqueueProgram(cq, program, false);
     Finish(cq);
@@ -184,7 +194,12 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     return is_cb_config_before_update_successful && is_cb_config_after_update_successful;
 }
 
-bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Program& program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
+bool test_dummy_EnqueueProgram_with_sems(
+    Device* device,
+    CommandQueue& cq,
+    Program& program,
+    const DummyProgramConfig& program_config,
+    const vector<vector<uint32_t>>& expected_semaphore_vals) {
     TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
 
     bool are_all_semaphore_values_correct = true;
@@ -194,24 +209,23 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
     Finish(cq);
 
     uint32_t expected_semaphore_vals_idx = 0;
-    for (const CoreRange& core_range : program_config.cr_set.ranges())
-    {
+    for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
         TT_ASSERT(expected_semaphore_vals_for_core.size() == program_config.num_sems);
         expected_semaphore_vals_idx++;
-        for (const CoreCoord& core_coord : core_range)
-        {
+        for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
             const uint32_t semaphore_buffer_size = program_config.num_sems * hal.get_alignment(HalMemType::L1);
             uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
-            for (uint32_t i = 0; i < semaphore_vals.size(); i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t)))
-            {
-                const bool is_semaphore_value_correct = semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
+            for (uint32_t i = 0; i < semaphore_vals.size();
+                 i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+                const bool is_semaphore_value_correct =
+                    semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
                 expected_semaphore_vals_for_core_idx++;
-                if (!is_semaphore_value_correct)
-                {
+                if (!is_semaphore_value_correct) {
                     are_all_semaphore_values_correct = false;
                 }
             }
@@ -233,36 +247,49 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     return test_dummy_EnqueueProgram_with_sems(device, cq, program, program_config, {expected_semaphore_values});
 }
 
-bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config, uint32_t num_runtime_args_dm0, uint32_t num_runtime_args_dm1, uint32_t num_runtime_args_compute, uint32_t num_iterations) {
+bool test_dummy_EnqueueProgram_with_runtime_args(
+    Device* device,
+    CommandQueue& cq,
+    const DummyProgramConfig& program_config,
+    uint32_t num_runtime_args_dm0,
+    uint32_t num_runtime_args_dm1,
+    uint32_t num_runtime_args_compute,
+    uint32_t num_iterations) {
     Program program;
     bool pass = true;
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);;
+    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    ;
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
-    std::map<string, string> dm_defines0 = {{"DATA_MOVEMENT", "1"},
-                                            {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm0)},
-                                            {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<string, string> dm_defines1 = {{"DATA_MOVEMENT", "1"},
-                                            {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm1)},
-                                            {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<string, string> compute_defines = {{"COMPUTE", "1"},
-                                                {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_compute)},
-                                                {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
+    std::map<string, string> dm_defines0 = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm0)},
+        {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
+    std::map<string, string> dm_defines1 = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm1)},
+        {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
+    std::map<string, string> compute_defines = {
+        {"COMPUTE", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_compute)},
+        {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
 
     auto dm_kernel0 = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         cr_set,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
 
     auto dm_kernel1 = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         cr_set,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
 
     auto compute_kernel = CreateKernel(
         program,
@@ -286,8 +313,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     }
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        for (const CoreCoord& core_coord : core_range)
-        {
+        for (const CoreCoord& core_coord : core_range) {
             SetRuntimeArgs(program, dm_kernel0, core_coord, dm_kernel0_args);
             SetRuntimeArgs(program, dm_kernel1, core_coord, dm_kernel1_args);
             SetRuntimeArgs(program, compute_kernel, core_coord, compute_kernel_args);
@@ -301,8 +327,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     Finish(cq);
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        for (const CoreCoord& core_coord : core_range)
-        {
+        for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> dm_kernel0_args_readback;
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, rta_base_dm0, dm_kernel0_args.size() * sizeof(uint32_t), dm_kernel0_args_readback);
@@ -315,7 +340,11 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
 
             vector<uint32_t> compute_kernel_args_readback;
             tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, rta_base_compute, compute_kernel_args.size() * sizeof(uint32_t), compute_kernel_args_readback);
+                device,
+                core_coord,
+                rta_base_compute,
+                compute_kernel_args.size() * sizeof(uint32_t),
+                compute_kernel_args_readback);
             pass &= (compute_kernel_args == compute_kernel_args_readback);
         }
     }
@@ -337,19 +366,23 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);;
+    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    ;
     uint32_t rta_base_dm1 = rta_base_dm0 + 1024 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
     // Copy max # runtime args in the kernel for simplicity
-    std::map<string, string> dm_defines0 = {{"DATA_MOVEMENT", "1"},
-                                            {"NUM_RUNTIME_ARGS", std::to_string(256)},
-                                            {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<string, string> dm_defines1 = {{"DATA_MOVEMENT", "1"},
-                                            {"NUM_RUNTIME_ARGS", std::to_string(256)},
-                                            {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<string, string> compute_defines = {{"COMPUTE", "1"},
-                                                {"NUM_RUNTIME_ARGS", std::to_string(256)},
-                                                {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
+    std::map<string, string> dm_defines0 = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(256)},
+        {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
+    std::map<string, string> dm_defines1 = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(256)},
+        {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
+    std::map<string, string> compute_defines = {
+        {"COMPUTE", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(256)},
+        {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
 
     auto dummy_kernel0 = CreateKernel(
         program,
@@ -546,20 +579,42 @@ bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const 
     return pass;
 }
 
-
 // Verify RT args for a core at a given address by comparing to expected values.
-bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const tt::RISCV &riscv, uint32_t addr, std::vector<uint32_t> expected_rt_args, uint32_t incr_val) {
+bool verify_rt_args(
+    bool unique,
+    Device* device,
+    CoreCoord logical_core,
+    const tt::RISCV& riscv,
+    uint32_t addr,
+    std::vector<uint32_t> expected_rt_args,
+    uint32_t incr_val) {
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::Cluster::instance().l1_barrier(device->id());
-    auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core) : device->worker_core_from_logical_core(logical_core);
-    std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
-    log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
+    auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
+                                            : device->worker_core_from_logical_core(logical_core);
+    std::vector<uint32_t> args_readback =
+        tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    log_debug(
+        tt::LogTest,
+        "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
+        expected_rt_args.size(),
+        label,
+        noc_xy,
+        logical_core.str(),
+        addr,
+        incr_val);
 
-    for(int i=0; i<expected_rt_args.size(); i++){
+    for (int i = 0; i < expected_rt_args.size(); i++) {
         uint32_t expected_val = expected_rt_args[i] + incr_val;
-        log_debug(tt::LogTest, "Checking {} RT Arg. i: {} expected: {} observed: {}", label, i, expected_val, args_readback[i]);
+        log_debug(
+            tt::LogTest,
+            "Checking {} RT Arg. i: {} expected: {} observed: {}",
+            label,
+            i,
+            expected_val,
+            args_readback[i]);
         EXPECT_EQ(args_readback[i], expected_val);
         pass &= (args_readback[i] == expected_val);
     }
@@ -567,8 +622,13 @@ bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const t
 }
 
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
-bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv, bool idle_eth = false) {
-
+bool test_increment_runtime_args_sanity(
+    Device* device,
+    const DummyProgramConfig& program_config,
+    uint32_t num_unique_rt_args,
+    uint32_t num_common_rt_args,
+    const tt::RISCV& riscv,
+    bool idle_eth = false) {
     Program program;
     bool pass = true;
     CoreRangeSet cr_set = program_config.cr_set;
@@ -625,7 +685,8 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
                 });
             break;
         case tt::RISCV::ERISC: {
-            HalProgrammableCoreType eth_core_type = idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+            HalProgrammableCoreType eth_core_type =
+                idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
             unique_args_addr = hal.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
@@ -639,7 +700,7 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
                 });
-            } break;
+        } break;
         default: TT_THROW("Unsupported {} processor in test.", riscv);
     }
 
@@ -647,14 +708,14 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
 
     // Unique Runtime Args.
     std::vector<uint32_t> unique_runtime_args;
-    for (uint32_t i=0; i< num_unique_rt_args; i++) {
+    for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         unique_runtime_args.push_back(i);
     }
     SetRuntimeArgs(program, 0, cr_set, unique_runtime_args);
 
     // Setup Common Runtime Args.
     std::vector<uint32_t> common_runtime_args;
-    for (uint32_t i=0; i< num_common_rt_args; i++) {
+    for (uint32_t i = 0; i < num_common_rt_args; i++) {
         common_runtime_args.push_back(1000 + i);
     }
     SetCommonRuntimeArgs(program, 0, common_runtime_args);
@@ -665,12 +726,14 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
 
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
-    for (auto &core_range : kernel->logical_coreranges()) {
+    for (auto& core_range : kernel->logical_coreranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
-                pass &= verify_rt_args(true, device, core_coord, riscv, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
-                pass &= verify_rt_args(false, device, core_coord, riscv, common_args_addr, common_runtime_args, common_arg_incr_val);
+                pass &= verify_rt_args(
+                    true, device, core_coord, riscv, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
+                pass &= verify_rt_args(
+                    false, device, core_coord, riscv, common_args_addr, common_runtime_args, common_arg_incr_val);
             }
         }
     }
@@ -685,7 +748,7 @@ namespace basic_tests {
 namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestArbiterDoesNotHang) {
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -693,24 +756,27 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestArbiterDoesNotHang) {
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
         auto dummy_reader_kernel = CreateKernel(
-            program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
+            cr_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         EnqueueProgram(device->command_queue(), program, false);
         Finish(device->command_queue());
     }
 }
-}
+}  // namespace compiler_workaround_hardware_bug_tests
 namespace single_core_tests {
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
-    CBConfig cb_config = {.cb_id=0, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config = {.cb_id = 0, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config} };
+    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
 }
@@ -724,10 +790,10 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbSeqConfigCorrectly
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
+    DummyProgramMultiCBConfig config = {
+        .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
-
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
 }
@@ -741,10 +807,10 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbRandomConfigCorrec
     CBConfig cb_config_2 = {.cb_id = 24, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_3 = {.cb_id = 16, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
+    DummyProgramMultiCBConfig config = {
+        .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
-
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
 }
@@ -756,22 +822,20 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
-        {intermediate_cb, tt::DataFormat::Float16_b},
-        {out_cb, tt::DataFormat::Float16_b}
-    };
+        {intermediate_cb, tt::DataFormat::Float16_b}, {out_cb, tt::DataFormat::Float16_b}};
     uint32_t num_bytes_for_df = 2;
     uint32_t single_tile_size = num_bytes_for_df * 1024;
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    CoreCoord core_coord(0,0);
+    CoreCoord core_coord(0, 0);
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         Program program;
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
-            .set_page_size(intermediate_cb, single_tile_size)
-            .set_page_size(out_cb, single_tile_size);
+                                             .set_page_size(intermediate_cb, single_tile_size)
+                                             .set_page_size(out_cb, single_tile_size);
         auto cb = CreateCircularBuffer(program, cr_set, cb_config);
 
         local_test_functions::initialize_dummy_kernels(program, cr_set);
@@ -783,8 +847,11 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
         vector<uint32_t> cb_config_vector;
 
         tt::tt_metal::detail::ReadFromDeviceL1(
-            device, core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
+            device,
+            core_coord,
+            program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+            cb_config_buffer_size,
+            cb_config_vector);
         uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
@@ -807,12 +874,13 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlyUp
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
-    CBConfig cb_config = {.cb_id=0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config = {.cb_id = 0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
 
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
+            device, device->command_queue(), config));
     }
 }
 
@@ -822,13 +890,13 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleSemaphoreConfigCorr
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
     }
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -836,7 +904,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAutoInsertedBlankBriscKer
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
         auto dummy_reader_kernel = CreateKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            cr_set,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         EnqueueProgram(device->command_queue(), program, false);
@@ -849,8 +919,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanitySin
     CoreRange cr0({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr0});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
     }
 }
 
@@ -862,43 +933,53 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
     }
 }
 
-// Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return 0 active eth cores, that's okay.
+// Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return
+// 0 active eth cores, that's okay.
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
-    for (Device *device : devices_) {
-        for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
+    for (Device* device : devices_) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
+            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
         }
     }
 }
 
-// Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may return 0 active eth cores, that's okay.
+// Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may
+// return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
-    for (Device *device : devices_) {
-        for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
+TEST_F(
+    CommandQueueSingleCardProgramFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
+    for (Device* device : devices_) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
         }
     }
 }
 
-// Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some arch may return 0 active eth cores, that's okay.
+// Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some
+// arch may return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
-    for (Device *device : devices_) {
-        for (const auto &eth_core : device->get_inactive_ethernet_cores()) {
+TEST_F(
+    CommandQueueSingleCardProgramFixture,
+    DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
+    for (Device* device : devices_) {
+        for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+            log_info(
+                tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
+            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
         }
     }
 }
@@ -908,7 +989,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
             device, device->command_queue(), dummy_program_config, 9, 12, 15, 1));
     }
@@ -920,18 +1001,18 @@ namespace multicore_tests {
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for(int i=0; i<NUM_CIRCULAR_BUFFERS; i++)
+    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         cb_config_vector[i].cb_id = i;
+    }
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set({cr});
 
-        DummyProgramMultiCBConfig config = {
-            .cr_set = cr_set, .cb_config_vector = cb_config_vector};
+        DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
@@ -940,20 +1021,21 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for(int i=0; i<NUM_CIRCULAR_BUFFERS; i++)
+    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         cb_config_vector[i].cb_id = i;
+    }
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set({cr});
 
-        DummyProgramMultiCBConfig config = {
-            .cr_set = cr_set, .cb_config_vector = cb_config_vector  };
+        DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
+            device, device->command_queue(), config));
     }
 }
 
@@ -963,18 +1045,18 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector <CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
+    std::vector<CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set({cr});
 
-        DummyProgramMultiCBConfig config = {
-            .cr_set = cr_set, .cb_config_vector = cb_config_vector  };
+        DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
+            device, device->command_queue(), config));
     }
 }
 
@@ -982,14 +1064,16 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for(int i = 0; i < NUM_CIRCULAR_BUFFERS; i++)
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         cb_config_vector[i].cb_id = i;
+    }
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-        CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRange cr1(
+            {worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
         CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
@@ -1003,20 +1087,23 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for(int i = 0; i < NUM_CIRCULAR_BUFFERS; i++)
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         cb_config_vector[i].cb_id = i;
+    }
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-        CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRange cr1(
+            {worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
         CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
+            device, device->command_queue(), config));
     }
 }
 
@@ -1026,24 +1113,26 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector <CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
+    std::vector<CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-        CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRange cr1(
+            {worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
         CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
+            device, device->command_queue(), config));
     }
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1056,12 +1145,12 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemConfigsCorrectlySen
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
-    for (Device *device : devices_)
-    {
+    for (Device* device : devices_) {
         CoreRange first_cr({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-        CoreRange second_cr({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRange second_cr(
+            {worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
         CoreRangeSet cr_set(std::vector{first_cr, second_cr});
 
@@ -1072,8 +1161,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrec
 
         uint32_t semaphore_val = 0;
         vector<uint32_t> initial_semaphore_vals;
-        for (uint32_t i = 0; i < config.num_sems; i++)
-        {
+        for (uint32_t i = 0; i < config.num_sems; i++) {
             initial_semaphore_vals.push_back(semaphore_val);
             semaphore_val++;
         }
@@ -1082,8 +1170,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrec
         expected_semaphore_vals.push_back(initial_semaphore_vals);
 
         initial_semaphore_vals.clear();
-        for (uint32_t i = 0; i < config.num_sems; i++)
-        {
+        for (uint32_t i = 0; i < config.num_sems; i++) {
             initial_semaphore_vals.push_back(semaphore_val);
             semaphore_val++;
         }
@@ -1091,31 +1178,34 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrec
         local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
         expected_semaphore_vals.push_back(initial_semaphore_vals);
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), program, config, expected_semaphore_vals));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(
+            device, device->command_queue(), program, config, expected_semaphore_vals));
     }
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 13, 17, 19, 1));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 13, 17, 19, 1));
     }
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 255, 255, 255, 1));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 255, 255, 255, 1));
     }
 }
 
@@ -1168,8 +1258,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
     }
 }
 
@@ -1179,8 +1270,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
     }
 }
 
@@ -1190,8 +1282,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
     }
 }
 
@@ -1201,8 +1294,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
     }
 }
 
@@ -1212,14 +1306,14 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
+    for (Device* device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
     }
 }
 
-
 }  // end namespace multicore_tests
-}
+}  // namespace basic_tests
 
 namespace stress_tests {
 
@@ -1229,11 +1323,11 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
     uint32_t page_size = 1024;
 
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP(); // Running on second CQ is hanging on CI
+        GTEST_SKIP();  // Running on second CQ is hanging on CI
     }
 
     // Make random
-    auto random_seed = 0; // (unsigned int)time(NULL);
+    auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
@@ -1274,11 +1368,22 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             USE_MAX_RT_ARGS = false;
         }
 
-        log_debug(tt::LogTest, "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
-                 i+1, NUM_PROGRAMS, BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, USE_MAX_RT_ARGS);
+        log_debug(
+            tt::LogTest,
+            "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
+            "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
+            i + 1,
+            NUM_PROGRAMS,
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            USE_MAX_RT_ARGS);
 
         for (uint32_t j = 0; j < NUM_CBS; j++) {
-            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}}).set_page_size(j, page_size * (j + 1));
+            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
+                                                 .set_page_size(j, page_size * (j + 1));
             auto cb = CreateCircularBuffer(program, cr_set, cb_config);
         }
 
@@ -1289,7 +1394,15 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
         auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
-        vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_brisc_unique_rtargs, num_brisc_common_rtargs, page_size};
+        vector<uint32_t> brisc_compile_args = {
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_brisc_unique_rtargs,
+            num_brisc_common_rtargs,
+            page_size};
 
         // ncrisc
         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
@@ -1306,7 +1419,15 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
         auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
-        vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_ncrisc_unique_rtargs, num_ncrisc_common_rtargs, page_size};
+        vector<uint32_t> ncrisc_compile_args = {
+            NCRISC_OUTER_LOOP,
+            NCRISC_MIDDLE_LOOP,
+            NCRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_ncrisc_unique_rtargs,
+            num_ncrisc_common_rtargs,
+            page_size};
 
         // trisc
         uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
@@ -1323,13 +1444,27 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
         auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
-        vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_trisc_unique_rtargs, num_trisc_common_rtargs, page_size};
+        vector<uint32_t> trisc_compile_args = {
+            TRISC_OUTER_LOOP,
+            TRISC_MIDDLE_LOOP,
+            TRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_trisc_unique_rtargs,
+            num_trisc_common_rtargs,
+            page_size};
 
         bool at_least_one_kernel = false;
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_brisc_kernel = CreateKernel(
-                program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = brisc_compile_args, .defines = data_movement_defines});
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = brisc_compile_args,
+                    .defines = data_movement_defines});
             SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
             SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
             at_least_one_kernel = true;
@@ -1337,8 +1472,14 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
 
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_ncrisc_kernel = CreateKernel(
-                program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ncrisc_compile_args, .defines = data_movement_defines});
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = ncrisc_compile_args,
+                    .defines = data_movement_defines});
             SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
             SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
             at_least_one_kernel = true;
@@ -1346,11 +1487,11 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
 
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_trisc_kernel = CreateKernel(
-                program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, ComputeConfig{
-                    .math_approx_mode = false,
-                    .compile_args = trisc_compile_args,
-                    .defines = compute_defines
-                });
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                ComputeConfig{
+                    .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
             SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
             SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             at_least_one_kernel = true;
@@ -1360,23 +1501,35 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             uint32_t random_risc = rand() % 3 + 1;
             if (random_risc == 1) {
                 auto dummy_brisc_kernel = CreateKernel(
-                    program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = brisc_compile_args, .defines = data_movement_defines});
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .compile_args = brisc_compile_args,
+                        .defines = data_movement_defines});
                 SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
             } else if (random_risc == 2) {
                 auto dummy_ncrisc_kernel = CreateKernel(
-                    program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ncrisc_compile_args, .defines = data_movement_defines});
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .compile_args = ncrisc_compile_args,
+                        .defines = data_movement_defines});
                 SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
             } else if (random_risc == 3) {
                 auto dummy_trisc_kernel = CreateKernel(
-                    program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, ComputeConfig{
-                        .math_approx_mode = false,
-                        .compile_args = trisc_compile_args,
-                        .defines = compute_defines
-                    });
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    ComputeConfig{
+                        .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             } else {
@@ -1390,21 +1543,33 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
     for (uint8_t cq_id = 0; cq_id < this->device_->num_hw_cqs(); ++cq_id) {
         log_info(tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
         // This loop caches program and runs
-        for (Program& program: programs) {
+        for (Program& program : programs) {
             EnqueueProgram(this->device_->command_queue(cq_id), program, false);
         }
 
         // This loops assumes already cached
-        uint32_t NUM_ITERATIONS = 500; // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of iterations, need to come back to that
+        uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
+                                        // iterations, need to come back to that
 
-        log_info(tt::LogTest, "Running {} programs on cq {} for {} iterations now.", programs.size(), (uint32_t)cq_id, NUM_ITERATIONS);
+        log_info(
+            tt::LogTest,
+            "Running {} programs on cq {} for {} iterations now.",
+            programs.size(),
+            (uint32_t)cq_id,
+            NUM_ITERATIONS);
         for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
-            auto rng = std::default_random_engine {};
+            auto rng = std::default_random_engine{};
             std::shuffle(std::begin(programs), std::end(programs), rng);
             if (i % 10 == 0) {
-                log_debug(tt::LogTest, "Enqueueing {} programs on cq {} for iter: {}/{} now.", programs.size(), (uint32_t)cq_id, i+1, NUM_ITERATIONS);
+                log_debug(
+                    tt::LogTest,
+                    "Enqueueing {} programs on cq {} for iter: {}/{} now.",
+                    programs.size(),
+                    (uint32_t)cq_id,
+                    i + 1,
+                    NUM_ITERATIONS);
             }
-            for (Program& program: programs) {
+            for (Program& program : programs) {
                 EnqueueProgram(this->device_->command_queue(cq_id), program, false);
             }
         }
@@ -1416,7 +1581,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
 
 TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     uint32_t NUM_ITER = 100000;
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1424,7 +1589,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_TensixTestFillDispatchCore
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER));
     }
 }
 
@@ -1434,7 +1600,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
     uint32_t page_size = 1024;
 
     // Make random
-    auto random_seed = 0; // (unsigned int)time(NULL);
+    auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
@@ -1479,11 +1645,22 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
             USE_MAX_RT_ARGS = false;
         }
 
-        log_debug(tt::LogTest, "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
-                 i+1, NUM_PROGRAMS, BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, USE_MAX_RT_ARGS);
+        log_debug(
+            tt::LogTest,
+            "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
+            "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
+            i + 1,
+            NUM_PROGRAMS,
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            USE_MAX_RT_ARGS);
 
         for (uint32_t j = 0; j < NUM_CBS; j++) {
-            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}}).set_page_size(j, page_size * (j + 1));
+            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
+                                                 .set_page_size(j, page_size * (j + 1));
             auto cb = CreateCircularBuffer(program, cr_set, cb_config);
         }
 
@@ -1494,7 +1671,15 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
-        vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_brisc_unique_rtargs, num_brisc_common_rtargs, page_size};
+        vector<uint32_t> brisc_compile_args = {
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_brisc_unique_rtargs,
+            num_brisc_common_rtargs,
+            page_size};
 
         // ncrisc
         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
@@ -1511,7 +1696,15 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
-        vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_ncrisc_unique_rtargs, num_ncrisc_common_rtargs, page_size};
+        vector<uint32_t> ncrisc_compile_args = {
+            NCRISC_OUTER_LOOP,
+            NCRISC_MIDDLE_LOOP,
+            NCRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_ncrisc_unique_rtargs,
+            num_ncrisc_common_rtargs,
+            page_size};
 
         // trisc
         uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
@@ -1528,13 +1721,27 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
-        vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_trisc_unique_rtargs, num_trisc_common_rtargs, page_size};
+        vector<uint32_t> trisc_compile_args = {
+            TRISC_OUTER_LOOP,
+            TRISC_MIDDLE_LOOP,
+            TRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_trisc_unique_rtargs,
+            num_trisc_common_rtargs,
+            page_size};
 
         bool at_least_one_kernel = false;
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_brisc_kernel = CreateKernel(
-                program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = brisc_compile_args, .defines = data_movement_defines});
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = brisc_compile_args,
+                    .defines = data_movement_defines});
             SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
             SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
             at_least_one_kernel = true;
@@ -1542,8 +1749,14 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
 
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_ncrisc_kernel = CreateKernel(
-                program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ncrisc_compile_args, .defines = data_movement_defines});
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = ncrisc_compile_args,
+                    .defines = data_movement_defines});
             SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
             SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
             at_least_one_kernel = true;
@@ -1551,11 +1764,11 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
 
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_trisc_kernel = CreateKernel(
-                program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, ComputeConfig{
-                    .math_approx_mode = false,
-                    .compile_args = trisc_compile_args,
-                    .defines = compute_defines
-                });
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                ComputeConfig{
+                    .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
             SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
             SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             at_least_one_kernel = true;
@@ -1565,23 +1778,35 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
             uint32_t random_risc = rand() % 3 + 1;
             if (random_risc == 1) {
                 auto dummy_brisc_kernel = CreateKernel(
-                    program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = brisc_compile_args, .defines = data_movement_defines});
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .compile_args = brisc_compile_args,
+                        .defines = data_movement_defines});
                 SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
             } else if (random_risc == 2) {
                 auto dummy_ncrisc_kernel = CreateKernel(
-                    program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ncrisc_compile_args, .defines = data_movement_defines});
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .compile_args = ncrisc_compile_args,
+                        .defines = data_movement_defines});
                 SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
             } else if (random_risc == 3) {
                 auto dummy_trisc_kernel = CreateKernel(
-                    program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, ComputeConfig{
-                        .math_approx_mode = false,
-                        .compile_args = trisc_compile_args,
-                        .defines = compute_defines
-                    });
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    ComputeConfig{
+                        .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             } else {
@@ -1594,21 +1819,23 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
 
     log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
     // This loop caches program and runs
-    for (Program& program: programs) {
+    for (Program& program : programs) {
         EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
     // This loops assumes already cached
-    uint32_t NUM_ITERATIONS = 500; // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of iterations, need to come back to that
+    uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
+                                    // iterations, need to come back to that
 
     log_info(tt::LogTest, "Running {} programs for {} iterations now.", programs.size(), NUM_ITERATIONS);
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
-        auto rng = std::default_random_engine {};
+        auto rng = std::default_random_engine{};
         std::shuffle(std::begin(programs), std::end(programs), rng);
         if (i % 50 == 0) {
-            log_info(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
+            log_info(
+                tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i + 1, NUM_ITERATIONS);
         }
-        for (Program& program: programs) {
+        for (Program& program : programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
         }
     }

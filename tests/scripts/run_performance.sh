@@ -17,6 +17,8 @@ run_perf_models_other() {
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -34,6 +36,8 @@ run_perf_models_other() {
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
     env pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m $test_marker
+
+    env pytest -n auto models/demos/mnist/tests -m $test_marker
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
@@ -100,6 +104,8 @@ run_device_perf_models() {
 
     env pytest models/demos/bert_tiny/tests/ -m $test_marker
 
+    env pytest models/demos/mnist/tests -m $test_marker
+
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
@@ -124,6 +130,8 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b_common/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests -m $test_marker
     fi
 
     ## Merge all the generated reports
