@@ -35,10 +35,14 @@ def data_gen_with_range_dtype(
     assert high > low, "Incorrect range provided"
     torch.manual_seed(213919)
     pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
-    if is_row_major:
-        tt_tensor = ttnn.Tensor(pt_tensor, ttnn_dtype).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
-    else:
-        tt_tensor = ttnn.Tensor(pt_tensor, ttnn_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    tt_tensor = ttnn.from_torch(pt_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        torch_input = ttnn.to_torch(tt_tensor).to(torch.bfloat16)
+        if required_grad:
+            torch_input.requires_grad_()
+        return torch_input, tt_tensor
+
     return pt_tensor, tt_tensor
 
 
