@@ -29,7 +29,6 @@ namespace operations::conv {
 using sliding_window::SlidingWindowConfig;
 using sliding_window::ParallelConfig;
 
-using namespace std;
 namespace conv2d {
 
 static uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
