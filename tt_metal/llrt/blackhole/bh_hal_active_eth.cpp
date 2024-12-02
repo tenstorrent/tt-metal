@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core_config.h"
 #include "dev_msgs.h"
 #include "eth_l1_address_map.h"
 
