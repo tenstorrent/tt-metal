@@ -17,6 +17,14 @@ namespace ttnn::operations::dram_prefetcher {
 
 void DramPrefetcher::validate(const std::vector<Tensor>& tensors) const {
     TT_FATAL(tensors.size() >= 1, "Must have at least one input tensor");
+    // Check that all tensors are on the same device
+    for (const auto& tensor : tensors) {
+        TT_FATAL(tensor.device() == tensors[0].device(), "All tensors must be on the same device");
+    }
+    // Check that all tensors' k is divisible by 24
+    for (const auto& tensor : tensors) {
+        TT_FATAL(tensor.get_legacy_shape()[0] % 24 == 0, "All tensors' k must be divisible by 24");
+    }
 }
 std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::vector<Tensor>& tensors) const {
     // Do nothing because it's an in-place operation
