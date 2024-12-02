@@ -431,20 +431,15 @@ int main() {
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
 
             // re-initialize the NoCs
-            if (prev_noc_mode != noc_mode) {
-                if (noc_mode == DM_DEDICATED_NOC) {
+            if (noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-                } else {
+                }
+            } else {
+                if (prev_noc_mode != noc_mode) {
                     dynamic_noc_init();
                 }
-            }
-            if (noc_mode == DM_DYNAMIC_NOC) {
                 dynamic_noc_local_state_init();
-                // DPRINT << "risc: " << (uint)risc_type << " noc: " << (uint32_t)noc_index << " " << get_noc_nonposted_writes_acked<risc_type>(noc_index) << " " << NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
-                // DPRINT << "risc: " << (uint)risc_type << " noc: " << (uint32_t)(1-noc_index) << " " << get_noc_nonposted_writes_acked<risc_type>(1-noc_index) << " " << NOC_STATUS_READ_REG(1-noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
-                // DPRINT << "risc: " << (uint)1 << " noc: " << (uint32_t)noc_index << " " << get_noc_nonposted_writes_acked<1-risc_type>(noc_index) << " " << NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
-                // DPRINT << "risc: " << (uint)1 << " noc: " << (uint32_t)(1-noc_index) << " " << get_noc_nonposted_writes_acked<1-risc_type>(1-noc_index) << " " << NOC_STATUS_READ_REG(1-noc_index, NIU_MST_WR_ACK_RECEIVED) <<ENDL();
-
             }
             prev_noc_mode = noc_mode;
 
@@ -482,6 +477,13 @@ int main() {
             WAYPOINT("D");
 
             wait_ncrisc_trisc();
+
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                // barrier to make sure profiler finishes writes
+                while(!ncrisc_dynamic_noc_nonposted_writes_flushed<risc_type>(noc_index));
+                // re-init for profiler to able to run barrier in dedicated noc mode
+                noc_local_state_init(noc_index);
+            }
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
