@@ -228,13 +228,19 @@ def run_multi_core_matmul_1d(
         gather_in0=True,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
-        math_approx_mode=True,
-        fp32_dest_acc_en=fp32_acc_mode,
-        packer_l1_acc=packer_l1_acc,
-        dst_full_sync_en=True,
-    )
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=fidelity,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
+            dst_full_sync_en=True,
+        )
 
     for _ in range(num_iters):
         output_t = ttnn.matmul(
