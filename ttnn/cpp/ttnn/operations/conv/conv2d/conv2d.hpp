@@ -120,8 +120,7 @@ sliding_window::ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled=true,
-    bool is_non_tile_mul_width=false);
+    bool is_out_tiled=true);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
