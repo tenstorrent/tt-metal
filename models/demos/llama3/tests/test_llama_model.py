@@ -105,9 +105,6 @@ def test_llama_model_inference(
         max_batch_size=batch_size,
     )
 
-    # Reduce max seq len and KV cache seq_len params to speed up the test
-    model_args.max_seq_len = 128
-
     model_name = {
         (16, False): "llama32_1b",
         (28, False): "llama32_3b",
