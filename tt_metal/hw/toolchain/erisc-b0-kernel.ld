@@ -11,9 +11,6 @@ REGION_ALIAS("REGION_APP_KERNEL_CODE", ERISC_APP_KERNEL_CODE)
 REGION_ALIAS("REGION_APP_KERNEL_DATA", ERISC_APP_KERNEL_DATA)
 REGION_ALIAS("REGION_LDM", LOCAL_DATA_MEM)
 
-__firmware_stack_size = 1024;
-__firmware_global_pointer = ORIGIN(ERISC_DATA) + 0x7f0;
-
 __firmware_start = ORIGIN(REGION_APP_KERNEL_CODE);
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
@@ -29,7 +26,6 @@ PHDRS {
 
 SECTIONS
 {
-  PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
   .text __firmware_start :
@@ -43,7 +39,6 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
   } > REGION_APP_KERNEL_CODE :text
-
   .init.fini :
   {
     /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
@@ -51,51 +46,39 @@ SECTIONS
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
   } > REGION_APP_KERNEL_CODE :text
 
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_KERNEL_CODE :text
-  .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE :text
+  .rodata         : {
+    *(.rodata .rodata.* .gnu.linkonce.r.*)
+  } > REGION_APP_KERNEL_CODE :text
+  .rodata1        : {
+    *(.rodata1)
+  } > REGION_APP_KERNEL_CODE :text
 
-  .sdata2         :
-  {
-    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_KERNEL_DATA :data
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_KERNEL_DATA :data
-  /* Adjust the address for the data segment.  We want to adjust up to
-     the same address within the page on the next page up.  */
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_KERNEL_DATA :data
-  .dynamic        : { *(.dynamic) } > REGION_APP_KERNEL_DATA :data
-  .data           :
-  {
-    . = ALIGN(16);
-    *(.data .data.* .gnu.linkonce.d.*)
+  .data : ALIGN(16) {
+    *(.dynamic)
+    *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
-    SORT(CONSTRUCTORS)
+    *(.sdata .sdata.* .gnu.linkonce.s.*)
+    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
+
+    *(.data .data.* .gnu.linkonce.d.*)
+    *(.data1)
+
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+    . = ALIGN(4);
   } > REGION_APP_KERNEL_DATA :data
 
-  . = ALIGN(4); /* startup code will use word writes to zero bss */
-  __l1_bss_start = .;
-  .sbss           :
-  {
+  .bss : ALIGN(4) {
+    __ldm_bss_start = .;
+    *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
-  } > REGION_APP_KERNEL_DATA :data
-  . = ALIGN(4);
-  __l1_bss_end = .;
-
-  .bss            :
-  {
-   __ldm_bss_start = .;
-   *(.dynbss)
-   *(.bss .bss.* .gnu.linkonce.b.*)
-   *(COMMON)
-
-   /* Align here to ensure that the .bss section occupies space up to
-      _end.  Align after .bss to ensure correct alignment even if the
-      .bss section disappears because there are no input sections.
-      FIXME: Why do we need it? When there is no .bss section, we don't
-      pad the .data section.  */
-   . = ALIGN(4);
-   __ldm_bss_end = .;
+    *(.dynbss)
+    *(.bss .bss.* .gnu.linkonce.b.*)
+    *(COMMON)
+    . = ALIGN(4);
+    __ldm_bss_end = .;
   } > REGION_APP_KERNEL_DATA :data
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
