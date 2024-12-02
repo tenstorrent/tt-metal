@@ -5,7 +5,7 @@
 #pragma once
 #include "common/utils.hpp"
 
-#include "third_party/umd/device/device_api_metal.h"
+#include "umd/device/device_api_metal.h"
 
 #include <string>
 

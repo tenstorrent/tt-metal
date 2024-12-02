@@ -338,11 +338,11 @@ std::map<chip_id_t, Device *> CreateDevices(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -912,18 +912,18 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
+Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig &dispatch_core_config) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -1081,6 +1081,12 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer) {
     auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
     circular_buffer->config().set_globally_allocated_address(buffer);
+    circular_buffer->assign_global_address();
+}
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
+    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
 }
 

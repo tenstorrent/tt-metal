@@ -863,7 +863,6 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
 def test_dram_read_l1_write_core(
     arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target
 ):
-    dev_freq = get_device_freq()
     data = []
     cycle_list = []
     time_list = []
@@ -879,6 +878,7 @@ def test_dram_read_l1_write_core(
             input_size = k * n * 2048 // 1024
         run_dram_read_l1_write_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
+        dev_freq = get_device_freq()
         time = cycle / dev_freq / 1000.0 / 1000.0
         throughput = input_size / cycle * dev_freq / 1000.0
         cycle_list.append(cycle)
@@ -1005,6 +1005,8 @@ def test_dram_read_remote_cb_sync(
     elif test == "Matmul":
         if arch == "wormhole_b0":
             bw_bound = 18.0
+    if use_sub_devices:
+        pytest.xfail("Tests using sub-devices is not correctly set up for BW measurements")
     assert bw_bound <= throughput
 
 

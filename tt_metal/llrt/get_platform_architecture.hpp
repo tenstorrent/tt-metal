@@ -8,7 +8,7 @@
 
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/third_party/umd/device/cluster.h"
+#include "umd/device/cluster.h"
 
 namespace tt::tt_metal {
 

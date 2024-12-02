@@ -60,9 +60,10 @@ struct CreateTensorParams {
     ttnn::SimpleShape shape;
 };
 
-}
+}  // namespace
 
-class CreateTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CreateTensorParams> {};
+class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
+                         public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
     CreateTensorParams params = GetParam();
@@ -73,21 +74,21 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})},
-        CreateTensorParams{.shape=ttnn::SimpleShape({2, 1, 32, 32})},
-        CreateTensorParams{.shape=ttnn::SimpleShape({0, 0, 0, 0})},
-        CreateTensorParams{.shape=ttnn::SimpleShape({0, 1, 32, 32})},
-        CreateTensorParams{.shape=ttnn::SimpleShape({0})}
-    )
-);
+        CreateTensorParams{.shape = ttnn::SimpleShape({1, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::SimpleShape({2, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::SimpleShape({0, 0, 0, 0})},
+        CreateTensorParams{.shape = ttnn::SimpleShape({0, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::SimpleShape({0})}));
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
     os << magic_enum::enum_name(value);
     return os;
 }
 
-using CombinationInputParams = std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
-class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CombinationInputParams> {};
+using CombinationInputParams =
+    std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
+class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
+                        public ::testing::WithParamInterface<CombinationInputParams> {};
 
 TEST_P(EmptyTensorTest, Combinations) {
     auto params = GetParam();
@@ -95,13 +96,15 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto dtype = std::get<1>(params);
     auto layout = std::get<2>(params);
     auto memory_config = std::get<3>(params);
-    tt::log_info("Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
+    tt::log_info(
+        "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
 
-    if(layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
+    if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
         return;
     }
 
-    auto tensor_layout = tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
+    auto tensor_layout =
+        tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
 
     // Ignoring too large single bank allocations
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
@@ -127,15 +130,14 @@ INSTANTIATE_TEST_SUITE_P(
             ttnn::Shape({1, 2}),
             ttnn::Shape({1, 2, 3}),
             ttnn::Shape({1, 2, 3, 4}),
-            //ttnn::Shape({0, 0, 0, 0}), fails with width sharded case
+            // ttnn::Shape({0, 0, 0, 0}), fails with width sharded case
             ttnn::Shape({1, 1, 1, 1}),
-            //ttnn::Shape({0, 1, 32, 32}), fails with width sharded case
+            // ttnn::Shape({0, 1, 32, 32}), fails with width sharded case
             ttnn::Shape({1, 1, 32, 32}),
             ttnn::Shape({2, 1, 32, 32}),
             ttnn::Shape({64, 1, 256, 1}),
             ttnn::Shape({1, 1, 21120, 16}),
-            ttnn::Shape({1, 2, 3, 4, 5})
-        ),
+            ttnn::Shape({1, 2, 3, 4, 5})),
 
         ::testing::Values(
             tt::tt_metal::DataType::BFLOAT16,
@@ -143,32 +145,22 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_metal::DataType::FLOAT32,
             tt::tt_metal::DataType::BFLOAT8_B),
 
-        ::testing::Values(
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::Layout::ROW_MAJOR),
+        ::testing::Values(tt::tt_metal::Layout::TILE, tt::tt_metal::Layout::ROW_MAJOR),
 
         ::testing::Values(
             tt::tt_metal::MemoryConfig{
-                .memory_layout = tt::tt_metal::TensorMemoryLayout::SINGLE_BANK,
-                .buffer_type = ttnn::BufferType::L1
-            },
+                .memory_layout = tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, .buffer_type = ttnn::BufferType::L1},
 
             tt::tt_metal::MemoryConfig{
-                .memory_layout = tt::tt_metal::TensorMemoryLayout::SINGLE_BANK,
-                .buffer_type = ttnn::BufferType::DRAM
-            },
-
+                .memory_layout = tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, .buffer_type = ttnn::BufferType::DRAM},
 
             tt::tt_metal::MemoryConfig{
                 .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-                .buffer_type = tt::tt_metal::BufferType::L1
-            },
+                .buffer_type = tt::tt_metal::BufferType::L1},
 
             tt::tt_metal::MemoryConfig{
                 .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-                .buffer_type = tt::tt_metal::BufferType::DRAM
-            }
-
+                .buffer_type = tt::tt_metal::BufferType::DRAM}
 
             // tt::tt_metal::MemoryConfig{
             //     .memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -188,7 +180,6 @@ INSTANTIATE_TEST_SUITE_P(
             //         tt::tt_metal::ShardOrientation::ROW_MAJOR,
             //         false}
             // },
-
 
             // ttnn::MemoryConfig{
             //     .memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
@@ -209,7 +200,6 @@ INSTANTIATE_TEST_SUITE_P(
             //         false}
             // },
 
-
             // tt::tt_metal::MemoryConfig{
             //     .memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
             //     .buffer_type = tt::tt_metal::BufferType::L1,
@@ -228,6 +218,4 @@ INSTANTIATE_TEST_SUITE_P(
             //         tt::tt_metal::ShardOrientation::ROW_MAJOR,
             //         false}
             // }
-        )
-    )
-);
+            )));

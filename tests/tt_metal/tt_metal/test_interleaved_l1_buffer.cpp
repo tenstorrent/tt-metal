@@ -15,22 +15,17 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int num_pages_two, uint32_t page_size) {
+bool test_interleaved_l1_buffer(tt_metal::Device* device, int num_pages_one, int num_pages_two, uint32_t page_size) {
     bool pass = true;
 
     uint32_t buffer_size = num_pages_one * page_size;
 
-
     tt_metal::InterleavedBufferConfig buff_config_0{
-                .device=device,
-                .size = buffer_size,
-                .page_size = page_size,
-                .buffer_type = tt_metal::BufferType::L1
-                };
+        .device = device, .size = buffer_size, .page_size = page_size, .buffer_type = tt_metal::BufferType::L1};
     auto interleaved_buffer = CreateBuffer(buff_config_0);
 
-    std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
-        buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> host_buffer =
+        create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     tt_metal::detail::WriteToBuffer(interleaved_buffer, host_buffer);
 
@@ -42,11 +37,7 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
     uint32_t second_buffer_size = num_pages_two * page_size;
 
     tt_metal::InterleavedBufferConfig buff_config_1{
-                .device=device,
-                .size = second_buffer_size,
-                .page_size = page_size,
-                .buffer_type = tt_metal::BufferType::L1
-                };
+        .device = device, .size = second_buffer_size, .page_size = page_size, .buffer_type = tt_metal::BufferType::L1};
 
     auto second_interleaved_buffer = CreateBuffer(buff_config_1);
 
@@ -63,32 +54,28 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
     return pass;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
-        uint32_t page_size =  2 * 1024;
+        uint32_t page_size = 2 * 1024;
 
         int num_bank_pages_one = 258;
         int num_bank_pages_two = 378;
-
-
 
         pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

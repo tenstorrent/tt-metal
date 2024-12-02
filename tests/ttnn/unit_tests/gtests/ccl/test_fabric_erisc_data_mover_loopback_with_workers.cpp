@@ -8,7 +8,7 @@
 #include <limits>
 #include <random>
 
-#include "device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 #include "gtest/gtest.h"
 // #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
@@ -30,7 +30,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 class T3000TestDevice {
-   public:
+public:
     T3000TestDevice() : device_open(false) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
@@ -63,7 +63,7 @@ class T3000TestDevice {
     tt::ARCH arch_;
     size_t num_devices_;
 
-   private:
+private:
     bool device_open;
 };
 
@@ -82,7 +82,6 @@ struct KernelXY {
 
     uint32_t to_uint32() const { return y << 16 | x; }
 };
-
 
 enum Correctness { Correct, Incorrect };
 
@@ -187,7 +186,6 @@ struct mcast_send {
     size_t range;
 };
 
-
 using mode_variant_t = std::variant<mcast_send, unicast_send>;
 
 static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::fabric::PacketHeader);
@@ -210,7 +208,6 @@ void generate_sender_worker_kernels(
     uint32_t worker_buffer_index_semaphore_id,
     // farthest to closest
     std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos) {
-
     auto const& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
@@ -239,10 +236,7 @@ void generate_sender_worker_kernels(
     log_trace(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
     log_trace(
-        tt::LogTest,
-        "Sender communicating with EDM: x={}, y={}",
-        (uint32_t)edm_noc_core.x,
-        (uint32_t)edm_noc_core.y);
+        tt::LogTest, "Sender communicating with EDM: x={}, y={}", (uint32_t)edm_noc_core.x, (uint32_t)edm_noc_core.y);
     std::vector<uint32_t> sender_worker_writer_runtime_args{
         worker_fabric_connection.edm_buffer_base_addr,
         worker_fabric_connection.edm_l1_sem_addr,
@@ -376,20 +370,10 @@ bool RunLoopbackTest(
     const chip_id_t remote_chip_id = 1;
     auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
     auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
-        sender_device,
-        sender_program,
-        eth_sender_core,
-        local_chip_id,
-        remote_chip_id,
-        edm_config);
+        sender_device, sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
-        receiver_device,
-        receiver_program,
-        eth_receiver_core,
-        remote_chip_id,
-        local_chip_id,
-        edm_config);
+        receiver_device, receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
 
@@ -505,9 +489,10 @@ bool RunLineFabricTest(
             output_buffers.push_back(CreateBuffer(InterleavedBufferConfig{
                 devices.at(i), test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type}));
         } else {
-            output_buffers.push_back(CreateBuffer(InterleavedBufferConfig{
-                devices.at(i), test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type}, output_buffers[0]->address())
-                );
+            output_buffers.push_back(CreateBuffer(
+                InterleavedBufferConfig{
+                    devices.at(i), test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type},
+                output_buffers[0]->address()));
         }
         tt_metal::detail::WriteToBuffer(output_buffers.back(), all_zeros);
     }
@@ -533,7 +518,8 @@ bool RunLineFabricTest(
 
     const auto edm_termination_infos = line_fabric.generate_ordered_termination_info_farthest_to_nearest();
 
-    auto chip0_worker_fabric_connection = line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
+    auto chip0_worker_fabric_connection =
+        line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
 
     const std::size_t pages_per_send =
         (chip0_worker_fabric_connection.buffer_size_bytes - PACKET_HEADER_SIZE_BYTES) / page_size;
@@ -561,7 +547,6 @@ bool RunLineFabricTest(
     ////////////////////////////////////////////////////////////////////////////
     line_fabric.build_kernels();
 
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
@@ -572,7 +557,6 @@ bool RunLineFabricTest(
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
-
         // Check all output buffers. Make sure only the buffers in the mcast range are
         // non-zero. All other buffers outside the range should be zero filled
         TT_ASSERT(
@@ -580,7 +564,7 @@ bool RunLineFabricTest(
             "Input buffer expected to not be all 0");
         for (size_t i = 0; i < output_buffers.size(); i++) {
             bool compare_with_input = (mcast_first_chip <= i && i <= mcast_last_chip);
-            auto &golden_tensor = compare_with_input ? inputs : all_zeros;
+            auto& golden_tensor = compare_with_input ? inputs : all_zeros;
             pass &= run_output_check(all_zeros, golden_tensor, output_buffers.at(i)) == Correctness::Correct;
         }
     }

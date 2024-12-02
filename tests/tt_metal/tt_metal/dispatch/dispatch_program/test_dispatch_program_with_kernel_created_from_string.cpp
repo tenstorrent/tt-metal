@@ -11,12 +11,12 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/program/program.hpp"
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "program_with_kernel_created_from_string_fixture.hpp"
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
-    const string &kernel_src_code = R"(
+    const string& kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "dataflow_api.h"
 
@@ -28,7 +28,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     }
     )";
 
-    for (Device *device : this->devices_) {
+    for (Device* device : this->devices_) {
         Program program = CreateProgram();
         tt_metal::CreateKernelFromString(
             program,
@@ -41,7 +41,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
-    const string &kernel_src_code = R"(
+    const string& kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "compute_kernel_api.h"
 
@@ -56,7 +56,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     }
     )";
 
-    for (Device *device : this->devices_) {
+    for (Device* device : this->devices_) {
         Program program = CreateProgram();
         tt_metal::CreateKernelFromString(
             program,
@@ -72,7 +72,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 }
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
-    const string &kernel_src_code = R"(
+    const string& kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "dataflow_api.h"
 
@@ -83,8 +83,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     }
     )";
 
-    for (Device *device : this->devices_) {
-        const std::unordered_set<CoreCoord> &active_ethernet_cores = device->get_active_ethernet_cores(true);
+    for (Device* device : this->devices_) {
+        const std::unordered_set<CoreCoord>& active_ethernet_cores = device->get_active_ethernet_cores(true);
         if (active_ethernet_cores.empty()) {
             const chip_id_t device_id = device->id();
             log_info(LogTest, "Skipping this test on device {} because it has no active ethernet cores.", device_id);

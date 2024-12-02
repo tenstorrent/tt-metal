@@ -331,12 +331,8 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
         }
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
-            {
-                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
-            }
-            {
-                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
-            }
+            { result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result); }
+            { result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result); }
         }
     }
     return result;

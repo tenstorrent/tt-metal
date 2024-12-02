@@ -953,7 +953,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             uint32_t transfer_info_index = 0;
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
-                const ll_api::memory &kernel_bin = binaries[sub_kernel_index];
+                const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
                 // Spans are now packed into one
                 // TODO: code below can be simplified w/ a single span
@@ -1231,7 +1231,7 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
             auto& optional_id = kg.kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = this->get_kernel(optional_id.value());
-                std::vector<ll_api::memory> const &binaries = kernel->binaries(device->build_key());
+                std::vector<ll_api::memory const*> const& binaries = kernel->binaries(device->build_key());
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
@@ -1275,8 +1275,8 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else {
-                        kg.kernel_text_offsets[class_id] = binaries[0].get_text_addr();
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0].get_text_addr();
+                        kg.kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
                     }
                 }
             }
@@ -1426,8 +1426,9 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const std::vector<CoreCoord> &storage_cores = tt::get_logical_storage_cores(device->id(), device->num_hw_cqs(), dispatch_core_type);
+        const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+        CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+        const std::vector<CoreCoord> &storage_cores = tt::get_logical_storage_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1435,7 +1436,7 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
 
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
-            const std::vector<CoreCoord> &dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_type);
+            const std::vector<CoreCoord> &dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
 
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {

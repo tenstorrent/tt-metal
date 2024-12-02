@@ -1899,13 +1899,13 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
 
         if (src0_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-            UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_shard * src0_single_tile_size);
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program, cb_src0, *src_buffer, num_tiles_per_shard * src0_single_tile_size);
         }
 
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_shard * dst_single_tile_size);
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program, cb_output, *dst_buffer, num_tiles_per_shard * dst_single_tile_size);
         }
 
         uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;

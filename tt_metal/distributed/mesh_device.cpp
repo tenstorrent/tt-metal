@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "device/tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
@@ -100,8 +100,20 @@ SystemMesh& SystemMesh::instance() {
 }
 void SystemMesh::initialize() {
     this->physical_device_id_to_coordinate = tt::Cluster::instance().get_user_chip_ethernet_coordinates();
-    for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate) {
-        this->physical_coordinate_to_device_id.emplace(physical_coordinate, chip_id);
+    if (this->physical_device_id_to_coordinate.empty()) {
+        // Only WH has ethernet coordinates. Fabric will assign chip ids for BH
+        auto arch = tt::Cluster::instance().arch();
+        TT_FATAL(arch == ARCH::GRAYSKULL or arch == ARCH::BLACKHOLE, "Expected Wormhole chips to have ethernet coordinates assigned by cluster descriptor");
+        const int num_detected_devices = tt::Cluster::instance().number_of_devices();
+        for (auto chip_id = 0; chip_id < num_detected_devices; chip_id++) {
+            PhysicalCoordinate coord{0, chip_id, 0, 0, 0};
+            this->physical_device_id_to_coordinate.emplace(chip_id, coord);
+            this->physical_coordinate_to_device_id.emplace(coord, chip_id);
+        }
+    } else {
+        for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate) {
+            this->physical_coordinate_to_device_id.emplace(physical_coordinate, chip_id);
+        }
     }
 
     // Initialize the system mesh shape and translation map
@@ -163,7 +175,7 @@ std::vector<Device*> SystemMesh::map_mesh_device(
     size_t num_command_queues,
     size_t l1_small_size,
     size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config) {
 
     auto [requested_num_rows, requested_num_cols] = mesh_device->shape();
@@ -180,7 +192,7 @@ std::vector<Device*> SystemMesh::map_mesh_device(
         config.physical_device_ids;
 
     this->opened_devices[mesh_device->get_mesh_id()] = tt::tt_metal::detail::CreateDevices(
-        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
     std::vector<Device*> mapped_devices;
     for (auto physical_device_id : physical_device_ids) {
@@ -229,10 +241,10 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type)
+    const DispatchCoreConfig &dispatch_core_config)
 {
     auto mesh_device = std::make_shared<MeshDevice>(config.mesh_shape, config.mesh_type);
-    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, config);
+    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
 
     return mesh_device;
 }
@@ -289,7 +301,7 @@ void MeshDevice::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config)
 {
     auto [num_rows, num_cols] = this->shape();
@@ -302,7 +314,7 @@ void MeshDevice::initialize(
 
     auto& instance = SystemMesh::instance();
     this->devices = instance.map_mesh_device(
-        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_type, config);
+        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_config, config);
     this->primary_view = std::make_shared<MeshDeviceView>(*this);
 }
 

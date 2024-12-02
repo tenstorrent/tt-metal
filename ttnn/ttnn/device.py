@@ -17,6 +17,8 @@ def get_device_core_grid(device):
 Device = ttnn._ttnn.device.Device
 Device.core_grid = property(get_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
+DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
+DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
 EPS_GS = ttnn._ttnn.device.EPS_GS
 EPS_WHB0 = ttnn._ttnn.device.EPS_WHB0
@@ -63,10 +65,10 @@ def CreateDevice(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_type: int = DispatchCoreType.WORKER,
+    dispatch_core_config: DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
 ):
     return ttnn._ttnn.device.CreateDevice(
-        device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type
+        device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config
     )
 
 
@@ -75,10 +77,10 @@ def CreateDevices(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_type: int = DispatchCoreType.WORKER,
+    dispatch_core_config: DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
 ):
     return ttnn._ttnn.device.CreateDevices(
-        device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type
+        device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config
     )
 
 

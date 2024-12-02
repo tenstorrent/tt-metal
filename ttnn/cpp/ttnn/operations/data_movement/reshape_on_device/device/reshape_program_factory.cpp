@@ -363,13 +363,9 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         for (uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-            {
-                SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-            }
+            { SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first); }
 
-            {
-                SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
-            }
+            { SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second); }
         }
     };
 

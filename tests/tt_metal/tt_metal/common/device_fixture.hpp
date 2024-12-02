@@ -13,7 +13,7 @@
 #include "tt_metal/impl/device/device_pool.hpp"
 
 class DeviceFixture : public DispatchFixture {
-   protected:
+protected:
     void SetUp() override {
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -44,8 +44,9 @@ class DeviceFixture : public DispatchFixture {
     }
 
     void create_devices(const std::vector<chip_id_t>& device_ids) {
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        tt::DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        tt::DevicePool::initialize(
+            device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         this->num_devices_ = this->devices_.size();
     }
@@ -54,7 +55,7 @@ class DeviceFixture : public DispatchFixture {
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {
-   protected:
+protected:
     void SetUp() override {
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -82,7 +83,7 @@ class DeviceSingleCardFixture : public DispatchFixture {
         this->num_devices_ = this->reserved_devices_.size();
     }
 
-    tt::tt_metal::Device *device_;
+    tt::tt_metal::Device* device_;
     std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
     size_t num_devices_;
 };
@@ -90,7 +91,7 @@ class DeviceSingleCardFixture : public DispatchFixture {
 class DeviceSingleCardBufferFixture : public DeviceSingleCardFixture {};
 
 class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
-   protected:
+protected:
     void SetUp() override {
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());

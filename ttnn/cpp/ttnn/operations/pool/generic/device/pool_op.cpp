@@ -2,21 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "max_pool2d_device_op.hpp"
+#include "pool_op.hpp"
 
+#include "tt_metal/common/math.hpp"
 #include <utility>
 
 /**
- * New maxpool2d implementation that uses the new sliding window infrastructure.
+ * Generic pool implementation that uses the new sliding window infrastructure.
  */
 
 namespace ttnn::operations::pool {
 
-MaxPool2D::program_factory_t MaxPool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
     return MultiCore{};
 }
 
-void validate_maxpool(
+void validate_pool2d(
     const Tensor& input,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config) {
@@ -41,15 +42,15 @@ void validate_maxpool(
     }
 }
 
-void MaxPool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-void MaxPool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-MaxPool2D::spec_return_value_t MaxPool2D::compute_output_specs(
+Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto& input = tensors.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
@@ -88,20 +89,20 @@ MaxPool2D::spec_return_value_t MaxPool2D::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(output_dtype, input.tensor_spec().page_config(), mem_config));
 }
 
-MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(
+Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return create_device_tensor(compute_output_specs(op_attr, tensors), tensors.input_tensor_.device());
 }
 
-tt::stl::hash::hash_t MaxPool2D::compute_program_hash(
+tt::stl::hash::hash_t Pool2D::compute_program_hash(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensor_.memory_config();
     auto dtype = tensors.input_tensor_.dtype();
-    return operation::hash_operation<MaxPool2D>(
-        op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
+    return operation::hash_operation<Pool2D>(
+        op_attr.sliding_window_config_.get_hash(), op_attr.pool_type_, op_attr.memory_config_, input_mem_config, dtype);
 }
 
-operation::OpPerformanceModel MaxPool2D::create_op_performance_model(
+operation::OpPerformanceModel Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_shape();
@@ -123,7 +124,7 @@ operation::OpPerformanceModel MaxPool2D::create_op_performance_model(
     int num_cores = 9 * 12;
     int tensix_mul_adds_per_cycle_lofi = 2048;
 
-    // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
+    // Calculate output dimensions: relevant for window/stride based OPs (conv, pool, downsample)
     int output_height = std::floor((activation_h - filter_h + 2 * pad_h) / stride_h + 1);
     int output_width = std::floor((activation_w - filter_w + 2 * pad_w) / stride_w + 1);
 
@@ -137,13 +138,18 @@ operation::OpPerformanceModel MaxPool2D::create_op_performance_model(
     return result;
 }
 
-std::tuple<MaxPool2D::operation_attributes_t, MaxPool2D::tensor_args_t> MaxPool2D::invoke(
+std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke(
     const Tensor& input_tensor,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
+    Pool2DType pool_type,
     DataType output_dtype,
     MemoryConfig memory_config) {
     return {
-        operation_attributes_t{sliding_window_config, output_dtype, std::move(memory_config)},
+        operation_attributes_t{
+            .sliding_window_config_ = sliding_window_config,
+            .pool_type_ = pool_type,
+            .output_dtype_ = output_dtype,
+            .memory_config_ = std::move(memory_config)},
         tensor_args_t{input_tensor}};
 }
 
