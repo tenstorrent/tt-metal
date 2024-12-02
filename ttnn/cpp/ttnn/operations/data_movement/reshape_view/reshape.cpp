@@ -21,6 +21,7 @@
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -53,7 +54,7 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     //This function is due to embedding issue 15558, once the issue is fixed we want to delete it
     tt::log_warning("host_reshape is deprecated and will be removed in the near future");
     if (!ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
-        return tensor.reshape(shape);
+        return ttnn::experimental::reshape(tensor, shape);
     }
     auto tensor_shape = tensor.shape();
     auto layout = tensor.layout();
@@ -73,7 +74,7 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
         host_tensor_4d = ttnn::slice(host_tensor_4d, begins, ends, step, std::nullopt);
         host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
     }
-    auto host_reshape_tensor = rm_tensor.reshape(shape);
+    auto host_reshape_tensor = ttnn::experimental::reshape(rm_tensor, shape);
     auto final_layout_tensor =
         ttnn::to_layout(host_reshape_tensor, layout, std::nullopt, std::nullopt, (Device*)nullptr);
     auto device_tensor = ttnn::data_transfer_to_device(final_layout_tensor, device, memory_config);
