@@ -440,11 +440,6 @@ void DeviceProfiler::dumpResults (
 
         }
 
-        // add trailing ] to close off JSON
-        std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
-        std::ofstream log_file(log_path, std::ios_base::app);
-        log_file << "]" << std::endl;
-        log_file.close();
     }
     else
     {
