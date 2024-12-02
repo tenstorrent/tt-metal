@@ -11,6 +11,28 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.parametrize(
+    "concat_spec",
+    (([[1, 1, 12, 50], [1, 1, 12, 50]], -1),),
+)
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
+def test_tiled_concat(device, concat_spec, async_mode):
+    shapes, dim = concat_spec
+    device.enable_async(async_mode)
+    torch_input_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_input_tensors, dim=dim)
+
+    input_tensors = [
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+        for torch_input_tensor in torch_input_tensors
+    ]
+
+    output = ttnn.concat(input_tensors, dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
 @pytest.mark.parametrize("height", [20, 32])
 @pytest.mark.parametrize("width", [4, 32])
 @pytest.mark.parametrize("dim", [0, 1])
@@ -23,9 +45,6 @@ def test_concat(device, height, width, dim, async_mode):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    if ttnn.has_tile_padding(input_tensor_a, dim=dim) or ttnn.has_tile_padding(input_tensor_b, dim=dim):
-        pytest.skip("Cannot concat tensors with tile padding")
 
     output = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim)
     output = ttnn.to_torch(output)

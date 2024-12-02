@@ -9,7 +9,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "impl/device/device.hpp"
 #include "llrt/hal.hpp"
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -18,7 +18,7 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 
 class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
-   protected:
+protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
@@ -45,7 +45,8 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(
+                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
@@ -71,7 +72,7 @@ class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
             device_id, this->num_cqs_, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     }
 
-    tt::tt_metal::Device *device_ = nullptr;
+    tt::tt_metal::Device* device_ = nullptr;
     tt::ARCH arch_;
     uint8_t num_cqs_;
 };
@@ -83,7 +84,7 @@ class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingl
 class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
 
 class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingleDeviceFixture {
-    protected:
+protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
@@ -106,12 +107,13 @@ class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingle
 };
 
 class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
-   protected:
+protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(
+                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
@@ -127,14 +129,16 @@ class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
-                tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
+                tt::log_warning(
+                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
                 dispatch_core_type = DispatchCoreType::ETH;
             }
         }
 
         const chip_id_t mmio_device_id = 0;
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id}, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-        for (const auto &[id, device] : reserved_devices_) {
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
+            {mmio_device_id}, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
     }

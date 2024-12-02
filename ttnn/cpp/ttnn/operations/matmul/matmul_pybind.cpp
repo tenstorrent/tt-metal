@@ -128,6 +128,7 @@ void py_module(py::module& module) {
                 std::size_t,
                 bool,
                 std::optional<UnaryWithParam>,
+                bool,
                 bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -138,7 +139,8 @@ void py_module(py::module& module) {
             py::arg("per_core_N").noconvert(),
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
-            py::arg("mcast_in0").noconvert())
+            py::arg("mcast_in0").noconvert(),
+            py::arg("gather_in0").noconvert() = false)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
@@ -149,7 +151,8 @@ void py_module(py::module& module) {
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCast1DProgramConfig::per_core_N)
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
-        .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0);
+        .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0)
+        .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0);
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(

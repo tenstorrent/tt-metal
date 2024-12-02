@@ -81,7 +81,11 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
 
-        TT_ASSERT(page_size == 0 ? transfer_size == 0 : transfer_size % page_size == 0, "Transfer size {}B should be divisible by page size {}B", transfer_size, page_size);
+        TT_ASSERT(
+            page_size == 0 ? transfer_size == 0 : transfer_size % page_size == 0,
+            "Transfer size {}B should be divisible by page size {}B",
+            transfer_size,
+            page_size);
 
         // Device setup
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);

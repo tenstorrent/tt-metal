@@ -45,29 +45,21 @@ Tensor to_weight_special_padding_tile_layout(
             }
         }
         if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto output_float_data = output_buffer.get();
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+                auto tensor = Tensor(
+                                  std::move(OwnedStorage{std::move(output_buffer)}),
+                                  output_shape,
+                                  DataType::FLOAT32,
+                                  Layout::ROW_MAJOR)
+                                  .to(Layout::TILE);
+                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
                 auto output_packed_data =
-                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    output_dtype == DataType::BFLOAT8_B
+                        ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                        : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
                 auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
-            }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto output_float_data = output_buffer.get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
+                return Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
             }
         } else {
             TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
@@ -130,29 +122,21 @@ Tensor to_weight_tile_layout(
             }
         }
         if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto output_float_data = output_buffer.get();
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+                auto tensor = Tensor(
+                                  std::move(OwnedStorage{std::move(output_buffer)}),
+                                  output_shape,
+                                  DataType::FLOAT32,
+                                  Layout::ROW_MAJOR)
+                                  .to(Layout::TILE);
+                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
                 auto output_packed_data =
-                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    output_dtype == DataType::BFLOAT8_B
+                        ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                        : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
                 auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
-            }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto output_float_data = output_buffer.get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
+                return Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
             }
         } else {
             TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));

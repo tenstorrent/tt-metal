@@ -1084,6 +1084,12 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
     circular_buffer->assign_global_address();
 }
 
+void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
+    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
+    circular_buffer->assign_global_address();
+}
+
 uint32_t CreateSemaphore(
     Program &program,
     const std::variant<CoreRange, CoreRangeSet> &core_spec,

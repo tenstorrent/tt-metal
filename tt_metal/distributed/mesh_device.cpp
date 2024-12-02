@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "device/tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
@@ -100,8 +100,20 @@ SystemMesh& SystemMesh::instance() {
 }
 void SystemMesh::initialize() {
     this->physical_device_id_to_coordinate = tt::Cluster::instance().get_user_chip_ethernet_coordinates();
-    for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate) {
-        this->physical_coordinate_to_device_id.emplace(physical_coordinate, chip_id);
+    if (this->physical_device_id_to_coordinate.empty()) {
+        // Only WH has ethernet coordinates. Fabric will assign chip ids for BH
+        auto arch = tt::Cluster::instance().arch();
+        TT_FATAL(arch == ARCH::GRAYSKULL or arch == ARCH::BLACKHOLE, "Expected Wormhole chips to have ethernet coordinates assigned by cluster descriptor");
+        const int num_detected_devices = tt::Cluster::instance().number_of_devices();
+        for (auto chip_id = 0; chip_id < num_detected_devices; chip_id++) {
+            PhysicalCoordinate coord{0, chip_id, 0, 0, 0};
+            this->physical_device_id_to_coordinate.emplace(chip_id, coord);
+            this->physical_coordinate_to_device_id.emplace(coord, chip_id);
+        }
+    } else {
+        for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate) {
+            this->physical_coordinate_to_device_id.emplace(physical_coordinate, chip_id);
+        }
     }
 
     // Initialize the system mesh shape and translation map

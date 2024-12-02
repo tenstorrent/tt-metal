@@ -28,6 +28,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.llama3.tt.model_config import LlamaOptimizations
 
 
 def load_and_cache_context(context_url, cache_dir):
@@ -152,7 +153,15 @@ def preprocess_inputs_prefill(
 
 
 def run_llama3_demo(
-    user_input, batch_size, single_layer, mesh_device, instruct_mode, is_ci_env, num_batches, print_to_file
+    user_input,
+    batch_size,
+    single_layer,
+    mesh_device,
+    instruct_mode,
+    is_ci_env,
+    num_batches,
+    print_to_file,
+    optimizations,
 ):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -189,7 +198,7 @@ def run_llama3_demo(
         batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(mesh_device, instruct=instruct_mode)
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, optimizations=optimizations)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if single_layer:
@@ -700,21 +709,41 @@ def run_llama3_demo(
 
 
 @pytest.mark.parametrize(
-    "input_prompts, instruct_weights, num_batches, single_layer",
+    "input_prompts, instruct_weights, num_batches, single_layer, optimizations",
     [
-        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 1, False),
-        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 2, False),
-        ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 1, False),
-        ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 2, False),
-        ("models/demos/llama3/demo/input_data_long.json", True, 1, False),
-        ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 1, True),
+        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 1, False, LlamaOptimizations.performance),
+        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 2, False, LlamaOptimizations.performance),
+        (
+            "models/demos/llama3/demo/input_data_questions_prefill_128.json",
+            True,
+            1,
+            False,
+            LlamaOptimizations.performance,
+        ),
+        (
+            "models/demos/llama3/demo/input_data_questions_prefill_128.json",
+            True,
+            2,
+            False,
+            LlamaOptimizations.performance,
+        ),
+        ("models/demos/llama3/demo/input_data_long.json", True, 1, False, LlamaOptimizations.performance),
+        ("models/demos/llama3/demo/input_data_long.json", True, 1, False, LlamaOptimizations.accuracy),
+        (
+            "models/demos/llama3/demo/input_data_questions_prefill_128.json",
+            True,
+            1,
+            True,
+            LlamaOptimizations.performance,
+        ),
     ],
     ids=[
         "general_weights-1_batch",
         "general_weights-2_batch",
         "instruct_weights-1_batch",
         "instruct_weights-2_batch",
-        "instruct_weights-long",
+        "instruct_weights-long-performance",
+        "instruct_weights-long-accuracy",
         "single_layer",
     ],
 )
@@ -729,7 +758,15 @@ def run_llama3_demo(
     indirect=True,
 )
 def test_llama_demo(
-    mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches, single_layer, reset_seeds
+    mesh_device,
+    use_program_cache,
+    input_prompts,
+    instruct_weights,
+    is_ci_env,
+    num_batches,
+    single_layer,
+    optimizations,
+    reset_seeds,
 ):
     if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
@@ -745,4 +782,5 @@ def test_llama_demo(
         is_ci_env=is_ci_env,
         num_batches=num_batches,
         print_to_file=False,
+        optimizations=optimizations,
     )

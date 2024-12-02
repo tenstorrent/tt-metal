@@ -11,9 +11,9 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "third_party/umd/device/device_api_metal.h"
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/device_api_metal.h"
+#include "umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_xy_pair.h"
 
 // clang-format off
 #include "noc/noc_parameters.h"
@@ -251,7 +251,6 @@ class Cluster {
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::string cluster_desc_path_;
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;

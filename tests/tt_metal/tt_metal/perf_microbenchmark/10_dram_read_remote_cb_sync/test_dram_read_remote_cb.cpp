@@ -57,10 +57,8 @@ using std::chrono::microseconds;
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
-
-
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -68,7 +66,8 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t num_datums_per_tile, uint32_t& page_size, uint32_t& num_pages) {
+void get_max_page_size_and_num_pages(
+    uint32_t num_tiles, uint32_t num_datums_per_tile, uint32_t& page_size, uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * num_datums_per_tile;
 
     page_size = (8192 / num_datums_per_tile) * num_datums_per_tile;
@@ -78,12 +77,17 @@ void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t num_datums_per
     num_pages = total_size / page_size;
 }
 
-std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std::vector<std::unique_ptr<tt_metal::GlobalSemaphore>>> create_programs(
-    tt_metal::Device *device,
-    const CoreRangeSet &dram_reader_core,
-    const CoreRangeSet &l1_receiver_cores,
-    const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format,
+std::tuple<
+    std::vector<tt_metal::Program>,
+    tt_metal::KernelHandle,
+    uint32_t,
+    std::vector<std::unique_ptr<tt_metal::GlobalSemaphore>>>
+create_programs(
+    tt_metal::Device* device,
+    const CoreRangeSet& dram_reader_core,
+    const CoreRangeSet& l1_receiver_cores,
+    const uint32_t& single_tile_size,
+    const tt::DataFormat& tile_format,
     uint32_t k,
     uint32_t n,
     uint32_t num_blocks,
@@ -93,9 +97,7 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
     uint32_t cb_padding,
     const std::shared_ptr<tt::tt_metal::Buffer>& input_buffer,
     const std::shared_ptr<tt::tt_metal::Buffer>& output_buffer,
-    bool use_sub_devices
-    ) {
-
+    bool use_sub_devices) {
     log_info("created program");
     std::vector<tt_metal::Program> programs;
     programs.push_back(tt_metal::Program());
@@ -151,10 +153,15 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
         next_layer_single_tile_size = 2048;
     }
     uint32_t next_layer_reader_page_size, next_layer_reader_num_pages;
-    get_max_page_size_and_num_pages(next_layer_block_num_tiles, next_layer_single_tile_size, next_layer_reader_page_size, next_layer_reader_num_pages);
+    get_max_page_size_and_num_pages(
+        next_layer_block_num_tiles,
+        next_layer_single_tile_size,
+        next_layer_reader_page_size,
+        next_layer_reader_num_pages);
 
     uint32_t next_layer_writer_page_size, next_layer_writer_num_pages;
-    get_max_page_size_and_num_pages(block_w / num_receivers, next_layer_single_tile_size, next_layer_writer_page_size, next_layer_writer_num_pages);
+    get_max_page_size_and_num_pages(
+        block_w / num_receivers, next_layer_single_tile_size, next_layer_writer_page_size, next_layer_writer_num_pages);
 
     // L1 receiver CB
     uint32_t receiver_cb_index = 0;
@@ -163,7 +170,8 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
     uint32_t receiver_cb_addr = output_buffer->address();
     tt_metal::CircularBufferConfig receiver_cb_config =
         tt_metal::CircularBufferConfig(receiver_cb_size, {{receiver_cb_index, tile_format}})
-            .set_page_size(receiver_cb_index, receiver_page_size).set_globally_allocated_address(*output_buffer);
+            .set_page_size(receiver_cb_index, receiver_page_size)
+            .set_globally_allocated_address(*output_buffer);
     auto receiver_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, receiver_cb_config);
 
     log_info("reader_cb_size: {}", reader_cb_size);
@@ -176,25 +184,24 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
     // Global semaphores use an actual address instead of an index
     if (use_sub_devices) {
         global_sems.reserve(num_receivers * 2);
-        for (uint32_t i=0; i < num_receivers; ++i) {
+        for (uint32_t i = 0; i < num_receivers; ++i) {
             global_sems.push_back(tt_metal::CreateGlobalSemaphore(device, all_cores, INVALID));
             pages_acked_semaphore_ids[i] = global_sems.back()->address();
             global_sems.push_back(tt_metal::CreateGlobalSemaphore(device, all_cores, INVALID));
-            pages_sent_semaphore_ids[i] =  global_sems.back()->address();
+            pages_sent_semaphore_ids[i] = global_sems.back()->address();
         }
     } else {
-        for (uint32_t i=0; i < num_receivers; ++i) {
+        for (uint32_t i = 0; i < num_receivers; ++i) {
             pages_acked_semaphore_ids[i] = tt_metal::CreateSemaphore(sender_program, all_cores, INVALID);
             pages_sent_semaphore_ids[i] = tt_metal::CreateSemaphore(sender_program, all_cores, INVALID);
         }
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) input_buffer->address(),
-        (std::uint32_t) start_tile_id,
-        (std::uint32_t) tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t) num_mixed_df_layers
-    };
+        (std::uint32_t)input_buffer->address(),
+        (std::uint32_t)start_tile_id,
+        (std::uint32_t)tt_metal::NOC::RISCV_0_default,
+        (std::uint32_t)num_mixed_df_layers};
 
     auto reader_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -207,13 +214,12 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t) receiver_cb_addr,
-        (std::uint32_t) receiver_cb_size,
-        (std::uint32_t) num_receivers,
-        (std::uint32_t) num_mixed_df_layers,
-        (std::uint32_t) use_sub_devices
-    };
+        (std::uint32_t)tt_metal::NOC::RISCV_0_default,
+        (std::uint32_t)receiver_cb_addr,
+        (std::uint32_t)receiver_cb_size,
+        (std::uint32_t)num_receivers,
+        (std::uint32_t)num_mixed_df_layers,
+        (std::uint32_t)use_sub_devices};
 
     auto writer_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -226,11 +232,10 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
             .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> receiver_compile_time_args = {
-        (std::uint32_t) reader_cb_addr,
-        (std::uint32_t) receiver_cb_size,
-        (std::uint32_t) num_mixed_df_layers,
-        (std::uint32_t) use_sub_devices
-    };
+        (std::uint32_t)reader_cb_addr,
+        (std::uint32_t)receiver_cb_size,
+        (std::uint32_t)num_mixed_df_layers,
+        (std::uint32_t)use_sub_devices};
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -247,21 +252,18 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
-    std::vector<uint32_t> reader_rt_args = {
-        (std::uint32_t) bank_id,
-        (std::uint32_t) vc
-    };
+    std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        reader_rt_args.push_back(i%2 == 0 ? reader_page_size : next_layer_reader_page_size);
+        reader_rt_args.push_back(i % 2 == 0 ? reader_page_size : next_layer_reader_page_size);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        reader_rt_args.push_back(i%2 == 0 ? reader_num_pages : next_layer_reader_num_pages);
+        reader_rt_args.push_back(i % 2 == 0 ? reader_num_pages : next_layer_reader_num_pages);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        reader_rt_args.push_back(i%2 == 0 ? num_blocks : next_layer_num_blocks);
+        reader_rt_args.push_back(i % 2 == 0 ? num_blocks : next_layer_num_blocks);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        reader_rt_args.push_back(i%2 == 0 ? block_num_tiles : next_layer_block_num_tiles);
+        reader_rt_args.push_back(i % 2 == 0 ? block_num_tiles : next_layer_block_num_tiles);
     }
     tt_metal::SetRuntimeArgs(sender_program, reader_kernel, dram_reader_core_coord, reader_rt_args);
 
@@ -271,60 +273,59 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
         l1_receiver_core_coords.push_back(l1_receiver_core_coord);
     }
     std::vector<uint32_t> writer_rt_args;
-    for (uint32_t i=0; i < num_receivers; ++i) {
+    for (uint32_t i = 0; i < num_receivers; ++i) {
         auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
         writer_rt_args.push_back(l1_receiver_core_coord_physical.x);
     }
-    for (uint32_t i=0; i < num_receivers; ++i) {
+    for (uint32_t i = 0; i < num_receivers; ++i) {
         auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
         writer_rt_args.push_back(l1_receiver_core_coord_physical.y);
     }
-    for (uint32_t i=0; i < num_receivers; ++i) {
+    for (uint32_t i = 0; i < num_receivers; ++i) {
         writer_rt_args.push_back(pages_acked_semaphore_ids[i]);
     }
-    for (uint32_t i=0; i < num_receivers; ++i) {
+    for (uint32_t i = 0; i < num_receivers; ++i) {
         writer_rt_args.push_back(pages_sent_semaphore_ids[i]);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        writer_rt_args.push_back(i%2 == 0 ? writer_page_size : next_layer_writer_page_size);
+        writer_rt_args.push_back(i % 2 == 0 ? writer_page_size : next_layer_writer_page_size);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        writer_rt_args.push_back(i%2 == 0 ? writer_num_pages : next_layer_writer_num_pages);
+        writer_rt_args.push_back(i % 2 == 0 ? writer_num_pages : next_layer_writer_num_pages);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        writer_rt_args.push_back(i%2 == 0 ? num_blocks : next_layer_num_blocks);
+        writer_rt_args.push_back(i % 2 == 0 ? num_blocks : next_layer_num_blocks);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        writer_rt_args.push_back(i%2 == 0 ? block_num_tiles : next_layer_block_num_tiles);
+        writer_rt_args.push_back(i % 2 == 0 ? block_num_tiles : next_layer_block_num_tiles);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        writer_rt_args.push_back(i%2 == 0 ? single_tile_size : next_layer_single_tile_size);
+        writer_rt_args.push_back(i % 2 == 0 ? single_tile_size : next_layer_single_tile_size);
     }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-        writer_rt_args.push_back(i%2 == 0 ? num_tile_rows_write : next_layer_num_tile_rows_write);
+        writer_rt_args.push_back(i % 2 == 0 ? num_tile_rows_write : next_layer_num_tile_rows_write);
     }
     tt_metal::SetRuntimeArgs(sender_program, writer_kernel, dram_reader_core_coord, writer_rt_args);
 
     // reciever rt
-    for (uint32_t i=0; i < num_receivers; ++i) {
+    for (uint32_t i = 0; i < num_receivers; ++i) {
         std::vector<uint32_t> receiver_rt_args = {
-            (std::uint32_t) vc & 0x3,
-            (std::uint32_t) dram_reader_core_coord_physical.x,
-            (std::uint32_t) dram_reader_core_coord_physical.y
-        };
-        vc ++;
+            (std::uint32_t)vc & 0x3,
+            (std::uint32_t)dram_reader_core_coord_physical.x,
+            (std::uint32_t)dram_reader_core_coord_physical.y};
+        vc++;
 
         receiver_rt_args.push_back(pages_acked_semaphore_ids[i]);
         receiver_rt_args.push_back(pages_sent_semaphore_ids[i]);
 
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-            receiver_rt_args.push_back(i%2 == 0 ? single_tile_size : next_layer_single_tile_size);
+            receiver_rt_args.push_back(i % 2 == 0 ? single_tile_size : next_layer_single_tile_size);
         }
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-            receiver_rt_args.push_back(i%2 == 0 ? num_blocks : next_layer_num_blocks);
+            receiver_rt_args.push_back(i % 2 == 0 ? num_blocks : next_layer_num_blocks);
         }
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-            receiver_rt_args.push_back(i%2 == 0 ? receiver_block_num_tile : next_layer_receiver_block_num_tile);
+            receiver_rt_args.push_back(i % 2 == 0 ? receiver_block_num_tile : next_layer_receiver_block_num_tile);
         }
 
         log_info("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
@@ -335,9 +336,7 @@ std::tuple<std::vector<tt_metal::Program>, tt_metal::KernelHandle, uint32_t, std
     return {std::move(programs), reader_kernel, reader_cb_addr, std::move(global_sems)};
 }
 
-float to_float(bfloat16 bfloat16_num) {
-    return bfloat16_num.to_float();
-}
+float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {
@@ -372,15 +371,14 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 
 bool validation_bfp8_b(
     const tt::deprecated::Tensor<float>& input_tensor,
-    const tt::DataFormat &data_format,
+    const tt::DataFormat& data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
-) {
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer) {
     bool pass = true;
-    std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0); // Initialize with zeros
+    std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);  // Initialize with zeros
     std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
@@ -388,7 +386,7 @@ bool validation_bfp8_b(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    result_untilized = tt::test_utils::untilize(result_bfp8, kt*32 / num_blocks * cb_num_blocks, nt*32);
+    result_untilized = tt::test_utils::untilize(result_bfp8, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
     const auto& values = input_tensor.get_values();
 
@@ -402,7 +400,7 @@ bool validation_bfp8_b(
         }
     }
 
-    for (int i=0; i<result_untilized.size(); ++i) {
+    for (int i = 0; i < result_untilized.size(); ++i) {
         result_vec[i] = result_untilized[i];
     }
 
@@ -413,18 +411,16 @@ bool validation_bfp8_b(
     return pass;
 }
 
-
 bool validation_fp16(
     const tt::deprecated::Tensor<bfloat16>& input_tensor,
-    const tt::DataFormat &data_format,
+    const tt::DataFormat& data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer
-) {
+    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer) {
     bool pass = true;
-    std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0); // Initialize with zeros
+    std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);  // Initialize with zeros
     std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
@@ -432,7 +428,7 @@ bool validation_fp16(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-    auto result_untilized = tt::test_utils::untilize(result_flat_layout, kt*32 / num_blocks * cb_num_blocks, nt*32);
+    auto result_untilized = tt::test_utils::untilize(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
     const auto& values = input_tensor.get_values();
 
@@ -446,7 +442,7 @@ bool validation_fp16(
         }
     }
 
-    for (int i=0; i<result_untilized.size(); ++i) {
+    for (int i = 0; i < result_untilized.size(); ++i) {
         result_vec[i] = to_float(static_cast<bfloat16>(result_untilized[i]));
     }
 
@@ -460,15 +456,14 @@ bool validation_fp16(
 bool validation_mixed_df(
     const tt::deprecated::Tensor<bfloat16>& input_tensor_fp16,
     const tt::deprecated::Tensor<float>& input_tensor_fp8,
-    const tt::DataFormat &data_format,
+    const tt::DataFormat& data_format,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
     uint32_t num_mixed_df_layers,
-    uint32_t num_receivers
-) {
+    uint32_t num_receivers) {
     bool pass = true;
 
     std::vector<uint32_t> result;
@@ -477,11 +472,11 @@ bool validation_mixed_df(
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_untilized_fp16 = convert_to_flat_layout(result_bfp16);
 
-    std::vector<float> golden_vec(kt*32 / num_blocks * cb_num_blocks * nt*32);
-    std::vector<float> result_vec_fp16(kt*32 / num_blocks * cb_num_blocks * nt*32);
+    std::vector<float> golden_vec(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
+    std::vector<float> result_vec_fp16(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
 
     // compare with the result tilized with tilized
-    auto values_fp16 = tt::test_utils::tilize(input_tensor_fp16.get_values(), kt*32, nt*32);
+    auto values_fp16 = tt::test_utils::tilize(input_tensor_fp16.get_values(), kt * 32, nt * 32);
 
     uint32_t block_h = kt / num_blocks;
     uint32_t block_w = nt;
@@ -489,49 +484,52 @@ bool validation_mixed_df(
 
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
     int start_index = 0;
-    int fifo_size = kt*32 / num_blocks * cb_num_blocks * nt*32 * 2 / num_receivers;
+    int fifo_size = kt * 32 / num_blocks * cb_num_blocks * nt * 32 * 2 / num_receivers;
     int fifo_size_page_aligned, page_size, num_pages, layer_transfer_size, fifo_wr_ptr = 0;
     for (int l = 0; l < num_mixed_df_layers; ++l) {
-        if (l % 2 == 0) { // fp16
+        if (l % 2 == 0) {  // fp16
             page_size = 2048;
         } else {
             page_size = 1088;
         }
         layer_transfer_size = page_size * kt * nt / num_receivers;
 
-        uint32_t block_size = block_num_tiles * tt::constants::TILE_HW * datum_size(tt::DataFormat::Float16_b); // fp16
+        uint32_t block_size = block_num_tiles * tt::constants::TILE_HW * datum_size(tt::DataFormat::Float16_b);  // fp16
         uint32_t num_blocks = fifo_size / block_size;
         uint32_t cb_size_block_aligned = num_blocks * block_size;
 
         bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > cb_size_block_aligned;
         uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
-        fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
+        fifo_wr_ptr =
+            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
         // start index to read, fifo_wr_ptr / 2 because fp16 format
         start_index = fifo_wr_ptr == cb_size_block_aligned ? 0 : fifo_wr_ptr / 2;
         // end pointer addr of current layer
         fifo_wr_ptr = (fifo_wr_ptr + layer_transfer_size) % cb_size_block_aligned;
     }
 
-    std::vector<std::vector<float> > values_fp16_split(num_receivers, std::vector<float>(values_fp16.size() / num_receivers));
+    std::vector<std::vector<float>> values_fp16_split(
+        num_receivers, std::vector<float>(values_fp16.size() / num_receivers));
 
     int index = 0;
     for (int k = 0; k < kt; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
                 values_fp16_split[n][i + k * nt * 32 * 32 / num_receivers] = to_float(values_fp16[index]);
-                index ++;
+                index++;
             }
         }
     }
 
-    std::vector<std::vector<float> > golden_vec_split(num_receivers, std::vector<float>(golden_vec.size() / num_receivers));
+    std::vector<std::vector<float>> golden_vec_split(
+        num_receivers, std::vector<float>(golden_vec.size() / num_receivers));
 
     for (int n = 0; n < num_receivers; ++n) {
         index = start_index;
         for (int i = 0; i < kt * nt * 32 * 32 / num_receivers; ++i) {
             golden_vec_split[n][index] = values_fp16_split[n][i];
-            index ++;
+            index++;
 
             if (index == num_datums_per_cb) {
                 index = 0;
@@ -544,12 +542,12 @@ bool validation_mixed_df(
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
                 golden_vec[index] = golden_vec_split[n][i + k * nt * 32 * 32 / num_receivers];
-                index ++;
+                index++;
             }
         }
     }
 
-    for (int i=0; i<result_untilized_fp16.size(); ++i) {
+    for (int i = 0; i < result_untilized_fp16.size(); ++i) {
         result_vec_fp16[i] = to_float(static_cast<bfloat16>(result_untilized_fp16[i]));
     }
 
@@ -585,9 +583,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     BufferType buffer_type,
     tt::DataFormat data_format,
     CoreRangeSet cores,
-    uint32_t num_receivers
-) {
-
+    uint32_t num_receivers) {
     uint32_t size_bytes;
     uint32_t page_size_bytes;
     if (data_format == tt::DataFormat::Bfp8_b) {
@@ -599,24 +595,24 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     }
 
     ShardSpecBuffer shard_spec = ShardSpecBuffer(
-                cores,
-                {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
-                ShardOrientation::ROW_MAJOR,
-                false,
-                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                {ht, wt});
+        cores,
+        {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
+        ShardOrientation::ROW_MAJOR,
+        false,
+        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        {ht, wt});
 
     log_info("cores: {}", cores);
     log_info("size_bytes: {}", size_bytes);
     log_info("page_size_bytes: {}", page_size_bytes);
 
     auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                                        .device = device,
-                                        .size = size_bytes,
-                                        .page_size = page_size_bytes,
-                                        .buffer_type = buffer_type,
-                                        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                                        .shard_parameters = shard_spec});
+        .device = device,
+        .size = size_bytes,
+        .page_size = page_size_bytes,
+        .buffer_type = buffer_type,
+        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
+        .shard_parameters = shard_spec});
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
 
     log_info("created sharded tensor");
@@ -624,7 +620,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     return input_buffer;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         log_error("Test not supported w/ slow dispatch, exiting");
     }
@@ -648,10 +644,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
         try {
-            std::tie(k, input_args) =
-                test_args::get_command_option_uint64_and_remaining_args(input_args, "--k", 8192);
+            std::tie(k, input_args) = test_args::get_command_option_uint64_and_remaining_args(input_args, "--k", 8192);
             std::tie(n, input_args) =
-                test_args::get_command_option_uint64_and_remaining_args(input_args, "--n", 12*128);
+                test_args::get_command_option_uint64_and_remaining_args(input_args, "--n", 12 * 128);
             std::tie(num_blocks, input_args) =
                 test_args::get_command_option_uint64_and_remaining_args(input_args, "--num-blocks", 8);
             std::tie(cb_num_blocks, input_args) =
@@ -671,28 +666,34 @@ int main(int argc, char **argv) {
             std::tie(use_sub_devices, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--use-sub-devices");
 
-
             test_args::validate_remaining_args(input_args);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
             TT_ASSERT(false);
         }
 
         log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
         log_info("num_receivers: {} ", num_receivers);
+        // TODO: Re-enable usage of cb_padding once Global CBs are supported
+        log_warning(
+            "Setting cb padding to 0B for now due to how buffers are constructed. Can be non-zero once Global CBs are "
+            "supported.");
+        cb_padding = 0;
 
-        TT_FATAL(num_mixed_df_layers % 2 == 1, "currently only support odd number of layers testing, due to issue with validatoin");
+        TT_FATAL(
+            num_mixed_df_layers % 2 == 1,
+            "currently only support odd number of layers testing, due to issue with validatoin");
         if (num_mixed_df_layers > 1) {
             TT_FATAL(df == 1, "must start with bfloat16 format for mix_df test");
         }
 
         if (use_device_profiler) {
-            #if !defined(TRACY_ENABLE)
+#if !defined(TRACY_ENABLE)
             log_error(
                 LogTest,
                 "Metal library and test code should be build with "
                 "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
-            #endif
+#endif
             auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
             TT_FATAL(
                 device_profiler,
@@ -730,7 +731,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
@@ -752,56 +753,133 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::shared_ptr<tt::tt_metal::Buffer> > input_buffers(num_mixed_df_layers);
+        std::vector<std::shared_ptr<tt::tt_metal::Buffer>> input_buffers(num_mixed_df_layers);
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         auto input_shape = SHAPE{1, 1, k, n};
-        tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::INCREMENT, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::INCREMENT, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(
+            input_shape,
+            tt::deprecated::Initialize::INCREMENT,
+            0,
+            100,
+            std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(
+            input_shape,
+            tt::deprecated::Initialize::INCREMENT,
+            0,
+            100,
+            std::chrono::system_clock::now().time_since_epoch().count());
         if (tile_format == tt::DataFormat::Bfp8_b) {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-                if (i%2 == 0) { // even layers
+                if (i % 2 == 0) {  // even layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
-                    std::vector<uint32_t> packed_input_vec_tile_layout = pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
-                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_reader_core, num_banks);
-                } else { // odd layers
+                    std::vector<uint32_t> packed_input_vec_tile_layout =
+                        pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(
+                        device,
+                        packed_input_vec_tile_layout,
+                        kt,
+                        nt,
+                        tt_metal::BufferType::DRAM,
+                        tt::DataFormat::Bfp8_b,
+                        dram_reader_core,
+                        num_banks);
+                } else {  // odd layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
                     auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
-                    vector<uint32_t> packed_input_vec_tile_layout = pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
-                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_reader_core, num_banks);
+                    vector<uint32_t> packed_input_vec_tile_layout =
+                        pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(
+                        device,
+                        packed_input_vec_tile_layout,
+                        kt,
+                        nt,
+                        tt_metal::BufferType::DRAM,
+                        tt::DataFormat::Float16_b,
+                        dram_reader_core,
+                        num_banks);
                 }
             }
 
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
-            output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Bfp8_b, l1_receiver_core, num_receivers);
+            output_buffer = create_and_transfer_data_sharded_cb(
+                device,
+                outputs,
+                kt / num_blocks * cb_num_blocks,
+                nt,
+                tt_metal::BufferType::L1,
+                tt::DataFormat::Bfp8_b,
+                l1_receiver_core,
+                num_receivers);
 
         } else {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-                if (i%2 == 0) { // even layers
+                if (i % 2 == 0) {  // even layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
                     auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
-                    vector<uint32_t> packed_input_vec_tile_layout = pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
-                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_reader_core, num_banks);
+                    vector<uint32_t> packed_input_vec_tile_layout =
+                        pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(
+                        device,
+                        packed_input_vec_tile_layout,
+                        kt,
+                        nt,
+                        tt_metal::BufferType::DRAM,
+                        tt::DataFormat::Float16_b,
+                        dram_reader_core,
+                        num_banks);
                 } else {
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
-                    std::vector<uint32_t> packed_input_vec_tile_layout = pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
-                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_reader_core, num_banks);
+                    std::vector<uint32_t> packed_input_vec_tile_layout =
+                        pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(
+                        device,
+                        packed_input_vec_tile_layout,
+                        kt,
+                        nt,
+                        tt_metal::BufferType::DRAM,
+                        tt::DataFormat::Bfp8_b,
+                        dram_reader_core,
+                        num_banks);
                 }
             }
 
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfloat16(output_size, 0);
-            output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Float16_b, l1_receiver_core, num_receivers);
+            output_buffer = create_and_transfer_data_sharded_cb(
+                device,
+                outputs,
+                kt / num_blocks * cb_num_blocks,
+                nt,
+                tt_metal::BufferType::L1,
+                tt::DataFormat::Float16_b,
+                l1_receiver_core,
+                num_receivers);
         }
 
-        for (uint32_t i=0; i < num_mixed_df_layers; ++i) {
+        for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
             log_info("input_buffers addr: {}", input_buffers[i]->address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [programs, kernel, output_cb_addr, global_sems] = create_programs(device, dram_reader_core, l1_receiver_core, single_tile_size, tile_format, k, n, num_blocks, cb_num_blocks, num_receivers, num_mixed_df_layers, cb_padding, input_buffers[0], output_buffer, use_sub_devices);
+        auto [programs, kernel, output_cb_addr, global_sems] = create_programs(
+            device,
+            dram_reader_core,
+            l1_receiver_core,
+            single_tile_size,
+            tile_format,
+            k,
+            n,
+            num_blocks,
+            cb_num_blocks,
+            num_receivers,
+            num_mixed_df_layers,
+            cb_padding,
+            input_buffers[0],
+            output_buffer,
+            use_sub_devices);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
@@ -826,40 +904,26 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (num_mixed_df_layers == 1) {
             if (tile_format == tt::DataFormat::Bfp8_b) {
-                pass = validation_bfp8_b(
-                    tensor_fp8,
-                    tile_format,
-                    num_blocks,
-                    cb_num_blocks,
-                    kt,
-                    nt,
-                    output_buffer);
+                pass = validation_bfp8_b(tensor_fp8, tile_format, num_blocks, cb_num_blocks, kt, nt, output_buffer);
             } else {
-                pass = validation_fp16(
-                    tensor_fp16,
-                    tile_format,
-                    num_blocks,
-                    cb_num_blocks,
-                    kt,
-                    nt,
-                    output_buffer);
+                pass = validation_fp16(tensor_fp16, tile_format, num_blocks, cb_num_blocks, kt, nt, output_buffer);
             }
         } else {
             pass = validation_mixed_df(
-                    tensor_fp16,
-                    tensor_fp8,
-                    tile_format,
-                    num_blocks,
-                    cb_num_blocks,
-                    kt,
-                    nt,
-                    output_buffer,
-                    num_mixed_df_layers,
-                    num_receivers);
+                tensor_fp16,
+                tensor_fp8,
+                tile_format,
+                num_blocks,
+                cb_num_blocks,
+                kt,
+                nt,
+                output_buffer,
+                num_mixed_df_layers,
+                num_receivers);
         }
 
         pass &= tt_metal::CloseDevice(device);
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
         log_error(LogTest, "System error message: {}", std::strerror(errno));

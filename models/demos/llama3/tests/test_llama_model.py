@@ -14,7 +14,7 @@ from models.demos.llama3.tt.llama_common import (
     HostEmbedding,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -37,6 +37,13 @@ from models.utility_functions import skip_for_grayskull
     ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
+    "optimizations",
+    [
+        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
+        pytest.param(LlamaOptimizations.performance, id="performance"),
+    ],
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -45,20 +52,16 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, reset_seeds, ensure_gc):
-    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
-
-    dtype = ttnn.bfloat8_b
-
+def test_llama_model_inference(mesh_device, weights, layers, optimizations, use_program_cache, reset_seeds, ensure_gc):
     mesh_device.enable_async(True)
 
-    # This sets the minimum PCC for each iteration
-    pcc = 0.88 if layers == 1 else 0.94  # TODO For model test quick (1 layer) one iteration might get a worse PCC
-
+    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
+    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
+    dtype = ttnn.bfloat8_b
+    mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
-    model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights)
+    model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights, optimizations=optimizations)
 
     model_name = {
         (16, False): "llama32_1b",
@@ -68,12 +71,19 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         (80, False): "llama31_70b",
     }[(model_args.n_layers, model_args.is_vision())]
 
+    # Define minimum PCC for each iteration
+    if layers == 1:
+        pcc = 0.88 if mode_accuracy else 0.86
+    else:
+        pcc = 0.94 if mode_accuracy else 0.86
+
+    # Define tight final PCC thresholds for quick mode
     final_model_pcc = {
-        "llama32_1b": 0.9991,
-        "llama32_3b": 0.9989,
-        "llama31_8b": 0.9987,
-        "llama32_11b": 0.9987,
-        "llama31_70b": 0.9843,
+        "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
+        "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
+        "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
+        "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
+        "llama31_70b": 0.9843 if mode_accuracy else 0.9843,
     }[model_name]
 
     final_k_cache_pcc = {
@@ -90,6 +100,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         "llama32_11b": 0.9996,
         "llama31_70b": 0.9998,
     }[model_name]
+
     quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
         model_name
     ]
@@ -156,6 +167,8 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
 
     if run_ref_pt:
         all_tests_pass = True
+        final_tests_pass = True
+        kv_cache_tests_pass = True
 
     seqlen = 1  # Generating one token per user at a time
     batch = model_args.max_batch_size
@@ -230,6 +243,8 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         if run_ref_pt:
             if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, final_model_pcc)
+                if not passing:
+                    final_tests_pass = False
             else:
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
@@ -282,9 +297,9 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
                             logger.info(f"V cache output: {output_pcc}")
 
                         if does_pass:
-                            logger.info(f"V Cache Passed!")
+                            logger.info(f"KV Cache Passed!")
                         else:
-                            logger.warning(f"V Cache Failed! PCC value is lower than {pcc}")
+                            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
                             all_tests_pass = False
 
         if not dummy_weights:
@@ -297,4 +312,6 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
             logger.info(f"All {generation_length} Llama decode iterations Passed!")
         else:
             logger.warning("One or more iterations of Llama decode had bad PCC")
+            assert final_tests_pass, f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!"
+            assert kv_cache_tests_pass, f"KV Cache PCC value is lower expected for some of the outputs. Check Warnings!"
             assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
