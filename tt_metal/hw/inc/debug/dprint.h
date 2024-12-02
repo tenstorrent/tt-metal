@@ -64,11 +64,11 @@
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #define DPRINT_DATA0(x)   \
     if (noc_index == 0) { \
-        x                 \
+        x;                \
     }
 #define DPRINT_DATA1(x)   \
     if (noc_index == 1) { \
-        x                 \
+        x;                \
     }
 #else
 #define DPRINT_DATA0(x)
