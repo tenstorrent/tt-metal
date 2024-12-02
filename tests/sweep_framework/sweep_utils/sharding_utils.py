@@ -9,7 +9,7 @@ import random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
-def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=64 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
+def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
     # device.compute_with_storage_grid_size()
     Y = 8
     X = 8
