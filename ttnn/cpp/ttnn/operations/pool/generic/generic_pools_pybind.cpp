@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/pool/maxpool/max_pool2d_pybind.hpp"
-#include "ttnn/operations/pool/maxpool/max_pool2d.hpp"
+#include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
+#include "ttnn/operations/pool/generic/generic_pools.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>

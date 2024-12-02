@@ -2,28 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "max_pool2d.hpp"
+#include "generic_pools.hpp"
 
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/common/constants.hpp"
+
+#include <limits>
 
 namespace ttnn {
 namespace operations::pool {
 
-Tensor MaxPool2DOp::invoke(uint8_t queue_id,
-                           const Tensor& input_tensor,
-                           uint32_t batch_size,
-                           uint32_t input_h, uint32_t input_w,
-                           uint32_t channels,
-                           std::array<uint32_t, 2> kernel_size,
-                           std::array<uint32_t, 2> stride,
-                           std::array<uint32_t, 2> padding,
-                           std::array<uint32_t, 2> dilation,
-                           const std::optional<const MemoryConfig>& memory_config,
-                           const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
+namespace {
+
+// Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
+uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
+    float value;
+    switch (pool_type) {
+        case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
+    }
+    return bfloat16(value).to_packed();
+}
+
+}  // namespace
+
+template <Pool2DType pool_type>
+Tensor Pool2DOp<pool_type>::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
@@ -35,7 +54,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
     auto output_shape = sliding_window_config.get_output_shape();   // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
 
-    // maxpool output is row major
+    // pool output is row major
     bool is_out_tiled = false;
     bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B; // input tiled for bfp8_b
 
@@ -106,23 +125,23 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
             .snap_to_tile = false
     };
 
-    // call the halo uop
-    uint32_t neg_inf_pad_val = 0xf7ff;
+    // Call the halo uop
     auto haloed_tensor = ttnn::halo(
         queue_id,
         input_tensor_sharded,
         sliding_window_config,
-        neg_inf_pad_val,
+        get_bf16_pool_init_value(pool_type), // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         0,
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    auto output_tensor = ttnn::prim::max_pool2d(
+    auto output_tensor = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
+        pool_type,
         DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config);
 
@@ -132,6 +151,8 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
 
     return output_tensor;
 }
+
+template class Pool2DOp<Pool2DType::MAX_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn
