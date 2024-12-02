@@ -12,8 +12,9 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     auto floored_p = std::floor(p);
     auto decimal = p - floored_p;
     bool p_is_negative = floored_p < 0.0f;
-    if (p_is_negative)
+    if (p_is_negative) {
         floored_p = -floored_p;
+    }
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
@@ -21,17 +22,19 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::Legacy
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
-        if (idx == rank - 1 || idx == rank - 2)
+        if (idx == rank - 1 || idx == rank - 2) {
             dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
-        else
+        } else {
             dim[i] = shape[idx];
+        }
     }
 }
 
 tt::tt_metal::LegacyShape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
-    if (keepdim)
+    if (keepdim) {
         return output_grad.get_legacy_shape();
+    }
 
     auto shape = input_grad.get_legacy_shape();
     auto rank = shape.rank();
@@ -42,8 +45,9 @@ tt::tt_metal::LegacyShape get_output_grad_shape(
         if (is_tile_dim) {
             shape[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
-        } else
+        } else {
             shape[dim] = 1;
+        }
     }
     return tt::tt_metal::LegacyShape(shape, padding);
 }
@@ -140,19 +144,19 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},    // input
-            {tt::CB::c_in1, in1_t},    // output
-            {tt::CB::c_in2, in2_t},    // output_grad
-            {tt::CB::c_in3, in3_t},    // decimal
-            {tt::CB::c_out0, out0_t},  // input_grad
-            {tt::CB::c_intermed0, im0_t, intermed_data_format},
-            {tt::CB::c_intermed1, im1_t, intermed_data_format},
-            {tt::CB::c_intermed2, im2_t, intermed_data_format},
-            {tt::CB::c_intermed3, im3_t, intermed_data_format},
-            {tt::CB::c_intermed4, im4_t, intermed_data_format},
-            {tt::CB::c_intermed5, im5_t, intermed_data_format},
-            {tt::CB::c_intermed6, im6_t, intermed_data_format},
-            {tt::CB::c_intermed7, im7_t, intermed_data_format},
+            {tt::CBIndex::c_0, in0_t},    // input
+            {tt::CBIndex::c_1, in1_t},    // output
+            {tt::CBIndex::c_2, in2_t},    // output_grad
+            {tt::CBIndex::c_3, in3_t},    // decimal
+            {tt::CBIndex::c_16, out0_t},  // input_grad
+            {tt::CBIndex::c_24, im0_t, intermed_data_format},
+            {tt::CBIndex::c_25, im1_t, intermed_data_format},
+            {tt::CBIndex::c_26, im2_t, intermed_data_format},
+            {tt::CBIndex::c_27, im3_t, intermed_data_format},
+            {tt::CBIndex::c_28, im4_t, intermed_data_format},
+            {tt::CBIndex::c_29, im5_t, intermed_data_format},
+            {tt::CBIndex::c_30, im6_t, intermed_data_format},
+            {tt::CBIndex::c_31, im7_t, intermed_data_format},
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -174,12 +178,9 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         static_cast<uint32_t>(is_dram(output)),
         static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(input_grad_rank)};
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input_grad))};
-    const auto reader_kernels_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

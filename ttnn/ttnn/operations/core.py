@@ -4,14 +4,13 @@
 
 import math
 import pathlib
-from typing import Union, Tuple, Optional, Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
-from loguru import logger
 import torch
-
+import ttnn.decorators
+from loguru import logger
 
 import ttnn
-import ttnn.decorators
 
 
 def _golden_function(input_tensor: ttnn.Tensor, slices):
@@ -154,6 +153,7 @@ def from_torch(
     dtype: Optional[ttnn.DataType] = None,
     *,
     tile: Optional[ttnn.Tile] = None,
+    pad_value: Optional[float] = None,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
@@ -171,6 +171,7 @@ def from_torch(
 
     Keyword Args:
         tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
+        pad_value (float, optional): the desired padding value for tiling. Only used if `layout` is `TILE_LAYOUT`. Defaults to `None`.
         layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
         device (ttnn.Device, optional): the desired `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
@@ -188,19 +189,21 @@ def from_torch(
 
     shape_with_padding = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        if len(tensor.shape) < 2:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile)
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value)
         shape_with_padding = tensor.shape
         tensor = tensor.reshape(tensor.shape.with_tile_padding())
         tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
         if device is None:
-            raise RuntimeError("device must be specified when memory_config is specified")
+            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
+
+    if pad_value is not None:
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
@@ -215,6 +218,8 @@ def from_torch(
             tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
+        if pad_value is not None:
+            tensor = tensor.pad_to_tile(pad_value)
         tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:
@@ -252,6 +257,7 @@ class TorchTensor(torch.Tensor):
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
 def to_torch(
     tensor: ttnn.Tensor,
+    dtype: Optional[torch.dtype] = None,
     *,
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
@@ -264,6 +270,7 @@ def to_torch(
 
     Args:
         tensor (ttnn.Tensor): the input tensor.
+        dtype (torch.dtype, optional): the desired `torch` data type of returned tensor. Defaults to `None`.
 
     Keyword Args:
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
@@ -309,7 +316,12 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
 
-    return TorchTensor(tensor)
+    torch_tensor = TorchTensor(tensor)
+
+    if dtype is not None:
+        torch_tensor = torch_tensor.to(dtype=dtype)
+
+    return torch_tensor
 
 
 def _golden_function(tensor, *args, **kwargs):

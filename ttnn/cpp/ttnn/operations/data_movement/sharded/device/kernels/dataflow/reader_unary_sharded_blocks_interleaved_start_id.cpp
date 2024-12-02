@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "tensix_types.h"
 
-//#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 // Target 8KB of data before a single barrier for 8x8 grid of readers
 template <uint32_t tile_bytes, uint32_t num_readers>
@@ -16,12 +16,12 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 void kernel_main() {
-    const uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
     const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t padded_offset_bytes = get_arg_val<uint32_t>(3); // input width in tiles - block width in tiles
-    const uint32_t input_width_offset_tiles = get_arg_val<uint32_t>(4); // input width in tiles - block width in tiles
-    const uint32_t block_num_tiles = get_arg_val<uint32_t>(5); // block_height_tiles * block_width_tiles
+    const uint32_t padded_offset_bytes = get_arg_val<uint32_t>(3);       // input width in tiles - block width in tiles
+    const uint32_t input_width_offset_tiles = get_arg_val<uint32_t>(4);  // input width in tiles - block width in tiles
+    const uint32_t block_num_tiles = get_arg_val<uint32_t>(5);           // block_height_tiles * block_width_tiles
     const uint32_t start_id_offset = get_arg_val<uint32_t>(6);
     const uint32_t start_id_base = get_arg_val<uint32_t>(7);
     const uint32_t start_id = start_id_base + start_id_offset;
@@ -34,10 +34,7 @@ void kernel_main() {
     constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
     const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_readers>();
     uint32_t barrier_count = 0;

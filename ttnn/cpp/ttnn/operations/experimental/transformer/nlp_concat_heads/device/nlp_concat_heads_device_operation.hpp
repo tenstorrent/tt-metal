@@ -12,7 +12,8 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &input_tensor_a, Tensor &output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
+    const Tensor& input_tensor_a, Tensor& output, CoreCoord compute_with_storage_grid_size);
 
 struct NLPConcatHeadsDeviceOperation {
     MemoryConfig output_mem_config;

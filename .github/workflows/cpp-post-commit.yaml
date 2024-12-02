@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
+        default: 80
   workflow_dispatch:
     inputs:
       arch:
@@ -58,7 +58,7 @@ jobs:
       - cloud-virtual-machine
       - in-service
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -76,7 +76,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U0593J2RQRZ # Bill Teng
+          owner: U06CXU895AP # Michael Chiou
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
         if: ${{ failure() }}

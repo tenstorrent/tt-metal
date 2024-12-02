@@ -44,47 +44,41 @@ SECTIONS
 
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE :text
   .rodata1        : { *(.rodata1) } > REGION_APP_CODE :text
-  .sdata2         :
+
+  .data : ALIGN(4)
   {
+    *(.dynamic)
+    *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+
+    *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
+    *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_DATA :data
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA :data
 
-.data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA :data
-  .dynamic        : { *(.dynamic) } > REGION_APP_DATA :data
-  .data           :
-  {
     *(.data .data.* .gnu.linkonce.d.*)
-    SORT(CONSTRUCTORS)
-  } > REGION_APP_DATA :data
+    *(.data1)
 
-  . = ALIGN(4); /* startup code will use word writes to zero bss */
-  __l1_bss_start = .;
-  .sbss           :
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+    . = ALIGN(4);
+  } > REGION_APP_DATA :data
+  .ctors.dtors :
   {
+    /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.ctors .ctors.* .dtors .dtors.*))
+    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
+  } > REGION_APP_DATA :data
+  .bss : ALIGN(4)
+  {
+    __ldm_bss_start = .;
+    *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
+    *(.dynbss)
+    *(.bss .bss.* .gnu.linkonce.b.*)
+    *(COMMON)
+    . = ALIGN(4);
+    __ldm_bss_end = .;
   } > REGION_APP_DATA :data
-  . = ALIGN(4);
-  __l1_bss_end = .;
-
-  .bss            :
-  {
-   __ldm_bss_start = .;
-   *(.dynbss)
-   *(.bss .bss.* .gnu.linkonce.b.*)
-   *(COMMON)
-
-   /* Align here to ensure that the .bss section occupies space up to
-      _end.  Align after .bss to ensure correct alignment even if the
-      .bss section disappears because there are no input sections.
-      FIXME: Why do we need it? When there is no .bss section, we don't
-      pad the .data section.  */
-   . = ALIGN(4);
-   __ldm_bss_end = .;
-  } > REGION_APP_DATA :data
-  . = ALIGN(32 / 8);
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 

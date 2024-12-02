@@ -15,6 +15,7 @@ from tests.ttnn.utils_for_testing import (
     get_per_core_size_and_num_cores,
 )
 from models.utility_functions import torch_random
+import pytest
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 20
@@ -4194,3 +4195,29 @@ def run(
     output_tensor = ttnn.to_torch(result_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+@pytest.mark.parametrize("concat_spec", parameters["nightly"]["concat_specs"])
+@pytest.mark.parametrize("dtype", parameters["nightly"]["dtype"])
+@pytest.mark.parametrize("layout", parameters["nightly"]["layout"])
+def test_concat_pytorch2(concat_spec, dtype, layout, device):
+    shapes = concat_spec["shapes"]
+    dim = concat_spec["dim"]
+    device.enable_async(False)
+    if dtype == ttnn.bfloat16 and any([shape[-1] % 2 != 0 for shape in shapes]) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Skipping test for RM bfloat16 with odd last dimension")
+
+    torch_input_tensors = [torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16) for shape in shapes]
+    torch_output_tensor = torch.cat(torch_input_tensors, dim=dim)
+
+    ttnn_input_tensors = [
+        ttnn.from_torch(torch_input_tensor, device=device, layout=layout, dtype=dtype)
+        for torch_input_tensor in torch_input_tensors
+    ]
+
+    result_tensor = ttnn.concat(ttnn_input_tensors, dim=dim)
+    output_tensor = ttnn.to_torch(result_tensor)
+
+    assert check_with_pcc(
+        torch_output_tensor, output_tensor, 0.999
+    ), "Output tensors do not match within the specified precision"

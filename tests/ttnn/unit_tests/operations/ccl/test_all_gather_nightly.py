@@ -22,15 +22,15 @@ from ttnn import ShardTensorToMesh
     [
         (4, 1, [4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
         (8, 1, [8, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
-        (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 1, 256, 32], -4, ttnn.TILE_LAYOUT),
         (8, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
         # (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
         (8, 1, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
-        (4, 1, [8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT),
-        (8, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (4, 1, [8, 5, 13, 384], -1, ttnn.ROW_MAJOR_LAYOUT),
+        (8, 1, [8, 5, 13, 512], -1, ttnn.ROW_MAJOR_LAYOUT),
         (4, 1, [8, 5, 32, 384], 3, ttnn.TILE_LAYOUT),
         (8, 1, [8, 5, 32, 512], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 16384], -1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -48,6 +48,7 @@ from ttnn import ShardTensorToMesh
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("tile_h", [32])
 def test_line_all_gather_on_t3000_nightly(
     t3k_mesh_device,
     num_devices,
@@ -60,6 +61,7 @@ def test_line_all_gather_on_t3000_nightly(
     use_program_cache,
     function_level_defaults,
     enable_async,
+    tile_h,
     num_iters=1,
 ):
     run_all_gather_on_t3000_impl(
@@ -76,6 +78,7 @@ def test_line_all_gather_on_t3000_nightly(
         all_gather_topology=ttnn.Topology.Linear,
         enable_async=enable_async,
         num_iters=num_iters,
+        tile=(tile_h, 32),
     )
 
 
@@ -152,6 +155,7 @@ def run_line_all_gather_instances(
     function_level_defaults,
     enable_async,
     num_iters=1,
+    tile=(32, 32),
 ):
     if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
@@ -162,7 +166,7 @@ def run_line_all_gather_instances(
     logger.info(f"dim: {dim}")
 
     (is_known_failure, message) = is_unsupported_case(
-        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -181,7 +185,9 @@ def run_line_all_gather_instances(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim))
+    ttnn_tensor = ttnn.from_torch(
+        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim)
+    )
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     result_mesh_tensors = []

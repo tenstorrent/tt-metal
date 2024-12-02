@@ -113,15 +113,16 @@ class Kernel : public JitBuildSettings {
     void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
     void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
 
-    int get_watcher_kernel_id() { return watcher_kernel_id_; }
+    int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 
+    HalProgrammableCoreType get_kernel_programmable_core_type() const;
     CoreType get_kernel_core_type() const;
     void set_full_name(const string& s) { kernel_full_name_ = s; }
     const string& get_full_kernel_name() const override;
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
     void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
 
-    bool is_idle_eth();
+    bool is_idle_eth() const;
 
    protected:
     int watcher_kernel_id_;
@@ -242,12 +243,6 @@ class ComputeKernel : public Kernel {
 }  // namespace v0
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
-
-struct KernelDefinesHash {
-    KernelDefinesHash() {}
-
-    size_t operator()(const std::map<std::string, std::string> &c_defines) const;
-};
 
 }  // namespace tt_metal
 

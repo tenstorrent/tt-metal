@@ -38,10 +38,12 @@ namespace detail{
     class Program_;
 
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
+    KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
-    void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+    void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
+
+    class Internal_;
 }
 
 typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
@@ -106,6 +108,8 @@ class Program {
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const;
 
+    const std::size_t num_circular_buffers() const { return circular_buffers().size();};
+
     const std::vector< Semaphore > & semaphores() const;
 
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
@@ -141,10 +145,13 @@ class Program {
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
     // debug/test
-    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
-    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
+
+    const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
 
    private:
     std::unique_ptr<detail::Program_> pimpl_;
@@ -153,7 +160,7 @@ class Program {
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
+    friend KernelHandle detail::AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
@@ -162,13 +169,15 @@ class Program {
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+    friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
+    bool kernel_binary_always_stored_in_ringbuffer();
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
+    friend detail::Internal_;
 
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
     const std::shared_ptr<Buffer> &get_kernels_buffer() const noexcept;

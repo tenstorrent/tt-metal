@@ -4,10 +4,12 @@
 
 import ttnn
 import torch
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
     pad_and_fold_conv_activation_for_unity_stride,
+    nearest_y,
 )
 from typing import List
 
@@ -391,7 +393,24 @@ class resnet50:
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
+        self.conv1_input_height = 259
+        self.conv1_input_width = 259
+        self.conv1_output_height = ttnn.get_conv_output_dim(self.conv1_input_height, 4, 1, 0)
+        self.conv1_output_width = ttnn.get_conv_output_dim(self.conv1_input_width, 4, 1, 0)
         assert self.conv1_weight_tensor.shape[2] == 4
+
+        self.grayskull_conv1_input_memory_config = get_conv_input_memory_config(
+            self.batch_size,
+            self.conv1_input_channels,
+            self.conv1_input_height,
+            self.conv1_input_width,
+            self.conv1_output_channels,
+            self.conv1_output_height,
+            self.conv1_output_width,
+            device.compute_with_storage_grid_size(),
+            16,
+            True,
+        )
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -522,6 +541,11 @@ class resnet50:
         else:
             act_block_h_override = 0
 
+        if is_grayskull():
+            input_tensor = ttnn.to_device(
+                input_tensor, device=device, memory_config=self.grayskull_conv1_input_memory_config
+            )
+
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -533,8 +557,8 @@ class resnet50:
             stride=(1, 1),
             padding=(0, 0),
             batch_size=self.batch_size,
-            input_height=259,
-            input_width=259,
+            input_height=self.conv1_input_height,
+            input_width=self.conv1_input_width,
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -828,6 +852,11 @@ class resnet50:
         else:
             act_block_h_override = 0
 
+        if is_grayskull():
+            input_tensor = ttnn.to_device(
+                input_tensor, device=device, memory_config=self.grayskull_conv1_input_memory_config
+            )
+
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -839,8 +868,8 @@ class resnet50:
             stride=(1, 1),
             padding=(0, 0),
             batch_size=self.batch_size,
-            input_height=259,
-            input_width=259,
+            input_height=self.conv1_input_height,
+            input_width=self.conv1_input_width,
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],

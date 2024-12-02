@@ -75,6 +75,7 @@ RUN apt-get -y update \
     && apt-get install -y --no-install-recommends \
     libc++-17-dev \
     libc++abi-17-dev \
+    clang-tidy-17 \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup Env variables to setup Python Virtualenv - Install TT-Metal Python deps

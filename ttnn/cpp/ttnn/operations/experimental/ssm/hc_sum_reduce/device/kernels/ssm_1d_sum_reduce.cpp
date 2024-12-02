@@ -66,8 +66,7 @@ void MAIN {
     reduce_init<true>(input_cb_id, scalar_cb_id);
     reduce_revert_delta<REDUCE_DIM>(intermed_cb_id1);  // Required or else the first tile is wrong
 
-    for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++){
-
+    for (uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++) {
         cb_wait_front(scalar_cb_id, ONE_TILE);
 
         for (uint32_t output_idx = 0; output_idx < num_blocks; output_idx++) {

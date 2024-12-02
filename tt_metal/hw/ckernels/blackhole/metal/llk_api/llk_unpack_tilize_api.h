@@ -52,8 +52,14 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 }
 
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    // Revert X dim value to default.
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
+
+    // Revert Z dim value back to default.
+    const uint Tile_z_dim = get_operand_num_faces(operand);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(Tile_z_dim);
+
     std::uint32_t operand_id = get_operand_id(operand);
     unpack_config_u config = {0};
 
@@ -250,9 +256,6 @@ inline void llk_unpack_tilizeA_B(
         // Wait for free context
         wait_for_next_context(2);
 
-        // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
-
         if constexpr (neginf_srcA) {
             TTI_UNPACR_NOP(SrcA,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
         }
@@ -265,6 +268,12 @@ inline void llk_unpack_tilizeA_B(
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_face_a;
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
         }
+
+        // Trisc::SEMPOST for context acquire
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         //Reset Y counters for SrcA
         TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);

@@ -10,7 +10,7 @@
 
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/common/logger.hpp"
-#include "device/tt_arch_types.h"
+#include "umd/device/tt_arch_types.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
@@ -30,13 +30,13 @@
 #include "tt_metal/distributed/mesh_device.hpp"
 
 using tt::tt_metal::Device;
-using tt::tt_metal::distributed::MeshShape;
 using tt::tt_metal::distributed::MeshDevice;
-using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshDeviceConfig;
+using tt::tt_metal::distributed::MeshDeviceView;
+using tt::tt_metal::distributed::MeshShape;
 
 class T3000TestDevice {
-   public:
+public:
     T3000TestDevice() : device_open(false) {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
@@ -69,7 +69,7 @@ class T3000TestDevice {
     size_t num_devices_;
     std::shared_ptr<MeshDevice> mesh_device_;
 
-   private:
+private:
     bool device_open;
 };
 
@@ -77,9 +77,8 @@ namespace tt {
 
 namespace tt_metal {
 
-
 std::vector<uint32_t> get_eth_receiver_rt_args(
-    Device *device,
+    Device* device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -88,11 +87,14 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
     uint32_t start_semaphore,
     uint32_t init_handshake_core_x,
     uint32_t init_handshake_core_y,
-    uint32_t init_handshake_semaphore_id
-    ) {
+    uint32_t init_handshake_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
-    std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
-    std::vector<uint32_t> erisc_buffer_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
+    std::vector<uint32_t> erisc_semaphore_addresses(
+        max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
+    std::vector<uint32_t> erisc_buffer_addresses(
+        max_concurrent_samples,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 +
+            round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
         erisc_buffer_addresses.at(i) += i * sample_page_size;
@@ -118,9 +120,8 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
     return rt_args;
 }
 
-
 std::vector<uint32_t> get_eth_sender_rt_args(
-    Device *device,
+    Device* device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -129,8 +130,12 @@ std::vector<uint32_t> get_eth_sender_rt_args(
     uint32_t receiver_y,
     uint32_t receiver_start_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
-    std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
-    std::vector<uint32_t> erisc_buffer_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
+    std::vector<uint32_t> erisc_semaphore_addresses(
+        max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
+    std::vector<uint32_t> erisc_buffer_addresses(
+        max_concurrent_samples,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 +
+            round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_buffer_addresses.at(i) += i * sample_page_size;
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
@@ -160,7 +165,6 @@ struct hop_eth_sockets {
     CoreCoord sender_core;
 };
 
-
 void build_and_run_roundtrip_latency_test(
     std::vector<Device*> devices,
     std::vector<hop_eth_sockets> hop_eth_sockets,
@@ -169,10 +173,9 @@ void build_and_run_roundtrip_latency_test(
     std::size_t max_concurrent_samples,
     std::size_t n_hops,
 
-    std::vector<Program> &programs,
-    std::vector<KernelHandle> &receiver_kernel_ids,
-    std::vector<KernelHandle> &sender_kernel_ids
-) {
+    std::vector<Program>& programs,
+    std::vector<KernelHandle>& receiver_kernel_ids,
+    std::vector<KernelHandle>& sender_kernel_ids) {
     TT_ASSERT(hop_eth_sockets.size() == devices.size());
     TT_ASSERT(n_hops == devices.size());
     TT_ASSERT(programs.size() == 0);
@@ -182,7 +185,7 @@ void build_and_run_roundtrip_latency_test(
     receiver_kernel_ids.reserve(n_hops);
     sender_kernel_ids.reserve(n_hops);
 
-    std::unordered_map<Device*,Program*> device_program_map;
+    std::unordered_map<Device*, Program*> device_program_map;
     for (std::size_t i = 0; i < n_hops; i++) {
         if (device_program_map.find(devices.at(i)) == device_program_map.end()) {
             programs.emplace_back();
@@ -194,8 +197,8 @@ void build_and_run_roundtrip_latency_test(
 
     for (std::size_t i = 0; i < n_hops; i++) {
         auto previous_hop = i == 0 ? n_hops - 1 : i - 1;
-        Device *device = devices.at(i);
-        auto &program = *device_program_map.at(device);
+        Device* device = devices.at(i);
+        auto& program = *device_program_map.at(device);
         auto const& eth_sender_core = hop_eth_sockets.at(i).sender_core;
         auto const& eth_receiver_core = hop_eth_sockets.at(previous_hop).receiver_core;
 
@@ -207,7 +210,8 @@ void build_and_run_roundtrip_latency_test(
         std::vector<uint32_t> const& receiver_eth_ct_args = {};
         std::vector<uint32_t> const& sender_eth_ct_args = {};
         bool is_starting_core = i == 0;
-        uint32_t receiver_start_semaphore = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16;//CreateSemaphore(program, eth_receiver_core, 0, CoreType::ETH);
+        uint32_t receiver_start_semaphore = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE +
+                                            16;  // CreateSemaphore(program, eth_receiver_core, 0, CoreType::ETH);
         log_trace(tt::LogTest, "is_starting_core: {}", (is_starting_core ? 1 : 0));
         std::vector<uint32_t> const& receiver_eth_rt_args = get_eth_receiver_rt_args(
             device,
@@ -235,25 +239,20 @@ void build_and_run_roundtrip_latency_test(
             worker_sem1,
             static_cast<uint32_t>(device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).x),
             static_cast<uint32_t>(device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).y),
-            receiver_start_semaphore
-        };
+            receiver_start_semaphore};
 
         auto receiver_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_latency_ubench_eth_receiver.cpp",
             eth_receiver_core,
-            tt_metal::EthernetConfig {
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = receiver_eth_ct_args});
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = receiver_eth_ct_args});
         receiver_kernel_ids.push_back(receiver_kernel);
 
         auto sender_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_latency_ubench_eth_sender.cpp",
             eth_sender_core,
-            tt_metal::EthernetConfig {
-                .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = sender_eth_ct_args});
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_1_default, .compile_args = sender_eth_ct_args});
         sender_kernel_ids.push_back(sender_kernel);
 
         // This guy is only used until fast dispatch 2 is available
@@ -261,35 +260,64 @@ void build_and_run_roundtrip_latency_test(
         // communicate after they are initialized
         auto worker_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_latency_ubench_init_coordination_worker.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+            "eth_latency_ubench_init_coordination_worker.cpp",
             init_worker_core,
-            tt_metal::DataMovementConfig {
+            tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_1_default,
                 .compile_args = {}});
 
-
         log_trace(tt::LogOp, "-------------Hop: {}, Device: {}:", i, device->id());
-        log_trace(tt::LogOp, "Receiver Kernel Info: Receives from {} on core[logical]: (x={},y={}), [noc]: (x={},y={}):", devices.at(previous_hop)->id(), eth_receiver_core.x, eth_receiver_core.y, device->ethernet_core_from_logical_core(eth_receiver_core).x, device->ethernet_core_from_logical_core(eth_receiver_core).y);
+        log_trace(
+            tt::LogOp,
+            "Receiver Kernel Info: Receives from {} on core[logical]: (x={},y={}), [noc]: (x={},y={}):",
+            devices.at(previous_hop)->id(),
+            eth_receiver_core.x,
+            eth_receiver_core.y,
+            device->ethernet_core_from_logical_core(eth_receiver_core).x,
+            device->ethernet_core_from_logical_core(eth_receiver_core).y);
         log_trace(tt::LogOp, "- RT Args ({})", receiver_eth_rt_args.size());
         for (std::size_t i = 0; i < receiver_eth_rt_args.size(); i++) {
             log_trace(tt::LogOp, "  - {}: {}", i, receiver_eth_rt_args.at(i));
         }
-        log_trace(tt::LogOp, "Sender Kernel Info: on core[logical]: (x={},y={}), [noc]: (x={},y={}):", eth_sender_core.x, eth_sender_core.y, device->ethernet_core_from_logical_core(eth_sender_core).x, device->ethernet_core_from_logical_core(eth_sender_core).y);
+        log_trace(
+            tt::LogOp,
+            "Sender Kernel Info: on core[logical]: (x={},y={}), [noc]: (x={},y={}):",
+            eth_sender_core.x,
+            eth_sender_core.y,
+            device->ethernet_core_from_logical_core(eth_sender_core).x,
+            device->ethernet_core_from_logical_core(eth_sender_core).y);
         for (std::size_t i = 0; i < sender_eth_rt_args.size(); i++) {
             log_trace(tt::LogOp, "  - {}: {}", i, sender_eth_rt_args.at(i));
         }
-        log_trace(tt::LogOp, "Worker Kernel Info: on core[logical]: (x={},y={})", init_worker_core.x, init_worker_core.y);
+        log_trace(
+            tt::LogOp, "Worker Kernel Info: on core[logical]: (x={},y={})", init_worker_core.x, init_worker_core.y);
         for (std::size_t i = 0; i < worker_init_rt_args.size(); i++) {
             log_trace(tt::LogOp, "  - {}: {}", i, worker_init_rt_args.at(i));
         }
 
         tt_metal::SetRuntimeArgs(program, receiver_kernel, eth_receiver_core, receiver_eth_rt_args);
         tt_metal::SetRuntimeArgs(program, sender_kernel, eth_sender_core, sender_eth_rt_args);
-        log_trace(tt::LogOp, "Setting RT args for receiver. kernel_id: {}, core: (x={},y={})", receiver_kernel, eth_receiver_core.x, eth_receiver_core.y);
-        log_trace(tt::LogOp, "Setting RT args for sender. kernel_id: {}, core: (x={},y={})", sender_kernel, eth_sender_core.x, eth_sender_core.y);
+        log_trace(
+            tt::LogOp,
+            "Setting RT args for receiver. kernel_id: {}, core: (x={},y={})",
+            receiver_kernel,
+            eth_receiver_core.x,
+            eth_receiver_core.y);
+        log_trace(
+            tt::LogOp,
+            "Setting RT args for sender. kernel_id: {}, core: (x={},y={})",
+            sender_kernel,
+            eth_sender_core.x,
+            eth_sender_core.y);
         tt_metal::SetRuntimeArgs(program, worker_kernel, init_worker_core, worker_init_rt_args);
-        log_trace(tt::LogOp, "Setting RT args for worker. kernel_id: {}, core: (x={},y={})", worker_kernel, init_worker_core.x, init_worker_core.y);
+        log_trace(
+            tt::LogOp,
+            "Setting RT args for worker. kernel_id: {}, core: (x={},y={})",
+            worker_kernel,
+            init_worker_core.x,
+            init_worker_core.y);
 
         tt::tt_metal::detail::CompileProgram(device, program);
     }
@@ -305,28 +333,23 @@ void build_and_run_roundtrip_latency_test(
     for (auto [device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::detail::DumpDeviceProfileResults(device_ptr);
     }
-
 }
 
 }  // namespace tt_metal
 
 }  // namespace tt
 
-
-auto is_device_pcie_connected(chip_id_t device_id) {
-    return device_id < 4;
-}
-
+auto is_device_pcie_connected(chip_id_t device_id) { return device_id < 4; }
 
 std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<Device*> const& devices) {
     std::vector<hop_eth_sockets> sockets;
     std::unordered_map<uint64_t, std::size_t> n_edge_visits;
     for (std::size_t i = 0; i < devices.size(); i++) {
-        Device *curr_device = devices.at(i);
-        Device *next_device = i == devices.size() - 1 ? devices.at(0) : devices.at(i + 1);
+        Device* curr_device = devices.at(i);
+        Device* next_device = i == devices.size() - 1 ? devices.at(0) : devices.at(i + 1);
         uint64_t edge = (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(next_device->id());
-        bool edge_needs_tunneling = !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
-
+        bool edge_needs_tunneling =
+            !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
 
         std::size_t conn = (edge_needs_tunneling ? 0 : 0) + n_edge_visits[edge];
         std::size_t link = 0;
@@ -335,15 +358,15 @@ std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<Device*> const& 
         auto eth_sender_core_iter = active_eth_cores.begin();
         bool found = false;
         for (; !found && eth_sender_core_iter != active_eth_cores.end(); eth_sender_core_iter++) {
-
             auto [device_id, receiver_core] = curr_device->get_connected_ethernet_core(*eth_sender_core_iter);
             if (device_id == next_device->id()) {
-                uint64_t pair_edge = (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(device_id);
+                uint64_t pair_edge =
+                    (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(device_id);
                 if (edge_link_idx[pair_edge] == conn) {
                     CoreCoord eth_sender_core = *eth_sender_core_iter;
                     CoreCoord eth_receiver_core = receiver_core;
                     chip_id_t receiver_device_id = device_id;
-                    sockets.push_back({receiver_device_id,eth_receiver_core,curr_device->id(),eth_sender_core});
+                    sockets.push_back({receiver_device_id, eth_receiver_core, curr_device->id(), eth_sender_core});
                     TT_ASSERT(receiver_device_id == next_device->id());
                     found = true;
                     break;
@@ -360,9 +383,7 @@ std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<Device*> const& 
     return sockets;
 }
 
-
-
-int main (int argc, char** argv) {
+int main(int argc, char** argv) {
     // num samples
     // page sizes
     // concurrent samples
@@ -375,7 +396,7 @@ int main (int argc, char** argv) {
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_trace(tt::LogTest,"Test must be run on WH");
+        log_trace(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -419,7 +440,8 @@ int main (int argc, char** argv) {
     TT_ASSERT(std::all_of(sample_counts.begin(), sample_counts.end(), [](std::size_t n) { return n > 0; }));
     TT_ASSERT(std::all_of(page_sizes.begin(), page_sizes.end(), [](std::size_t n) { return n > 0; }));
     TT_ASSERT(std::all_of(page_sizes.begin(), page_sizes.end(), [](std::size_t n) { return n % 16 == 0; }));
-    TT_ASSERT(std::all_of(max_concurrent_samples.begin(), max_concurrent_samples.end(), [](std::size_t n) { return n > 0; }));
+    TT_ASSERT(
+        std::all_of(max_concurrent_samples.begin(), max_concurrent_samples.end(), [](std::size_t n) { return n > 0; }));
 
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
@@ -452,7 +474,7 @@ int main (int argc, char** argv) {
                     view->get_device(1, 2),
                 };
 
-            case 12: // Does an extra loop through the inner ring
+            case 12:  // Does an extra loop through the inner ring
                 return std::vector<Device*>{
                     view->get_device(1, 1),
                     view->get_device(1, 0),
@@ -468,24 +490,28 @@ int main (int argc, char** argv) {
                     view->get_device(1, 2),
                 };
 
-            default:
-                TT_THROW("Unsupported hop_count");
-                return std::vector<Device*>{};
+            default: TT_THROW("Unsupported hop_count"); return std::vector<Device*>{};
         };
     };
 
     try {
         constexpr std::size_t placeholder_arg_value = 1;
         for (auto n_hops : hop_counts) {
-
             auto devices = get_device_list(view, n_hops);
             std::vector<hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
 
             for (auto max_concurrent_samples : max_concurrent_samples) {
                 for (auto num_samples : sample_counts) {
                     for (auto sample_page_size : page_sizes) {
-                        log_trace(tt::LogTest, "Running test with num_devices={}, num_samples={}, sample_page_size={}, max_concurrent_samples={}, n_hops={}",
-                            n_hops, num_samples, sample_page_size, max_concurrent_samples, n_hops);
+                        log_trace(
+                            tt::LogTest,
+                            "Running test with num_devices={}, num_samples={}, sample_page_size={}, "
+                            "max_concurrent_samples={}, n_hops={}",
+                            n_hops,
+                            num_samples,
+                            sample_page_size,
+                            max_concurrent_samples,
+                            n_hops);
                         std::vector<Program> programs = {};
                         std::vector<KernelHandle> receiver_kernel_ids;
                         std::vector<KernelHandle> sender_kernel_ids;
@@ -499,8 +525,7 @@ int main (int argc, char** argv) {
 
                             programs,
                             receiver_kernel_ids,
-                            sender_kernel_ids
-                        );
+                            sender_kernel_ids);
                     }
                 }
             }

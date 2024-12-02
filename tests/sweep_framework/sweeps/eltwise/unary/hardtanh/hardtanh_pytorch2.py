@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
+# Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.hardtanh.default.md
 
 parameters = {
     "nightly": {
@@ -157,7 +158,7 @@ def run(
     max_val = input_specs.get("max_val")
 
     golden_function = ttnn.get_golden_function(ttnn.hardtanh)
-    torch_output_tensor = golden_function(torch_input_tensor_a, min_val=min_val, max_val=max_val)
+    torch_output_tensor = golden_function(torch_input_tensor_a, min_val, max_val)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -168,7 +169,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.hardtanh(input_tensor_a, min_val=min_val, max_val=max_val, memory_config=output_memory_config)
+    result = ttnn.hardtanh(input_tensor_a, min_val, max_val, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

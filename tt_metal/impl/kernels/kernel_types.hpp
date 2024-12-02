@@ -53,6 +53,7 @@ struct ComputeConfig {
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
@@ -70,7 +71,6 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-
 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

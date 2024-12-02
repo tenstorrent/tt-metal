@@ -5,6 +5,8 @@
 #include "device/argmax_op.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 
+#include <utility>
+
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -19,8 +21,15 @@ ttnn::Tensor ArgMaxOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     return operation::run(
-                ArgMax{tt::tt_metal::DataType::UINT32, dim, use_muticore, memory_config.value_or(input_tensor.memory_config())},
-                {input_tensor}, {}, {optional_output_tensor}, queue_id)
+               ArgMax{
+                   tt::tt_metal::DataType::UINT32,
+                   dim,
+                   use_muticore,
+                   memory_config.value_or(input_tensor.memory_config())},
+               {input_tensor},
+               {},
+               {std::move(optional_output_tensor)},
+               queue_id)
         .at(0);
 }
 
@@ -30,8 +39,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    return invoke(DefaultQueueId, input_tensor, dim, use_muticore, memory_config, optional_output_tensor);
+    return invoke(DefaultQueueId, input_tensor, dim, use_muticore, memory_config, std::move(optional_output_tensor));
 }
-
 
 }  // namespace ttnn::operations::reduction

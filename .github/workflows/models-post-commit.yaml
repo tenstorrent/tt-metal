@@ -54,7 +54,7 @@ jobs:
       - in-service
       - cloud-virtual-machine
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/retry-command
         with:
           timeout-seconds: 100
@@ -76,7 +76,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U0593J2RQRZ # Bill Teng
+          owner: U06CXU895AP # Michael Chiou
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         with:

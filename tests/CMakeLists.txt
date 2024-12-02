@@ -18,5 +18,5 @@ endif(TT_METAL_BUILD_TESTS)
 
 if(TTNN_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_eager) # this should go away and be replaced with link to ttnn
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn/unit_tests/gtests)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
 endif(TTNN_BUILD_TESTS)

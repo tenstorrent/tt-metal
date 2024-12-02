@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 
-
 namespace ttnn {
 namespace operations::data_movement {
 
@@ -18,13 +17,13 @@ struct ShardedToInterleavedPartialOperation {
         int64_t& num_slices,
         int64_t& slice_index,
         const std::optional<MemoryConfig>& memory_config_arg,
-        const std::optional<DataType> & data_type_arg);
-
+        const std::optional<DataType>& data_type_arg);
 };
-
 
 }  // namespace operations::data_movement
 
-constexpr auto sharded_to_interleaved_partial = ttnn::register_operation_with_auto_launch_op<"ttnn::sharded_to_interleaved_partial", ttnn::operations::data_movement::ShardedToInterleavedPartialOperation>();
+constexpr auto sharded_to_interleaved_partial = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::sharded_to_interleaved_partial",
+    ttnn::operations::data_movement::ShardedToInterleavedPartialOperation>();
 
 }  // namespace ttnn

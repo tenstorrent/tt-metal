@@ -10,9 +10,11 @@ runtime
 test_hlk_args_init_gen
 tt_build
 tt_debug
+.build/
 build
 build_*
 /python_env/
+CMakeUserPresets.json
 
 /llk_out/
 /out/
@@ -23,6 +25,7 @@ coremodel/model/release/
 
 pipegen.yaml
 device_desc.yaml
+cluster_descriptor.yaml
 .umd/
 /clean
 *coverage.txt

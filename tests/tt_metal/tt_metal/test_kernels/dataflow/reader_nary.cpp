@@ -15,16 +15,16 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 1;
 
-    for (uint32_t i = 0; i<num_reads; i++){
-        uint32_t src_addr  = get_arg_val<uint32_t>(2 + i * 4);
+    for (uint32_t i = 0; i < num_reads; i++) {
+        uint32_t src_addr = get_arg_val<uint32_t>(2 + i * 4);
         uint32_t src_noc_x = get_arg_val<uint32_t>(3 + i * 4);
         uint32_t src_noc_y = get_arg_val<uint32_t>(4 + i * 4);
-        uint32_t cb_id_in  = get_arg_val<uint32_t>(5 + i * 4);
+        uint32_t cb_id_in = get_arg_val<uint32_t>(5 + i * 4);
 
         uint32_t ublock_size_bytes = get_tile_size(cb_id_in);
 
         // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-        for (uint32_t i = 0; i<num_tiles_per_read; i += ublock_size_tiles) {
+        for (uint32_t i = 0; i < num_tiles_per_read; i += ublock_size_tiles) {
             uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
 
             cb_reserve_back(cb_id_in, ublock_size_tiles);

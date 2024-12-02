@@ -8,6 +8,7 @@ from loguru import logger
 from pathlib import Path
 from transformers import FalconConfig
 from models.utility_functions import is_grayskull, is_wormhole_b0
+from models.demos.falcon7b_common.tt.model_utils import get_default_hifi2_kernel_config
 
 OP_KEYS = (
     # Inputs
@@ -289,6 +290,22 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
             )
             model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
             model_config["POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
+
+    if is_wormhole_b0():
+        default_lofi_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+    else:
+        default_lofi_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    model_config["DEFAULT_LoFi_KERNEL_CONFIG"] = default_lofi_kernel_config
+
+    model_config["DEFAULT_HiFi2_KERNEL_CONFIG"] = get_default_hifi2_kernel_config()
 
     # uncomment if need to see all the configs
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")

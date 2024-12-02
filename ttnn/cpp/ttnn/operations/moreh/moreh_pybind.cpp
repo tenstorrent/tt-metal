@@ -4,11 +4,13 @@
 
 #include "moreh_pybind.hpp"
 
+#include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_adam/moreh_adam_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_adamw/moreh_adamw_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_arange/moreh_arange_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_bmm/moreh_bmm_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward_pybind.hpp"
@@ -36,7 +38,8 @@
 #include "ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_pybind.hpp"
 
 namespace ttnn::operations::moreh {
-void bind_moreh_operations(py::module &module) {
+void bind_moreh_operations(py::module& module) {
+    moreh_abs_pow::bind_moreh_abs_pow_operation(module);
     moreh_adam::bind_moreh_adam_operation(module);
     moreh_adamw::bind_moreh_adamw_operation(module);
     moreh_arange::bind_moreh_arange_operation(module);
@@ -68,5 +71,6 @@ void bind_moreh_operations(py::module &module) {
     moreh_softmax::bind_moreh_softmax_operation(module);
     moreh_sum_backward::bind_moreh_sum_backward_operation(module);
     moreh_sum::bind_moreh_sum_operation(module);
+    moreh_clip_grad_norm::bind_moreh_clip_grad_norm_operation(module);
 }
 }  // namespace ttnn::operations::moreh

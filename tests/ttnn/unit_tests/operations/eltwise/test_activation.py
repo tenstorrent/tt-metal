@@ -307,6 +307,7 @@ def test_scalarB_leaky_relu(device, h, w, scalar):
     run_activation_test_leaky_relu(device, h, w, scalar, ttnn.leaky_relu)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])

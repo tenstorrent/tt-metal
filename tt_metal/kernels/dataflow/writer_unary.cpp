@@ -5,12 +5,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_noc_x = get_arg_val<uint32_t>(1);
     uint32_t dst_noc_y = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
 
     // single-tile ublocks
     uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);

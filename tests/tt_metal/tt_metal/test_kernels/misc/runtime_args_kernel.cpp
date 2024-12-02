@@ -16,16 +16,16 @@ namespace {
 void kernel_main() {
 #endif
 #ifdef COMPUTE
-namespace NAMESPACE {
-void MAIN  {
+    namespace NAMESPACE {
+    void MAIN {
 #endif
-    volatile uint32_t tt_l1_ptr *results = (volatile uint32_t tt_l1_ptr *)RESULTS_ADDR;
-    for (int i = 0; i < NUM_RUNTIME_ARGS; i++) {
+        volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
+        for (int i = 0; i < NUM_RUNTIME_ARGS; i++) {
 #ifdef COMMON_RUNTIME_ARGS
-        results[i] = get_common_arg_val<uint32_t>(i);
+            results[i] = get_common_arg_val<uint32_t>(i);
 #else
-        results[i] = get_arg_val<uint32_t>(i);
+    results[i] = get_arg_val<uint32_t>(i);
 #endif
+        }
     }
-}
-}
+    }

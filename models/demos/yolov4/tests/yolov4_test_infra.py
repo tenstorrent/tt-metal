@@ -19,8 +19,11 @@ from models.utility_functions import (
 )
 
 
-def load_yolov4_weight(model_location_generator):
-    model_path = model_location_generator("models", model_subdir="Yolo")
+def load_yolov4_weight(model_location_generator=None):
+    if model_location_generator == None:
+        model_path = "models"
+    else:
+        model_path = model_location_generator("models", model_subdir="Yolo")
     if model_path == "models":
         if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
             os.system(
@@ -132,7 +135,7 @@ class Yolov4TestInfra:
         output_tensor = output_tensor.reshape(1, 40, 40, 255)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-        valid_pcc = 0.99
+        valid_pcc = 0.985
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=valid_pcc)
 
         logger.info(

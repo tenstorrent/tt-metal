@@ -31,16 +31,18 @@ void py_module_types(py::module& module) {
 
     py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
         .def(
-            py::init<MathFidelity, bool, bool, bool>(),
+            py::init<MathFidelity, bool, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
             py::arg("math_approx_mode") = true,
             py::arg("fp32_dest_acc_en") = false,
-            py::arg("packer_l1_acc") = false)
+            py::arg("packer_l1_acc") = false,
+            py::arg("dst_full_sync_en") = false)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
-        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
+        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc)
+        .def_readwrite("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en);
 }
 
 void py_module(py::module& module) {
@@ -107,8 +109,12 @@ void py_module(py::module& module) {
                 >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
-    module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true,
-    R"doc(
+    module.def(
+        "deallocate",
+        &ttnn::operations::core::deallocate,
+        py::arg("tensor"),
+        py::arg("force") = true,
+        R"doc(
         Deallocates device tensor. Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
         Args:
@@ -342,7 +348,6 @@ void py_module(py::module& module) {
         "num_cores_to_corerangeset",
         py::overload_cast<const uint32_t, const CoreCoord, const bool>(&tt::tt_metal::num_cores_to_corerangeset),
         R"doc(Create a CoreRangeSet containing the specified number of cores)doc");
-
 }
 
 }  // namespace core

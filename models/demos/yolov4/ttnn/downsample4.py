@@ -14,7 +14,9 @@ class Down4:
         else:
             torch_model = model.torch_model
         self.torch_model = torch_model
-        self.conv1 = Conv(torch_model, "down4.conv1", [1, 40, 40, 256], (2, 2, 1, 1), reshard=True)
+        self.conv1 = Conv(
+            torch_model, "down4.conv1", [1, 40, 40, 256], (2, 2, 1, 1), reshard=True, height_sharding=False
+        )
         self.conv2 = Conv(torch_model, "down4.conv2", [1, 20, 20, 512], (1, 1, 0, 0), deallocate=False)
         self.conv3 = Conv(torch_model, "down4.conv3", [1, 20, 20, 512], (1, 1, 0, 0))
 
