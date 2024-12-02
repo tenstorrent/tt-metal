@@ -36,15 +36,13 @@ void kernel_main() {
     //We are guranteed to be in 2D going to 2D
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
-    const uint32_t dst_addr                 = get_arg_val<uint32_t>(1);
-    const uint32_t source_page_size_bytes   = get_arg_val<uint32_t>(2);
-    const uint32_t dest_page_size_bytes     = get_arg_val<uint32_t>(3);
+    const uint32_t dst_addr = get_arg_val<uint32_t>(1);
     //If DDR this is source_page_size_bytes + 64 (rounded up to next 64B), if L1 this is source_page_size_bytes + 16 (rounded up to next 16B)
-    const uint32_t source_read_size_bytes   = get_arg_val<uint32_t>(4);
-    const uint32_t read_start_page          = get_arg_val<uint32_t>(5);
-    const uint32_t read_end_page            = get_arg_val<uint32_t>(6);
-    const uint32_t write_start_page         = get_arg_val<uint32_t>(7);
-    const uint32_t write_start_offset       = get_arg_val<uint32_t>(8);
+    const uint32_t source_read_size_bytes = get_arg_val<uint32_t>(2);
+    const uint32_t read_start_page = get_arg_val<uint32_t>(3);
+    const uint32_t read_end_page = get_arg_val<uint32_t>(4);
+    const uint32_t write_start_page = get_arg_val<uint32_t>(5);
+    const uint32_t write_start_offset = get_arg_val<uint32_t>(6);
     const uint32_t nop = get_arg_val<uint32_t>(9);
 
     constexpr bool tensor_is_dram = get_compile_time_arg_val(0) == 1;
@@ -52,22 +50,35 @@ void kernel_main() {
 #define src_aligned_to_16 get_compile_time_arg_val(2) == 1
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
+    constexpr uint32_t source_page_size_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t dest_page_size_bytes = get_compile_time_arg_val(6);
+#define source_page_is_pow_2 get_compile_time_arg_val(7) == 1
+    constexpr uint32_t source_page_pow_2 = get_compile_time_arg_val(8);
+#define dest_page_is_pow_2 get_compile_time_arg_val(9) == 1
+    constexpr uint32_t dest_page_pow_2 = get_compile_time_arg_val(10);
     //Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this core
     if (nop == 1)
     {
         return;
     }
-
+#if source_page_is_pow_2
+    const InterleavedPow2AddrGen<tensor_is_dram> s = {
+        .bank_base_address = src_addr, .log_base_2_of_page_size = source_page_pow_2};
+#else
     const InterleavedAddrGen<tensor_is_dram> s = {
         .bank_base_address = src_addr,
         .page_size = source_page_size_bytes
     };
-
+#endif
+#if dest_page_is_pow_2
+    const InterleavedPow2AddrGen<tensor_is_dram> d = {
+        .bank_base_address = dst_addr, .log_base_2_of_page_size = dest_page_pow_2};
+#else
     const InterleavedAddrGen<tensor_is_dram> d = {
         .bank_base_address = dst_addr,
         .page_size = dest_page_size_bytes
     };
-
+#endif
 
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;

@@ -77,13 +77,22 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
         tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size1);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-
+    bool source_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(source_page_size_bytes);
+    uint32_t source_page_pow_2 = source_page_is_pow_2 ? (std::uint32_t)std::log2(source_page_size_bytes) : 0;
+    bool dest_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(dest_page_size_bytes);
+    uint32_t dest_page_pow_2 = dest_page_is_pow_2 ? (std::uint32_t)std::log2(dest_page_size_bytes) : 0;
     std::vector<uint32_t> compile_time_args = {
         (std::uint32_t)src0_is_dram,
         (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
         (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,
         src0_cb_index,
-        src1_cb_index};
+        src1_cb_index,
+        source_page_size_bytes,
+        dest_page_size_bytes,
+        source_page_is_pow_2,
+        source_page_pow_2,
+        dest_page_is_pow_2,
+        dest_page_pow_2};
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -96,16 +105,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
             CoreCoord core = {core_x, core_y};
             if (done == 1) {
                 const std::vector<uint32_t> reader_runtime_args = {
-                    src_buffer->address(),
-                    dst_buffer->address(),
-                    source_page_size_bytes,
-                    dest_page_size_bytes,
-                    source_read_size_bytes,
-                    0,
-                    0,
-                    0,
-                    0,
-                    1
+                    src_buffer->address(), dst_buffer->address(), source_read_size_bytes, 0, 0, 0, 0, 1
 
                 };
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -120,8 +120,6 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
                 const std::vector<uint32_t> reader_runtime_args = {
                     src_buffer->address(),
                     dst_buffer->address(),
-                    source_page_size_bytes,
-                    dest_page_size_bytes,
                     source_read_size_bytes,
                     start_of_read,
                     end_of_read,
@@ -169,16 +167,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
                 CoreCoord core = {core_x, core_y};
                 if (done == 1) {
                     const std::vector<uint32_t> reader_runtime_args = {
-                        src_buffer->address(),
-                        dst_buffer->address(),
-                        source_page_size_bytes,
-                        dest_page_size_bytes,
-                        source_read_size_bytes,
-                        0,
-                        0,
-                        0,
-                        0,
-                        1
+                        src_buffer->address(), dst_buffer->address(), source_read_size_bytes, 0, 0, 0, 0, 1
 
                     };
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -193,8 +182,6 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
                     const std::vector<uint32_t> reader_runtime_args = {
                         src_buffer->address(),
                         dst_buffer->address(),
-                        source_page_size_bytes,
-                        dest_page_size_bytes,
                         source_read_size_bytes,
                         start_of_read,
                         end_of_read,
@@ -236,7 +223,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer_multi_risk(const Tensor& inp
     tt::log_debug("data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
-    uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
+    uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 256;
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
     tt::tt_metal::Buffer* src_buffer = input.buffer();
