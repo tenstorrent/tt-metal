@@ -81,6 +81,8 @@ void kernel_main() {
     cb_reserve_back(cb_id_in1, 1);
     const uint32_t source_buffer = get_write_ptr(cb_id_in0);
     const uint32_t dest_buffer = get_write_ptr(cb_id_in1);
+    cb_push_back(cb_id_in0, 1);
+    cb_push_back(cb_id_in1, 1);
 
     uint64_t dst_noc_addr = get_noc_addr(write_page, d);
     uint64_t write_offset = dst_noc_addr&OFFSET_16 + write_start_offset;
@@ -111,29 +113,26 @@ void kernel_main() {
             noc_async_write_barrier();
             if (readable < writable)
             {
-                tt::data_movement::common::tt_memmove<false,true>(dest_buffer+write_offset, source_buffer + read_offset, readable);
+                tt::data_movement::common::tt_memmove<false, true, false>(
+                    dest_buffer + write_offset, source_buffer + read_offset, readable);
                 writable = writable -readable;
                 write_offset = write_offset + readable;
                 readable = 0;
                 end_to_write = end_to_write + readable;
                 if (i == read_end_page-1)
                 {
-                    noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, end_to_write);
-                    cb_push_back(cb_id_in0, 1);
-                    cb_push_back(cb_id_in1, 1);
+                    noc_async_write(dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
                     return;
                 }
             }
             else if (readable == writable)
             {
-                tt::data_movement::common::tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, readable);
+                tt::data_movement::common::tt_memmove<false, false, false>(
+                    dest_buffer + write_offset, source_buffer + read_offset, readable);
                 noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, dest_page_size_bytes);
                 writable = dest_page_size_bytes;
                 readable = 0;
-                if (i == read_end_page-1)
-                {
-                    cb_push_back(cb_id_in0, 1);
-                    cb_push_back(cb_id_in1, 1);
+                if (i == read_end_page - 1) {
                     return;
                 }
                 end_to_write = 0;
@@ -146,7 +145,8 @@ void kernel_main() {
             {
                 //writable < readable
 
-                tt::data_movement::common::tt_memmove<false,false>(dest_buffer+write_offset, source_buffer + read_offset, writable);
+                tt::data_movement::common::tt_memmove<false, false, false>(
+                    dest_buffer + write_offset, source_buffer + read_offset, writable);
                 noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, dest_page_size_bytes);
                 end_to_write = 0;
                 readable = readable - writable;
@@ -159,7 +159,5 @@ void kernel_main() {
             }
         }
     }
-    cb_push_back(cb_id_in0, 1);
-    cb_push_back(cb_id_in1, 1);
     return;
 }
