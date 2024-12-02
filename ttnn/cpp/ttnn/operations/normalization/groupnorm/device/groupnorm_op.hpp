@@ -36,10 +36,10 @@ struct GroupNormShardedMultiCoreProgramConfig {
 };
 
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
-    const Tensor &a,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    const std::optional<const Tensor> input_mask,
+    const Tensor& a,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
     const uint32_t num_groups,
@@ -47,8 +47,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     MathFidelity fidelity,
     DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace
-);
+    bool inplace);
 
 struct GroupNorm {
     float eps;
@@ -56,15 +55,15 @@ struct GroupNorm {
     MemoryConfig output_mem_config;
     GroupNormShardedMultiCoreProgramConfig program_config;
 
-    void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const;
+        std::vector<Tensor>& output_tensors) const;
 };
 
-
-}   // namespace operations::normalization
+}  // namespace ttnn::operations::normalization

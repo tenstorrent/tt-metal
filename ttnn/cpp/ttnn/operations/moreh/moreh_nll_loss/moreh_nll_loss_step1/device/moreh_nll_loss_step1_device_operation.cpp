@@ -64,7 +64,7 @@ MorehNllLossStep1DeviceOperation::invoke(
     const Tensor& target_tensor,
     const std::optional<Tensor>& weight_tensor,
     const int32_t ignore_index,
-    const std::string reduction,
+    const std::string& reduction,
     const DataType dtype,
     const uint32_t channel_size,
     const std::optional<MemoryConfig>& memory_config,

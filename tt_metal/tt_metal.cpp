@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include "dev_msgs.h"
 #include "llrt/hal.hpp"
@@ -19,11 +20,13 @@
 #include "tools/profiler/profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
@@ -267,9 +270,9 @@ inline void SetRuntimeArgsImpl(
 
 inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args,
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args,
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
     for (size_t i = 0; i < core_spec.size(); i++) {
@@ -335,11 +338,11 @@ std::map<chip_id_t, Device *> CreateDevices(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -356,7 +359,7 @@ std::map<chip_id_t, Device *> CreateDevices(
     return ret_devices;
 }
 
-void CloseDevices(std::map<chip_id_t, Device *> devices) {
+void CloseDevices(const std::map<chip_id_t, Device *>& devices) {
     std::vector<Device *> devices_to_close;
     for (auto& [id, device] : devices) {
         devices_to_close.push_back(device);
@@ -386,7 +389,7 @@ void print_page(
     CoreCoord noc_coordinates,
     uint32_t l1_address,
     uint32_t bank_id,
-    std::vector<uint32_t> page) {
+    const std::vector<uint32_t>& page) {
     std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
     std::cout << "host_page_index " << host_page_id << std::endl;
     std::cout << "noc coordinates " << noc_coordinates.str() << std::endl;
@@ -400,20 +403,15 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
+void WriteToDeviceSharded(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer) {
     TT_FATAL(
-        host_buffer_size_bytes <= buffer.size(),
+        host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
-        host_buffer_size_bytes,
+        host_buffer.size(),
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
-
-    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    TT_ASSERT(page_size % bytes_per_page_entry == 0);
-    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
     auto device = buffer.device();
 
@@ -424,18 +422,18 @@ void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buff
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
         auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
-        auto data_index = host_page_id * num_entries_per_page;
-        std::vector<uint32_t> page;
+        auto data_index = host_page_id * page_size;
+        std::vector<uint8_t> page;
         page.insert(
-            page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+            page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + page_size);
 
         auto noc_coordinates = buffer.noc_coordinates(bank_id);
         llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
     }
 }
 
-void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
+void WriteToDeviceInterleavedContiguous(const Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    uint32_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -445,20 +443,15 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
     uint32_t page_size = buffer.page_size();
     uint32_t num_pages = buffer.num_pages();
 
-    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    TT_FATAL(page_size % bytes_per_page_entry == 0,
-        "Invalid page size: {}. Page size  must be a multiple of bytes per page entry {}.", page_size, bytes_per_page_entry);
-    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
-
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
     uint32_t bank_index = 0;
     int data_index = 0;
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint32_t> page;
+        std::vector<uint8_t> page;
         page.insert(
-            page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+            page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::L1:
@@ -470,11 +463,11 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         }
 
         bank_index = (bank_index + 1) % num_banks;
-        data_index += num_entries_per_page;
+        data_index += page_size;
     }
 }
 
-void WriteToDevice(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToDevice(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
@@ -486,11 +479,7 @@ void WriteToDevice(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     }
 }
 
-void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<uint32_t> &host_buffer) {
-    WriteToBuffer(*buffer, host_buffer);
-}
-
-void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToBuffer(Buffer &buffer, tt::stl::Span<const uint8_t> host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -504,33 +493,34 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     }
 }
 
-void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-    host_buffer.clear();  // overwrite the data
+void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, uint8_t* host_buffer) {
     uint32_t page_size = buffer.page_size();
     uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
+    size_t host_idx = 0;
 
     uint32_t bank_index = 0;
+    std::vector<uint8_t> page;
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint32_t> page;
+        page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE:
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+                page.resize(page_size);
+                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
 
         // Copy page into host buffer
-        for (uint32_t entry : page) {
-            host_buffer.push_back(entry);
-        }
+        std::memcpy(host_buffer + host_idx, page.data(), page.size());
+        host_idx += page.size();
 
         bank_index = (bank_index + 1) % num_banks;
     }
@@ -539,19 +529,18 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint3
 void read_pages_to_host_helper(
     Device *device,
     Buffer &dev_buffer,
-    std::vector<uint32_t> &host_buffer,
+    uint8_t* host_buffer,
     const uint32_t &page_size,
     const uint32_t &host_page_id,
     const uint32_t &dev_page_id,
     const uint32_t &bank_id) {
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
-    uint32_t num_entries_per_page = page_size / sizeof(uint32_t);
-    uint32_t host_buffer_start = host_page_id * num_entries_per_page;
-    tt::Cluster::instance().read_core(host_buffer.data() + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
+    uint32_t host_buffer_start = host_page_id * page_size;
+    tt::Cluster::instance().read_core(host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
 }
 
-void ReadFromDeviceSharded(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromDeviceSharded(Buffer &buffer, uint8_t* host_buffer, bool shard_order) {
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
@@ -559,13 +548,8 @@ void ReadFromDeviceSharded(Buffer &buffer, std::vector<uint32_t> &host_buffer, b
     std::cout << "Reading From Device Height Sharded " << std::endl;
 #endif
 
-    int output_page_index = 0;
     auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
-    uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
-
-    host_buffer = std::vector<uint32_t>(total_pages * num_entries_per_page);
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (int dev_page_id = 0; dev_page_id < total_pages; dev_page_id++) {
@@ -583,9 +567,8 @@ void ReadFromDeviceSharded(Buffer &buffer, std::vector<uint32_t> &host_buffer, b
     }
 }
 
-void ReadFromDevice(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromDevice(Buffer &buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
-    host_buffer.clear();  // overwrite the data
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
@@ -596,11 +579,11 @@ void ReadFromDevice(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool sha
     }
 }
 
-void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
-void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(Buffer &buffer, uint8_t* host_buffer, bool shard_order) {
     Device *device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -621,14 +604,9 @@ void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool sha
     }
 }
 
-void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t &core_id) {
+void ReadShard(Buffer &buffer, uint8_t* host_buffer, const uint32_t &core_id) {
     Device *device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
-    host_buffer.clear();  // overwrite the data
-
-    uint32_t num_entries_per_page = buffer.page_size() / sizeof(uint32_t);
-    uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_spec().size();
-    host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
     std::vector<uint32_t> page_ids;
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
@@ -647,7 +625,7 @@ void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done) {
+void LaunchProgram(Device *device, const std::shared_ptr<Program>& program, bool wait_until_cores_done) {
     LaunchProgram(device, *program, wait_until_cores_done);
 }
 
@@ -741,18 +719,18 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                 std::vector<uint32_t> circular_buffer_config_vec(program.get_program_config(index).cb_size / sizeof(uint32_t));
 
                 auto cbs_on_core = program.circular_buffers_on_core(logical_core);
-                for (auto circular_buffer : cbs_on_core) {
+                for (const auto& circular_buffer : cbs_on_core) {
                     for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                         uint32_t addr_in_bytes = circular_buffer->address();
                         uint32_t size_in_bytes = circular_buffer->size();
                         uint32_t num_pages = circular_buffer->num_pages(buffer_index);
                         uint32_t page_size = size_in_bytes / num_pages;
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index) =
-                            addr_in_bytes >> 4;  // convert to addr in 16B words
+                            addr_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 1) =
-                            size_in_bytes >> 4;  // convert to addr in 16B words
+                            size_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
                         circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 2) = num_pages;
-                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> 4;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                     }
                 }  // PROF_END("CBS")
 
@@ -837,16 +815,23 @@ DeviceAddr AllocateBuffer(Buffer *buffer) {
         GraphTracker::instance().track_allocate(buffer);
         return 0;
     }
-
+    if (buffer->sub_device_manager_id().has_value()) {
+        TT_FATAL(*(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            *buffer->sub_device_manager_id(),
+            buffer->device()->get_active_sub_device_manager_id());
+    }
+    auto allocator = buffer->allocator();
     DeviceAddr allocated_addr;
+
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
+            *allocator,
             buffer->shard_spec().size() * buffer->num_cores().value() * buffer->page_size(),
             buffer);
     } else {
         allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
+            *allocator,
             buffer->size(),
             buffer);
     }
@@ -875,7 +860,14 @@ void DeallocateBuffer(Buffer *buffer) {
         TracyFreeN(reinterpret_cast<void const *>(buffer->address()), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
     }
 #endif
-    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
+    if (buffer->sub_device_manager_id().has_value()) {
+        TT_FATAL(*(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            *buffer->sub_device_manager_id(),
+            buffer->device()->get_active_sub_device_manager_id());
+    }
+    auto allocator = buffer->allocator();
+    allocator::deallocate_buffer(*allocator, buffer);
 }
 
 void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
@@ -920,18 +912,18 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
+Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig &dispatch_core_config) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -1092,6 +1084,12 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
     circular_buffer->assign_global_address();
 }
 
+void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
+    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
+    circular_buffer->assign_global_address();
+}
+
 uint32_t CreateSemaphore(
     Program &program,
     const std::variant<CoreRange, CoreRangeSet> &core_spec,
@@ -1139,14 +1137,37 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
     return Buffer::create(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
 }
-
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
     return Buffer::create(
-        config.device, address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+        config.device,
+        address,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        std::nullopt,
+        std::nullopt);
 }
-
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, SubDeviceId sub_device_id) {
+    return Buffer::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        std::nullopt,
+        std::nullopt,
+        sub_device_id);
+}
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
     return Buffer::create(
         config.device,
@@ -1155,9 +1176,9 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
         config.buffer_type,
         config.buffer_layout,
         config.shard_parameters,
+        std::nullopt,
         std::nullopt);
 }
-
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
     return Buffer::create(
         config.device,
@@ -1167,7 +1188,19 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAd
         config.buffer_type,
         config.buffer_layout,
         config.shard_parameters,
+        std::nullopt,
         std::nullopt);
+}
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, SubDeviceId sub_device_id) {
+    return Buffer::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt,
+        sub_device_id);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
@@ -1212,18 +1245,18 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args) {
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, std::move(runtime_args), false);
 }
 
 void SetRuntimeArgs(
     Device *device,
-    const std::shared_ptr<Kernel> kernel,
+    const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord> &core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args) {
+    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args) {
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mismatch between number of cores {} and number of runtime args {} getting updated",
@@ -1279,13 +1312,13 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
 
 void ReleaseTrace(Device *device, const uint32_t tid) { device->release_trace(tid); }
 
-void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         if (cq_id.has_value()) {
-            Finish(device->command_queue(cq_id.value()));
+            Finish(device->command_queue(cq_id.value()), sub_device_ids);
         } else {
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id));
+                Finish(device->command_queue(cq_id), sub_device_ids);
             }
         }
     }

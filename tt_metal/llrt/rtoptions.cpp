@@ -119,7 +119,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
-        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
+        this->dispatch_core_config.set_dispatch_core_type(tt_metal::DispatchCoreType::ETH);
     }
 
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {
@@ -177,7 +177,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
         watcher_dispatch_str};
-    for (std::string feature : all_features) {
+    for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
         if (getenv(env_var.c_str()) != nullptr) {

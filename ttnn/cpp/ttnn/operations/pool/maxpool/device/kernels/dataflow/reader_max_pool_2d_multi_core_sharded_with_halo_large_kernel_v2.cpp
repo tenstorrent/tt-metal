@@ -49,35 +49,35 @@ void kernel_main() {
 
     const int32_t pad_w = get_compile_time_arg_val(3);
 
-    // channel size in bytes, multiple of 32
+    // channel size in bytes
     const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
-    const int32_t in_w = get_compile_time_arg_val(6);
-    const uint32_t in_cb_nsticks = get_compile_time_arg_val(7);
+    const int32_t in_w = get_compile_time_arg_val(5);
+    const uint32_t in_cb_nsticks = get_compile_time_arg_val(6);
 
-    const uint32_t in_c = get_compile_time_arg_val(8);
+    const uint32_t in_c = get_compile_time_arg_val(7);
 
-    const uint32_t split_reader = get_compile_time_arg_val(10);
-    const uint32_t reader_id = get_compile_time_arg_val(11);
+    const uint32_t split_reader = get_compile_time_arg_val(9);
+    const uint32_t reader_id = get_compile_time_arg_val(10);
 
     // compile time args
     // value of 1 in bf16 in a uin32_t
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(14);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(15);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
 
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512; // TILE_WIDTH * 8 * numbytes
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
     constexpr uint32_t ROW_HW = 64;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
-    constexpr uint32_t in_shard_cb_id = tt::CB::c_in2;  // local input shard
-    constexpr uint32_t in_reader_indices_cb_id = tt::CB::c_in3;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
-    constexpr uint32_t interm_reduction_cb_id = tt::CB::c_intermed1;
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
+    constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
+    constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
 
     // minus infinity for bfp16
     uint16_t minus_inf = 63487;
@@ -115,8 +115,9 @@ void kernel_main() {
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
             uint32_t out_l1_write_addr = out_l1_write_addr_base;
             // fill interm buffer with minus_inf if we have only one chunk
-            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction)
+            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                 fill_with_val(out_l1_write_addr, in_cb_sz, minus_inf);
+            }
             for (uint32_t h = 0; h < window_h; ++h) {
                 for (uint32_t w = 0; w < window_w; w++) {
                     uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
@@ -132,8 +133,9 @@ void kernel_main() {
                         out_l1_write_addr_base = get_write_ptr(in_cb_id);
                         out_l1_write_addr = out_l1_write_addr_base;
                         // If next is last chunk, fill whole buffer with -inf.
-                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction)
+                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                             fill_with_val(out_l1_write_addr, in_cb_sz, minus_inf);
+                        }
                     }
                 }
             }
@@ -143,7 +145,8 @@ void kernel_main() {
             }
         }
         counter++;
-        if (split_reader)
+        if (split_reader) {
             counter++;  // interleave the indices
+        }
     }
 }  // kernel_main()

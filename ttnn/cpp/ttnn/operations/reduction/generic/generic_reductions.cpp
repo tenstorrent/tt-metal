@@ -57,7 +57,7 @@ static Tensor reduce_impl(
             rank);
     }
 
-    if (dim.size() == 1) {
+    if (dim.size() == 1 && rank == 4) {
         if (dim[0] == rank - 3) {
             // Pad before running the op to only pay cost of formatting once
             auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), true);
@@ -118,18 +118,21 @@ static Tensor reduce_impl(
 
     Tensor output_tensor;
     if (!dim_arg.has_value()) {
-        if constexpr (reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max  || reduce_type == ReduceType::Min) {
+        if constexpr (
+            reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
             output_tensor = input_tensor;
             for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<reduce_type>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
+                output_tensor = reduce_impl<reduce_type>(
+                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
         } else if constexpr (reduce_type == ReduceType::Mean) {
             output_tensor = input_tensor;
             for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<ReduceType::Sum>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
+                output_tensor = reduce_impl<ReduceType::Sum>(
+                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
-            float inv_volume = 1.0f/input_tensor.volume();
-            return ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
+            float inv_volume = 1.0f / input_tensor.get_logical_volume();
+            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -151,22 +154,58 @@ static Tensor reduce_impl(
         }
 
         if constexpr (reduce_type == ReduceType::Sum) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, scalar,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                scalar,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                1.0 / reduced_volume,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Max) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::MAX, reduce_op_dim, scalar,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::MAX,
+                reduce_op_dim,
+                scalar,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Min) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::MIN, reduce_op_dim, scalar,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::MIN,
+                reduce_op_dim,
+                scalar,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Var or reduce_type == ReduceType::Std) {
-            auto mean_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume,
-                memory_config, std::nullopt, compute_kernel_config);
-            auto mean_square_tensor = tt::tt_metal::reduce(ttnn::pow(input_tensor, 2.0f, memory_config), tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim,
-                1.0 / reduced_volume, memory_config, std::nullopt, compute_kernel_config);
+            auto mean_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                1.0 / reduced_volume,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
+            auto mean_square_tensor = tt::tt_metal::reduce(
+                ttnn::pow(input_tensor, 2.0f, memory_config),
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                1.0 / reduced_volume,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
             output_tensor = ttnn::subtract(
                 mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
             if constexpr (reduce_type == ReduceType::Std) {

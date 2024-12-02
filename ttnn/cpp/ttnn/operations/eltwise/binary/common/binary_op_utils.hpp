@@ -19,7 +19,7 @@ std::map<std::string, std::string> get_defines(
     BinaryOpType op_type,
     const std::optional<tt::tt_metal::DataType> in_dtype = std::nullopt,
     const std::optional<tt::tt_metal::DataType> out_dtype = std::nullopt,
-    const std::optional<ttnn::operations::unary::FusedActivations> fused_activations = std::nullopt,
-    const std::optional<ttnn::operations::unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+    const std::optional<ttnn::operations::unary::FusedActivations>& fused_activations = std::nullopt,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
 }

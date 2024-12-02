@@ -41,6 +41,7 @@ while IFS= read -r line1 && IFS= read -r line2 <&3; do
         # Calculate the percentage difference
         if (( $(echo "$value1 != 0" | bc -l) )); then
             percentage_diff=$(echo "scale=2; 100 * (($value2 - $value1) / $value1)" | bc)
+            percentage_diff="${percentage_diff#-}"
         else
             continue
         fi

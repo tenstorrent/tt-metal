@@ -94,7 +94,7 @@ void kernel_main() {
             const auto mean_l1_read_ptr = get_read_ptr(cb_id_mean);
             cb_wait_front(cb_id_mean, onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
-                auto mean_ptr = reinterpret_cast<uint16_t *>(mean_l1_read_ptr);
+                auto mean_ptr = reinterpret_cast<uint16_t*>(mean_l1_read_ptr);
                 mean_ptr[tilized_mean_rstd_idx_in_tile] = mean_ptr[0];
             }
             const auto mean_noc_addr = mean_is_dram ? get_noc_addr(mean_rstd_tile_idx, dram_mean_addrg)
@@ -113,7 +113,7 @@ void kernel_main() {
             const auto rstd_l1_read_ptr = get_read_ptr(cb_id_rstd);
             cb_wait_front(cb_id_rstd, onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
-                auto rstd_ptr = reinterpret_cast<uint16_t *>(rstd_l1_read_ptr);
+                auto rstd_ptr = reinterpret_cast<uint16_t*>(rstd_l1_read_ptr);
                 rstd_ptr[tilized_mean_rstd_idx_in_tile] = rstd_ptr[0];
             }
             const auto rstd_noc_addr = rstd_is_dram ? get_noc_addr(mean_rstd_tile_idx, dram_rstd_addrg)

@@ -43,8 +43,9 @@ void kernel_main() {
     uint32_t outbatch = output_tile_start_id % MtNt;
     uint32_t itileB_batch = output_tile_start_id % Nt;
     uint32_t itileB = itileB_batch;  // input1 col = output col if we are bcasting
-    if (bcast_B == 0)
+    if (bcast_B == 0) {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
+    }
 
     const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
@@ -83,8 +84,9 @@ void kernel_main() {
             itileB_batch = 0;
             itileB -= Nt;  // Go back to first column in batch
             if (outbatch == MtNt) {
-                if (bcast_B == 0)
+                if (bcast_B == 0) {
                     itileB += KtNt;  // Move B to start of next batch
+                }
                 outbatch = 0;
             }
         } else {
