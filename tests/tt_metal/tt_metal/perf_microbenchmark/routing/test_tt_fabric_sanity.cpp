@@ -297,15 +297,10 @@ int main(int argc, char **argv) {
 
         auto tunneler_l_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/impl/dispatch/kernels/tt_fabric_router.cpp",
+            "tt_fabric/impl/kernels/tt_fabric_router.cpp",
             tunneler_logical_core,
             tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_l_compile_args,
-                .defines = defines
-            }
-        );
-
+                .noc = tt_metal::NOC::NOC_0, .compile_args = tunneler_l_compile_args, .defines = defines});
 
         std::vector<uint32_t> tunneler_r_compile_args =
             {
@@ -319,16 +314,10 @@ int main(int argc, char **argv) {
 
         auto tunneler_r_kernel = tt_metal::CreateKernel(
             program_r,
-            "tt_metal/impl/dispatch/kernels/tt_fabric_router.cpp",
+            "tt_fabric/impl/kernels/tt_fabric_router.cpp",
             r_tunneler_logical_core,
             tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_r_compile_args,
-                .defines = defines
-            }
-        );
-
-
+                .noc = tt_metal::NOC::NOC_0, .compile_args = tunneler_r_compile_args, .defines = defines});
 
         log_info(LogTest, "Starting test...");
 
