@@ -98,6 +98,7 @@ def run_multi_core_matmul_1d(
     num_iters,
     max_dst_tiles=8,
     pcc_threshold=0.98,
+    mm_chain=False,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -243,6 +244,35 @@ def run_multi_core_matmul_1d(
             memory_config=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
+        if mm_chain:
+            a_t = ttnn.from_torch(
+                in0,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=in0_dtype,
+            )
+            b_t = ttnn.from_torch(
+                in1,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=in1_dtype,
+            )
+            c_t = ttnn.matmul(a_t, b_t)
+            c_out = ttnn.to_torch(c_t)
+            passing, output = comp_pcc(in0 * in1, c_out)
+            assert passing
+
+            c_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=output_sharded_mem_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+            c_out = ttnn.to_torch(c_t)
+            passing, output = comp_pcc(in0 * in1, c_out, pcc_threshold)
+            assert passing
+
     tt_out = ttnn.to_torch(output_t)
 
     pt_out = in0 @ in1
@@ -350,6 +380,68 @@ def test_multi_core_matmul_1d_wh(
         grid,
         use_arbitrary_cores,
         num_iters,
+    )
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    [
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+    ],
+)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_arbitrary_cores",
+    [False],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [3],
+)
+def test_multi_core_matmul_1d_mm_chain_wh(
+    device,
+    in0_dtype,
+    in1_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    activation,
+    grid,
+    use_arbitrary_cores,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        activation,
+        grid,
+        use_arbitrary_cores,
+        num_iters,
+        True,
     )
 
 

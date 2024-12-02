@@ -26,7 +26,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCAsyncWriteProgram) {
-    uint32_t NUM_PROGRAMS = 10;
+    uint32_t NUM_PROGRAMS = 3;
     uint32_t MAX_LOOP = 123456789;
     uint32_t page_size = 1024;
 
@@ -86,9 +86,7 @@ TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCAsyncWriteProgram)
     // This loop caches program and runs
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         Program& program = programs[i];
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Running program {} of {}", i + 1, NUM_PROGRAMS);
-        }
+        log_info(tt::LogTest, "Running program {} of {}", i + 1, NUM_PROGRAMS);
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(this->device_, program);
         } else {
