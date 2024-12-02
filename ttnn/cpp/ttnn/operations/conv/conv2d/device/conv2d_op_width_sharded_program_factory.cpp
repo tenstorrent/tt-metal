@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "common/logger.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -76,11 +77,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt::DataFormat bias_df =
         has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat tilized_act_df = out_df;
+     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
+    tt::DataFormat interm0_df =
+        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
     log_debug(LogOp, "act_df: {}", act_df);
     log_debug(LogOp, "weight_df: {}", weight_df);
     log_debug(LogOp, "out_df: {}", out_df);
     log_debug(LogOp, "bias_df: {}", bias_df);
+    log_debug(LogOp, "tilized_act_df: {}", tilized_act_df);
+    log_debug(LogOp, "interm0_df: {}", interm0_df);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -465,8 +471,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
     uint32_t dst_l1_weight_buffer_size_bytes =
         weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
-
-    // Number of bytes to be read from the channel dimension in one block.
+    //Number of bytes to be read from the channel dimension in one block.
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
     // log info for debugging opts
@@ -673,7 +678,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
 
-    bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
@@ -748,8 +752,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    tt::DataFormat interm0_df =
-        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
@@ -766,13 +768,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
                 .set_page_size(matmul_partials_cb, out_tile_size);
         if (output.is_sharded()) {
             cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
+        } else {
+            log_debug(LogOp, "Matmul Partials CB: {}, npages: {}, pagesize: {}", matmul_partials_cb, num_output_tiles, out_tile_size);
         }
-        log_debug(
-            LogOp,
-            "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-            matmul_partials_cb,
-            num_output_tiles,
-            out_tile_size);
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
     } else {
         // Separate buffer if not same data format
