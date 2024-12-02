@@ -21,6 +21,8 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
+
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
@@ -61,7 +63,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
             },
             host_tensor.get_storage());
         // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
+        Tensor reshaped_tensor = ttnn::experimental::reshape(host_tensor, ttnn::SimpleShape{1, 1, 32, 128});
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
@@ -282,7 +284,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
                 },
                 host_tensor.get_storage());
 
-            Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
+            Tensor reshaped_tensor = ttnn::experimental::reshape(host_tensor, ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
             auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
