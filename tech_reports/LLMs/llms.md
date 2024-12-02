@@ -56,7 +56,7 @@ TT-NN includes two primary implementations of normalization operations to handle
 
 #### 1. Non-Distributed Norm
 
-This implementation supports both sharded and interleaved inputs. It is employed in the following scenarios:
+**Non-Distributed Norm** refers to the standard implementation of normalization operations applied to activations that are not distributed across multiple devices. This implementation supports both sharded and interleaved inputs. It is employed in the following scenarios:
 - **Single-Device Activations**: When the entire embedding resides on a single device.
 - **Multi-Device Replicated Activations**: When activation data is replicated across devices in a data-parallel setup.
 
@@ -102,7 +102,7 @@ ttnn_output = ttnn.rms_norm(ttnn_input, epsilon=1e-5, weight=ttnn_gamma)
 
 **Optimization for Efficient Weight Reads from DRAM**
 
-In above example, weights were traditionally pushed to device in **TILE layout**. But in this case, padding is required to match the TILE_HEIGHT. This padding increased memory footprint and reduced DRAM access efficiency. To address this, weights are now wrapped into **TILE_WIDTH** sticks and converted to **ROW_MAJOR_LAYOUT** without requiring any padding.
+In above example, weights were traditionally pushed to device in **TILE layout**. But in this case, padding is required to match the TILE_HEIGHT. This padding increased memory footprint and reduced DRAM access efficiency. To address this, weights are now wrapped into **TILE_WIDTH** sticks and converted to **ROW_MAJOR_LAYOUT** without requiring any padding. This weight transformation doesn't have any overhead during runtime as its only performed once during initialization.
 
 ```python
 # Optimized Weight Layout for DRAM
