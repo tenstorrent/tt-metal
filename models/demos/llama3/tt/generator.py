@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import torch
+from loguru import logger
 
 from llama_models.llama3.api.datatypes import (
     InterleavedTextMedia,
@@ -24,7 +26,7 @@ from models.demos.llama3.tt.llama_common import (
 
 
 class LlamaGenerator:
-    def __init__(self, model, model_args, mesh_device, vllm=False, tokenizer=None, formatter=None):
+    def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -38,7 +40,6 @@ class LlamaGenerator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
-        self.vllm = vllm
         self.tokenizer = tokenizer
         self.formatter = formatter
 
@@ -61,13 +62,7 @@ class LlamaGenerator:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                block_size = get_block_size(kv_cache)
-                num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(
-                    seq_len, block_size
-                )
-                page_table_user = torch.cat(
-                    [page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1
-                )
+                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
@@ -181,6 +176,8 @@ class LlamaGenerator:
         user_id,
         total_len,
         prefill_len,
+        page_table=None,
+        kv_cache=None,
     ):
         """
         Performs vision encode step then text prefill.
@@ -193,6 +190,9 @@ class LlamaGenerator:
             total_len=total_len,
         )
 
+        if page_table is not None:
+            page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
+
         (
             tt_h,
             tt_xattn_mask,
@@ -200,8 +200,13 @@ class LlamaGenerator:
             tt_full_text_mask_expand_11SD,
             tt_position_id,
             rot_mats,
+            tt_page_table,
         ) = self.model.prepare_inputs_prefill(
-            tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len=prefill_len
+            tokens,
+            cross_attention_masks,
+            full_text_row_masked_out_mask,
+            prefill_len=prefill_len,
+            page_table=page_table,
         )
 
         tt_logits = self.model.ttnn_prefill_forward(
@@ -214,13 +219,27 @@ class LlamaGenerator:
             rot_mats,
             user_id,
             vision_tokens,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
         )
+
+        del tt_page_table
 
         logits = self.model.process_output_prefill(tt_logits, B, prefill_len)
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
 
-    def prefill_forward(self, vision_images, vision_masks, tokens: torch.Tensor, xattn_caches, total_lens, prompt_lens):
+    def prefill_forward(
+        self,
+        vision_images,
+        vision_masks,
+        tokens: torch.Tensor,
+        xattn_caches,
+        total_lens,
+        prompt_lens,
+        page_table=None,
+        kv_cache=None,
+    ):
         """
         Batched version of prefill_forward_single_user for vision model.
         """
@@ -245,20 +264,30 @@ class LlamaGenerator:
                 user_id=user_id,
                 total_len=total_lens[user_id],
                 prefill_len=seq_len,
+                page_table=page_table,
+                kv_cache=kv_cache,
             )
             output_logits[user_id, :seq_len] = logits
             output_xattn_masks.append(cross_attention_masks)
             output_full_text_row_masked_out_masks.append(full_text_row_masked_out_mask)
 
+        # Get logits for last prefill token
+        output_logits = output_logits[torch.arange(batch), prompt_lens - 1].view(batch, 1, -1)
+
+        logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+
         return output_logits, output_xattn_masks, output_full_text_row_masked_out_masks
 
     def decode_forward(
         self,
-        position_id,
+        start_pos,
         tokens,
         cross_attention_masks,
         full_text_row_masked_out_mask,
         xattn_caches,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
     ):
         """
         Performs text decode step.
@@ -268,6 +297,7 @@ class LlamaGenerator:
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
         B, S = tokens.shape
+        assert S == 1
 
         (
             tt_h,
@@ -275,8 +305,9 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rot_mats,
+            tt_page_table,
         ) = self.model.prepare_inputs_decode(
-            tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
+            tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=start_pos, page_table=page_table
         )
 
         tt_logits = self.model.ttnn_decode_forward(
@@ -286,6 +317,8 @@ class LlamaGenerator:
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
         )
 
         logits = self.model.process_output_decode(tt_logits, B, S)
@@ -308,6 +341,7 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rot_mats,
+            tt_page_table,
         ) = self.model.prepare_inputs_decode(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
@@ -519,14 +553,14 @@ class LlamaGenerator:
         )
 
         for gen_idx in range(max_gen_len - 1):
-            position_id = prefill_len + gen_idx
+            position_id = torch.tensor([prefill_len + gen_idx])
             next_token_tensor = next_token.reshape(1, 1)  # B, S
 
             logits = self.decode_forward(
                 position_id,
                 next_token_tensor,
-                cross_attention_masks,
-                full_text_row_masked_out_mask,
+                [cross_attention_masks],
+                [full_text_row_masked_out_mask],
                 xattn_caches,
             )
 
@@ -593,3 +627,9 @@ class LlamaGenerator:
         generation = self.tokenizer.decode(tokens)
 
         return CompletionPrediction(generation=generation)
+
+    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
+        # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+        block_size = get_block_size(kv_cache)
+        num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        return page_table[:, :num_blocks]
