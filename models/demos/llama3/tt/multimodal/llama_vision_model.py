@@ -296,16 +296,15 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
 
         xattn_mask = cross_attention_masks[:, :, position_ids]
-        xattn_mask_expand = xattn_mask.expand(-1, self.configuration.n_heads // self.configuration.num_devices, -1, -1)
-        xattn_mask_expand = torch.nn.functional.pad(
-            xattn_mask_expand,
-            (0, 0, 0, padded_seq_len - xattn_mask_expand.shape[2]),
+        xattn_mask = torch.nn.functional.pad(
+            xattn_mask,
+            (0, 0, 0, padded_seq_len - xattn_mask.shape[2]),
             "constant",
             get_negative_inf_value(torch.float32),
         )
 
         tt_xattn_mask = ttnn.from_torch(
-            xattn_mask_expand,
+            xattn_mask,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -313,6 +312,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT)
+        tt_xattn_mask = ttnn.typecast(tt_xattn_mask, ttnn.bfloat4_b)
 
         full_text_mask = full_text_row_masked_out_mask[:, :, position_ids]
         full_text_mask = torch.nn.functional.pad(
@@ -330,6 +330,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tt_full_text_mask_expand_1NSH = ttnn.to_layout(tt_full_text_mask_expand_1NSH, ttnn.TILE_LAYOUT)
+        tt_full_text_mask_expand_1NSH = ttnn.typecast(tt_full_text_mask_expand_1NSH, ttnn.bfloat4_b)
 
         h = torch.nn.functional.pad(h, (0, 0, 0, padded_seq_len - h.shape[1]), "constant", 0)
         tt_h = self.configuration.prepare_inputs_ttnn_prefill(
@@ -343,7 +344,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_full_text_mask_expand_11SD = ttnn.from_torch(
             full_text_mask_expand_11SD,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
@@ -695,11 +696,11 @@ def _pad_masks(
 def _get_padded_prefill_seqlen(seq_len):
     """
     If seq_len is less than 128, pad to 128
-    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 1024
+    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048 (text model requires mult of 2048, while vision allows mult of 1024)
     """
     if seq_len < 128:
         return 128
     else:
-        mult_1024 = 1024 * math.ceil(seq_len / 1024)
+        mult_2k = 2048 * math.ceil(seq_len / 2048)
         pow_2 = 2 ** math.ceil(math.log2(seq_len))
-        return min(mult_1024, pow_2)
+        return min(mult_2k, pow_2)

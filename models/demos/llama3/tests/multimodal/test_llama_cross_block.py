@@ -58,6 +58,7 @@ def test_llama_cross_attention_transformer_block_inference(
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
+    n_kv_heads = model_args.n_kv_heads
     reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
     reference_model.load_state_dict(partial_state_dict)
 
@@ -84,12 +85,14 @@ def test_llama_cross_attention_transformer_block_inference(
     """
     pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
-    pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache]
+    pt_xattn_cache_chunks = [
+        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+    ]
 
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
-            torch.zeros(batch, n_heads, vision_seq_len, head_dim),
+            torch.zeros(batch, n_kv_heads, vision_seq_len, head_dim),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -154,9 +157,9 @@ def test_llama_cross_attention_transformer_block_inference(
                     tt_x[b : b + 1],
                 )
                 tt_xattn_mask = ttnn.from_torch(
-                    xattn_mask_expand[b : b + 1],
+                    xattn_mask[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -164,7 +167,7 @@ def test_llama_cross_attention_transformer_block_inference(
                 tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                     full_text_mask_expand_1NSH[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -172,7 +175,7 @@ def test_llama_cross_attention_transformer_block_inference(
                 tt_full_text_mask_expand_11SD = ttnn.from_torch(
                     full_text_mask_expand_11SD[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
@@ -202,7 +205,7 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
                 device=mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -219,7 +222,7 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                 full_text_mask_expand_1NSH,
                 device=mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -253,7 +256,7 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,
-                    n_heads,
+                    n_kv_heads,
                     vision_seq_len,
                     head_dim,
                 )
