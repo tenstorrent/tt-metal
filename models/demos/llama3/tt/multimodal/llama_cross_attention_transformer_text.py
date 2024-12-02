@@ -41,6 +41,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         weight_cache_path,
         dtype,
         configuration,
+        transformation_mats,
     ):
         super().__init__()
         self.vocab_size = configuration.vocab_size
@@ -121,7 +122,9 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.cross_attention_layers = []
         for i in range(configuration.n_layers):
             layer_id = i
-            block = TtTransformerBlock(configuration, mesh_device, dtype, state_dict, layer_id, weight_cache_path)
+            block = TtTransformerBlock(
+                configuration, mesh_device, dtype, state_dict, layer_id, weight_cache_path, transformation_mats
+            )
             self.layers.append(block)
             if layer_id in self.fusion_schedule:
                 xa_layer_id = self.fusion_schedule.index(layer_id)
@@ -248,7 +251,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         xattn_caches,
         current_pos,
         rot_mat=None,
-        transformation_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -275,8 +277,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             h = layer(
                 h,
                 current_pos,
-                rot_mat=rot_mat,
-                transformation_mats=transformation_mats,
+                rot_mats=rot_mat,
                 user_id=user_id,
                 mode=mode,
             )
