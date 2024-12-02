@@ -16,8 +16,8 @@ class memory {
  public:
   typedef std::uint64_t address_t;
   typedef std::uint32_t word_t;
-  enum class PackSpans { PACK, NO_PACK };
-  enum class Relocate { XIP, NONE };
+    enum class Packing : std::uint8_t { SEPARATE, CONTIGUOUS };
+    enum class Relocate : std::uint8_t { ABS, XIP };
 
  private:
   static constexpr uint32_t initial_data_space_ = 0x400;
