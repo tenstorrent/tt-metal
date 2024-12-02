@@ -382,14 +382,14 @@ void DataMovementKernel::read_binaries(Device *device) {
     // TODO: from HAL
     ll_api::memory::Relocate relo_type =
         (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)) ?
-        ll_api::memory::Relocate::NONE : ll_api::memory::Relocate::XIP;
+        ll_api::memory::Relocate::ABS : ll_api::memory::Relocate::XIP;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         // processor class is BRISC/NCRISC and each have one data movement processor type
         tensix_core_type,
         riscv_id,
         dm_class_idx,
-        ll_api::memory::PackSpans::PACK,
+        ll_api::memory::Packing::CONTIGUOUS,
         relo_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
@@ -408,13 +408,13 @@ void EthernetKernel::read_binaries(Device *device) {
     int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
     // TODO: fix when active eth supports relo
     ll_api::memory::Relocate relo_type = (this->config_.eth_mode == Eth::IDLE) ?
-        ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::NONE;
+        ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::ABS;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         erisc_core_type,
         erisc_id,
         dm_class_idx,
-        ll_api::memory::PackSpans::PACK,
+        ll_api::memory::Packing::CONTIGUOUS,
         relo_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
@@ -434,7 +434,7 @@ void ComputeKernel::read_binaries(Device *device) {
             tensix_core_type,
             compute_class_idx,
             trisc_id,
-            ll_api::memory::PackSpans::PACK,
+            ll_api::memory::Packing::CONTIGUOUS,
             ll_api::memory::Relocate::XIP);
         binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();

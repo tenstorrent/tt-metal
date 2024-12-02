@@ -50,7 +50,7 @@ ll_api::memory const& get_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type,
+    ll_api::memory::Packing span_type,
     ll_api::memory::Relocate relo_type) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
@@ -67,7 +67,7 @@ ll_api::memory const& get_risc_binary(
 
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
-      if (span_type == ll_api::memory::PackSpans::PACK) {
+      if (span_type == ll_api::memory::Packing::CONTIGUOUS) {
           uint64_t data_start = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::LOCAL);
           uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
               0 :

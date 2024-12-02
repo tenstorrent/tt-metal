@@ -58,8 +58,8 @@ ll_api::memory const& get_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
-    ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
+    ll_api::memory::Packing span_type = ll_api::memory::Packing::SEPARATE,
+    ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::ABS);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
