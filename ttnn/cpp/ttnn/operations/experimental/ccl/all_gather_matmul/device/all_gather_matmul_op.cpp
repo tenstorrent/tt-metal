@@ -20,7 +20,8 @@ namespace experimental {
 
 void AllGatherMatmul::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) const {
     TT_ASSERT(
         input_tensors.size() == 4,
         "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
@@ -33,7 +34,7 @@ void AllGatherMatmul::validate(
     this->all_gather_struct.validate({input_tensor});
 
     // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors);
+    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, optional_output_tensors);
 
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
@@ -158,6 +159,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor})),
         ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor}))};
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
+    std::vector<std::optional<ttnn::Tensor>> optional_output_tensors = {std::nullopt};
 
     operation::launch_op(
         [dim,
@@ -229,11 +231,13 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                                                     /* Fusion params */
                                                     all_gather_core_grid_offset},
                 {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor},
-                optional_input_tensors);
+                optional_input_tensors,
+                optional_output_tensors);
         },
         {input_tensor, weight_tensor},
         output_tensors,
-        optional_input_tensors);
+        optional_input_tensors,
+        optional_output_tensors);
     return {output_tensors[0], output_tensors[1], output_tensors[2]};
 }
 
