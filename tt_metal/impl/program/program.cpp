@@ -953,7 +953,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             uint32_t transfer_info_index = 0;
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
-                const ll_api::memory &kernel_bin = binaries[sub_kernel_index];
+                const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
                 // Spans are now packed into one
                 // TODO: code below can be simplified w/ a single span
@@ -1231,7 +1231,7 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
             auto& optional_id = kg.kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = this->get_kernel(optional_id.value());
-                std::vector<ll_api::memory> const &binaries = kernel->binaries(device->build_key());
+                std::vector<ll_api::memory const*> const& binaries = kernel->binaries(device->build_key());
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
@@ -1275,8 +1275,8 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else {
-                        kg.kernel_text_offsets[class_id] = binaries[0].get_text_addr();
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0].get_text_addr();
+                        kg.kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
                     }
                 }
             }

@@ -120,9 +120,9 @@ int main(int argc, char** argv) {
         std::vector<Program> programs;
         std::set<uint32_t> build_keys;
         // kernel->binaries() returns 32B aligned binaries
-        std::map<uint32_t, std::vector<ll_api::memory>> compute_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory>> brisc_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory>> ncrisc_binaries;
+        std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
+        std::map<uint32_t, std::vector<ll_api::memory const*>> brisc_binaries;
+        std::map<uint32_t, std::vector<ll_api::memory const*>> ncrisc_binaries;
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
@@ -211,10 +211,10 @@ int main(int argc, char** argv) {
                             dm_class_idx,
                             0,
                             get_latest_kernel_binary_path(mask, riscv0_kernel));
-                        ll_api::memory brisc_binary = llrt::get_risc_binary(
+                        ll_api::memory const& brisc_binary = llrt::get_risc_binary(
                             brisc_hex_path, 0, 0, 0, ll_api::memory::PackSpans::PACK, ll_api::memory::Relocate::XIP);
                         TT_FATAL(
-                            brisc_binary == brisc_binaries.at(mask).at(0),
+                            brisc_binary == *brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
                         std::string ncrisc_hex_path = device->build_kernel_target_path(
                             programmable_core_index,
@@ -226,10 +226,10 @@ int main(int argc, char** argv) {
                                 ? ll_api::memory::Relocate::NONE
                                 : ll_api::memory::Relocate::XIP;
 
-                        ll_api::memory ncrisc_binary =
+                        ll_api::memory const& ncrisc_binary =
                             llrt::get_risc_binary(ncrisc_hex_path, 0, 1, 0, ll_api::memory::PackSpans::PACK, relo_type);
                         TT_FATAL(
-                            ncrisc_binary == ncrisc_binaries.at(mask).at(0),
+                            ncrisc_binary == *ncrisc_binaries.at(mask).at(0),
                             "Expected saved NCRISC binary to be the same as binary in persistent cache");
                         for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                             std::string trisc_id_str = std::to_string(trisc_id);
@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
                                 compute_class_idx,
                                 trisc_id,
                                 get_latest_kernel_binary_path(mask, compute_kernel));
-                            ll_api::memory trisc_binary = llrt::get_risc_binary(
+                            ll_api::memory const& trisc_binary = llrt::get_risc_binary(
                                 trisc_hex_path,
                                 0,
                                 2,
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
                                 ll_api::memory::PackSpans::PACK,
                                 ll_api::memory::Relocate::XIP);
                             TT_FATAL(
-                                trisc_binary == compute_binaries.at(mask).at(trisc_id),
+                                trisc_binary == *compute_binaries.at(mask).at(trisc_id),
                                 "Expected saved TRISC binary for {} to be the same as binary in persistent cache",
                                 trisc_id_str);
                         }
