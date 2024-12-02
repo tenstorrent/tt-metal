@@ -10,7 +10,7 @@
 
 #include "common/bfloat16.hpp"
 #include "impl/buffers/buffer_constants.hpp"
-#include "overloaded.hpp"
+#include "tt_metal/tt_stl/overloaded.hpp"
 #include "tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -742,17 +742,18 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
                 return buffer.data();
             },
             [](BorrowedStorage& s) {
-                if constexpr (
-                    std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
-                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
-                    std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>) {
-                    auto buffer = borrowed_buffer::get_as<DataType>(s.buffer);
-                    return buffer.data();
-                } else {
-                    TT_THROW("Borrowed storage doesn't support this data type");
-                }
+                return tt::stl::overloaded{
+                    [&s]()
+                        requires(std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
+                                 std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
+                                 std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>)
+                    {
+                        auto buffer = borrowed_buffer::get_as<DataType>(s.buffer);
+                        return buffer.data();
+                    },
+                    []() -> void* { TT_THROW("Borrowed storage doesn't support this data type"); }}();
             },
-            []<typename OtherStorage>(OtherStorage&) -> void* { TT_THROW("Device storage isn't supported"); }},
+            [](auto&&) -> void* { TT_THROW("Device storage doesn't support this data type"); }},
         tensor.get_storage());
 }
 }  // namespace detail
