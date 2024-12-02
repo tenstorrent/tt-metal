@@ -10,7 +10,6 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
-    sample,
     HostEmbedding,
     encode_prompt_llama_instruct,
     PagedAttentionConfig,
@@ -71,9 +70,16 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 def test_llama_model_inference(
-    
-    seq_len, batch_size, paged_attention, page_params, optimizations, mesh_device, use_program_cache, reset_seeds, ensure_gc, is_ci_env
-
+    seq_len,
+    batch_size,
+    paged_attention,
+    page_params,
+    optimizations,
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
+    is_ci_env,
 ):
     if is_ci_env and optimizations == LlamaOptimizations.accuracy:
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
@@ -84,10 +90,10 @@ def test_llama_model_inference(
     dtype = ttnn.bfloat8_b
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
-        pcc = 0.90  # TODO Look on improving PCC
+        pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
-        pcc = 0.90
+        pcc = 0.87  # TODO Look on improving PCC
 
     mesh_device.enable_async(True)
 

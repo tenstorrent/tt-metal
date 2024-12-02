@@ -8,14 +8,14 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
-    sample,
+    sample_host,
     encode_prompt_llama_instruct,
     HostEmbedding,
     PagedAttentionConfig,
 )
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup, LlamaOptimizations
+from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -83,7 +83,7 @@ def test_llama_model_inference(
     batch_size,
     paged_attention,
     page_params,
-    optimizations, 
+    optimizations,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -97,7 +97,12 @@ def test_llama_model_inference(
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = TtModelArgs(
-        mesh_device, instruct=instruct, dummy_weights=dummy_weights, optimizations=optimizations, max_seq_len=max_seq_len, max_batch_size=batch_size
+        mesh_device,
+        instruct=instruct,
+        dummy_weights=dummy_weights,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+        max_batch_size=batch_size,
     )
 
     # Reduce max seq len and KV cache seq_len params to speed up the test
@@ -317,11 +322,11 @@ def test_llama_model_inference(
                 pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
         else:
             # Greedy decode (temperature = 0) the generated token and save it to print out later
-            tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
+            tt_out_tok = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
             tt_decode_input = embd(tt_out_tok)
             all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
             if run_ref_pt:
-                pt_out_tok = sample(ref_output, temperature=0, top_p=0.8)
+                pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
                 pt_decode_input = embd(pt_out_tok)
                 all_outputs_ref.append(
                     pt_out_tok.squeeze(1).tolist()[0]

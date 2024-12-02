@@ -255,12 +255,24 @@ def sample_top_p(probs: torch.Tensor, p: float):
 
 def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True):
     vocab_size = tt_input.shape[-1]
-    pt_input = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[..., :vocab_size]
+    if mesh_device:
+        pt_input = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[..., :vocab_size]
+    else:  # input already on host
+        pt_input = tt_input[..., :vocab_size]
+
     if temperature > 0:
         probs = torch.softmax(pt_input / temperature, dim=-1)
-        pt_out = sample_top_p(probs.squeeze(), top_p).view(1, 1, 1, -1)
+        pt_out = sample_top_p(probs.squeeze(), top_p)
+        if mesh_device:
+            pt_out = pt_out.view(1, 1, 1, -1)
     else:
-        pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
+        if mesh_device:
+            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
+        else:
+            pt_out = torch.argmax(pt_input, dim=-1)
+
+    if mesh_device is None:
+        return pt_out
     if on_host:
         return (
             ttnn.as_tensor(
