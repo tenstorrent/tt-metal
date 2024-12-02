@@ -253,6 +253,7 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor) : User provided on-device output tensor where the result of matmul is to be written.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -361,6 +362,7 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor) : User provided on-device output tensor where the result of linear is to be written.
 
         Returns:
             ttnn.Tensor: the output tensor.
