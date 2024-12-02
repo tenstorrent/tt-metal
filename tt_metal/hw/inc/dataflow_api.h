@@ -1691,7 +1691,7 @@ inline void noc_async_write_multicast_exclude_region(
     uint8_t noc = noc_index) {
     WAYPOINT("NMEW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_exclude_region(
+    ncrisc_noc_fast_write_any_len_exclude_region<risc_type, noc_mode>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,
