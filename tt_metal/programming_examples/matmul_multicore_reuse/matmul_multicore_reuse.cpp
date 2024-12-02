@@ -12,6 +12,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
+#include "tt_metal/hostdevcommon/profiler_common.h"
 
 using namespace tt::constants;
 using namespace std;
@@ -390,6 +391,7 @@ int main(int argc, char **argv) {
         log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
         TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
 
+        //tt_metal::detail::DumpDeviceProfileResults(device);
         pass &= CloseDevice(device);
 
     } catch (const std::exception &e) {
