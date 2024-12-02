@@ -273,16 +273,16 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     }
 
     if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
-        UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_core_group_1 * src0_single_tile_size);
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, cb_src0, *src_buffer_a, num_tiles_per_core_group_1 * src0_single_tile_size);
     }
     if (src1_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
-        UpdateCircularBufferTotalSize(program, cb_src1, num_tiles_per_core_group_1 * src1_single_tile_size);
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, cb_src1, *src_buffer_b, num_tiles_per_core_group_1 * src1_single_tile_size);
     }
     if (out_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-        UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, cb_output, *dst_buffer, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
 }
 BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperation::ElementWiseMultiCore::create(

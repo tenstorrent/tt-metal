@@ -23,17 +23,17 @@ constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE / WORD_SIZE;
 
 struct erisc_info_t {
-  volatile uint32_t num_bytes;
-  volatile uint32_t mode;
-  volatile uint32_t reserved_0_;
-  volatile uint32_t reserved_1_;
-  volatile uint32_t bytes_done;
-  volatile uint32_t reserverd_2_;
-  volatile uint32_t reserverd_3_;
-  volatile uint32_t reserverd_4_;
+    volatile uint32_t num_bytes;
+    volatile uint32_t mode;
+    volatile uint32_t reserved_0_;
+    volatile uint32_t reserved_1_;
+    volatile uint32_t bytes_done;
+    volatile uint32_t reserverd_2_;
+    volatile uint32_t reserverd_3_;
+    volatile uint32_t reserverd_4_;
 };
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -216,15 +216,17 @@ bool send_over_eth(
         receiver_device->id(), receiver_core, all_zeros, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
     std::vector<uint32_t> args_0 = {uint32_t(byte_size), 0};
-    llrt::write_hex_vec_to_core(sender_device->id(), sender_core, args_0, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+    llrt::write_hex_vec_to_core(
+        sender_device->id(), sender_core, args_0, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     std::vector<uint32_t> args_1 = {uint32_t(byte_size), 1};
-    llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, args_1, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+    llrt::write_hex_vec_to_core(
+        receiver_device->id(), receiver_core, args_1, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    ll_api::memory binary_mem_send = llrt::get_risc_binary(
+    ll_api::memory const& binary_mem_send = llrt::get_risc_binary(
         sender_device->build_firmware_target_path(active_eth_index, 0, 0), active_eth_index, 0, 0);
-    ll_api::memory binary_mem_receive = llrt::get_risc_binary(
+    ll_api::memory const& binary_mem_receive = llrt::get_risc_binary(
         receiver_device->build_firmware_target_path(active_eth_index, 0, 0), active_eth_index, 0, 0);
 
     for (const auto& eth_core : eth_cores) {

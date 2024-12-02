@@ -82,7 +82,7 @@ std::vector<v1::DeviceHandle> get_device_ring(std::vector<tt::tt_metal::v1::Devi
     std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
     for (uint32_t i = 0; i < devices.size(); ++i) {
         const auto& device = devices[i];
-        for (const auto &connected_device_id : device->get_ethernet_connected_device_ids()) {
+        for (const auto& connected_device_id : device->get_ethernet_connected_device_ids()) {
             for (uint32_t j = 0; j < devices.size(); ++j) {
                 if (devices[j]->id() == connected_device_id) {
                     adj[i][j] = 1;
@@ -337,9 +337,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     output_buffers.reserve(sender_receivers.size());
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
-        inputs.emplace_back(
-            tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-                -1.0f, 1.0f, cfg.size_bytes / bfloat16::SIZEOF, i));
+        inputs.emplace_back(tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+            -1.0f, 1.0f, cfg.size_bytes / bfloat16::SIZEOF, i));
         full_input.insert(full_input.begin() + i * numel, inputs[i].begin(), inputs[i].end());
 
         const auto& device = std::get<0>(sender_receivers[i]);
@@ -391,10 +390,16 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});
         llrt::write_hex_vec_to_core(
-            device->id(), device->ethernet_core_from_logical_core(eth_sender_core), std::vector{INVALID}, sem_l1_byte_address);
+            device->id(),
+            device->ethernet_core_from_logical_core(eth_sender_core),
+            std::vector{INVALID},
+            sem_l1_byte_address);
 
         llrt::write_hex_vec_to_core(
-            device->id(), device->ethernet_core_from_logical_core(eth_receiver_core), std::vector{INVALID}, sem_l1_byte_address);
+            device->id(),
+            device->ethernet_core_from_logical_core(eth_receiver_core),
+            std::vector{INVALID},
+            sem_l1_byte_address);
 
         auto eth_receiver_kernel = tt_metal::CreateKernel(
             program,

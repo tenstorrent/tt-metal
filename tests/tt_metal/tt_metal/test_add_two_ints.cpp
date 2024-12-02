@@ -15,21 +15,19 @@
 ////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
-
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -40,18 +38,18 @@ int main(int argc, char **argv) {
         constexpr std::array<uint32_t, 2> second_runtime_args = {303, 606};
 
         tt_metal::KernelHandle add_two_ints_kernel = tt_metal::CreateKernel(
-            program, "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp", core,
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = {l1_unreserved_base}
-            });
+                .compile_args = {l1_unreserved_base}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
-
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -74,13 +72,17 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         uint32_t first_expected_result = first_runtime_args[0] + first_runtime_args[1];
         uint32_t second_expected_result = second_runtime_args[0] + second_runtime_args[1];
-        log_info(LogVerif, "first expected result = {} second expected result = {}", first_expected_result, second_expected_result);
+        log_info(
+            LogVerif,
+            "first expected result = {} second expected result = {}",
+            first_expected_result,
+            second_expected_result);
         pass = first_kernel_result[0] == first_expected_result;
         pass = second_kernel_result[0] == second_expected_result;
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
@@ -95,7 +97,6 @@ int main(int argc, char **argv) {
     }
 
     TT_FATAL(pass, "Error");
-
 
     return 0;
 }

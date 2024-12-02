@@ -23,7 +23,7 @@ def run_eltwise_sqrt_tests(
     device,
 ):
     torch.manual_seed(data_seed)
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(1, 100).to(torch.bfloat16)  # Range will be updated after #14077.
 
     try:
         # get ref result

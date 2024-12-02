@@ -9,11 +9,12 @@ import torch
 import ttnn
 import traceback
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from models.utility_functions import skip_for_grayskull
 
 
-def run_eltwise_rsqrt_tests(
+def run_eltwise_sin_tests(
     input_shape,
     dtype,
     dlayout,
@@ -27,14 +28,15 @@ def run_eltwise_rsqrt_tests(
 
     try:
         # get ref result
-        ref_value = torch.rsqrt(x)
-        logger.info(f"PyTorch: {ref_value[0:10, 0:10]}")
+        tt_input = ttnn.from_torch(x, dtype=dtype[0], layout=ttnn.TILE_LAYOUT, device=device)
+        torch_input = ttnn.to_torch(tt_input).to(torch.bfloat16)
+        if dtype[0] == ttnn.bfloat16:
+            ref_value = torch.sin(x)
+        else:
+            ref_value = torch.sin(torch_input)
 
-        x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
-
-        tt_result = ttnn.rsqrt(x)
+        tt_result = ttnn.sin(tt_input)
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
-        logger.info(f"TensTorrent: {tt_result[0:10, 0:10]}")
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
@@ -43,31 +45,25 @@ def run_eltwise_rsqrt_tests(
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
-
-    # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
-    logger.debug(pcc_value)
-    logger.debug(success)
-
-    assert success
+    assert_with_pcc(ref_value, tt_result, 0.999)
 
 
 test_sweep_args = [
     (
-        [(224, 128)],
-        [ttnn.bfloat8_b],
+        [(3, 2, 192, 32)],
+        [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,
-        1358430,
+        11079580,
     ),
     (
-        [(6, 160, 64)],
+        [(12, 224, 224)],
         [ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,
-        17869870,
+        6411147,
     ),
 ]
 
@@ -76,5 +72,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_rsqrt(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
-    run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+@skip_for_grayskull("Not supported for Grayskull")
+def test_eltwise_sin(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+    run_eltwise_sin_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)

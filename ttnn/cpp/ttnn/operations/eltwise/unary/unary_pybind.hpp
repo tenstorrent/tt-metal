@@ -460,7 +460,8 @@ void bind_unary_operation_with_float_parameter(
             {6}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 3
             >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
@@ -688,8 +689,9 @@ void bind_unary_rdiv(
             {9}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2}, {4} = {6})
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 2
+            >>> output = {1}(tensor, {2}, {4} = None)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -738,8 +740,8 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            beta (float): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`.
-            threshold (float): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values.
+            beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
+            threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -747,9 +749,22 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, beta=1.0, threshold=20.0)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, beta = 1.0, threshold = 20.0)
         )doc",
         ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
@@ -1270,7 +1285,7 @@ void bind_hardtanh(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
-    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_dtype = "BFLOAT16, BFLOAT8_B",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1303,8 +1318,10 @@ void bind_hardtanh(
             {9}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2} = {4}, {5} = {7})
+            >>> tensor = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> min = 2
+            >>> max = 8
+            >>> output = {1}(tensor, min, max)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1465,7 +1482,7 @@ void bind_unary_composite_threshold(
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite_operation(py::module& module, const unary_operation_t& operation, const std::string& description) {
+void bind_unary_composite_trunc(py::module& module, const unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1484,8 +1501,21 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
@@ -1530,7 +1560,7 @@ void bind_unary_composite_float_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
+            {2} (float, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1552,8 +1582,8 @@ void bind_unary_composite_float_with_default(
             {6}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2} = {4})
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, {2} = 5)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1581,7 +1611,7 @@ void bind_unary_composite_float_with_default(
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite_float(
+void bind_unary_composite_rpow(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name_a,
@@ -1620,8 +1650,9 @@ void bind_unary_composite_float(
             {7}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2})
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> exponent = 2
+            >>> output = {1}(tensor, exponent)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1742,6 +1773,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_operation(module, ttnn::i0, R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::i1, R"doc(\mathrm{{output\_tensor}}_i = \verb|i1|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::isfinite, R"doc(\mathrm{{output\_tensor}}_i = \verb|isfinite|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::isinf, R"doc(\mathrm{{output\_tensor}}_i = \verb|isinf|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::isnan, R"doc(\mathrm{{output\_tensor}}_i = \verb|isnan|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1779,7 +1811,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt);
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt, R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     // Unaries with float parameter
     detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function","",R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1789,7 +1821,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "negative_slope", "The slope parameter for the Leaky ReLU function", "",R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor",
-        "This will create a tensor of same shape as input reference tensor with fill_value.", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
+        "This will create a tensor of same shape and dtype as input reference tensor with fill_value.", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function",
         "This function caps off the input to a max value and a min value of 0", R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(System memory is not supported.)doc");
@@ -1897,7 +1929,7 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16)doc",
         R"doc(ROW_MAJOR, TILE)doc", R"doc(4)doc", "", R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::frac, R"doc(Performs frac function on :attr:`input_tensor`.)doc",  "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite_operation(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
+    detail::bind_unary_composite_trunc(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
 
     detail::bind_unary_composite_floats_with_default(
         module,
@@ -1976,12 +2008,12 @@ void py_module(py::module& module) {
         module,
         ttnn::softshrink,
         "lambd", "lambd value", 0.5f,
-            R"doc(BFLOAT16)doc");
+            R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_composite_float_with_default(
         module,
         ttnn::celu,
-        "alpha", "alpha value", 1.0f, R"doc(BFLOAT16)doc");
+        "alpha", "alpha value", 1.0f, R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_composite_float_with_default(
         module,
@@ -1989,7 +2021,7 @@ void py_module(py::module& module) {
         "eps", "eps", 0.0f,  R"doc(BFLOAT16)doc",
             R"doc(Not available for Wormhole_B0.)doc");
 
-    detail::bind_unary_composite_float(
+    detail::bind_unary_composite_rpow(
         module,
         ttnn::rpow,
         "exponent", "exponent value. Non-positive values are not supported.",
@@ -2008,7 +2040,7 @@ void py_module(py::module& module) {
 
         Output tensor will have BFLOAT16 data type.)doc",
 
-        R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(System memory is not supported.)doc");
+        R"doc(BFLOAT16)doc", R"doc(System memory is not supported.)doc");
 }
 
 }  // namespace unary

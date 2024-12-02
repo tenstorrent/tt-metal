@@ -28,8 +28,8 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
 
     ASSERT_TRUE(device_0_active_eth_cores.size() == 2);
     ASSERT_TRUE(device_1_active_eth_cores.size() == 2);
-    //mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access.
-    //mmio device (0) port 15 is reserved for syseng tools.
+    // mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access.
+    // mmio device (0) port 15 is reserved for syseng tools.
     ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 13);
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
@@ -146,9 +146,11 @@ TEST_F(N300DeviceFixture, ActiveEthValidateEthernetSockets) {
     ASSERT_TRUE(device_0_sockets.size() == 2);
     ASSERT_TRUE(device_1_sockets.size() == 2);
     ASSERT_TRUE(
-        device_0->get_connected_ethernet_core(device_0_sockets.at(0)) == std::make_tuple(device_1->id(), device_1_sockets.at(0)));
+        device_0->get_connected_ethernet_core(device_0_sockets.at(0)) ==
+        std::make_tuple(device_1->id(), device_1_sockets.at(0)));
     ASSERT_TRUE(
-        device_0->get_connected_ethernet_core(device_0_sockets.at(1)) == std::make_tuple(device_1->id(), device_1_sockets.at(1)));
+        device_0->get_connected_ethernet_core(device_0_sockets.at(1)) ==
+        std::make_tuple(device_1->id(), device_1_sockets.at(1)));
     EXPECT_ANY_THROW(device_0->get_ethernet_sockets(2));
 }
 }  // namespace unit_tests::multichip::cluster

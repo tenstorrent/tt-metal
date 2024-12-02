@@ -4,6 +4,12 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## December 2, 2024
+
+### [Llama 3.1/3.2](demos/llama3)
+- Improved the decode performance of the 1B/3B/8B/11B text models (for 8B, increased from ~23 t/s/u to ~28 t/s/u) by using BFP4 weights (instead of BFP8) for FF1 and FF3 in the MLP.
+- Added the option to specify custom model configurations, with two defaults for performance and accuracy already provided. 
+
 ## November 18, 2024
 
 ### [Llama 3.2 - 1B/3B/11B](demos/llama3)

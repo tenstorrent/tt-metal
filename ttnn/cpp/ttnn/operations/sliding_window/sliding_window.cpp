@@ -693,8 +693,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(
-    const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const
-    -> format_context::iterator {
+    const ttnn::operations::sliding_window::SlidingWindowConfig& t,
+    format_context& ctx) const -> format_context::iterator {
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), pad_hw=({},{}), "
         "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
