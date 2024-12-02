@@ -429,8 +429,8 @@ def run_llama3_demo(
         logger.info("Starting decode...")
 
         # Set sampling mode
-        # argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
-        argmax_on_device = False
+        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+
         # Create events
         profiler.start(f"compile_trace_{batch_idx}")
         op_event = ttnn.create_event(mesh_device)
@@ -856,9 +856,9 @@ def run_llama3_demo(
         ),
     ],
     ids=[
-        "latency",
-        "throughput",
-        "max-length",
+        "batch-1",  # latency
+        "batch-32",  # throughput
+        "long-context",  # max-length
     ],
 )
 @pytest.mark.parametrize(
