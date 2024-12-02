@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "repeat_interleave.hpp"
 
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -15,7 +14,8 @@ namespace operations {
 namespace data_movement {
 
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
-ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, std::optional<MemoryConfig> output_mem_config) {
+ttnn::Tensor ExecuteRepeatInterleave::invoke(
+    const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
     MemoryConfig mem_config = output_mem_config.value_or(input_a.memory_config());
@@ -52,9 +52,9 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32
 
     auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
     auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::Shape(final_shape));
-    auto original_layout = ttnn::to_layout(reshaped_tensor, input_a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
+    auto original_layout =
+        ttnn::to_layout(reshaped_tensor, input_a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
     return typecast ? ttnn::typecast(original_layout, input_a.get_dtype(), mem_config) : original_layout;
-
 }
 
 }  // namespace data_movement

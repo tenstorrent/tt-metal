@@ -47,13 +47,14 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      TEST_DATA_DIR: ${{ github.workspace }}/tt-train/tests/test_data
+      TEST_DATA_DIR: ${{ github.workspace }}/data
+      ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
       - in-service
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

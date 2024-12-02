@@ -28,8 +28,8 @@ bool is_help_command(std::string input);
 bool is_help_documentation_command(std::string input);
 
 // Debugger general apis
-inline void prompt(std::string &input);
-inline std::string get_second_token(std::string &input);
+inline void prompt(std::string& input);
+inline std::string get_second_token(std::string& input);
 
 // Commands
 void print_cmd(uint32_t chip_id, CoreCoord core, std::string variable, std::string thread_type, std::string op);
@@ -48,10 +48,10 @@ void nicely_display_commands();
 
 // Debugger driver and python UI
 void launch_core_map(PythonCoreMapInfo info);
-void breakpoint_subroutine(int chip_id, const CoreCoord &core, std::string thread_type, std::string op);
+void breakpoint_subroutine(int chip_id, const CoreCoord& core, std::string thread_type, std::string op);
 
 void tt_gdb(int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops);
-} // end namespace tt_gdb
+}  // end namespace tt_gdb
 
 namespace tt {
 namespace tt_metal {
@@ -59,4 +59,4 @@ namespace tt_metal {
 void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops);
 
 }
-}
+}  // namespace tt

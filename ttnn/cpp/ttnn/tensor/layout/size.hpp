@@ -18,6 +18,7 @@ public:
     Size(std::size_t height, std::size_t width);
     Size(const std::pair<std::size_t, std::size_t>& size);
     Size(const std::array<std::size_t, 2>& size);
+    Size(const std::array<std::uint32_t, 2>& size);
 
     operator std::pair<std::size_t, std::size_t>() const;
     operator std::array<std::size_t, 2>() const;
@@ -38,6 +39,6 @@ private:
     std::size_t width_ = 0;
 };
 
-std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Size &size);
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size);
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

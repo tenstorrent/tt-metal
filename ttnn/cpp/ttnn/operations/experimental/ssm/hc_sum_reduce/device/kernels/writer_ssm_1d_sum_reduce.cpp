@@ -31,7 +31,7 @@ void kernel_main() {
 
     const uint32_t end_id = start_id + num_output_blocks_w_per_core;
 
-    for(uint32_t block_h_id = 0; block_h_id < out_num_blocks_h; block_h_id++){
+    for (uint32_t block_h_id = 0; block_h_id < out_num_blocks_h; block_h_id++) {
         for (uint32_t i = start_id; i < end_id; ++i) {
             cb_reserve_back(intermed_cb_id2, onetile);
             uint32_t dst = get_write_ptr(intermed_cb_id2);
@@ -68,7 +68,7 @@ void kernel_main() {
 
             cb_wait_front(output_cb_id, onetile);
             uint32_t l1_read_addr = get_read_ptr(output_cb_id);
-            noc_async_write_tile((block_h_id*out_num_blocks_w) + i, s, l1_read_addr);
+            noc_async_write_tile((block_h_id * out_num_blocks_w) + i, s, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(output_cb_id, onetile);
         }

@@ -8,12 +8,12 @@
 #include <fmt/color.h>
 
 #include <algorithm>
+#include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <stdexcept>
-#include <core/ttnn_all_includes.hpp>
 
 namespace {
 
@@ -146,8 +146,7 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 
 tt::tt_metal::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
-    // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device->get_device(0), memory_config);
+    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device, memory_config);
 }
 
 tt::tt_metal::Tensor full(
@@ -167,11 +166,10 @@ tt::tt_metal::Tensor full(
                 (padded[2] + additional_padding_h),
                 (padded[3] + additional_padding_w),
             });
-        // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
+        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device));
     }
     // if not padding available, we can just create a tensor with the given shape
-    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
+    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device));
 }
 
 tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
@@ -198,15 +196,6 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
 
-    auto to_device_odd_slow = [&]() {
-        if (layout == Layout::TILE) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
-        }
-
-        output = ttnn::to_device(output, device, output_mem_config);
-        return output;
-    };
-
     auto to_device_even_fast = [&]() {
         output = ttnn::to_device(output, device, output_mem_config);
         if (layout == Layout::TILE) {
@@ -216,11 +205,7 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
         return output;
     };
 
-    if (shape[-1] % 2 == 1) {
-        output = to_device_odd_slow();
-    } else {
-        output = to_device_even_fast();
-    }
+    output = to_device_even_fast();
 
     return output;
 }

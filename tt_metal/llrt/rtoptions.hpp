@@ -17,7 +17,7 @@
 
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"  // For CoreType
+#include "umd/device/tt_soc_descriptor.h"  // For CoreType
 
 namespace tt {
 
@@ -124,7 +124,7 @@ class RunTimeOptions {
 
     bool enable_dispatch_data_collection = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
    public:
     RunTimeOptions();
@@ -280,7 +280,7 @@ class RunTimeOptions {
     inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
-    inline tt_metal::DispatchCoreType get_dispatch_core_type() { return dispatch_core_type; }
+    inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
 
    private:
     // Helper functions to parse feature-specific environment vaiables.

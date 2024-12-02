@@ -51,15 +51,15 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, Wt},                              // input
-            {tt::CB::c_in1, 1},                               // mask
-            {tt::CB::c_in2, 1},                               // scaler
-            {tt::CB::c_out0, Wt},                             // output
-            {tt::CB::c_intermed0, Wt, intermed_data_format},  // exp(x)
-            {tt::CB::c_intermed1, 1, intermed_data_format},   // reduce
-            {tt::CB::c_intermed2, 1, intermed_data_format},   // max
-            {tt::CB::c_intermed3, Wt, intermed_data_format},  // x - max
-            {tt::CB::c_intermed4, 1, intermed_data_format}    // tmp
+            {tt::CBIndex::c_0, Wt},                         // input
+            {tt::CBIndex::c_1, 1},                          // mask
+            {tt::CBIndex::c_2, 1},                          // scaler
+            {tt::CBIndex::c_16, Wt},                        // output
+            {tt::CBIndex::c_24, Wt, intermed_data_format},  // exp(x)
+            {tt::CBIndex::c_25, 1, intermed_data_format},   // reduce
+            {tt::CBIndex::c_26, 1, intermed_data_format},   // max
+            {tt::CBIndex::c_27, Wt, intermed_data_format},  // x - max
+            {tt::CBIndex::c_28, 1, intermed_data_format}    // tmp
         });
 
     // create read/wrtie kernel
@@ -83,10 +83,11 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX)
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
@@ -125,8 +126,9 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
 
         float scaler = 1.0f;
         uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0)
+        if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
+        }
         std::vector<uint32_t> reader_args = {
             input.buffer()->address(),
             num_tiles_per_core,

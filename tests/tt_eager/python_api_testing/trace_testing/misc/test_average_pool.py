@@ -64,7 +64,7 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
     ttact_res = ttact.to(device)
 
     def run_ops(ttact_res):
-        return ttnn.avg_pool2d(ttact_res)
+        return ttnn.global_avg_pool2d(ttact_res)
 
     # Compile
     run_ops(ttact_res)

@@ -76,7 +76,7 @@ run_frequent_api_pipeline_tests() {
     local dispatch_mode=$3
 
     if [[ $dispatch_mode == "slow" ]]; then
-        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_frequent
+        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=DispatchStress.TensixRunManyTimes
         echo "Running Python API unit tests in SD for frequent..."
         ./tests/scripts/run_python_api_unit_tests.sh
     fi
@@ -321,6 +321,9 @@ run_pipeline_tests() {
         demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
         model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
+        ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
+        ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg
     # TGG pipelines
     elif [[ $pipeline_type == "unit_tgg_device" ]]; then
         unit_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"

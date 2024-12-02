@@ -6,37 +6,30 @@
 
 #include <cstdint>
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "circular_buffer_constants.h"
 #include "risc_attribs.h"
-#else
-#define tt_l1_ptr
-#define tt_reg_ptr
-#endif
-
-constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
-constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
 struct CQReadInterface {
     uint32_t issue_fifo_size;
-    uint32_t issue_fifo_limit; // range is inclusive of the limit
+    uint32_t issue_fifo_limit;  // range is inclusive of the limit
     uint32_t issue_fifo_rd_ptr;
     uint32_t issue_fifo_rd_toggle;
 };
 
-// The command queue write interface controls writes to the completion region, host owns the completion region read interface
-// Data requests from device and event states are written to the completion region
+// The command queue write interface controls writes to the completion region, host owns the completion region read
+// interface Data requests from device and event states are written to the completion region
 struct CQWriteInterface {
     uint32_t completion_fifo_size;
-    uint32_t completion_fifo_limit; // range is inclusive of the limit
+    uint32_t completion_fifo_limit;  // range is inclusive of the limit
     uint32_t completion_fifo_wr_ptr;
     uint32_t completion_fifo_wr_toggle;
 };
 
 struct CBInterface {
     uint32_t fifo_size;
-    uint32_t fifo_limit; // range is inclusive of the limit
+    uint32_t fifo_limit;  // range is inclusive of the limit
     uint32_t fifo_page_size;
     uint32_t fifo_num_pages;
 
@@ -60,14 +53,17 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
-inline void setup_cb_read_write_interfaces(uint32_t tt_l1_ptr *cb_l1_base, uint32_t start_cb_index, uint32_t max_cb_index, bool read, bool write, bool init_wr_tile_ptr) {
-
-    constexpr uint32_t WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
-
-    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = cb_l1_base + start_cb_index * WORDS_PER_CIRCULAR_BUFFER_CONFIG;
+inline void setup_cb_read_write_interfaces(
+    uint32_t tt_l1_ptr* cb_l1_base,
+    uint32_t start_cb_index,
+    uint32_t max_cb_index,
+    bool read,
+    bool write,
+    bool init_wr_tile_ptr) {
+    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr =
+        cb_l1_base + start_cb_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;
 
     for (uint32_t cb_id = start_cb_index; cb_id < max_cb_index; cb_id++) {
-
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
         uint32_t fifo_addr = circular_buffer_config_addr[0];
         uint32_t fifo_size = circular_buffer_config_addr[1];
@@ -93,6 +89,6 @@ inline void setup_cb_read_write_interfaces(uint32_t tt_l1_ptr *cb_l1_base, uint3
             cb_interface[cb_id].fifo_wr_tile_ptr = 0;
         }
 
-        circular_buffer_config_addr += WORDS_PER_CIRCULAR_BUFFER_CONFIG;
+        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;
     }
 }

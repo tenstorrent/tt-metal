@@ -36,7 +36,12 @@ inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint nti
     }
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false, bool tilize = false/*unused*/>
+template <
+    DataCopyType type,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool is_fp32_dest_acc_en = false,
+    bool is_int_fpu_en = false,
+    bool tilize = false /*unused*/>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
 inline void llk_math_eltwise_unary_datacopy_init(
     const std::uint32_t transpose_of_faces = 0 /*unused*/,

@@ -62,11 +62,11 @@ On the host side, we set initialize the source data. In this case, they are repr
 ## Set up circular buffers for input
 
 ``` cpp
-constexpr uint32_t src0_cb_index = CB::c_in0;
+constexpr uint32_t src0_cb_index = CBIndex::c_0;
 CircularBufferConfig cb_src0_config = CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
 CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-constexpr uint32_t src1_cb_index = CB::c_in1;
+constexpr uint32_t src1_cb_index = CBIndex::c_1;
 CircularBufferConfig cb_src1_config = CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
 CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 ```
@@ -104,8 +104,8 @@ uint64_t src0_dram_noc_addr = get_noc_addr(src0_dram_noc_x, src0_dram_noc_y, src
 uint64_t src1_dram_noc_addr = get_noc_addr(src1_dram_noc_x, src1_dram_noc_y, src1_dram);
 uint64_t dst_dram_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_dram);
 
-constexpr uint32_t cb_id_in0 = tt::CB::c_in0; // index=0
-constexpr uint32_t cb_id_in1 = tt::CB::c_in1; // index=1
+constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0; // index=0
+constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1; // index=1
 
 // single-tile ublocks
 uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);

@@ -15,12 +15,29 @@ namespace tt_metal {
 
 namespace allocator {
 
-FreeList::FreeList(DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment, FreeList::SearchPolicy search_policy)
-    : search_policy_(search_policy), Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
+FreeList::FreeList(
+    DeviceAddr max_size_bytes,
+    DeviceAddr offset_bytes,
+    DeviceAddr min_allocation_size,
+    DeviceAddr alignment,
+    FreeList::SearchPolicy search_policy) :
+    search_policy_(search_policy), Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
     this->init();
 }
 
+FreeList::~FreeList() { this->clear(); }
+
 void FreeList::init() {
+    boost::local_shared_ptr<FreeList::Block> curr_block = this->block_head_;
+    while (curr_block != nullptr) {
+        auto next_block = curr_block->next_block;
+        curr_block->prev_block = nullptr;
+        curr_block->next_block = nullptr;
+        curr_block->prev_free = nullptr;
+        curr_block->next_free = nullptr;
+        curr_block = next_block;
+    }
+
     this->shrink_size_ = 0;
     auto block = boost::make_local_shared<Block>(0, this->max_size_bytes_);
     this->block_head_ = block;
@@ -29,8 +46,9 @@ void FreeList::init() {
     this->free_block_tail_ = block;
 }
 
-bool FreeList::is_allocated(const boost::local_shared_ptr<Block> block) const {
-    return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and block != this->free_block_tail_;
+bool FreeList::is_allocated(const boost::local_shared_ptr<Block>& block) const {
+    return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and
+           block != this->free_block_tail_;
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeList::available_addresses(DeviceAddr size_bytes) const {
@@ -82,19 +100,14 @@ boost::local_shared_ptr<FreeList::Block> FreeList::search_first(DeviceAddr size_
 
 boost::local_shared_ptr<FreeList::Block> FreeList::search(DeviceAddr size_bytes, bool bottom_up) {
     switch (this->search_policy_) {
-        case FreeList::SearchPolicy::BEST:
-            return search_best(size_bytes, bottom_up);
-        break;
-        case FreeList::SearchPolicy::FIRST:
-            return search_first(size_bytes, bottom_up);
-        break;
-        default:
-            TT_ASSERT(false && "Unsupported search policy");
+        case FreeList::SearchPolicy::BEST: return search_best(size_bytes, bottom_up); break;
+        case FreeList::SearchPolicy::FIRST: return search_first(size_bytes, bottom_up); break;
+        default: TT_ASSERT(false && "Unsupported search policy");
     }
     return nullptr;
 }
 
-void FreeList::allocate_entire_free_block(boost::local_shared_ptr<Block> free_block_to_allocate) {
+void FreeList::allocate_entire_free_block(const boost::local_shared_ptr<Block>& free_block_to_allocate) {
     TT_ASSERT(not is_allocated(free_block_to_allocate));
     if (free_block_to_allocate->prev_free != nullptr) {
         free_block_to_allocate->prev_free->next_free = free_block_to_allocate->next_free;
@@ -122,7 +135,8 @@ void FreeList::allocate_entire_free_block(boost::local_shared_ptr<Block> free_bl
 
 // free_block range: [a, b)
 // allocated_block range: [a, c), where c < b
-void FreeList::update_left_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block) {
+void FreeList::update_left_aligned_allocated_block_connections(
+    const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block) {
     allocated_block->prev_block = free_block->prev_block;
     allocated_block->next_block = free_block;
     if (free_block->prev_block != nullptr) {
@@ -139,7 +153,8 @@ void FreeList::update_left_aligned_allocated_block_connections(boost::local_shar
 
 // free_block range: [a, b)
 // allocated_block range: [c, b), where c > a
-void FreeList::update_right_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block) {
+void FreeList::update_right_aligned_allocated_block_connections(
+    const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block) {
     allocated_block->prev_block = free_block;
     allocated_block->next_block = free_block->next_block;
     if (free_block->next_block != nullptr) {
@@ -154,7 +169,8 @@ void FreeList::update_right_aligned_allocated_block_connections(boost::local_sha
 }
 
 // Offset marks the start of the allocated block
-boost::local_shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(boost::local_shared_ptr<FreeList::Block> free_block, DeviceAddr offset, DeviceAddr size_bytes) {
+boost::local_shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(
+    boost::local_shared_ptr<FreeList::Block> free_block, DeviceAddr offset, DeviceAddr size_bytes) {
     TT_ASSERT(free_block->address + offset + size_bytes <= free_block->address + free_block->size);
 
     // Allocated slice spans the entire space of free_block
@@ -170,8 +186,10 @@ boost::local_shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(
     // 2. allocated_block is right aligned with free_block with free space remaining on the left
     // 3. allocated_block is in the middle of free_block with free space on left and right sides
     bool case_one = offset == 0 and size_bytes < free_block->size;
-    bool case_two = offset > 0 and ((free_block->address + offset + size_bytes) == (free_block->address + free_block->size));
-    bool case_three = offset > 0 and ((free_block->address + offset + size_bytes) < (free_block->address + free_block->size));
+    bool case_two =
+        offset > 0 and ((free_block->address + offset + size_bytes) == (free_block->address + free_block->size));
+    bool case_three =
+        offset > 0 and ((free_block->address + offset + size_bytes) < (free_block->address + free_block->size));
     TT_ASSERT((int)(case_one + case_two + case_three) == 1);
 
     if (case_one) {
@@ -190,8 +208,7 @@ boost::local_shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(
             allocated_block,
             free_block->next_block,
             free_block,
-            free_block->next_free
-        );
+            free_block->next_free);
         if (free_block->next_block != nullptr) {
             free_block->next_block->prev_block = next_free_block;
         }
@@ -239,13 +256,20 @@ std::optional<DeviceAddr> FreeList::allocate(DeviceAddr size_bytes, bool bottom_
 
     this->update_lowest_occupied_address(allocated_block->address);
     if (allocated_block->address + this->offset_bytes_ < address_limit) {
-        TT_THROW("Out of Memory: Cannot allocate at an address below {}. Tried to allocate at {}", address_limit, allocated_block->address + this->offset_bytes_);
+        TT_THROW(
+            "Out of Memory: Cannot allocate at an address below {}. Tried to allocate at {}",
+            address_limit,
+            allocated_block->address + this->offset_bytes_);
     }
     return allocated_block->address + this->offset_bytes_;
 }
 
 std::optional<DeviceAddr> FreeList::allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) {
-    TT_ASSERT(absolute_start_address % this->alignment_ == 0, "Requested address {} should be {} B aligned", absolute_start_address, this->alignment_);
+    TT_ASSERT(
+        absolute_start_address % this->alignment_ == 0,
+        "Requested address {} should be {} B aligned",
+        absolute_start_address,
+        this->alignment_);
     auto start_address = absolute_start_address - this->offset_bytes_;
     boost::local_shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
     DeviceAddr alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
@@ -256,7 +280,9 @@ std::optional<DeviceAddr> FreeList::allocate_at_address(DeviceAddr absolute_star
             if (curr_block->address == start_address) {
                 allocate_slice_of_free_block(curr_block, /*offset=*/0, alloc_size);
                 break;
-            } else if ((start_address > curr_block->address) and ((start_address + alloc_size) <= (curr_block->address + curr_block->size))) {
+            } else if (
+                (start_address > curr_block->address) and
+                ((start_address + alloc_size) <= (curr_block->address + curr_block->size))) {
                 DeviceAddr start_offset = start_address - curr_block->address;
                 allocate_slice_of_free_block(curr_block, start_offset, alloc_size);
                 break;
@@ -376,17 +402,14 @@ void FreeList::deallocate(DeviceAddr absolute_address) {
     }
 }
 
-void FreeList::clear() {
-    this->init();
-}
+void FreeList::clear() { this->init(); }
 
 Statistics FreeList::get_statistics() const {
     Statistics stats{
         .total_allocatable_size_bytes = this->max_size_bytes_,
         .total_allocated_bytes = 0,
         .total_free_bytes = 0,
-        .largest_free_block_bytes = 0
-    };
+        .largest_free_block_bytes = 0};
 
     boost::local_shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
@@ -408,14 +431,12 @@ Statistics FreeList::get_statistics() const {
     return stats;
 }
 
-void FreeList::dump_block(const boost::local_shared_ptr<Block> block, std::ofstream &out) const {
+void FreeList::dump_block(const boost::local_shared_ptr<Block>& block, std::ofstream& out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
-    out << ",,," << (block->address + this->offset_bytes_)
-        << "," << (block->size)
-        << "," << alloc_status << "\n";
+    out << ",,," << (block->address + this->offset_bytes_) << "," << (block->size) << "," << alloc_status << "\n";
 }
 
-void FreeList::dump_blocks(std::ofstream &out) const {
+void FreeList::dump_blocks(std::ofstream& out) const {
     out << ",,Blocks:,Address (B),Size (B),Allocated (Y/N)\n";
     boost::local_shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {

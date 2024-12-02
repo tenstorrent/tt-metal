@@ -8,6 +8,7 @@ on:
 jobs:
   build-lib:
     strategy:
+      fail-fast: false
       matrix:
         build: [
           {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-20.04},
@@ -38,7 +39,7 @@ jobs:
             echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

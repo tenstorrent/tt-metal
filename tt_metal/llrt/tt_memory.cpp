@@ -4,13 +4,10 @@
 
 #include "tt_memory.h"
 
-#include <cassert>
-#include <cstdio>
-#include <fstream>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
-#include <stdexcept>
 
-#include "tensix.h"
 #include "tt_elffile.hpp"
 #include "tt_metal/common/assert.hpp"
 
@@ -23,7 +20,7 @@ memory::memory() {
     packed_size_ = 0;
 }
 
-memory::memory(std::string const &path, Relocate relo_type) : memory() {
+memory::memory(std::string const& path, Relocate relo_type) : memory() {
     ElfFile elf;
 
     elf.ReadImage(path);
@@ -37,8 +34,7 @@ memory::memory(std::string const &path, Relocate relo_type) : memory() {
     uint32_t total_size = 0;
     auto emit_segment = [&](ElfFile::Segment const& segment) {
         TT_ASSERT(segment.relocs.empty(), "Unexpected dynamic relocations");
-        link_spans_.emplace_back(
-            segment.address, segment.contents.size());
+        link_spans_.emplace_back(segment.address, segment.contents.size());
         data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
         total_size += segment.contents.size();
     };
@@ -50,26 +46,26 @@ memory::memory(std::string const &path, Relocate relo_type) : memory() {
         }
         emit_segment(segment);
     }
-    if (text)
+    if (text) {
         emit_segment(*text);
+    }
 
     set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
     set_packed_size(total_size * sizeof(uint32_t));
 }
 
-bool memory::operator==(const memory& other) const {
-    return
-        data_ == other.data_ &&
-        link_spans_ == other.link_spans_;
-}
+bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
 
-void memory::fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
+void memory::fill_from_mem_template(
+    const memory& mem_template,
+    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
     link_spans_ = mem_template.link_spans_;
     data_.resize(mem_template.data_.size());
     process_spans(callback);
 }
 
-void memory::process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
+void memory::process_spans(
+    const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
     uint32_t offset = 0;
     for (const auto& span : link_spans_) {
         std::vector<uint32_t>::const_iterator cit = data_.cbegin() + offset;
@@ -78,7 +74,8 @@ void memory::process_spans(const std::function<void (std::vector<uint32_t>::cons
     }
 }
 
-void memory::process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
+void memory::process_spans(
+    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
     uint32_t offset = 0;
     for (const auto& span : link_spans_) {
         std::vector<uint32_t>::iterator it = data_.begin() + offset;
@@ -92,7 +89,6 @@ void memory::process_spans(const std::function<void (std::vector<uint32_t>::iter
 // Spans get packed for kernels so they can be loaded in one NOC transaction
 // A symbol at the end of the text segment allows the FW to find the data segment to copy into place
 void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_start) {
-
     uint64_t text_end, data_end;
     if (text_start > data_start) {
         text_end = std::numeric_limits<uint64_t>::max();

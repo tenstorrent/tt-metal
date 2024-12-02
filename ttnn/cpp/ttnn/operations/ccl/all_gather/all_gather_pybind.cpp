@@ -29,13 +29,14 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t dim,
+               const int32_t dim,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+                return self(
+                    input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -49,7 +50,7 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t dim,
+               const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const uint32_t num_links,
@@ -57,7 +58,16 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+                return self(
+                    input_tensor,
+                    dim,
+                    cluster_axis,
+                    mesh_device,
+                    num_links,
+                    memory_config,
+                    num_workers,
+                    num_buffers_per_channel,
+                    topology);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -72,7 +82,6 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
 }
 
 }  // namespace detail
-
 
 void py_bind_all_gather(pybind11::module& module) {
     detail::bind_all_gather(

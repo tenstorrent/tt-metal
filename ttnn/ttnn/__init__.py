@@ -124,6 +124,7 @@ from ttnn.types import (
     L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
+    ShardMode,
     ShardSpec,
     CoreRangeSet,
     CoreRange,
@@ -152,6 +153,8 @@ from ttnn.types import (
 from ttnn.device import (
     Device,
     DispatchCoreType,
+    DispatchCoreAxis,
+    DispatchCoreConfig,
     open_device,
     close_device,
     enable_program_cache,
@@ -243,10 +246,6 @@ mul = ttnn.multiply
 mul_ = ttnn.multiply_
 
 
-def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
-    return ttnn.leaky_relu(*args, **kwargs)
-
-
 # TODO: pybind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
@@ -295,8 +294,7 @@ from ttnn.operations.ccl import (
     Topology,
 )
 
-from ttnn.operations.conv2d import Conv2dConfig, get_conv_padded_input_shape_and_mem_config, get_conv_output_dim
-from ttnn.operations.pool import avg_pool2d
+from ttnn.operations.conv2d import Conv2dConfig, get_conv_output_dim
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig

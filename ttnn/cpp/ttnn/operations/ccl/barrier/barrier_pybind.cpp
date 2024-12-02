@@ -28,18 +28,15 @@ void bind_barrier(pybind11::module& module, const ccl_operation_t& operation, co
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::MemoryConfig& memory_config,
-               ttnn::ccl::Topology topology)-> ttnn::Tensor {
-                return self(input_tensor, memory_config, topology);
-            },
+               ttnn::ccl::Topology topology) -> ttnn::Tensor { return self(input_tensor, memory_config, topology); },
             py::arg("input_tensor"),
-            py::kw_only(),//The following are optional by key word only
+            py::kw_only(),  // The following are optional by key word only
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring});
 }
 }  // namespace detail
 
 void py_bind_barrier(pybind11::module& module) {
-
     detail::bind_barrier(
         module,
         ttnn::barrier,
@@ -73,4 +70,4 @@ void py_bind_barrier(pybind11::module& module) {
         )doc");
 }
 
-}
+}  // namespace ttnn::operations::ccl

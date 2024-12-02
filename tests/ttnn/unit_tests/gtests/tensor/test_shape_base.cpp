@@ -7,13 +7,12 @@
 
 #include "ttnn/tensor/shape/shape_base.hpp"
 
-
 TEST(TensorShapeBaseTests, General4D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 4);
     EXPECT_EQ(vec[0], 20);
-    EXPECT_EQ(vec[1],30);
+    EXPECT_EQ(vec[1], 30);
     EXPECT_EQ(vec[2], 40);
     EXPECT_EQ(vec[3], 50);
     EXPECT_THROW(vec[4], std::exception);
@@ -25,7 +24,6 @@ TEST(TensorShapeBaseTests, General4D) {
 }
 
 TEST(TensorVectorBaseTests, General5D) {
-
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50, 60});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 5);
@@ -39,8 +37,7 @@ TEST(TensorVectorBaseTests, General5D) {
     EXPECT_THROW(vec[-6], std::exception);
 }
 
-TEST(TensorShapeBaseTests, Empty)
-{
+TEST(TensorShapeBaseTests, Empty) {
     tt::tt_metal::ShapeBase vec({});
     EXPECT_EQ(vec.view().size(), vec.view().size());
     EXPECT_EQ(vec.view().size(), 0);

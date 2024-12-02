@@ -14,13 +14,13 @@ namespace detail {
 
 template <class T, std::size_t Extent>
 class SpanBase : public boost::span<T, Extent> {
-   public:
+public:
     using boost::span<T, Extent>::span;
 };
 
 template <class T, std::size_t Extent>
 class SpanBase<const T, Extent> : public boost::span<const T, Extent> {
-   public:
+public:
     using boost::span<const T>::span;
 
     // expose constructor from initializer_list for const-qualified element_type
@@ -34,7 +34,7 @@ template <class T, std::size_t Extent = dynamic_extent>
 class Span : detail::SpanBase<T, Extent> {
     using base = detail::SpanBase<T, Extent>;
 
-   public:
+public:
     // Member types
     using typename base::const_pointer;
     using typename base::const_reference;
@@ -77,19 +77,19 @@ class Span : detail::SpanBase<T, Extent> {
 };
 
 template <class It, class EndOrSize>
-Span(It, EndOrSize) -> Span<std::remove_reference_t<decltype(*std::declval<It &>())>>;
+Span(It, EndOrSize) -> Span<std::remove_reference_t<decltype(*std::declval<It&>())>>;
 
 template <class T, std::size_t N>
 // NOLINTNEXTLINE(modernize-avoid-c-arrays)
 Span(T (&)[N]) -> Span<T, N>;
 
 template <class T, std::size_t N>
-Span(std::array<T, N> &) -> Span<T, N>;
+Span(std::array<T, N>&) -> Span<T, N>;
 
 template <class T, std::size_t N>
-Span(const std::array<T, N> &) -> Span<const T, N>;
+Span(const std::array<T, N>&) -> Span<const T, N>;
 
 template <class R>
-Span(R &&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R &>()))>>;
+Span(R&&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R&>()))>>;
 
 }  // namespace tt::stl

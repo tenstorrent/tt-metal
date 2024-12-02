@@ -8,13 +8,12 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char **argv) {
-
+int main(int argc, char** argv) {
     // Initialize Program and Device
 
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    Device *device = CreateDevice(device_id);
+    Device* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
@@ -29,9 +28,7 @@ int main(int argc, char **argv) {
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_kernel_args
-        }
-    );
+            .compile_args = compute_kernel_args});
 
     // Configure Program and Start Program Execution on Device
 
@@ -46,5 +43,4 @@ int main(int argc, char **argv) {
     CloseDevice(device);
 
     return 0;
-
 }

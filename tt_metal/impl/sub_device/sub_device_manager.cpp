@@ -23,7 +23,7 @@ namespace tt::tt_metal {
 namespace detail {
 
 SubDeviceManager::SubDeviceManager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, Device *device) :
+    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, Device* device) :
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     local_l1_size_(align(local_l1_size, hal.get_alignment(HalMemType::L1))),
     device_(device) {
@@ -36,7 +36,7 @@ SubDeviceManager::SubDeviceManager(
     this->populate_worker_launch_message_buffer_state();
 }
 
-SubDeviceManager::SubDeviceManager(Device *device, std::unique_ptr<Allocator> &&global_allocator) : device_(device) {
+SubDeviceManager::SubDeviceManager(Device* device, std::unique_ptr<Allocator>&& global_allocator) : device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->local_l1_size_ = 0;
     const auto& compute_grid_size = this->device_->compute_with_storage_grid_size();
@@ -59,13 +59,13 @@ SubDeviceManager::SubDeviceManager(Device *device, std::unique_ptr<Allocator> &&
 }
 
 SubDeviceManager::~SubDeviceManager() {
-    for (const auto &allocator : this->sub_device_allocators_) {
+    for (const auto& allocator : this->sub_device_allocators_) {
         if (allocator) {
             // Clear the bank managers, this makes subsequent buffer deallocations fast
             allocator::clear(*allocator);
             // Deallocate all buffers
             // This is done to set buffer object status to Deallocated
-            const auto &allocated_buffers = allocator::get_allocated_buffers(*allocator);
+            const auto& allocated_buffers = allocator::get_allocated_buffers(*allocator);
             for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
                 tt::tt_metal::DeallocateBuffer(*(*(buf++)));
             }
@@ -75,16 +75,14 @@ SubDeviceManager::~SubDeviceManager() {
 
 uint8_t SubDeviceManager::num_sub_devices() const { return this->sub_devices_.size(); }
 
-const std::vector<SubDeviceId> &SubDeviceManager::get_sub_device_ids() const {
-    return this->sub_device_ids_;
-}
+const std::vector<SubDeviceId>& SubDeviceManager::get_sub_device_ids() const { return this->sub_device_ids_; }
 
 const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_devices_[sub_device_index];
 }
 
-const vector_memcpy_aligned<uint32_t> &SubDeviceManager::noc_mcast_unicast_data() const {
+const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const {
     return noc_mcast_unicast_data_;
 }
 
@@ -108,26 +106,24 @@ uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id
     return this->noc_unicast_data_start_index_[sub_device_index];
 }
 
-const std::unique_ptr<Allocator> &SubDeviceManager::get_initialized_allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<Allocator>& SubDeviceManager::get_initialized_allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(this->sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return this->sub_device_allocators_[sub_device_index];
 }
 
-std::unique_ptr<Allocator> &SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
+std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return this->sub_device_allocators_[sub_device_index];
 }
 
-std::shared_ptr<TraceBuffer> &SubDeviceManager::create_trace(uint32_t tid) {
+std::shared_ptr<TraceBuffer>& SubDeviceManager::create_trace(uint32_t tid) {
     auto [trace, emplaced] = this->trace_buffer_pool_.emplace(tid, Trace::create_empty_trace_buffer());
     TT_ASSERT(emplaced, "Trace buffer with tid {} already exists", tid);
     return trace->second;
 }
 
-void SubDeviceManager::release_trace(uint32_t tid) {
-    this->trace_buffer_pool_.erase(tid);
-}
+void SubDeviceManager::release_trace(uint32_t tid) { this->trace_buffer_pool_.erase(tid); }
 
 std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
     auto trace = this->trace_buffer_pool_.find(tid);
@@ -138,7 +134,10 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
 }
 
 void SubDeviceManager::reset_worker_launch_message_buffer_state() {
-    std::for_each(this->worker_launch_message_buffer_state_.begin(), this->worker_launch_message_buffer_state_.end(), std::mem_fn(&LaunchMessageRingBufferState::reset));
+    std::for_each(
+        this->worker_launch_message_buffer_state_.begin(),
+        this->worker_launch_message_buffer_state_.end(),
+        std::mem_fn(&LaunchMessageRingBufferState::reset));
 }
 
 LaunchMessageRingBufferState& SubDeviceManager::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
@@ -238,6 +237,14 @@ void SubDeviceManager::populate_sub_allocators() {
         if (compute_cores.empty()) {
             continue;
         }
+        auto compute_cores_vec = corerange_to_cores(compute_cores, std::nullopt, true);
+        // Make sub-device cores have the same bank id as global allocator
+        std::vector<uint32_t> l1_bank_remap;
+        l1_bank_remap.reserve(compute_cores_vec.size());
+        for (const auto& core : compute_cores_vec) {
+            // These are compute cores, so they should have a single bank
+            l1_bank_remap.push_back(this->device_->bank_ids_from_logical_core(BufferType::L1, core)[0]);
+        }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
              .dram_bank_size = 0,
@@ -252,7 +259,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .core_type_from_noc_coord_table = {},  // Populated later
              .worker_log_to_physical_routing_x = global_allocator_config.worker_log_to_physical_routing_x,
              .worker_log_to_physical_routing_y = global_allocator_config.worker_log_to_physical_routing_y,
-             .l1_bank_remap = {},
+             .l1_bank_remap = std::move(l1_bank_remap),
              .compute_grid = compute_cores,
              .alignment = global_allocator_config.alignment,
              .disable_interleaved = true});
@@ -300,7 +307,8 @@ void SubDeviceManager::populate_noc_data() {
                 this->device_->physical_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
             auto physical_end = this->device_->physical_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
             auto physical_core_range = CoreRange(physical_start, physical_end);
-            this->noc_mcast_unicast_data_[idx++] = this->device_->get_noc_multicast_encoding(noc_index, physical_core_range);
+            this->noc_mcast_unicast_data_[idx++] =
+                this->device_->get_noc_multicast_encoding(noc_index, physical_core_range);
             this->noc_mcast_unicast_data_[idx++] = core_range.size();
         }
         this->noc_unicast_data_start_index_[i] = idx;
@@ -310,12 +318,17 @@ void SubDeviceManager::populate_noc_data() {
             this->noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
                 auto physical_core = this->device_->physical_core_from_logical_core(core, CoreType::ETH);
-                this->noc_mcast_unicast_data_[idx++] = this->device_->get_noc_unicast_encoding(noc_index, physical_core);
+                this->noc_mcast_unicast_data_[idx++] =
+                    this->device_->get_noc_unicast_encoding(noc_index, physical_core);
             }
         }
         this->num_noc_unicast_txns_[i] = idx - this->noc_unicast_data_start_index_[i];
 
-        TT_FATAL(idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES, "NOC data entries {} exceeds maximum supported size {}", idx, dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+        TT_FATAL(
+            idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            "NOC data entries {} exceeds maximum supported size {}",
+            idx,
+            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
 

@@ -6,8 +6,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-
-    constexpr bool src0_is_dram          = (bool) get_compile_time_arg_val(0);
+    constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t dims = get_compile_time_arg_val(2);
 
@@ -18,8 +17,8 @@ void kernel_main() {
     for (uint32_t i = 1; i <= dims; i++) {
         shape[i - 1] = get_arg_val<uint32_t>(i);
         starts[i - 1] = get_arg_val<uint32_t>(i + dims);
-        ends[i - 1] = get_arg_val<uint32_t>(i + 2*dims);
-        strides[i - 1] = get_arg_val<uint32_t>(i + 3*dims);
+        ends[i - 1] = get_arg_val<uint32_t>(i + 2 * dims);
+        strides[i - 1] = get_arg_val<uint32_t>(i + 3 * dims);
     }
 
     // Calculate the product array, excluding the last dimension
@@ -32,16 +31,12 @@ void kernel_main() {
     }
     prod[dims - 1] = 1;  // Not used, but set to 1 for completeness
 
-    const InterleavedAddrGen<src0_is_dram> s0 = {
-        .bank_base_address = src_addr,
-        .page_size = page_size
-    };
+    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = page_size};
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;
     uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
     volatile tt_l1_ptr uint16_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_buffer_l1_addr);
-
 
     uint32_t index[dims - 1];  // To hold current index in each of the first dims-1 dimensions
     for (uint32_t i = 0; i < dims - 1; i++) {
@@ -67,7 +62,8 @@ void kernel_main() {
         noc_async_read_barrier();
         for (uint32_t l = starts[dims - 1]; l < ends[dims - 1]; l += strides[dims - 1]) {
             // Write the element into the output buffer
-            volatile tt_l1_ptr uint16_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_out0));
+            volatile tt_l1_ptr uint16_t* out_stick =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_out0));
             out_stick[out_stick_id] = in_stick[l];  // Assuming you write one element at a time
             out_stick_id++;
         }

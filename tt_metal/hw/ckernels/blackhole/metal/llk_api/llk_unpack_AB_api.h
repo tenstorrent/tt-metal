@@ -12,7 +12,7 @@
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure(
-    const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0) {
+    const llk_unpack_AB_params_t* unpack_AB_params, const int within_face_16x16_transpose = 0) {
     // In0 -> unpA
     // In1 -> unpB
     const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpA_operand);

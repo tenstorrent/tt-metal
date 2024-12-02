@@ -24,14 +24,18 @@ else()
     FIND_AND_SET_CLANG17()
 endif()
 
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(version)
+ParseGitDescribe()
 project(
     Metalium
-    VERSION 0.50.0
+    VERSION ${VERSION_NUMERIC}
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
         CXX
 )
+message(STATUS "Metalium version: ${PROJECT_VERSION}")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -39,8 +43,6 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
         "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
     )
 endif()
-
-list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(project_options)
 include(unity)
@@ -107,9 +109,6 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
-
-# Set default values for variables/options
-set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
 ############################################################################################################################
 # Project Options
@@ -210,6 +209,7 @@ string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
 add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
+    -Wno-deprecated-declarations
     -Wdelete-non-virtual-dtor
     -Wreturn-type
     -Wswitch
@@ -229,9 +229,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-builtins>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-declarations>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated-declarations>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"

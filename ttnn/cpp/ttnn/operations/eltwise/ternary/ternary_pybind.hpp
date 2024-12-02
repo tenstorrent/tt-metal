@@ -14,7 +14,6 @@
 
 namespace py = pybind11;
 
-
 namespace ttnn {
 namespace operations {
 namespace ternary {
@@ -22,7 +21,11 @@ namespace ternary {
 namespace detail {
 
 template <typename ternary_operation_t>
-void bind_ternary_composite_float(py::module& module, const ternary_operation_t& operation, const std::string& description, const std::string& supported_dtype = "BFLOAT16") {
+void bind_ternary_composite_float(
+    py::module& module,
+    const ternary_operation_t& operation,
+    const std::string& description,
+    const std::string& supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -78,8 +81,8 @@ void bind_ternary_composite_float(py::module& module, const ternary_operation_t&
                const Tensor& input_tensor_c,
                float value,
                const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
-                },
+                return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
+            },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("input_tensor_c"),
@@ -213,12 +216,12 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
         {2}
 
         .. math::
-            \mathrm{{output\_tensor}} = \verb|{0}|(\mathrm{{input\_tensor\_a, input\_tensor\_b, input\_tensor\_c}})
+            \mathrm{{output\_tensor}} = \verb|{0}|(\mathrm{{input, end, weight}})
 
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            input  (ttnn.Tensor): the input tensor with the starting points.
+            end    (ttnn.Tensor): the tensor with the ending points.
+            weight (ttnn.Tensor or float): the weight for the interpolation formula.
 
 
         Keyword Args:
@@ -240,6 +243,8 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+            end, weight tensors should have same dtype as input
+
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -256,29 +261,25 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
         doc,
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b,
-            const Tensor& input_tensor_c,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::arg("input_tensor_c"),
+               const Tensor& input,
+               const Tensor& end,
+               const Tensor& weight,
+               const std::optional<MemoryConfig>& memory_config) { return self(input, end, weight, memory_config); },
+            py::arg("input"),
+            py::arg("end"),
+            py::arg("weight"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b,
-            float value,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, value, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::arg("value"),
+               const Tensor& input,
+               const Tensor& end,
+               float weight,
+               const std::optional<MemoryConfig>& memory_config) { return self(input, end, weight, memory_config); },
+            py::arg("input"),
+            py::arg("end"),
+            py::arg("weight"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
@@ -331,12 +332,12 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
         doc,
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b,
-            const Tensor& input_tensor_c,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
-                },
+               const Tensor& input_tensor_a,
+               const Tensor& input_tensor_b,
+               const Tensor& input_tensor_c,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
+            },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("input_tensor_c"),
@@ -345,12 +346,12 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
 
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input_tensor_a,
-            float value1,
-            float value2,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, value1, value2, memory_config);
-                },
+               const Tensor& input_tensor_a,
+               float value1,
+               float value2,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor_a, value1, value2, memory_config);
+            },
             py::arg("input_tensor_a"),
             py::arg("value1"),
             py::arg("value2"),
@@ -381,7 +382,7 @@ void py_module(py::module& module) {
     detail::bind_ternary_lerp(
         module,
         ttnn::lerp,
-        R"doc(Computes Lerp on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes Lerp on :attr:`input`, :attr:`end` and :attr:`weight` and returns the tensor with the same layout as :attr:`input`)doc");
 
     detail::bind_ternary_mac(
         module,

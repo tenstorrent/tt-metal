@@ -22,6 +22,7 @@
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
 volatile tt_l1_ptr uint8_t *const slave_idle_erisc_run = &mailboxes->slave_sync.dm1;
 
+uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
@@ -54,9 +55,7 @@ int main(int argc, char *argv[]) {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
-
-    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    l1_to_local_mem_copy((uint *)__ldm_data_start, (uint tt_l1_ptr *)MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH, num_words);
+    do_crt1((uint32_t *)MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     risc_init();
 
