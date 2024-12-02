@@ -4,29 +4,27 @@
 
 from typing import Optional, Tuple
 from functools import partial
-import itertools
 
+import json
 import torch
 import random
 import ttnn
 import math
-from tests.sweep_framework.sweep_utils.utils import (
-    gen_shapes,
-    sanitize_shape_rm,
-    get_device_grid_size,
-)
+from tests.sweep_framework.sweep_utils.utils import gen_func_with_cast_tt, gen_shapes, sanitize_shape_rm
 from tests.sweep_framework.sweep_utils.sharding_utils import (
-    gen_unary_sharded_spec,
+    gen_sharded_spec_unary,
     parse_sharding_spec,
+    invalidate_vector_sharding,
+    roundup,
+    divup,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-
+# Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
-
-Y, X = get_device_grid_size()
 
 random.seed(0)
 
@@ -36,26 +34,32 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "xfail": {
-        "input_spec": list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "TENSOR_HW"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "TENSOR_HW"))
-        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "BLOCK"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "BLOCK"))
-        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "HEIGHT"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "HEIGHT"))
-        + list(gen_unary_sharded_spec(16, 4, "ROW_MAJOR", "WIDTH"))
-        + list(gen_unary_sharded_spec(16, 4, "COL_MAJOR", "WIDTH")),
+    "nightly": {
+        "input_spec": gen_sharded_spec_unary(16, 4),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     },
 }
 
 
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Input to eltwise binary must be tilized"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and input_spec["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    input_spec = parse_sharding_spec(test_vector["input_spec"])
+    (
+        input_shape,
+        core_grid_size,
+        shard_orientation,
+        sharding_strategy,
+        tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
+        input_layout,
+    ) = input_spec
+    invlidated, output_str = invalidate_vector_sharding(*input_spec)
+    if invlidated:
+        return invlidated, output_str
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row Major layout and bfloat8_b are not supported"
     return False, None
 
 
@@ -66,7 +70,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_spec,
     input_a_dtype,
-    input_layout,
     *,
     device,
 ) -> list:
@@ -80,6 +83,7 @@ def run(
         sharding_strategy,
         tensor_hw_as_shard_shape,
         shard_height_mul_of_32,
+        input_layout,
     ) = parse_sharding_spec(input_spec)
     y, x = core_grid_size
     device_grid_size = ttnn.CoreGrid(y=y, x=x)
