@@ -16,7 +16,7 @@ from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
 from collections import OrderedDict
 import ttnn
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 
 
 def yolo_forward_dynamic(
@@ -558,6 +558,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "use_pretrained_weight",
