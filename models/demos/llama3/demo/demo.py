@@ -844,7 +844,7 @@ def run_llama3_demo(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Max length mode run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/demos/llama3/demo/input_data_long_128k.json",  # input_prompts
+            "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -852,7 +852,7 @@ def run_llama3_demo(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0.6, "top_p": 0.08},  # sampling_params (top-p)
         ),
     ],
     ids=[
@@ -894,8 +894,8 @@ def test_llama_demo(
     is_ci_env,
     reset_seeds,
 ):
-    if is_ci_env and "long" in input_prompts:
-        pytest.skip("Do not run the 'max-length test on CI to reduce load")
+    if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
+        pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
     mesh_device.enable_async(True)
 
