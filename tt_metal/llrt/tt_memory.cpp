@@ -29,40 +29,30 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
         elf.MakeExecuteInPlace();
     }
 
-    TT_ASSERT(elf.GetSegments().size() <= 2, "Unexpected number of segments");
-    TT_ASSERT(elf.GetSegments()[0].relocs.empty(), "Unexpected dynamic text relocations");
-    TT_ASSERT(elf.GetSegments()[1].relocs.empty(), "Unexpected dynamic data relocations");
-
-    text_size_ = elf.GetSegments()[0].contents.size() * sizeof(word_t);
-    text_addr_ = elf.GetSegments()[0].address;
-
-    // The ELF file puts the text segment first, but at least one
-    // memory user wants spans in ascending address order.
-    bool has_data = elf.GetSegments().size() == 2;
-    bool data_is_first = has_data && pack_type == Packing::SEPARATE && text_addr_ > elf.GetSegments()[1].address;
-    auto const& first = elf.GetSegments()[data_is_first];
-    link_spans_.emplace_back(first.address, first.contents.size());
-    data_.insert(data_.end(), first.contents.begin(), first.contents.end());
-
-    if (has_data) {
-        auto const& second = elf.GetSegments()[!data_is_first];
-        if (pack_type == Packing::CONTIGUOUS) {
-            if (first.lma + first.contents.size() * sizeof(word_t) != second.lma) {
-                TT_THROW(
-                    "{}: inconsistent load addresses prohibit contiguous packing, {}+{} != {}",
-                    path,
-                    first.lma,
-                    first.contents.size() * sizeof(word_t),
-                    second.lma);
-            }
-        } else {
-            link_spans_.emplace_back(second.address, 0);
+    // The ELF file puts the text segment first, but memory wants
+    // ordered spans.
+    // FIXME: Perhaps we can relax that?
+    uint32_t total_size = 0;
+    auto emit_segment = [&](ElfFile::Segment const& segment) {
+        TT_ASSERT(segment.relocs.empty(), "Unexpected dynamic relocations");
+        link_spans_.emplace_back(segment.address, segment.contents.size());
+        data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
+        total_size += segment.contents.size();
+    };
+    auto* text = &elf.GetSegments()[0];
+    for (auto& segment : std::span(elf.GetSegments()).subspan(1)) {
+        if (text && segment.address > text->address) {
+            emit_segment(*text);
+            text = nullptr;
         }
-        link_spans_.back().len += second.contents.size();
-        data_.insert(data_.end(), second.contents.begin(), second.contents.end());
+        emit_segment(segment);
+    }
+    if (text) {
+        emit_segment(*text);
     }
 
-    packed_size_ = data_.size() * sizeof(word_t);
+    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
+    set_packed_size(total_size * sizeof(uint32_t));
 }
 
 bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
