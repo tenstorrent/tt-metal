@@ -260,10 +260,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table(std::uint3
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_chip_id == dst_chip_id) {
                             // This entry represents chip to itself, should not be used by FW
-                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] = eth_chan_magic_values::ROUTE_TO_LOCAL_CHIP;
+                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] =
+                                src_chan_id;
                         } else if (target_direction == direction) {
                             // This entry represents an outgoing eth channel
-                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] = eth_chan_magic_values::OUTGOING_ETH_LINK;
+                            this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] =
+                                src_chan_id;
                         } else {
                             this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] =
                                 this->get_eth_chan_id(src_chan_id, eth_chans_in_target_direction);
@@ -303,10 +305,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table(std::uint3
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_mesh_id == dst_mesh_id) {
                             // This entry represents mesh to itself, should not be used by FW
-                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] = eth_chan_magic_values::ROUTE_TO_LOCAL_CHIP;
+                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] =
+                                src_chan_id;
                         } else if (target_direction == direction) {
                             // This entry represents an outgoing eth channel
-                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] = eth_chan_magic_values::OUTGOING_ETH_LINK;
+                            this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] =
+                                src_chan_id;
                         } else {
                             this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] =
                                 this->get_eth_chan_id(src_chan_id, eth_chans_in_target_direction);
@@ -408,13 +412,12 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
             }
             std::cout << std::endl;
 */
-            // TODO: use eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE when bug with queues is fixed, hardcoded to
-            // enable sanity testing
+
             tt::Cluster::instance().write_core(
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 physical_eth_core,
-                eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR,
+                eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE,
                 false);
         }
     }

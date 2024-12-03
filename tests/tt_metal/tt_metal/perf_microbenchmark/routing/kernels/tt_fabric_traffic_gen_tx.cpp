@@ -9,30 +9,15 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 // clang-format on
 
-
-/*
-constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
-constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
-constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
-constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead;
-constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
-
-// indexes of return values in test results buffer
-constexpr uint32_t PQ_TEST_STATUS_INDEX = 0;
-constexpr uint32_t PQ_TEST_WORD_CNT_INDEX = 2;
-constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
-constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
-constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
-*/
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
 static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 
-constexpr uint32_t req_buffer_start_addr = get_compile_time_arg_val(3);
-constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(4);
-constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(5);
+constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
+constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
+constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
 constexpr uint32_t router_x = get_compile_time_arg_val(6);
 constexpr uint32_t router_y = get_compile_time_arg_val(7);
 
@@ -53,25 +38,30 @@ static_assert(max_packet_size_words > 3, "max_packet_size_words must be greater 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(13);
 
 constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(14);
-constexpr pkt_dest_size_choices_t pkt_dest_size_choice = static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(15));
+constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
+    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(15));
 
 constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
+constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
 uint32_t max_packet_size_mask;
 
-// input_queue_rnd_state_t input_queue_state;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
+tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
-
+uint32_t target_address;
 
 
 uint64_t xy_local_addr;
 
+packet_header_t packet_header __attribute__((aligned(16)));
+
 // generates packets with random size and payload on the input side
-inline bool test_buffer_handler() {
+inline bool test_buffer_handler_async_wr() {
     if (input_queue_state.all_packets_done()) {
         return true;
     }
@@ -82,13 +72,13 @@ inline bool test_buffer_handler() {
     }
 
     // Each call to test_buffer_handler initializes only up to the end
-    // of the queue buffer, so we don't need to handle wrapping.
-    // TODO: we need to handle wrapping since header is 3 words now.
-    // if we have to wrap before next 3 words, header has to wrap.
+    // of the producer buffer. Since the header is 3 words, we need to handle
+    // split header cases, where the buffer has not enough space for the full header.
+    // In this case, we write as many words as space available, and remaining header words
+    // are written on next call.
     uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
     uint32_t words_to_init = std::min(free_words, test_producer.words_before_local_buffer_wrap());
     uint32_t words_initialized = 0;
-    uint32_t target_address = 0x100000;
     while (words_initialized < words_to_init) {
         if (input_queue_state.all_packets_done()) {
             break;
@@ -97,22 +87,53 @@ inline bool test_buffer_handler() {
         if (!input_queue_state.packet_active()) { // start of a new packet
             input_queue_state.next_packet(num_dest_endpoints, dest_endpoint_start_id, max_packet_size_words, max_packet_size_mask, total_data_words);
 
-            tt_l1_ptr packet_header_t* header_ptr =
-                reinterpret_cast<tt_l1_ptr packet_header_t*>(byte_wr_addr);
+            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
 
-            header_ptr->routing.flags = FORWARD;
-            header_ptr->routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
-            header_ptr->session.command = ASYNC_WR;
-            header_ptr->session.target_offset_l = target_address;
-            header_ptr->session.target_offset_h = 0x410;
-            target_address += header_ptr->routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
-            header_ptr->packet_parameters.misc_parameters.words[0] = input_queue_state.packet_rnd_seed;
+            packet_header.routing.flags = FORWARD;
+            packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
+            packet_header.routing.dst_mesh_id = 4;
+            packet_header.session.command = ASYNC_WR;
+            packet_header.session.target_offset_l = target_address;
+            packet_header.session.target_offset_h = 0x410;
+            target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
+            packet_header.packet_parameters.misc_parameters.words[1] = input_queue_state.packet_rnd_seed;
+            tt_fabric_add_header_checksum(&packet_header);
+            uint32_t words_left = words_to_init - words_initialized;
+            bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
+            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS;
+            if (split_header) {
+                header_words_to_init = words_left;
+            }
 
-            words_initialized += PACKET_HEADER_SIZE_WORDS;
-            input_queue_state.curr_packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
-            byte_wr_addr += PACKET_HEADER_SIZE_BYTES;
+            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                header_ptr[i] = ((uint32_t *)&packet_header)[i];
+            }
+
+            words_initialized += header_words_to_init;
+            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
+            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
         } else {
             uint32_t words_remaining = words_to_init - words_initialized;
+            uint32_t packet_words_initialized = input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
+            if (packet_words_initialized < PACKET_HEADER_SIZE_WORDS) {
+                tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+                uint32_t header_words_initialized = packet_words_initialized;
+                uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS - header_words_initialized;
+                uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
+                header_words_to_init = std::min(words_remaining, header_words_to_init);
+                for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                    header_ptr[i] = ((uint32_t *)&packet_header)[i + header_dword_index];
+                }
+                words_initialized += header_words_to_init;
+                words_remaining = words_to_init - words_initialized;
+                input_queue_state.curr_packet_words_remaining -= header_words_to_init;
+                byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
+                if (words_remaining == 0) {
+                    // no space left for packet data.
+                    break;
+                }
+            }
+
             uint32_t num_words = std::min(words_remaining, input_queue_state.curr_packet_words_remaining);
             if constexpr (!skip_pkt_content_gen) {
                 uint32_t start_val =
@@ -129,9 +150,90 @@ inline bool test_buffer_handler() {
     return false;
 }
 
+// generates packets with random size and payload on the input side
+inline bool test_buffer_handler_atomic_inc() {
+    if (input_queue_state.all_packets_done()) {
+        return true;
+    }
+
+    uint32_t free_words = test_producer.get_num_words_free();
+    if (free_words < PACKET_HEADER_SIZE_WORDS) {
+        return false;
+    }
+
+    uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
+    uint32_t words_to_init = std::min(free_words, test_producer.words_before_local_buffer_wrap());
+    uint32_t words_initialized = 0;
+    while (words_initialized < words_to_init) {
+        if (input_queue_state.all_packets_done()) {
+            break;
+        }
+
+        if (!input_queue_state.packet_active()) {  // start of a new packet
+            input_queue_state.next_inline_packet(total_data_words);
+
+            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+
+            packet_header.routing.flags = INLINE_FORWARD;
+            packet_header.routing.dst_mesh_id = 4;
+            packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+            packet_header.session.command = ATOMIC_INC;
+            packet_header.session.target_offset_l = target_address;
+            packet_header.session.target_offset_h = 0x410;
+            packet_header.packet_parameters.atomic_parameters.wrap_boundary = 31;
+            packet_header.packet_parameters.atomic_parameters.increment = 4;
+            tt_fabric_add_header_checksum(&packet_header);
+            uint32_t words_left = words_to_init - words_initialized;
+            bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
+            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS;
+            if (split_header) {
+                header_words_to_init = words_left;
+            }
+            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                header_ptr[i] = ((uint32_t*)&packet_header)[i];
+            }
+
+            words_initialized += header_words_to_init;
+            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
+            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
+        } else {
+            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+            uint32_t header_words_initialized =
+                input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
+            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS - header_words_initialized;
+            uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
+            uint32_t words_left = words_to_init - words_initialized;
+            header_words_to_init = std::min(words_left, header_words_to_init);
+
+            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                header_ptr[i] = ((uint32_t*)&packet_header)[i + header_dword_index];
+            }
+            words_initialized += header_words_to_init;
+            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
+            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
+        }
+    }
+    test_producer.advance_local_wrptr(words_initialized);
+    return false;
+}
+
+bool test_buffer_handler() {
+    if constexpr (test_command == ASYNC_WR) {
+        return test_buffer_handler_async_wr();
+    } else if constexpr (test_command == ATOMIC_INC) {
+        return test_buffer_handler_atomic_inc();
+    }
+}
+
 void kernel_main() {
 
     tt_fabric_init();
+    target_address = 0x100000;
+
+    uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+    noc_async_read_one_packet(
+        router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
+    noc_async_read_barrier();
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
@@ -142,6 +244,7 @@ void kernel_main() {
 
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
+    zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);
@@ -217,40 +320,19 @@ void kernel_main() {
             if (curr_packet_words_sent == curr_packet_size) {
                 curr_packet_words_sent = 0;
                 packet_count++;
-                if (packet_count >= 4) {
-                    break;
-                }
             }
+        } else if (test_producer.packet_corrupted) {
+            DPRINT << "Packet Header Corrupted: packet " << packet_count
+                   << " Addr: " << test_producer.get_local_buffer_read_addr() << ENDL();
+            break;
         } else if (all_packets_initialized) {
+            DPRINT << "all packets done" << ENDL();
             break;
         }
-        //words_flushed += output_queue_ptr->prev_words_in_flight_check_flush();
     }
-/*
-    if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00002;
-        if (!output_queue_ptr->output_barrier(timeout_cycles)) {
-            timeout = true;
-        }
-    }
-*/
+
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
-/*
-    if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00003;
-        progress_timestamp = get_timestamp_32b();
-        while (!output_queue_ptr->is_remote_finished()) {
-            if (timeout_cycles > 0) {
-                uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-                if (cycles_since_progress > timeout_cycles) {
-                    timeout = true;
-                    break;
-                }
-            }
-        }
-    }
-*/
     uint64_t num_packets = input_queue_state.get_num_packets();
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
     set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
@@ -261,14 +343,14 @@ void kernel_main() {
     set_64b_result(test_results, few_data_sent_iter, TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
-    if (!timeout) {
+    if (test_producer.packet_corrupted) {
+        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
+        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+    } else if (!timeout) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00004;
+        test_results[PQ_TEST_MISC_INDEX] = packet_count;
     } else {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
-        // these calls lead to code size issues?
-        // input_queue_ptr->dprint_object();
-        // output_queue_ptr->dprint_object();
     }
 }
