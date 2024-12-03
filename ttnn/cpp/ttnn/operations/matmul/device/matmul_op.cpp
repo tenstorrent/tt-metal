@@ -1045,7 +1045,7 @@ Tensor matmul(
     const std::optional<Tensor> optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    const bool is_optional_output_tensor = !optional_output_tensor.has_value();
+    const bool is_optional_output_tensor = optional_output_tensor.has_value();
 
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
