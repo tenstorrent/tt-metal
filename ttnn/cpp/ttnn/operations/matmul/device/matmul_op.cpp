@@ -1042,19 +1042,19 @@ Tensor matmul(
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
     const uint8_t queue_id,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor> optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    const bool is_optional_output_tensor_empty = !optional_output_tensor.has_value();
+    const bool is_optional_output_tensor = !optional_output_tensor.has_value();
 
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
-        if (is_optional_output_tensor_empty)
+        if (!is_optional_output_tensor)
             output_tensors = {
                 Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
         optional_input_tensors.push_back(std::nullopt);
-        if (is_optional_output_tensor_empty)
+        if (!is_optional_output_tensor)
             output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
@@ -1114,8 +1114,8 @@ void Matmul::validate(
         a_shape[-1],
         b_shape[-2]);
 
-    const bool is_optional_output_tensor_empty = !optional_output_tensors.empty() && !optional_output_tensors.at(0).has_value();
-    if (!is_optional_output_tensor_empty) {
+    const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+    if (!is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
         TT_FATAL(optional_output_tensor_shape == this->compute_output_shapes(input_tensors).at(0), "Shape of Optional Output Tensor showld match Output Tensor");
