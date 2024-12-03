@@ -264,10 +264,13 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         auto actual_cb_size = program->get_max_cb_memory_usage(device);
         DataType accum_dtype = fp32_accum ? DataType::FLOAT32 : DataType::BFLOAT16;
 
-        auto [calc_output_size, calc_CB_size] = this->estimate_L1_usage(input_tensor_a.dtype(), input_tensor_b.dtype(), output_tensor.dtype(), accum_dtype, input_tensor_bias.has_value());
+        auto [calc_output_size, calc_CB_size] = this->estimate_L1_usage(input_tensor_a, input_tensor_b, output_tensor, accum_dtype, input_tensor_bias.has_value());
         if(calc_CB_size>0) {
-            if(calc_CB_size != actual_cb_size)
-            tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
+            if(calc_CB_size != actual_cb_size) {
+                tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
+                if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
+                    TT_ASSERT(actual_cb_size==calc_CB_size);
+            }
         }
         if(post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
             tt::log_error(tt::LogOp, "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
@@ -277,11 +280,18 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     return program_with_cbs;
 }
 
-std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(DataType input_dtype, DataType weights_dtype, DataType output_dtype, DataType accum_dtype, bool enable_bias) const {
+std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(const Tensor& input_tensor,const Tensor &weights_tensor, const Tensor &output_tensor, DataType accum_dtype, bool enable_bias) const {
+    auto input_dtype = input_tensor.get_dtype();
+    auto weights_dtype = weights_tensor.get_dtype();
+    auto output_dtype = output_tensor.get_dtype();
+
     auto output_shape = sliding_window_config.get_output_shape();
     uint32_t batch_size = output_shape[0];
     uint32_t conv_output_h = output_shape[1];
     uint32_t conv_output_w = output_shape[2];
+
+    auto filter_hw = sliding_window_config.window_hw;
+    uint32_t input_channels = this->input_tensor_shape[3];
 
     uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
     uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
@@ -294,9 +304,6 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(DataType input_
 
     if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
     {
-
-
-
         uint32_t conv_output_c_per_core = this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH;
 
         uint32_t output_size_per_core_in_bytes = this->parallelization_config.per_core_out_matrix_width_ntiles * this->parallelization_config.per_core_out_matrix_height_ntiles * tt::tile_size(datatype_to_dataformat_converter(this->dtype));
@@ -345,6 +352,67 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(DataType input_
         return {output_size_per_core_in_bytes, total_CB_size};
     } else if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
 
+
+
+        uint32_t output_size = 0;
+        if(this->use_non_tile_height){
+            uint32_t total_height = conv_output_h * conv_output_w * batch_size;
+            output_size = total_height / this->parallelization_config.num_cores_nhw * this->output_channels;
+        } else {
+            output_size = this->parallelization_config.per_core_out_matrix_height_ntiles *
+                          this->parallelization_config.per_core_out_matrix_width_ntiles *
+                          output_tile_size;
+        }
+
+        uint32_t act_block_w_ntiles = this->block_config.act_block_w_ntiles;
+        uint32_t act_block_h_ntiles = this->block_config.act_block_h_ntiles;
+        uint32_t act_block_num_tiles = this->block_config.act_block_h_ntiles * act_block_w_ntiles;
+
+        uint32_t act_block_num_bytes = act_block_num_tiles * input_tile_size;
+        uint32_t tilized_act_block_num_bytes = act_block_num_tiles * output_tile_size;
+
+        uint32_t bias_block_num_bytes = this->parallelization_config.per_core_out_matrix_width_ntiles * bias_tile_size;
+
+        uint32_t weight_matrix_height = weights_tensor.get_legacy_shape()[2];
+        uint32_t weight_matrix_width = weights_tensor.get_legacy_shape()[3];
+        uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
+        uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
+
+        uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / this->parallelization_config.per_core_out_matrix_width_ntiles;
+
+        uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
+        uint32_t weight_block_h_ntiles = act_block_w_ntiles;
+
+        uint32_t act_block_cb_size =  act_block_h_ntiles * act_block_w_ntiles * input_tile_size /conv_act_c_blocks;
+        uint32_t tilzed_act_cb_size = act_block_h_ntiles * act_block_w_ntiles * output_tile_size /conv_act_c_blocks;
+        if(this->enable_split_reader) {
+            tilzed_act_cb_size *= 2;
+        }
+        uint32_t output_block_ntiles = this->parallelization_config.per_core_out_matrix_height_ntiles * this->parallelization_config.per_core_out_matrix_width_ntiles;
+        //CB 0
+        uint32_t cb0_size = act_block_cb_size; tt::log_debug(tt::LogOp, "CB0 Size: {}", cb0_size);
+
+        //CB 1
+        uint32_t cb1_size = filter_hw.first * weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size / conv_act_c_blocks; tt::log_debug(tt::LogOp, "CB1 Size: {}", cb1_size);
+
+        //CB 2
+        uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
+
+        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
+
+        //CB 24
+        uint32_t cb24_size = output_block_ntiles * partial_tile_size; tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
+        //CB 25
+        uint32_t cb25_size = tilzed_act_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
+
+
+        uint32_t cb26_size = 0;
+        //CB26
+        if(this->untilize_out) {
+            cb26_size = weight_block_w_ntiles * output_tile_size; tt::log_debug(tt::LogOp, "CB26 Size: {}", cb26_size);
+        }
+
+        return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb24_size + cb25_size + cb26_size};
     }
     return {0, 0};
 
