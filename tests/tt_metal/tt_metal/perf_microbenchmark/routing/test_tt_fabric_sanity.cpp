@@ -292,7 +292,7 @@ int main(int argc, char **argv) {
                 (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
                 tunneler_test_results_addr, // 44: test_results_addr
                 tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
+                0, //timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
             };
 
         auto tunneler_l_kernel = tt_metal::CreateKernel(
@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
                 (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
                 tunneler_test_results_addr, // 44: test_results_addr
                 tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
+                0, //timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
             };
 
         auto tunneler_r_kernel = tt_metal::CreateKernel(

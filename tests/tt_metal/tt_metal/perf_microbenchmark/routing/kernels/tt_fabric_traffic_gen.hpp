@@ -63,6 +63,7 @@ struct input_queue_raw_state_t {
                                 uint32_t dest_endpoint_start_id,
                                 uint32_t max_packet_size_words,
                                 uint64_t total_data_words) {
+        /*
         this->curr_packet_dest = this->num_dests_sent_last_packet + dest_endpoint_start_id;
         this->curr_packet_flags = TERMINATE;
         this->curr_packet_size_words = PACKET_HEADER_SIZE_WORDS;
@@ -70,9 +71,10 @@ struct input_queue_raw_state_t {
         this->data_words_input += this->curr_packet_size_words;
         this->num_packets++;
         this->num_dests_sent_last_packet++;
-        if (this->num_dests_sent_last_packet == num_dest_endpoints) {
+        */
+        //if (this->num_dests_sent_last_packet == num_dest_endpoints) {
             this->data_and_last_packets_done = true;
-        }
+        //}
     }
 
     inline bool start_of_packet() {
@@ -84,7 +86,8 @@ struct input_queue_raw_state_t {
     }
 
     inline bool all_packets_done() {
-        return this->data_and_last_packets_done && !this->packet_active();
+        //return this->data_and_last_packets_done && !this->packet_active();
+        return this->data_packets_done && !this->packet_active();
     }
 
     inline uint64_t get_data_words_input() {

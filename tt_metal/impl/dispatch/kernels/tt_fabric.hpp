@@ -304,7 +304,7 @@ typedef struct fvc_consumer_state {
     inline void advance_pull_wrptr(uint32_t num_words) {
         uint32_t temp = fvc_pull_wrptr + num_words;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         fvc_pull_wrptr = temp;
     }
@@ -312,7 +312,7 @@ typedef struct fvc_consumer_state {
     inline void advance_out_wrptr(uint32_t num_words) {
         uint32_t temp = fvc_out_wrptr + num_words;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         fvc_out_wrptr = temp;
     }
@@ -320,7 +320,7 @@ typedef struct fvc_consumer_state {
     inline void advance_out_rdptr(uint32_t num_words) {
         uint32_t temp = fvc_out_rdptr + num_words;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         fvc_out_rdptr = temp;
     }
@@ -471,7 +471,7 @@ typedef struct fvc_producer_state {
     inline uint32_t inc_ptr_with_wrap(uint32_t ptr, uint32_t inc) {
         uint32_t temp = ptr + inc;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         return temp;
     }
@@ -685,8 +685,11 @@ typedef struct fvc_producer_state {
                 }
 
             }
-        } else {
+        } else if (current_packet_header.routing.flags == FORWARD ) {
             words_processed = pull_data_from_fvc_buffer<fvc_mode>();
+        } else {
+            volatile uint32_t * temp = (volatile uint32_t *)0xffb2010c;
+            temp[0] = 0xdead2222;
         }
         return words_processed;
     }
@@ -743,6 +746,21 @@ void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
         buf[index] = val >> 32;
         buf[index+1] = val & 0xFFFFFFFF;
     }
+}
+
+inline void req_buf_ptr_advance(chan_ptr* ptr) {
+  ptr->ptr = (ptr->ptr + 1) & CHAN_REQ_BUF_PTR_MASK;
+}
+
+inline void req_buf_advance_wrptr(chan_req_buf* req_buf) {
+  req_buf_ptr_advance(&(req_buf->wrptr));
+}
+
+inline void req_buf_advance_rdptr(chan_req_buf* req_buf) {
+  //clear valid before incrementing read pointer.
+  uint32_t rd_index = req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
+  req_buf->chan_req[rd_index].bytes[47] = 0;
+  req_buf_ptr_advance(&(req_buf->rdptr));
 }
 
 inline bool req_buf_ptrs_empty(uint32_t wrptr, uint32_t rdptr) {
@@ -835,7 +853,7 @@ inline uint32_t get_num_words_to_pull(volatile pull_request_t *pull_request, fvc
 
 inline uint32_t pull_data_to_fvc_buffer(volatile pull_request_t *pull_request, fvc_consumer_state_t *fvc_consumer_state) {
 
-
+    volatile uint32_t * temp = (volatile uint32_t *)0xffb2010c;
     if (fvc_consumer_state->packet_in_progress == 0) {
         uint32_t size = pull_request->size;
         fvc_consumer_state->packet_words_remaining = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
@@ -845,6 +863,7 @@ inline uint32_t pull_data_to_fvc_buffer(volatile pull_request_t *pull_request, f
     uint32_t num_words_to_pull = get_num_words_to_pull(pull_request, fvc_consumer_state);
     bool full_packet_sent = (num_words_to_pull == fvc_consumer_state->packet_words_remaining);
     if (num_words_to_pull == 0) {
+        temp[0] = 0xdead1111;
         return 0;
     }
 
@@ -952,7 +971,7 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     //This will happen, if the producer did not have all the availale data in its buffer when
     //the pull request was first issued. In this case, as the producer gets more data in its buffer,
     //it updates write pointer in the consumer request buffer pull request entry.
-    uint64_t wr_ptr_addr = noc_addr = offsetof(pull_request_t, wr_ptr);
+    uint64_t wr_ptr_addr = noc_addr + offsetof(pull_request_t, wr_ptr);
     return wr_ptr_addr;
 }
 
