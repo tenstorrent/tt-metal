@@ -14,6 +14,7 @@
 #include <functional>
 #include <optional>
 #include <stdexcept>
+#include <ttnn/tensor/tensor.hpp>
 
 namespace {
 
@@ -182,7 +183,11 @@ tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevic
 
 template <>
 tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
-    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, Layout layout) {
+    const std::vector<float>& buffer,
+    const ttnn::Shape& shape,
+    ttnn::distributed::MeshDevice* device,
+    Layout layout,
+    const std::optional<MeshMapper> config = std::nullopt) {
     assert(device != nullptr);
     const DataType data_type = DataType::BFLOAT16;
     MemoryConfig output_mem_config{};
@@ -194,7 +199,8 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     }
     auto owned_buffer = create_owned_buffer_from_vector_of_floats(buffer, data_type);
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
+    auto output = tt::tt_metal::Tensor(device->num_devices(), config);
+    // auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
 
     auto to_device_even_fast = [&]() {
         output = ttnn::to_device(output, device, output_mem_config);
