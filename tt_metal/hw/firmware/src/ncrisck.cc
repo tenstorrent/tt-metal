@@ -42,7 +42,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
-    } 
+    }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
