@@ -34,7 +34,7 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
         program, "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = kernel_defines});
-    vector<uint32_t> trisc_kernel_args = {};
+    std::vector<uint32_t> trisc_kernel_args = {};
     tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events_compute.cpp",
         all_cores,
