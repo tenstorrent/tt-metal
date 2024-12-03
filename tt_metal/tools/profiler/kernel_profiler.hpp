@@ -276,7 +276,7 @@ namespace kernel_profiler{
 
     inline __attribute__((always_inline)) void quick_push ()
     {
-#if defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) 
         SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
         mark_time_at_index_inlined(wIndex, hash);
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
@@ -406,6 +406,10 @@ namespace kernel_profiler{
     template<uint32_t data_id, bool dispatch=false>
     inline __attribute__((always_inline)) void timeStampedData(uint64_t data)
     {
+        if (not bufferHasRoom<dispatch>())
+        {
+            quick_push();
+        }
         if (bufferHasRoom<dispatch>())
         {
             mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
@@ -413,6 +417,11 @@ namespace kernel_profiler{
             profiler_data_buffer[myRiscID][wIndex++] = data >> 32;
             profiler_data_buffer[myRiscID][wIndex++] = (data << 32) >> 32;
         }
+    }
+
+    void timeStampedDataNoID(uint64_t data)
+    {
+        timeStampedData<0>(data);
     }
 
     template<bool dispatch=false>

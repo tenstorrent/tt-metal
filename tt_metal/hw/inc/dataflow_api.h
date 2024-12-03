@@ -139,6 +139,10 @@ uint32_t get_bank_offset(uint32_t bank_index) {
 
 }  // namespace addrgen
 
+// if PROFILE_NOC_EVENTS is defined, enables RECORD* macros to tracking noc events via kernel profiler 
+// otherwise this just defines empty RECORD_* macros with no other effects
+#define PROFILE_NOC_EVENTS 1 
+#include "tools/profiler/noc_event_profiler.hpp"
 
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via SetRuntimeArgs() API.
@@ -1245,23 +1249,27 @@ FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedAddr
     return s.get_noc_addr(id, offset, noc);
 }
 
-template <bool DRAM>
+template <bool DRAM, bool enable_noc_tracing = true>
 FORCE_INLINE void noc_async_read_page(
     const uint32_t id, const InterleavedAddrGen<DRAM>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_READ_EVENT_WITH_ID(id,s.page_size);
+
     s.noc_async_read_page(id, dst_local_l1_addr, offset, noc);
 }
 
-template <bool DRAM, uint32_t tile_hw>
+template <bool DRAM, uint32_t tile_hw, bool enable_noc_tracing = true>
 FORCE_INLINE void noc_async_read_tile(
     const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_READ_EVENT_WITH_ID(id,s.page_size);
+
     s.noc_async_read_tile(id, dst_local_l1_addr, offset, noc);
 }
 
@@ -1283,12 +1291,13 @@ FORCE_INLINE void noc_async_read_tile(
  * | dst_noc_addr      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO(insert a reference  to what constitutes valid coords) | True     |
  * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
  */
-template<uint32_t max_page_size=NOC_MAX_BURST_SIZE + 1>
+template<uint32_t max_page_size=NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true>
 inline
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size);
     } else {
+        //RECORD_NOC_WRITE_EVENT_WITH_ADDR(dst_noc_addr,size);
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr,size);
         ncrisc_noc_fast_write_any_len(
@@ -1306,9 +1315,11 @@ void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr
     }
 }
 
-template <bool DRAM, uint32_t tile_hw>
+template <bool DRAM, uint32_t tile_hw, bool enable_noc_tracing = true>
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    RECORD_NOC_WRITE_EVENT_WITH_ID(id,s.page_size);
+
     s.noc_async_write_tile(id, src_local_l1_addr, noc);
 }
 
@@ -1582,7 +1593,10 @@ void noc_async_write_multicast_exclude_region(
  *
  * Return value: None
  */
+template <bool enable_noc_tracing = true>
+FORCE_INLINE
 void noc_async_read_barrier(uint8_t noc = noc_index) {
+    RECORD_NOC_READ_BARRIER();
     WAYPOINT("NRBW");
     // BH cache is write-through so reader must invalidate if reading any address that was previously read
     do {
@@ -1599,8 +1613,10 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  *
  * Return value: None
  */
+template <bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
+    RECORD_NOC_WRITE_BARRIER();
     WAYPOINT("NWBW");
     while (!ncrisc_noc_nonposted_writes_flushed(noc))
         ;
