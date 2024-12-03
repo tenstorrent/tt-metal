@@ -35,11 +35,11 @@ tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
 # Testing scripts and infra
 
 conftest.py @tenstorrent/metalium-developers-infra
-/conftest.py @tt-rkim @cfjchu @SeanNijjar
+/conftest.py @cfjchu @SeanNijjar @tenstorrent/metalium-developers-infra
 
 tests/scripts/run_pre_post_commit_regressions.sh @tenstorrent/metalium-developers-infra
 tests/scripts/run_tests.sh @tenstorrent/metalium-developers-infra
-tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @tt-aho @TT-BrianLiu
+tests/scripts/run_pre_post_commit_regressions_multi_device.sh @aliuTT @tt-aho @TT-BrianLiu @tenstorrent/metalium-developers-infra
 tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tenstorrent/metalium-developers-infra
 tests/scripts/run_models.sh @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/ @tenstorrent/metalium-developers-infra
@@ -76,7 +76,7 @@ sfpi/ @pgkeller
 
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
-tt_metal/**/profiler/**/CMakeLists.txt @tt-rkim @mo-tenstorrent
+tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tests/tt_metal/tools/profiler/ @mo-tenstorrent
 tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent
 docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent
