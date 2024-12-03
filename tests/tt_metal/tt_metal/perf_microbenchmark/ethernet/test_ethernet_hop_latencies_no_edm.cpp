@@ -29,6 +29,9 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 using tt::tt_metal::Device;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
