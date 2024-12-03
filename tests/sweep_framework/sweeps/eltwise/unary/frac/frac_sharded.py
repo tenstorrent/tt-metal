@@ -29,9 +29,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(12, max_tensor_size_per_core=32 * 1024, layouts=["TILE_LAYOUT"]),
+        "input_spec": gen_sharded_spec_unary(12, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "lambd": [0.5, 1],
     },
 }
 
@@ -60,7 +59,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_spec,
     input_a_dtype,
-    lambd,
     *,
     device,
 ) -> list:
@@ -83,8 +81,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_op = ttnn.get_golden_function(ttnn.softshrink)
-    torch_output_tensor = torch_op(torch_input_tensor_a, lambd)
+    torch_op = ttnn.get_golden_function(ttnn.frac)
+    torch_output_tensor = torch_op(torch_input_tensor_a)
 
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
@@ -103,7 +101,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.softshrink(input_tensor_a, lambd=lambd, memory_config=sharded_config)
+    output_tensor = ttnn.frac(input_tensor_a, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 

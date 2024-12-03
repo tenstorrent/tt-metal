@@ -42,9 +42,11 @@ on:
           - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
+          - eltwise.unary.frac.frac_sharded
           - eltwise.unary.ceil.ceil
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
+          - eltwise.unary.trunc.trunc_sharded
           - eltwise.unary.floor.floor
           - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
