@@ -876,6 +876,8 @@ void EnqueueProgramCommand::assemble_device_commands(
         }
     }
 
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+
     const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
     const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
     std::vector<std::pair<uint32_t, uint32_t>> mcast_cb_payload;
@@ -883,7 +885,7 @@ void EnqueueProgramCommand::assemble_device_commands(
     uint32_t aligned_cb_config_size_bytes = 0;
     std::vector<std::vector<uint32_t>> cb_config_payloads(
         num_multicast_cb_sub_cmds,
-        std::vector<uint32_t>(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS, 0));
+        std::vector<uint32_t>(program.get_program_config(index).cb_size / sizeof(uint32_t), 0));
     std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_cb_config_sub_cmds;
     std::vector<std::pair<const void*, uint32_t>> multicast_cb_config_data;
     if (num_multicast_cb_sub_cmds > 0) {
@@ -891,14 +893,15 @@ void EnqueueProgramCommand::assemble_device_commands(
         multicast_cb_config_data.reserve(num_multicast_cb_sub_cmds);
         program_command_sequence.circular_buffers_on_core_ranges.resize(num_multicast_cb_sub_cmds);
         uint32_t i = 0;
-        uint32_t max_overall_base_index = 0;
+        uint32_t max_overall_index = 0;
+        uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
         for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
             const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_coord);
             const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_coord);
 
             const uint32_t num_receivers = core_range.size();
             auto& cb_config_payload = cb_config_payloads[i];
-            uint32_t max_base_index = 0;
+            uint32_t max_index = 0;
             const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
             program_command_sequence.circular_buffers_on_core_ranges[i].reserve(
                 circular_buffers_on_corerange.size());
@@ -906,31 +909,35 @@ void EnqueueProgramCommand::assemble_device_commands(
                 program_command_sequence.circular_buffers_on_core_ranges[i].emplace_back(cb);
                 const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                 const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-                for (const auto& buffer_index : cb->buffer_indices()) {
+                for (const auto& buffer_index : cb->local_buffer_indices()) {
                     // 1 cmd for all 32 buffer indices, populate with real data for specified indices
-
                     // cb config payload
-                    const uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                    const uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                     cb_config_payload[base_index] = cb_address;
                     cb_config_payload[base_index + 1] = cb_size;
                     cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
                     cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-                    max_base_index = std::max(max_base_index, base_index);
+                    max_index = std::max(max_index, base_index + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG);
+                }
+                for (const auto& buffer_index : cb->remote_buffer_indices()) {
+                    const uint32_t base_index =
+                        remote_offset_index +
+                        (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                    cb_config_payload[base_index] = cb->config_address();
+                    cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
+                    max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 }
             }
             multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
                     this->noc_index, CoreRange(physical_start, physical_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
-            multicast_cb_config_data.emplace_back(
-                cb_config_payload.data(),
-                (max_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t));
-            max_overall_base_index = std::max(max_overall_base_index, max_base_index);
+            multicast_cb_config_data.emplace_back(cb_config_payload.data(), max_index * sizeof(uint32_t));
+            max_overall_index = std::max(max_overall_index, max_index);
             i++;
         }
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-        cb_config_size_bytes =
-            (max_overall_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t);
+        cb_config_size_bytes = max_overall_index * sizeof(uint32_t);
         aligned_cb_config_size_bytes = align(cb_config_size_bytes, l1_alignment);
         cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
             num_multicast_cb_sub_cmds,
@@ -1160,7 +1167,7 @@ void EnqueueProgramCommand::assemble_device_commands(
 
     // Semaphores
     // Multicast Semaphore Cmd
-    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (uint32_t i = 0; i < num_multicast_semaphores; ++i) {
         uint32_t curr_sub_cmd_idx = 0;
         for (const auto& [num_sub_cmds_in_cmd, multicast_sem_payload_sizeB] : multicast_sem_payload[i]) {
@@ -1357,20 +1364,28 @@ void EnqueueProgramCommand::update_device_commands(
     const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs) {
     uint32_t i = 0;
     ZoneScopedN("program_loaded_on_device");
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
             const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-            for (const auto& buffer_index : cb->buffer_indices()) {
+            for (const auto& buffer_index : cb->local_buffer_indices()) {
                 // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
                 // cb config payload
-                uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                 cb_config_payload[base_index] = cb_address;
                 cb_config_payload[base_index + 1] = cb_size;
                 cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
                 cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+            }
+            for (const auto& buffer_index : cb->remote_buffer_indices()) {
+                const uint32_t base_index = remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                cb_config_payload[base_index] = cb->config_address();
+                cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
             }
         }
         i++;

@@ -106,6 +106,10 @@ CoreType Kernel::get_kernel_core_type() const {
 
 const string &Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
 
+void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
+    this->defines_.insert(defines.begin(), defines.end());
+}
+
 void Kernel::process_defines(const std::function<void(const string &define, const string &value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
