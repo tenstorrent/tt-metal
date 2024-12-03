@@ -32,4 +32,11 @@ void kernel_main() {
 
     ASSERT(large_msg > DPRINT_BUFFER_SIZE);
     DPRINT << "(" << core_x << "," << core_y << "): " << large_msg << ENDL();
+
+    const char* msg_with_newlines =
+        "This DPRINT message\n"
+        "contains several newline characters\n"
+        "and should be displayed over multiple lines.\n";
+
+    DPRINT << "(" << core_x << "," << core_y << "): " << msg_with_newlines;
 }

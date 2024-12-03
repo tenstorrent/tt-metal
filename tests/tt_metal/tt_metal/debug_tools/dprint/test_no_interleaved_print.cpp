@@ -45,7 +45,16 @@ const std::vector<string>& golden_output = {
     "found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars "
     "and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability "
     "to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the "
-    "little mouse learned that bravery and kindness can change the world."};
+    "little mouse learned that bravery and kindness can change the world.",
+    "(0,0): This DPRINT message",
+    "contains several newline characters",
+    "and should be displayed over multiple lines.",
+    "(0,1): This DPRINT message",
+    "contains several newline characters",
+    "and should be displayed over multiple lines.",
+    "(0,2): This DPRINT message",
+    "contains several newline characters",
+    "and should be displayed over multiple lines."};
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     std::vector<CoreCoord> cores;

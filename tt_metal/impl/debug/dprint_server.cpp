@@ -174,6 +174,8 @@ private:
     // A counter to keep track of how many iterations the print server has gone through without
     std::atomic<int> wait_loop_iterations_ = 0;
 
+    std::map<HartKey, DPrintTypeID, HartKeyComparator> risc_to_prev_type_;
+
     ofstream* outfile_ = nullptr;  // non-cout
     ostream* stream_ = nullptr;    // either == outfile_ or is &cout
 
@@ -217,14 +219,16 @@ private:
 
     ostream* GetOutputStream(const HartKey& hart_key);
 
+    void ResetIntermediateStream(const HartKey& hart_key);
+
     // Stores the last value of setw, so that array elements can reuse the width.
     char most_recent_setw = 0;
 };
 
-static void ResetStream(ostringstream* stream) {
-    stream->str("");
-    stream->clear();
-}  // ResetStream
+static bool StreamEndsWithNewlineChar(const ostringstream* stream) {
+    const string stream_str = stream->str();
+    return !stream_str.empty() && stream_str.back() == '\n';
+}  // StreamEndsWithNewlineChar
 
 static void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
     TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
@@ -794,6 +798,11 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     char val = 0;
 
     HartKey hart_key{chip_id, logical_core, hart_id};
+
+    if (!risc_to_prev_type_[hart_key]) {
+        risc_to_prev_type_[hart_key] = DPrintTypeID_Count;
+    }
+
     if (!risc_to_intermediate_stream_[hart_key]) {
         risc_to_intermediate_stream_[hart_key] = new ostringstream;
     }
@@ -853,10 +862,8 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
         constexpr uint32_t bufsize = sizeof(DebugPrintMemLayout::data);
         // parse the input codes
-        const char* cptr = nullptr;
-        int nlen = 0;
         while (rpos < wpos) {
-            auto code = static_cast<DPrintTypeID>(l->data[rpos++]);
+            DPrintTypeID code = static_cast<DPrintTypeID>(l->data[rpos++]);
             TT_ASSERT(rpos <= bufsize);
             uint8_t sz = l->data[rpos++];
             TT_ASSERT(rpos <= bufsize);
@@ -868,21 +875,40 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
             // we are sharing the same output file between debug print threads for multiple cores
             switch (code) {
                 case DPrintCSTR:  // const char*
-                    // terminating zero was included in size and should be present in the buffer
-                    cptr = reinterpret_cast<const char*>(ptr);
-                    nlen = strnlen(cptr, sizeof(DebugPrintMemLayout::data));
-                    if (nlen >= 200) {
+                {
+                    // null terminating char was included in size and should be present in the buffer
+                    const char* cptr = reinterpret_cast<const char*>(ptr);
+                    const size_t cptr_len = strnlen(cptr, sizeof(DebugPrintMemLayout::data) - 2);
+                    if (cptr_len == sizeof(DebugPrintMemLayout::data) - 2) {
                         *intermediate_stream << "STRING BUFFER OVERFLOW DETECTED\n";
                         TransferToAndFlushOutputStream(hart_key, intermediate_stream);
                     } else {
+                        const char* newline_pos = strchr(cptr, '\n');
+                        bool contains_newline = newline_pos != nullptr;
+                        while (contains_newline) {
+                            const char* pos_after_newline = newline_pos + 1;
+                            const uint32_t substr_len = pos_after_newline - cptr;
+                            char substr_upto_newline[substr_len + 1];
+                            strncpy(substr_upto_newline, cptr, substr_len);
+                            substr_upto_newline[substr_len] = '\0';
+                            *intermediate_stream << substr_upto_newline;
+                            TransferToAndFlushOutputStream(hart_key, intermediate_stream);
+                            cptr = pos_after_newline;
+                            newline_pos = strchr(cptr, '\n');
+                            contains_newline = newline_pos != nullptr;
+                        }
                         *intermediate_stream << cptr;
                     }
-                    AssertSize(sz, strlen(cptr) + 1);
+                    AssertSize(sz, cptr_len + 1);
                     break;
+                }
                 case DPrintTILESLICE: PrintTileSlice(intermediate_stream, ptr); break;
 
                 case DPrintENDL:
-                    *intermediate_stream << endl;
+                    if (risc_to_prev_type_[hart_key] != DPrintTILESLICE ||
+                        !StreamEndsWithNewlineChar(intermediate_stream)) {
+                        *intermediate_stream << '\n';
+                    }
                     TransferToAndFlushOutputStream(hart_key, intermediate_stream);
                     AssertSize(sz, 1);
                     break;
@@ -1023,6 +1049,8 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         phys_core.y);
             }
 
+            risc_to_prev_type_[hart_key] = code;
+
             rpos += sz;  // parse the payload size
             TT_ASSERT(rpos <= wpos);
 
@@ -1139,7 +1167,7 @@ void DebugPrintServerContext::TransferToAndFlushOutputStream(
     const string& intermediate_stream_data = intermediate_stream->str();
     ostream* output_stream = GetOutputStream(hart_key);
     *output_stream << intermediate_stream_data << flush;
-    ResetStream(intermediate_stream);
+    ResetIntermediateStream(hart_key);
 }  // TransferToAndFlushOutputStream
 
 ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
@@ -1170,6 +1198,11 @@ ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
 
     return output_stream;
 }  // GetOutputStream
+
+void DebugPrintServerContext::ResetIntermediateStream(const HartKey& hart_key) {
+    risc_to_intermediate_stream_[hart_key]->str("");
+    risc_to_intermediate_stream_[hart_key]->clear();
+}  // ResetIntermediateStream
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
 bool DebugPrintServerContext::ProfilerIsRunning = false;

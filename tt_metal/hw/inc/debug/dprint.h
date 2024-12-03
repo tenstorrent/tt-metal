@@ -389,7 +389,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
                 wpos += code_sz;
                 printbuf[wpos] = curr_payload_size;
                 wpos += sz_sz;
-                for (uint32_t j = 0; j < curr_payload_size - 1; j++) {  // might be the issue
+                for (uint32_t j = 0; j < curr_payload_size - 1; j++) {
                     printbuf[wpos + j] = *valaddr;
                     valaddr++;
                 }
