@@ -253,13 +253,14 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                     .set_page_size(matmul_partials_cb, out_tile_size);
             if (output.is_sharded()) {
                 cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
+            } else {
+                log_debug(
+                    LogOp,
+                    "Matmul Partials CB: {}, npages: {}, pagesize: {}",
+                    matmul_partials_cb,
+                    num_output_tiles,
+                    out_tile_size);
             }
-            log_debug(
-                LogOp,
-                "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-                matmul_partials_cb,
-                num_output_tiles,
-                out_tile_size);
             cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
         } else {
             // Separate buffer if not same data format
