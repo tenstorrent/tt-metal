@@ -101,6 +101,50 @@ Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device
 }
 
 template <typename T>
+static Tensor full(
+    uint8_t queue_id,
+    const tt::tt_metal::LegacyShape& shape,
+    T value,
+    const Layout layout,
+    const std::vector<Device*>& devices,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> optional_output_tensor) {
+    constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
+    TensorSpec tensor_spec(
+        shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout), MemoryConfig{}, shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.padded_shape().volume());
+    // TODO: 15061 - Generalize the header to support generic vector / view types.
+    std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
+
+    if (!optional_output_tensor.has_value()) {
+        auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+        if (!devices.empty()) {
+            output = output.to(devices, output_mem_config);
+        }
+        return output;
+    } else {
+        const auto buffers = optional_output_tensor->buffers();
+        const bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+
+        for (auto* buffer : buffers) {
+            if (using_fast_dispatch) {
+                auto& cmd_queue = buffer->device()->command_queue(queue_id);
+                if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
+                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.get_ptr(), /*blocking=*/false);
+                } else {
+                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
+                }
+            } else {
+                tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
+            }
+        }
+
+        return *optional_output_tensor;
+    }
+}
+
+template <typename T>
 inline ttnn::Tensor full_impl(
     uint8_t queue_id,
     const ttnn::Shape& shape,
@@ -122,8 +166,19 @@ inline ttnn::Tensor full_impl(
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
-    return numpy::full_impl(
-        queue_id, shape_value, fill_value, dtype_value, layout_value, workers, mem_cfg, optional_output_tensor);
+    auto concrete_full = [&]<typename FillValueType>(FillValueType concrete_fill_value) {
+        return full<FillValueType>(
+            queue_id, shape_value, concrete_fill_value, layout_value, workers, mem_cfg, optional_output_tensor);
+    };
+
+    switch (dtype_value) {
+        case DataType::UINT8: return concrete_full(static_cast<uint8_t>(fill_value));
+        case DataType::UINT16: return concrete_full(static_cast<uint16_t>(fill_value));
+        case DataType::UINT32: return concrete_full(static_cast<uint32_t>(fill_value));
+        case DataType::FLOAT32: return concrete_full(static_cast<float>(fill_value));
+        case DataType::BFLOAT16: return concrete_full(static_cast<::bfloat16>(static_cast<float>(fill_value)));
+        default: TT_THROW("Unsupported DataType!");
+    }
 }
 
 template <typename T>
