@@ -108,6 +108,9 @@ int main() {
     //device_setup();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
 
     deassert_all_reset(); // Bring all riscs on eth cores out of reset
     mailboxes->go_message.signal = RUN_MSG_DONE;
@@ -170,13 +173,12 @@ int main() {
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
-
-#ifndef ARCH_BLACKHOLE
-            while (1) {
-                RISC_POST_HEARTBEAT(heartbeat);
-            }
-#endif
         }
+#ifndef ARCH_BLACKHOLE
+        while (1) {
+            RISC_POST_HEARTBEAT(heartbeat);
+        }
+#endif
     }
 
     return 0;

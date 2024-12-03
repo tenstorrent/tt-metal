@@ -116,6 +116,7 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
     uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
     while (!all_outputs_finished && !timeout) {
+        DeviceZoneScopedND("ETH-TUNNELER");
         iter++;
         if (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;

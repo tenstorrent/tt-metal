@@ -176,6 +176,7 @@ void kernel_main() {
     uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
     uint32_t heartbeat = 0;
     while (!dest_finished && !timeout) {
+        DeviceZoneScopedND("PACKET-MUX");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
         if (timeout_cycles > 0) {
