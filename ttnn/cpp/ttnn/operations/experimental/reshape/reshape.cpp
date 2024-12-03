@@ -34,15 +34,12 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
 
-
-namespace ttnn{
-
-namespace operations::experimental::reshape {
+namespace ttnn::operations::experimental::reshape {
 ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("ttnn::experimental::reshape", input_tensor, new_shape);
+    GraphTracker::instance().track_function_start("ttnn::experimental::unsafe_view", input_tensor, new_shape);
     const auto& new_padded_shape = new_shape.padded_shape();
-    const auto tile = input_tensor.get_tensor_spec().tile();
+
     TT_ASSERT(
         input_tensor.volume() == new_padded_shape.volume(),
         "{} != {}",
@@ -52,7 +49,7 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
         TT_ASSERT(
             new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 &&
             new_padded_shape[-1] % tile.get_tile_shape()[1] == 0 &&
-            "Expected a multiple of 32 for H, W (or -1 evaluating to such) in ttnn::experimental::reshape()!");
+            "Expected a multiple of 32 for H, W (or -1 evaluating to such) in ttnn::experimental::unsafe_view()!");
     }
     auto output = std::visit(
         [&input_tensor, &new_shape, &tile](auto&& storage) -> Tensor {
@@ -82,7 +79,7 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
                         DeviceBuffer device_buffer = device_storage.get_buffer();
                         device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
                         device_storage.insert_buffer(device_buffer);
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
                     } else {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         DeviceBuffer device_buffer = device_storage.get_buffer();
@@ -104,13 +101,20 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
                         device_buffer->set_shard_spec(shard_spec_buffer);
                         device_storage.insert_buffer(device_buffer);
 
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
                     }
                 } else {
+                    const auto tile = input_tensor.get_tensor_spec().tile();
                     return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
                 }
             } else {
-                return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                    return Tensor(
+                        tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
+                } else {
+                    const auto tile = input_tensor.get_tensor_spec().tile();
+                    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                }
             }
         },
         input_tensor.get_storage());
@@ -122,12 +126,11 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
 
 
 ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
-    return tensor_reshape(tensor, shape);
+    return tensor_reshape(tensor, ttnn::Shape(shape.view()));
 }
 
 ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     return tensor_reshape(tensor, shape);
 }
 
-}  // namespace operations::experimental::reshape
-}  //namespace ttnn
+}  // namespace ttnn::operations::experimental::reshape
