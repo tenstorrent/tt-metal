@@ -737,11 +737,11 @@ template <typename DataType>
 void* get_raw_host_data_ptr(const Tensor& tensor) {
     return std::visit(
         tt::stl::overloaded{
-            [](OwnedStorage& s) {
+            [](const OwnedStorage& s) {
                 auto buffer = owned_buffer::get_as<DataType>(s.buffer);
                 return buffer.data();
             },
-            [](BorrowedStorage& s) {
+            [](const BorrowedStorage& s) {
                 if constexpr (
                     std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
                     std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
@@ -752,7 +752,8 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
                     TT_THROW("Borrowed storage doesn't support this data type");
                 }
             },
-            [](auto&&) -> void* { TT_THROW("Device storage doesn't support this data type"); }},
+            [](auto&&) -> void* { TT_THROW("Device storage doesn't support this data type"); },
+        },
         tensor.get_storage());
 }
 }  // namespace detail
