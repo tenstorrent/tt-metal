@@ -28,7 +28,7 @@ ttnn::Tensor ExecuteUpSample::invoke(
                 scale_w = sf;
             } else if constexpr (std::is_same_v<T, tt::tt_metal::Array2D>) {
                 scale_h = sf.at(0);
-                scale_w = sf.at(0);
+                scale_w = sf.at(1);
             } else {
                 // static_assert(false, "Unsupported scale factor");
                 static_assert(sizeof(T) != 0, "Type check failed.");
