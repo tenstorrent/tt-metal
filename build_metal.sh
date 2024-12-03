@@ -177,6 +177,7 @@ echo "INFO: Enable Unity builds: $unity_builds"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
+cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 
