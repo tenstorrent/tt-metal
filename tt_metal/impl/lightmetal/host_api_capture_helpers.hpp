@@ -122,6 +122,15 @@ inline void captureCreateBuffer(std::shared_ptr<Buffer> buffer, const Interleave
     captureCommand(tt::target::CommandType::CreateBufferCommand, cmd_variant.Union());
 }
 
+inline void captureDeallocateBuffer(Buffer *buffer) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+    auto buffer_global_id = ctx.getGlobalId(buffer);
+    log_info(tt::LogMetalTrace, "{} : buffer_global_id: {} size: {} address: {}", __FUNCTION__, buffer_global_id, buffer->size(), buffer->address());
+    captureCommand(tt::target::CommandType::DeallocateBufferCommand,
+        tt::target::CreateDeallocateBufferCommand(ctx.getBuilder(), buffer_global_id).Union());
+}
+
 
 inline void captureEnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking) {
     auto& ctx = LightMetalCaptureContext::getInstance();

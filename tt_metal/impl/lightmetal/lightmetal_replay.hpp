@@ -23,6 +23,7 @@ namespace tt::target {
     struct EnqueueTraceCommand;
     struct LoadTraceCommand;
     struct CreateBufferCommand;
+    struct DeallocateBufferCommand;
     struct EnqueueWriteBufferCommand;
     struct EnqueueReadBufferCommand;
     struct FinishCommand;
@@ -61,6 +62,7 @@ public:
     void execute(tt::target::ReplayTraceCommand const *command);
     void execute(tt::target::LoadTraceCommand const *command);
     void execute(tt::target::CreateBufferCommand const *command);
+    void execute(tt::target::DeallocateBufferCommand const *command);
     void execute(tt::target::EnqueueWriteBufferCommand const *command);
     void execute(tt::target::EnqueueReadBufferCommand const *command);
     void execute(tt::target::FinishCommand const *command);

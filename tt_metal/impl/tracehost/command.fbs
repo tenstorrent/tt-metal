@@ -28,6 +28,10 @@ table CreateBufferCommand {
     address: uint32; // Optional for pre-allocated buffers.
 }
 
+table DeallocateBufferCommand {
+    global_id: uint32;   // Reference to Buffer to be deallocated
+}
+
 table EnqueueWriteBufferCommand {
     cq_global_id: uint32;       // reference to CommandQueue
     buffer_global_id: uint32;   // Reference to Buffer used as destination
@@ -51,6 +55,7 @@ union CommandType {
     EnqueueTraceCommand,
     LoadTraceCommand,
     CreateBufferCommand,
+    DeallocateBufferCommand,
     EnqueueWriteBufferCommand,
     EnqueueReadBufferCommand,
     FinishCommand

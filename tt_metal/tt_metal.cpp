@@ -866,6 +866,7 @@ DeviceAddr AllocateBuffer(Buffer *buffer) {
 }
 
 void DeallocateBuffer(Buffer *buffer) {
+    TRACE_FUNCTION_CALL(captureDeallocateBuffer, buffer);
     GraphTracker::instance().track_deallocate(buffer);
     if(GraphTracker::instance().hook_deallocate(buffer)) {
         return;
