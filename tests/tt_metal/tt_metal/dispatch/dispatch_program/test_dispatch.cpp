@@ -6,6 +6,9 @@
 
 #include "dispatch_fixture.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "noc/noc_parameters.h"
+
 using std::vector;
 
 // Test sync w/ semaphores betweeen eth/tensix cores

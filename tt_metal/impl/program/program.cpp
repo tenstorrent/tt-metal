@@ -29,8 +29,6 @@
 #include "tt_metal/program.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // L1_KERNEL_CONFIG_SIZE
-
 namespace tt::tt_metal {
 
 namespace {
@@ -408,7 +406,7 @@ KernelGroup::KernelGroup(
         }
     }
 
-    for (uint32_t index = 0; index < MaxProcessorsPerCoreType; index ++) {
+    for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index ++) {
         this->kernel_bin_sizes[index] = 0;
         this->kernel_text_offsets[index] = 0;
         this->launch_msg.kernel_config.kernel_text_offset[index] = 0;

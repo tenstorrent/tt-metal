@@ -8,6 +8,9 @@
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
+// FIXME: ARCH_NAME specific include
+#include "noc/noc_parameters.h"
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {

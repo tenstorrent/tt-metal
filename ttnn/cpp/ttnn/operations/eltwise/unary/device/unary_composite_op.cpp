@@ -623,19 +623,16 @@ Tensor _hardtanh(
 Tensor _selu(
     const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     // term 2
-    Tensor x_Exp = ttnn::exp(x, false, output_mem_config);
-    Tensor x_Exp_minus_1 = ttnn::subtract(x_Exp, -1.0f, std::nullopt, output_mem_config);
-    x_Exp.deallocate();
+    Tensor x_Exp_minus_1 = ttnn::expm1(x);
     Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, alpha, std::nullopt, output_mem_config);
     x_Exp_minus_1.deallocate();
-    Tensor result_term2 =
-        ttnn::multiply(ttnn::gtz(result_t2_, output_mem_config), result_t2_, std::nullopt, output_mem_config);
+    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
-    Tensor x_relu = ttnn::relu(x, output_mem_config);
-    Tensor result_term1 = ttnn::multiply(x_relu, scale, std::nullopt, output_mem_config);
-    x_relu.deallocate();
+    Tensor x_max = ttnn::maximum(x, 0.0f, output_mem_config);
+    Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
+    x_max.deallocate();
     Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
 
     return result_selu;

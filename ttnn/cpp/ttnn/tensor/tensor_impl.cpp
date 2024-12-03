@@ -896,26 +896,6 @@ template Tensor to_layout<uint32_t>(const Tensor& tensor, Layout target_layout);
 template Tensor to_layout<uint16_t>(const Tensor& tensor, Layout target_layout);
 template Tensor to_layout<uint8_t>(const Tensor& tensor, Layout target_layout);
 
-// Template Specialization for unpack_bfloat_tiles_into_float {bfp4,bfp8}
-template <typename... Args>
-inline std::vector<float> unpack_bfloat_tiles_into_float_vec(const bfloat8_b&, Args&&... args) {
-    return unpack_bfp8_tiles_into_float_vec(std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline std::vector<float> unpack_bfloat_tiles_into_float_vec(const bfloat4_b&, Args&&... args) {
-    return unpack_bfp4_tiles_into_float_vec(std::forward<Args>(args)...);
-}
-
-// Template Specialization for pack_fp32_vec_as_bfp4_tiles {bfp4,bfp8}
-template <typename... Args>
-inline std::vector<uint32_t> pack_fp32_vec_as_bfloat_tiles(const bfloat8_b&, Args&&... args) {
-    return pack_fp32_vec_as_bfp8_tiles(std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline std::vector<uint32_t> pack_fp32_vec_as_bfloat_tiles(const bfloat4_b&, Args&&... args) {
-    return pack_fp32_vec_as_bfp4_tiles(std::forward<Args>(args)...);
-}
-
 template <typename T>
 Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
     static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
