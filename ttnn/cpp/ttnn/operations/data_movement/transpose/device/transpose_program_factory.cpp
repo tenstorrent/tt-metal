@@ -11,6 +11,9 @@
 #include "tt_log.h"
 #include "ttnn/operation.hpp"
 
+// FIXME: ARCH_NAME specific include
+#include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {

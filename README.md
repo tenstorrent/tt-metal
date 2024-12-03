@@ -27,16 +27,16 @@
 | [Falcon7B](./models/demos/wormhole/falcon7b)                  | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 71       | 17.6  | 26              | 563.2  | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |
 | [Mistral-7B](./models/demos/wormhole/mistral7b)               | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |          | 9.9   | 25              | 316.8  | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
 | [Mamba-2.8B](./models/demos/wormhole/mamba)                   | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 48       | 12.3  | 41              | 393.6  | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
-| [LLaMA-3.1-8B](./models/demos/llama3)                     | 1         | [n150](https://tenstorrent.com/hardware/wormhole)        | 209      | 23.7  | 23              | 23.7   | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |
-| [LLaMA-3.2-1B](./models/demos/llama3)                     | 1         | [n150](https://tenstorrent.com/hardware/wormhole)        | 72       | 86.4  | 160             | 86.4   | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |
-| [LLaMA-3.2-3B](./models/demos/llama3)                     | 1         | [n150](https://tenstorrent.com/hardware/wormhole)        | 123      | 44.7  | 60              | 44.7   | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |
+| [LLaMA-3.1-8B](./models/demos/llama3)                     | 1         | [n150](https://tenstorrent.com/hardware/wormhole)        | 202      | 28.6  | 23              | 28.6   | [v0.53.1-rc7](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc7) |
+| [LLaMA-3.2-1B](./models/demos/llama3)                     | 1         | [n150](https://tenstorrent.com/hardware/wormhole)        | 71       | 90.8  | 160             | 90.8   | [v0.53.1-rc7](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc7) |
+| [LLaMA-3.2-3B](./models/demos/llama3)                     | 1         | [n150](https://tenstorrent.com/hardware/wormhole)        | 112      | 49.1  | 60              | 49.1   | [v0.53.1-rc7](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc7) |
 | [Falcon7B (DP=8)](./models/demos/t3000/falcon7b)              | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 97       | 14.6  | 26              | 3737.6 | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |
 | [LLaMA-3.1-70B (TP=8)](./models/demos/t3000/llama3_70b)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 190      | 15.1  | 20              | 483.2  | [v0.53.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc36) |
-| [Falcon40B (TP=8)](./models/demos/t3000/falcon40b)            | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |          | 5.3   | 36              | 169.6  | [v0.53.0-rc39](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc39) |
+| [Falcon40B (TP=8)](./models/demos/t3000/falcon40b)            | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |          | 5.3   | 36              | 169.6  | [v0.53.1-rc7](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc7) |
 | [Mixtral7Bx8 (TP=8)](./models/demos/t3000/mixtral8x7b)        | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 230      | 14.6  | 33              | 467.2  | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |
 | [Falcon7B (DP=32)](./models/demos/tg/falcon7b)                | 1024  | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 242      | 4.4   | 26              | 4505.6 | [v0.53.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc33) |
 | [LLaMA-3.1-70B (DP=4, TP=8)](./models/demos/t3000/llama3_70b) | 128   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 190      | 14.3  | 20              | 1835.5 | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
-> **Last Update:** November 18, 2024
+> **Last Update:** December 2, 2024
 
 > **Notes:**
 > - TP = Tensor Parallel, DP = Data Parallel; Defines parallelization factors across multiple devices.
@@ -55,7 +55,7 @@
 | [ViT (224x224)](./models/demos/grayskull/vit)                               | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [ViT (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 912     | 1,600      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
-| [Yolo V4 (320x320)](./models/demos/yolov4)                                  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 95      | 300        |             |
+| [Yolo V4 (320x320)](./models/demos/yolov4)                                  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 198     | 300        |             |
 | [Segformer Semantic Segmentation (512x512)](./models/demos/segformer)       | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 90      | 300        |             |
 
 
@@ -80,7 +80,7 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 ## Benchmarks
 - [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
 
-  
+
 ---
 
 <div align="center">

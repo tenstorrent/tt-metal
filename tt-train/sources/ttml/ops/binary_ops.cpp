@@ -70,6 +70,19 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
     return out;
 }
 
+autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
+    auto out = autograd::create_tensor(ttnn::multiply(a->get_value(), b));
+    autograd::GradFunction grad = [a, b, out]() {
+        auto a_grad = ttnn::multiply(out->get_grad(), b);
+
+        a->add_grad(a_grad);
+    };
+    auto links = autograd::get_links(a);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
@@ -99,6 +112,10 @@ autograd::TensorPtr mul(const autograd::TensorPtr& a, const autograd::TensorPtr&
 
 autograd::TensorPtr div(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     return a / b;
+}
+
+autograd::TensorPtr mul(const autograd::TensorPtr& a, float b) {
+    return a * b;
 }
 
 }  // namespace ttml::ops

@@ -98,22 +98,23 @@ static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& 
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
-    const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     TT_FATAL(
-        (shape[-2] % tile.get_tile_shape()[0] == 0 && shape[-1] % tile.get_tile_shape()[1] == 0),
+        (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
         "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
         "be a multiple of tile height ({}) and width ({}), but the provided shape is {}",
         tile.get_tile_shape()[0],
         tile.get_tile_shape()[1],
         shape);
 
-    auto tile_shape = ttnn::SmallVector<uint32_t>{tile.get_tile_shape()[0], tile.get_tile_shape()[1]};
-    auto face_shape = ttnn::SmallVector<uint32_t>{tile.get_face_shape()[0], tile.get_face_shape()[1]};
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
     auto transpose_of_faces = tile.get_transpose_of_faces();
+
     return convert_layout(
         data_to_convert,
-        tt::stl::Span(shape.begin(), shape.end()),
+        shape,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
         tests::utils::TensorLayoutType::TILED_NFACES,
         tile_shape,
@@ -124,14 +125,15 @@ inline std::vector<T> convert_layout_row_major_to_tile(
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(
-    const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
-    auto tile_shape = ttnn::SmallVector<uint32_t>{tile.get_tile_shape()[0], tile.get_tile_shape()[1]};
-    auto face_shape = ttnn::SmallVector<uint32_t>{tile.get_face_shape()[0], tile.get_face_shape()[1]};
+    const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
     auto transpose_of_faces = tile.get_transpose_of_faces();
+
     return convert_layout(
         data_to_convert,
-        tt::stl::Span(shape.begin(), shape.end()),
+        shape,
         tests::utils::TensorLayoutType::TILED_NFACES,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
         tile_shape,
