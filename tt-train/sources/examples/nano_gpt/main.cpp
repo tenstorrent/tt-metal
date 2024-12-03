@@ -345,7 +345,6 @@ int main(int argc, char **argv) {
             auto loss = ttml::ops::nll_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             auto loss_float = ttml::core::to_vector(loss->get_value())[0];
-            loss_meter.update(loss_float, features->get_value().get_shape()[0]);
 
             loss->backward();
             ttml::autograd::ctx().reset_graph();
@@ -357,12 +356,14 @@ int main(int argc, char **argv) {
                 optimizer.step();
                 auto global_step = optimizer.get_steps();
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
+                loss_meter.update(gradient_accumulator_helper.average_loss());
 
                 if (global_step % 10 == 0) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
-                         {"Loss", gradient_accumulator_helper.average_loss()}});
+                         {"Loss", loss_meter.average()}});
+                    loss_meter.reset();
                 }
                 if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
                     save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
