@@ -159,6 +159,45 @@ run_microbenchmarks_pipeline_tests() {
     pytest -svv tests/tt_metal/microbenchmarks
 }
 
+run_ccl_microbenchmarks_pipeline_tests() {
+    export TT_METAL_DEVICE_PROFILER=1
+
+    source python_env/bin/activate
+    # Record the start time
+    fail=0
+    start_time=$(date +%s)
+
+    echo "LOG_METAL: Running run_n300_ccl_all_gather_perf_tests"
+
+    tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t n300
+    fail+=$?
+
+    # Record the end time
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+    echo "LOG_METAL: run_n300_ccl_all_gather_perf_tests $duration seconds to complete"
+    if [[ $fail -ne 0 ]]; then
+      exit 1
+    fi
+
+    # Record the start time
+    fail=0
+    start_time=$(date +%s)
+
+    echo "LOG_METAL: Running run_n300_ccl_reduce_scatter_perf_tests"
+
+    tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t n300
+    fail+=$?
+
+    # Record the end time
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+    echo "LOG_METAL: run_n300_ccl_reduce_scatter_perf_tests $duration seconds to complete"
+    if [[ $fail -ne 0 ]]; then
+      exit 1
+    fi
+}
+
 run_ttnn_sweeps_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -301,6 +340,8 @@ run_pipeline_tests() {
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "ccl_microbenchmarks" ]]; then
+        run_ccl_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # T3000 pipelines
