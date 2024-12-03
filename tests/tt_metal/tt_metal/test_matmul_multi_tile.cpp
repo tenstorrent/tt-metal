@@ -152,11 +152,6 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
 
         auto dst_dram_buffer = CreateBuffer(dst_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -254,32 +249,20 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             tt_metal::detail::WriteToBuffer(src2_dram_buffer, bias);
         }
 
-
-
         vector<uint32_t> reader_l1_args = {
             src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
+            (uint32_t)0,
             src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
+            (uint32_t)0,
             K,
             M,
             N,
             M * single_tile_size,
             N * single_tile_size,
-            with_bias
-        };
+            with_bias};
 
         if (with_bias) {
-            auto dram_src2_noc_xy = src2_dram_buffer->noc_coordinates();
-            vector<uint32_t> bias_args = {
-                src2_dram_buffer->address(),
-                (std::uint32_t)dram_src2_noc_xy.x,
-                (std::uint32_t)dram_src2_noc_xy.y,
-                N,
-                N * single_tile_size
-            };
+            vector<uint32_t> bias_args = {src2_dram_buffer->address(), (uint32_t)0, N, N * single_tile_size};
 
             for (uint32_t arg: bias_args) {
                 reader_l1_args.push_back(arg);
@@ -292,14 +275,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             core,
             reader_l1_args);
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            M * N});
+        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dst_dram_buffer->address(), (uint32_t)0, M * N});
 
         tt_metal::detail::LaunchProgram(device, program);
 

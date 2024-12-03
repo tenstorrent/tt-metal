@@ -160,23 +160,17 @@ bool test_dropout_standalone(tt_metal::Device* device, float probability, uint32
             core,
             {
                 src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                0,  // dram bank id
                 num_tiles,
-            }
-        );
+            });
 
         SetRuntimeArgs(
             program,
             unary_writer_kernel_id,
             core,
-            {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-                num_tiles
-            }
-        );
+            {dst_dram_buffer->address(),
+             0,  // dram bank id
+             num_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);
 

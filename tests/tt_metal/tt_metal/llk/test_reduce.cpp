@@ -133,11 +133,9 @@ void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logi
                 logical_core,
                 {
                     dst_dram_buffer->address(),
-                    (std::uint32_t)dst_dram_buffer->noc_coordinates().x,
-                    (std::uint32_t)dst_dram_buffer->noc_coordinates().y,
-                    num_tensor_tiles/Ht
-                }
-            );
+                    (uint32_t)0,           // dram bank id
+                    num_tensor_tiles / Ht  // num tiles
+                });
 
             break;
         }
@@ -161,25 +159,24 @@ void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logi
                 logical_core,
                 {
                     src_dram_buffer->address(),
-                    (std::uint32_t)src_dram_buffer->noc_coordinates().x,
-                    (std::uint32_t)src_dram_buffer->noc_coordinates().y,
-                    num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
+                    (uint32_t)0,  // dram bank id
+                    (uint32_t)0,  // unused
+                    num_tensor_tiles,
+                    NC,
+                    Ht,
+                    Wt,
+                    Ht * Wt,
                     *reinterpret_cast<uint32_t*>(&scaler),
-                }
-            );
+                });
 
             uint32_t num_tiles = test_config.reduce_dim == ReduceDim::W ? (num_tensor_tiles/Wt) : (num_tensor_tiles/(Wt*Ht));
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel,
                 logical_core,
-                {
-                    dst_dram_buffer->address(),
-                    (std::uint32_t)dst_dram_buffer->noc_coordinates().x,
-                    (std::uint32_t)dst_dram_buffer->noc_coordinates().y,
-                    num_tiles
-                }
-            );
+                {dst_dram_buffer->address(),
+                 (uint32_t)0,  // dram bank id
+                 num_tiles});
 
             break;
         }
