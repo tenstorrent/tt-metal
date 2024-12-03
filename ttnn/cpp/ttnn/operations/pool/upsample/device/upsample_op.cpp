@@ -83,10 +83,6 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
             auto core_range = *shard_grid.begin();
             uint32_t ncores_w = core_range.end_coord.x + 1;
             uint32_t ncores_h = core_range.end_coord.y + 1;
-            // std::array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] /
-            // ncores_h, output_shape[-1] / ncores_w}; auto output_shard_spec = input_shard_spec;
-            // output_shard_spec.shape = output_shard_shape;
-            // mem_config.shard_spec = output_shard_spec;
             auto output_shard_spec = mem_config.shard_spec.value();
             auto output_shard_shape = output_shard_spec.shape;
             log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
