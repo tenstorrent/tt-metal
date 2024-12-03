@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks InterleavedToShardedPartialDeviceOperation::crea
     auto& output_tensor = output_tensors.at(0);
     // Will move with sharded ops
     return detail::interleaved_to_sharded_multi_core(
-        input_tensor, output_tensor, this->output_mem_config.keep_l1_aligned, this->num_slices, this->slice_index);
+        input_tensor, output_tensor, false, this->num_slices, this->slice_index);
 }
 
 }  // namespace ttnn::operations::data_movement
