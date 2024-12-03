@@ -127,13 +127,13 @@ ttnn/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 
 # models
-/models/ @tt-rkim @uaydonat
+/models/ @uaydonat
 /models/*/**
 models/conv_on_device_utils*.py @mywoodstock @shwetankTT @sankarmanoj-tt
 functional_*/ @uaydonat @esmalTT
-models/demos @uaydonat @tt-rkim
+models/demos @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
-models/demos/wormhole @uaydonat @tt-rkim
+models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/demos/llama3 @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
@@ -149,12 +149,12 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/grayskull @uaydonat @tt-rkim
+models/demos/grayskull @uaydonat
 models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
-models/perf/ @uaydonat @tt-rkim
-models/perf/perf_report.py @yieldthought @uaydonat @tt-rkim
-models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
+models/perf/ @uaydonat
+models/perf/perf_report.py @yieldthought @uaydonat
+models/perf/benchmarking_utils.py @skhorasganiTT
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
