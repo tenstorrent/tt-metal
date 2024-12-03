@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 
+#include "autograd/tensor.hpp"
 #include "serialization/msgpack_file.hpp"
 #include "serialization/serialization.hpp"
 
@@ -52,3 +54,23 @@ void load_model_and_optimizer(
 }
 
 uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size = 32);
+
+class GradientAccumulator {
+public:
+    explicit GradientAccumulator(uint32_t accumulation_steps);
+
+    [[nodiscard]] bool should_zero_grad() const;
+    [[nodiscard]] bool should_step() const;
+    ttml::autograd::TensorPtr scale(ttml::autograd::TensorPtr &tensor_ptr);
+    void update(float loss, size_t samples = 1);
+    void reset();
+
+    [[nodiscard]] float average_loss() const;
+
+private:
+    uint32_t m_accumulation_steps = 1;
+    uint32_t m_steps = 0;
+
+    float m_total_loss = 0.0F;
+    size_t m_total_samples = 0;
+};
