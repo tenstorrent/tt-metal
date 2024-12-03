@@ -188,14 +188,15 @@ def generate_permutations(N):
 @pytest.mark.parametrize("shape", [(7, 7, 7, 7, 7)])
 @pytest.mark.parametrize("perm", generate_permutations(5))
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-def test_permute_5d_width(shape, perm, memory_config, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     torch.manual_seed(2005)
     input_a = torch.randn(shape)
     # print(input_a)
     torch_output = torch.permute(input_a, perm)
 
     tt_input = ttnn.from_torch(
-        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=memory_config
+        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
     )
 
     tt_output = ttnn.permute(tt_input, perm)
