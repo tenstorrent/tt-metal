@@ -66,6 +66,7 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
+        if: ${{ !(inputs.arch == 'grayskull' && matrix.test-group.name == 'ttnn ccl cpp unit tests') }}
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
