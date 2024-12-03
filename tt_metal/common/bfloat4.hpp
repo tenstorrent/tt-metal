@@ -40,6 +40,8 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
 
+    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
     auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
@@ -57,6 +59,8 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(
     int num_exps_in_dword = 4;
     int data_dwords_per_exp_dword_log2 = log2(data_dwords_per_exp * num_exps_in_dword);
     int data_dwords_per_exp_log2 = log2(data_dwords_per_exp);
+
+    uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
 
     uint32_t size_bytes = bfp_tiles.size() * 4;
     uint32_t single_bfp_tile_size =
@@ -85,7 +89,7 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
     uint32_t fp32_element_index = 0;
 
-    uint32_t num_exp_words = num_faces * face_H / num_exps_in_dword;
+    uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / num_exps_in_dword;
     uint32_t num_tile_words = tile_HW / num_elements_in_dword;
     int num_bfp_dwords_in_tile = num_tile_words + num_exp_words;
     int num_dwords_per_row = subtile_cols / num_elements_in_dword;
@@ -114,8 +118,8 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) &
-                                         0x3;  // Extract the byte in which the shared exponent is stored. Each byte is
-                                               // shared amongst 16 datums.
+                                         exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
+                                                        // byte is shared amongst 16 datums.
                         __m256i exp_vector0 =
                             _mm256_set1_epi32(get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
                         __m256i exp_vector1 = exp_vector0;

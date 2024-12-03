@@ -53,6 +53,25 @@ inline uint32_t get_exp_dword(const std::vector<uint8_t>& vec) {
     return tmp;
 }
 
+inline std::vector<uint32_t> pack_exponents(const std::vector<uint8_t>& exponents, size_t num_elements_in_dword) {
+    TT_FATAL(
+        exponents.size() % num_elements_in_dword == 0, "Input vector size {} must be divisible by 4", exponents.size());
+
+    std::vector<uint32_t> packed_result;
+
+    for (size_t i = 0; i < exponents.size(); i += num_elements_in_dword) {
+        uint32_t packed_value = 0;
+
+        for (size_t j = 0; j < num_elements_in_dword; ++j) {
+            packed_value = packed_value | ((exponents[i + j] & 0xff) << (8 * j));
+        }
+
+        packed_result.push_back(packed_value);
+    }
+
+    return packed_result;
+}
+
 inline uint32_t get_byte(uint32_t word, uint32_t index) {
     TT_ASSERT(index < 4);
     uint32_t mask = 0xff << (8 * index);
@@ -288,6 +307,9 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
+    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
+
     int num_float_in_tile = tile_HW;
     TT_ASSERT(fp32_vec.size() % num_float_in_tile == 0);
     uint32_t num_tiles = fp32_vec.size() / num_float_in_tile;
@@ -304,6 +326,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     int fp32_element_index = 0;
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
         std::vector<uint32_t> packed_data;
+        std::vector<uint8_t> exponents_with_padding;
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
@@ -323,11 +346,16 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
                     }
 
                     uint8_t exp = get_max_exp(single_row, is_exp_a);
-                    exponents.push_back(exp);
 
-                    if (exponents.size() % num_exponents_in_dword == 0) {
-                        packed_result.push_back(get_exp_dword(exponents));
-                        exponents.clear();
+                    // check if it satifies the 16B alignment
+                    if (exponent_padding) {
+                        exponents_with_padding.push_back(exp);
+                    } else {
+                        exponents.push_back(exp);
+                        if (exponents.size() % num_exponents_in_dword == 0) {
+                            packed_result.push_back(get_exp_dword(exponents));
+                            exponents.clear();
+                        }
                     }
 
                     for (uint32_t u32_datum : single_row) {
@@ -351,6 +379,14 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
         //  entire sub-tile 1 (RM layout)​
         //  entire sub-tile 2 (RM layout)​
         //  entire sub-tile 3 (RM layout)
+        // align the exponent section to 16B
+        if (exponent_padding) {
+            std::vector<uint8_t> pads(
+                tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
+            exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
+            std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
+            packed_result.insert(packed_result.end(), packed.begin(), packed.end());
+        }
         packed_result.insert(packed_result.end(), packed_data.begin(), packed_data.end());
     }
 

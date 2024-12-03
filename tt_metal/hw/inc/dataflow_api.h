@@ -251,14 +251,16 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
                                     : (tile_hw == 128) ? 7
                                     : (tile_hw == 64)  ? 6
                                     : (tile_hw == 32)  ? 5
+                                    : (tile_hw == 16)  ? 4
                                                        : 10;
 
     constexpr uint8_t exp_shift = (tile_hw == 1024)  ? 6
                                   : (tile_hw == 512) ? 5
                                   : (tile_hw == 256) ? 4
-                                  : (tile_hw == 128) ? 3
-                                  : (tile_hw == 64)  ? 2
-                                  : (tile_hw == 32)  ? 1
+                                  : (tile_hw == 128) ? 4
+                                  : (tile_hw == 64)  ? 4
+                                  : (tile_hw == 32)  ? 4
+                                  : (tile_hw == 16)  ? 4
                                                      : 6;
     switch (format & 0x1F) {
         case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
