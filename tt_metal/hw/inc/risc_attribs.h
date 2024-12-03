@@ -18,8 +18,7 @@ union tt_uint64_t {
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr __attribute__((rvtt_reg_ptr))
 
-inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr *p)
-{
+inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr* p) {
     tt_uint64_t v;
 
     v.hi = p->hi;
@@ -27,8 +26,7 @@ inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr 
     return v.v;
 }
 
-inline __attribute__((always_inline)) uint64_t tt_l1_load(volatile tt_uint64_t * tt_l1_ptr p)
-{
+inline __attribute__((always_inline)) uint64_t tt_l1_load(volatile tt_uint64_t* tt_l1_ptr p) {
     tt_uint64_t v;
 
     v.hi = p->hi;
@@ -39,9 +37,9 @@ inline __attribute__((always_inline)) uint64_t tt_l1_load(volatile tt_uint64_t *
 // In certain cases enabling watcher can cause the code size to be too large. Give an option to
 // disable inlining if we need to.
 #if defined(WATCHER_NOINLINE)
-    #define FORCE_INLINE
+#define FORCE_INLINE
 #else
-    #define FORCE_INLINE inline __attribute__((always_inline))
+#define FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
-#endif // _RISC_ATTRIBS_H_
+#endif  // _RISC_ATTRIBS_H_

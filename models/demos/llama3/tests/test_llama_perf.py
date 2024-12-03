@@ -15,7 +15,7 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
@@ -31,17 +31,26 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time",
     (
-        (32, 20),
-        (128, 20),
-        (1024, 20),
+        (32, 30),
+        (128, 30),
+        (1024, 30),
     ),
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
 )
 def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, optimizations=LlamaOptimizations.performance)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     if "3.2-1B" in model_args.DEFAULT_CACHE_PATH:
@@ -162,15 +171,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         dtype=ttnn.uint32,
     )
 
-    # Generate first input on host
-    pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
     # Send first input to device
-    tt_decode_input = pt_decode_input
-    decode_input = tt_model.args.prepare_inputs_ttnn_decode(
-        tt_decode_input,
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     current_pos = ttnn.from_torch(
         torch.tensor([generation_start_pos] * batch),
         device=mesh_device,
@@ -183,6 +184,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         profiler.start(f"model_run_for_inference_{i}")
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
+        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
         ttnn.deallocate(tt_out)

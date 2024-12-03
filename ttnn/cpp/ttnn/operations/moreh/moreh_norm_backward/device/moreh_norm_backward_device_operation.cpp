@@ -39,8 +39,9 @@ MorehNormBackwardOperation::shape_return_value_t MorehNormBackwardOperation::com
 
 MorehNormBackwardOperation::tensor_return_value_t MorehNormBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad.has_value())
+    if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
+    }
     const auto& input = tensor_args.input;
     return create_device_tensor(
         compute_output_shapes(operation_attributes, tensor_args),
@@ -56,7 +57,7 @@ MorehNormBackwardOperation::invoke(
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,

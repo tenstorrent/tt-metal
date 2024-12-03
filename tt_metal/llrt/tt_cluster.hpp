@@ -11,9 +11,9 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "third_party/umd/device/device_api_metal.h"
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/device_api_metal.h"
+#include "umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_xy_pair.h"
 
 // clang-format off
 #include "noc/noc_parameters.h"
@@ -93,7 +93,7 @@ class Cluster {
         std::vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
-        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(target);
         return device->get_tlb_data_from_target(virtual_chip_coord);
@@ -102,14 +102,14 @@ class Cluster {
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
         int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
-        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
         return device->get_static_tlb_writer(virtual_target);
@@ -117,7 +117,7 @@ class Cluster {
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
         uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
-        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
@@ -202,6 +202,10 @@ class Cluster {
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
 
+    // Returns map of connected chip ids to active ethernet cores
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+        chip_id_t chip_id) const;
+
     // Returns vector of unique tunnels originating from mmio device.
     // Each vector entry is another vector of remote devices on that tunnel.
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
@@ -234,9 +238,7 @@ class Cluster {
 
     // Reserves ethernet cores in cluster for tunneling
     void reserve_ethernet_cores_for_tunneling();
-    // Returns map of connected chip ids to active ethernet cores
-    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
-        chip_id_t chip_id) const;
+
     void initialize_ethernet_sockets();
 
     // Set tunnels from mmio
@@ -251,7 +253,6 @@ class Cluster {
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::string cluster_desc_path_;
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;

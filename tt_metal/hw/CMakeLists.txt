@@ -18,6 +18,17 @@ set(TYPES
     kernel
 )
 
+include(FetchContent)
+FetchContent_Declare(
+    sfpi
+    URL
+        https://github.com/tenstorrent/sfpi/releases/download/v6.0.0/sfpi-release.tgz
+    URL_HASH MD5=d837d26a2312d27815179995fdea83bd
+    SOURCE_DIR
+    ${PROJECT_SOURCE_DIR}/runtime/sfpi
+)
+FetchContent_MakeAvailable(sfpi)
+
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
@@ -63,29 +74,14 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
 # Define flags for each architecture
-set(GPP_FLAGS_grayskull
-    -mgrayskull
-    -march=rv32iy
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
-set(GPP_FLAGS_wormhole
-    -mwormhole
-    -march=rv32imw
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
-set(GPP_FLAGS_blackhole
-    -mblackhole
-    -march=rv32iml
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
+set(GPP_FLAGS_grayskull -mcpu=tt-gs)
+set(GPP_FLAGS_wormhole -mcpu=tt-wh)
+set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 
 # Define common flags for all architectures
 set(GPP_FLAGS_common
@@ -96,6 +92,7 @@ set(GPP_FLAGS_common
     -fno-exceptions
     -Wall
     -Werror
+    -Wno-deprecated-declarations
     -Wno-unknown-pragmas
     -Wno-error=multistatement-macros
     -Wno-error=parentheses

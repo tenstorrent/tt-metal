@@ -9,96 +9,114 @@ import ttnn
 from loguru import logger
 
 
-# Unet shallow torch implementation
+def concatenate(activations, residuals, groups=2):
+    assert (
+        activations.shape[2:] == residuals.shape[2:]
+    ), "Activations and residuals must have the same shape in all dims but channels"
+
+    N, activation_channels, H, W = activations.shape
+    assert activation_channels % groups == 0, "Channel count must be divisible by the number of groups"
+
+    N, residual_channels, H, W = residuals.shape
+    assert residual_channels % groups == 0, "Channel count must be divisible by the number of groups"
+
+    activation_groups = activations.view(N, groups, activation_channels // groups, H, W)
+    residual_groups = residuals.view(N, groups, residual_channels // groups, H, W)
+
+    interleaved = torch.cat([activation_groups, residual_groups], dim=2)  # Shape: [N, H, W, groups, 2 * group_size]
+    interleaved = interleaved.permute(0, 1, 2, 3, 4).reshape(N, residual_channels + activation_channels, H, W)
+
+    return interleaved
+
+
 class UNet(nn.Module):
     def __init__(self, groups=1):
         super(UNet, self).__init__()
-        # Contracting Path
-        self.c1 = nn.Conv2d(4 * groups, 16 * groups, kernel_size=3, padding=1)
+
+        self.c1 = nn.Conv2d(4 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b1 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r1 = nn.ReLU(inplace=True)
-        self.c1_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c1_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b1_2 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r1_2 = nn.ReLU(inplace=True)
         self.p1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b2 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r2 = nn.ReLU(inplace=True)
-        self.c2_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c2_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b2_2 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r2_2 = nn.ReLU(inplace=True)
         self.p2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c3 = nn.Conv2d(16 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c3 = nn.Conv2d(16 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b3 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r3 = nn.ReLU(inplace=True)
-        self.c3_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c3_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b3_2 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r3_2 = nn.ReLU(inplace=True)
         self.p3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c4 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c4 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b4 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r4 = nn.ReLU(inplace=True)
-        self.c4_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c4_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b4_2 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r4_2 = nn.ReLU(inplace=True)
         self.p4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.bnc = nn.Conv2d(32 * groups, 64 * groups, kernel_size=3, padding=1)
+        self.bnc = nn.Conv2d(32 * groups, 64 * groups, kernel_size=3, padding=1, groups=groups)
         self.bnb = nn.BatchNorm2d(64 * groups, momentum=1)
         self.bnr = nn.ReLU(inplace=True)
-        self.bnc_2 = nn.Conv2d(64 * groups, 64 * groups, kernel_size=3, padding=1)
+        self.bnc_2 = nn.Conv2d(64 * groups, 64 * groups, kernel_size=3, padding=1, groups=groups)
         self.bnb_2 = nn.BatchNorm2d(64 * groups, momentum=1)
         self.bnr_2 = nn.ReLU(inplace=True)
         self.u4 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
-        self.c5 = nn.Conv2d(96 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c5 = nn.Conv2d(96 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b5 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r5 = nn.ReLU(inplace=True)
-        self.c5_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c5_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b5_2 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r5_2 = nn.ReLU(inplace=True)
-        self.c5_3 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c5_3 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b5_3 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r5_3 = nn.ReLU(inplace=True)
         self.u3 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
-        self.c6 = nn.Conv2d(64 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c6 = nn.Conv2d(64 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b6 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r6 = nn.ReLU(inplace=True)
-        self.c6_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c6_2 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b6_2 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r6_2 = nn.ReLU(inplace=True)
-        self.c6_3 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1)
+        self.c6_3 = nn.Conv2d(32 * groups, 32 * groups, kernel_size=3, padding=1, groups=groups)
         self.b6_3 = nn.BatchNorm2d(32 * groups, momentum=1)
         self.r6_3 = nn.ReLU(inplace=True)
         self.u2 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
-        self.c7 = nn.Conv2d(48 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c7 = nn.Conv2d(48 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b7 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r7 = nn.ReLU(inplace=True)
-        self.c7_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c7_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b7_2 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r7_2 = nn.ReLU(inplace=True)
-        self.c7_3 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c7_3 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b7_3 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r7_3 = nn.ReLU(inplace=True)
         self.u1 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
-        self.c8 = nn.Conv2d(32 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c8 = nn.Conv2d(32 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b8 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r8 = nn.ReLU(inplace=True)
-        self.c8_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c8_2 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b8_2 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r8_2 = nn.ReLU(inplace=True)
-        self.c8_3 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1)
+        self.c8_3 = nn.Conv2d(16 * groups, 16 * groups, kernel_size=3, padding=1, groups=groups)
         self.b8_3 = nn.BatchNorm2d(16 * groups, momentum=1)
         self.r8_3 = nn.ReLU(inplace=True)
 
-        # Output layer
-        self.output_layer = nn.Conv2d(16 * groups, 1 * groups, kernel_size=1)
+        self.output_layer = nn.Conv2d(16 * groups, 1 * groups, kernel_size=1, groups=groups)
 
     def downblock1(self, x):
         c1 = self.c1(x)
@@ -142,7 +160,7 @@ class UNet(nn.Module):
 
     def upblock1(self, bnr_2, r4_2):
         u4 = self.u4(bnr_2)
-        conc1 = torch.cat([u4, r4_2], dim=1)
+        conc1 = concatenate(u4, r4_2)
 
         c5 = self.c5(conc1)
         b5 = self.b5(c5)
@@ -157,7 +175,7 @@ class UNet(nn.Module):
 
     def upblock2(self, r5_3, r3_2):
         u3 = self.u3(r5_3)
-        conc2 = torch.cat([u3, r3_2], dim=1)
+        conc2 = concatenate(u3, r3_2)
 
         c6 = self.c6(conc2)
         b6 = self.b6(c6)
@@ -172,7 +190,7 @@ class UNet(nn.Module):
 
     def upblock3(self, r6_3, r2_2):
         u2 = self.u2(r6_3)
-        conc3 = torch.cat([u2, r2_2], dim=1)
+        conc3 = concatenate(u2, r2_2)
 
         c7 = self.c7(conc3)
         b7 = self.b7(c7)
@@ -187,7 +205,7 @@ class UNet(nn.Module):
 
     def upblock4(self, r7_3, r1_2):
         u1 = self.u1(r7_3)
-        conc4 = torch.cat([u1, r1_2], dim=1)
+        conc4 = concatenate(u1, r1_2)
 
         c8 = self.c8(conc4)
         b8 = self.b8(c8)

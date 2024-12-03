@@ -41,7 +41,8 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
 
 JitBuildEnv::JitBuildEnv() {}
 
-void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string> &device_kernel_defines) {
+void JitBuildEnv::init(
+    uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     this->root_ = llrt::OptionsG.get_root_dir();
     this->out_root_ = this->root_ + "built/";
@@ -53,14 +54,14 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
     // Tools
-    this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    this->gpp_ = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
 
     // Flags
     string common_flags;
     switch (arch) {
-        case ARCH::GRAYSKULL: common_flags = "-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 "; break;
-        case ARCH::WORMHOLE_B0: common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 "; break;
-        case ARCH::BLACKHOLE: common_flags = "-mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32 "; break;
+        case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
+        case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
+        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
@@ -73,6 +74,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
     this->cflags_ +=
         "-fno-use-cxa-atexit -fno-exceptions "
         "-Wall -Werror -Wno-unknown-pragmas "
+        "-Wno-deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "
         "-Wno-unused-function ";
@@ -91,7 +93,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
 
     if (tt::tt_metal::getDeviceProfilerState()) {
         if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
-            //TODO(MO): Standard bit mask for device side profiler options
+            // TODO(MO): Standard bit mask for device side profiler options
             this->defines_ += "-DPROFILE_KERNEL=2 ";
         } else {
             this->defines_ += "-DPROFILE_KERNEL=1 ";
@@ -109,7 +111,9 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
     }
 
     if (tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" + to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) + " ";
+        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" +
+                          to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) +
+                          " ";
     }
 
     if (tt::llrt::OptionsG.get_record_noc_transfers()) {
@@ -132,6 +136,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
                       this->aliased_arch_name_ + " " + "-I" + this->root_ + "tt_metal/hw/inc/" +
                       this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" + this->root_ +
                       "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
+                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ +
                       "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
                       "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
                       this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
@@ -143,8 +148,11 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 }
 
-JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
-    env_(env), core_id_(build_config.processor_id), is_fw_(build_config.is_fw), dispatch_message_addr_(build_config.dispatch_message_addr) {}
+JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
+    env_(env),
+    core_id_(build_config.processor_id),
+    is_fw_(build_config.is_fw),
+    dispatch_message_addr_(build_config.dispatch_message_addr) {}
 
 // Fill in common state derived from the default state set up in the constructors
 void JitBuildState::finish_init() {
@@ -156,7 +164,7 @@ void JitBuildState::finish_init() {
     this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(this->dispatch_message_addr_) + " ";
 
     // Create the objs from the srcs
-    for (string src : srcs_) {
+    for (const string& src : srcs_) {
         // Lop off the right side from the last "."
         string stub = src.substr(0, src.find_last_of("."));
         // Lop off the leading path
@@ -188,7 +196,9 @@ void JitBuildState::finish_init() {
             this->link_objs_ += build_dir + "ncrisc-halt.o ";
         }
     } else {
-        this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        if (this->target_name_ != "erisc") {
+            this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        }
     }
     if (this->target_name_ == "brisc" or this->target_name_ == "idle_erisc") {
         this->link_objs_ += build_dir + "noc.o ";
@@ -205,7 +215,7 @@ void JitBuildState::finish_init() {
     }
 }
 
-JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
+JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
 
@@ -238,9 +248,11 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
             }
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_brisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_brisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_brisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_brisc.ld ";
             }
 
             break;
@@ -260,9 +272,11 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
             }
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_ncrisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_ncrisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ncrisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ncrisc.ld ";
             }
 
             break;
@@ -273,7 +287,8 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
     finish_init();
 }
 
-JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
+    JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
 
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
@@ -295,8 +310,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" + env_.root_ +
-                      "tt_metal/third_party/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" +
-                      env_.root_ + "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
+                      "runtime/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" + env_.root_ +
+                      "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
 
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
@@ -315,9 +330,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
             this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc0.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc0.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc0.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc0.ld ";
             }
 
             break;
@@ -330,9 +347,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
             this->defines_ += "-DCOMPILE_FOR_TRISC=1 ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc1.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc1.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc1.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc1.ld ";
             }
 
             break;
@@ -345,9 +364,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
             this->defines_ += "-DCOMPILE_FOR_TRISC=2 ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc2.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc2.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc2.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc2.ld ";
             }
 
             break;
@@ -358,7 +379,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     finish_init();
 }
 
-JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
+    JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
@@ -410,15 +432,15 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                             env_.root_ + linker_str;
             break;
         }
-        default:
-            TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+        default: TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
     }
     this->process_defines_at_compile = true;
 
     finish_init();
 }
 
-JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
+    JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
@@ -442,7 +464,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             this->defines_ +=
                 "-DCOMPILE_FOR_IDLE_ERISC=0 "
                 "-DERISC "
-                "-DRISC_B0_HW ";    // do we need this for BH?
+                "-DRISC_B0_HW ";  // do we need this for BH?
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 
@@ -454,9 +476,11 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             this->lflags_ = env_.lflags_ + "-Os ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_ierisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_ierisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ierisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ierisc.ld ";
             }
 
             break;
@@ -477,14 +501,15 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             }
             this->lflags_ = env_.lflags_ + "-Os ";
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_slave_ierisc.ld ";
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_slave_ierisc.ld ";
             }
             break;
         }
-        default:
-            TT_THROW("Invalid processor ID {} for Idle Ethernet core.", this->core_id_);
+        default: TT_THROW("Invalid processor ID {} for Idle Ethernet core.", this->core_id_);
     }
     this->process_defines_at_compile = true;
 
@@ -509,7 +534,7 @@ void JitBuildState::compile_one(
     const JitBuildSettings* settings,
     const string& src,
     const string& obj) const {
-    //ZoneScoped;
+    // ZoneScoped;
     fs::create_directories(out_dir);
 
     // Add kernel specific defines
@@ -546,7 +571,7 @@ void JitBuildState::compile_one(
 }
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
-    //ZoneScoped;
+    // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         launch_build_step(
@@ -563,7 +588,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir) const {
-    //ZoneScoped;
+    // ZoneScoped;
     string lflags = this->lflags_;
     if (tt::llrt::OptionsG.get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + "linker.map ";
@@ -593,20 +618,20 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
-    //ZoneScoped;
+    // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
-    static std::string_view const strong_names[] = {"__fw_export_*"};
+    static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     elf.WriteImage(pathname_out);
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {
-    //ZoneScoped;
+    // ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
@@ -625,7 +650,7 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
 }
 
 void JitBuildState::build(const JitBuildSettings* settings) const {
-    //ZoneScoped;
+    // ZoneScoped;
     string out_dir = (settings == nullptr)
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
@@ -645,13 +670,13 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
-    //ZoneScoped;
+    // ZoneScoped;
 
     build.build(settings);
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
-    //ZoneScoped;
+    // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference

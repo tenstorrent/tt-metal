@@ -10,8 +10,8 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/program/program.hpp"
 
-using std::unique_lock;
 using std::mutex;
+using std::unique_lock;
 
 namespace tt::tt_metal {
 
@@ -20,10 +20,11 @@ namespace detail {
 /**
  * Enable generation of reports for compilation statistics.
  * Two reports are generated in .reports/tt_metal:
- *  - `compile_program_summary.csv` has a table with an entry for each program that indicates number of Compute and Data movement CreateKernel API calls,
- *  and number of kernel compilation cache hits and misses
- *  - `compile_program.csv` expands on the summary report by including a per program table with an entry for each kernel, indicating the cores the kernel
- * is placed on, kernel attributes and whether there was a cache hit or miss when compiling the kernel.
+ *  - `compile_program_summary.csv` has a table with an entry for each program that indicates number of Compute and Data
+ * movement CreateKernel API calls, and number of kernel compilation cache hits and misses
+ *  - `compile_program.csv` expands on the summary report by including a per program table with an entry for each
+ * kernel, indicating the cores the kernel is placed on, kernel attributes and whether there was a cache hit or miss
+ * when compiling the kernel.
  *
  * Return value: void
  *
@@ -39,26 +40,35 @@ void EnableCompilationReports();
 void DisableCompilationReports();
 
 class CompilationReporter {
-   public:
+public:
     CompilationReporter& operator=(const CompilationReporter&) = delete;
     CompilationReporter& operator=(CompilationReporter&& other) noexcept = delete;
     CompilationReporter(const CompilationReporter&) = delete;
     CompilationReporter(CompilationReporter&& other) noexcept = delete;
 
-    void add_kernel_compile_stats(uint64_t program_id, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash);
+    void add_kernel_compile_stats(
+        uint64_t program_id, const std::shared_ptr<Kernel>& kernel, bool cache_hit, size_t kernel_hash);
 
-    void flush_program_entry(uint64_t program_id, size_t num_kernels, std::function<std::shared_ptr<Kernel>(size_t)> get_kernel, bool persistent_compilation_cache_enabled);
+    void flush_program_entry(
+        uint64_t program_id,
+        size_t num_kernels,
+        std::function<std::shared_ptr<Kernel>(size_t)> get_kernel,
+        bool persistent_compilation_cache_enabled);
     static CompilationReporter& inst();
-    static void toggle (bool state);
-    static bool enabled ();
-   private:
+    static void toggle(bool state);
+    static bool enabled();
+
+private:
     CompilationReporter();
 
     ~CompilationReporter();
 
     void init_reports();
 
-    struct cache_counters {int misses = 0; int hits = 0; };
+    struct cache_counters {
+        int misses = 0;
+        int hits = 0;
+    };
 
     static std::atomic<bool> enable_compile_reports_;
     std::mutex mutex_;
@@ -69,6 +79,6 @@ class CompilationReporter {
     std::ofstream summary_report_;
 };
 
-}   // namespace detail
+}  // namespace detail
 
-}   // namespace tt::tt_metal
+}  // namespace tt::tt_metal

@@ -8,7 +8,6 @@ Table of Contents
   - [Machine setup](#machine-setup)
     - [Hugepages setup](#hugepages-setup)
   - [Developing tt-metal](#developing-tt-metal)
-    - [Setting up Git](#setting-up-git)
     - [Setting logger level](#setting-logger-level)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
   - [Tests in tt-metal](#tests-in-tt-metal)
@@ -22,6 +21,8 @@ Table of Contents
     - [Debugging host-side code](#debugging-host-side-code)
     - [Debugging device-side code](#debugging-device-side-code)
     - [Debugging device hangs](#debugging-device-hangs)
+      - [Using watcher](#using-watcher)
+      - [Using watcher hang dump tool](#using-watcher-hang-dump-tool)
   - [Contribution standards](#contribution-standards)
     - [File structure and formats](#file-structure-and-formats)
     - [CI/CD Principles](#cicd-principles)
@@ -29,10 +30,16 @@ Table of Contents
     - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates)
     - [Documentation](#documentation)
     - [Git rules and guidelines](#git-rules-and-guidelines)
+      - [Creating a branch](#creating-a-branch)
+      - [Saving your changes](#saving-your-changes)
+      - [Saving the commit to origin and create a pull request](#saving-the-commit-to-origin-and-create-a-pull-request)
+      - [Rebasing your branch](#rebasing-your-branch)
+      - [Merging to main](#merging-to-main)
     - [Code reviews](#code-reviews)
     - [New feature and design specifications](#new-feature-and-design-specifications)
     - [Release flows](#release-flows)
     - [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
+    - [Further reading](#further-reading)
   - [Hardware troubleshooting](#hardware-troubleshooting)
     - [Resetting an accelerator board](#resetting-an-accelerator-board)
 
@@ -244,8 +251,8 @@ The new fangled way we run our tests is with Googletest. The way we generally
 structure our tests with this framework is to bundle it into a single
 executable.
 
-You can use `--gtest_filter_test` to filter out the specific test you'd like.
-For example, to build and run the `CommonFixture.DRAMLoopbackSingleCore` on
+You can use `--gtest_filter` to filter out the specific test you'd like.
+For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the unit tests:
@@ -254,7 +261,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommonFixture.DRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_api --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:
@@ -263,7 +270,7 @@ On slow dispatch, to run another specific test, the equivalent would be:
 2. Run with the slow dispatch mode:
    ```
    export TT_METAL_SLOW_DISPATCH_MODE=1
-   ./build/test/tt_metal/unit_tests/fast_dispatch --gtest_filter_test="BasicFixture.TestL1BuffersAllocatedTopDown"
+   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="DeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
    ```
 
 We have split our tests into the two dispatch modes for less pollution of state
@@ -422,6 +429,44 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   - In the future, this tool will be expanded to show more debug information available from the host side.
 
 ## Contribution standards
+This project has adopted C++ formatting and style as defined in `.clang-format`.
+There are additional requirements such as license headers.
+
+## Pre-commit Hook Integration for Formatting and Linting
+
+As part of maintaining consistent code formatting across the project, we have integrated the [pre-commit](https://pre-commit.com/) framework into our workflow. The pre-commit hooks will help automatically check and format code before commits are made, ensuring that we adhere to the project's coding standards.
+
+### What is Pre-commit?
+
+Pre-commit is a framework for managing and maintaining multi-language pre-commit hooks. It helps catch common issues early by running a set of hooks before code is committed, automating tasks like:
+
+- Formatting code (e.g., fixing trailing whitespace, enforcing end-of-file newlines)
+- Running linters (e.g., `clang-format`, `black`, `flake8`)
+- Checking for merge conflicts or other common issues.
+
+For more details on pre-commit, you can visit the [official documentation](https://pre-commit.com/).
+
+### How to Set Up Pre-commit Locally
+
+To set up pre-commit on your local machine, follow these steps:
+
+1. **Install Pre-commit**:
+   Ensure you have Python installed, then run:
+   ```bash
+   pip install pre-commit
+   ```
+   *Note:* pre-commit is already installed if you are using the python virtual environment.
+2. **Install the Git Hook Scripts**:
+   In your local repository, run the following command to install the pre-commit hooks:
+   ```bash
+   pre-commit install
+   ```
+   This command will configure your local Git to run the defined hooks automatically before each commit.
+3. **Run Pre-commit Hooks Manually**:
+   You can also run the hooks manually against all files at any time with:
+   ```bash
+   pre-commit run --all-files
+   ```
 
 ### File structure and formats
 
@@ -779,6 +824,12 @@ After that, the UI will usually delete your branch.
 
 - Use Loguru for Python logging.
 - Use Tenstorrent logger for C++ logging.
+
+### Further reading
+
+- [General best practices](contributing/BestPractices.md)
+- [Error message best practices](contributing/ErrorMessageBestPractices.md)
+- [Working with Clang Tidy](contributing/ClangTidy.md)
 
 ## Hardware troubleshooting
 

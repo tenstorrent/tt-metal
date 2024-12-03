@@ -5,7 +5,7 @@
 #pragma once
 #include "common/utils.hpp"
 
-#include "third_party/umd/device/device_api_metal.h"
+#include "umd/device/device_api_metal.h"
 
 #include <string>
 
@@ -43,7 +43,7 @@ inline std::string get_umd_arch_name() {
         return get_env_arch_name();
     }
 
-    std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
+    std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
     tt::ARCH arch = detect_arch(physical_mmio_device_ids.at(0));
     for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
         chip_id_t device_id = physical_mmio_device_ids.at(dev_index);

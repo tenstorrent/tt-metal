@@ -158,6 +158,7 @@ def run_max_pool(
             output_channels=in_c,
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            enable_channels_padding=False,
             is_out_tiled=False,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
@@ -269,6 +270,8 @@ def run_max_pool(
             [1, 512, 14, 14],
             # wide yolo kernel
             [1, 512, 10, 10],
+            [1, 96, 112, 112],
+            [1, 192, 132, 20],
         )
     ),
 )
@@ -335,6 +338,7 @@ def test_run_max_pool(
             [8, 4096, 10, 16],
             # wide yolo kernel
             [1, 32768, 10, 10],
+            [1, 6144, 6, 6],
         )
     ),
 )
@@ -429,6 +433,8 @@ def test_run_max_pool_width_shard(
             [16, 16, 528, 80],
             # wide yolo kernel
             [1, 4096, 10, 10],
+            [1, 768, 56, 56],
+            [1, 1280, 8, 6],
         )
     ),
 )
@@ -739,6 +745,7 @@ def test_pool_core_nondivis(
             output_channels=in_c,
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            enable_channels_padding=False,
             is_out_tiled=True,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(

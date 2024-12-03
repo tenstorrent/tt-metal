@@ -66,7 +66,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
             # Unaries with float parameter
-            # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
             # Other unaries (composite operations)
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
@@ -148,7 +147,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.gelu,
     ttnn.rsqrt,
     # Unaries with float parameter
-    # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
     ttnn.log_sigmoid,
     ttnn.softplus,
@@ -257,7 +255,7 @@ def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kw
 ttnn.attach_golden_function(ttnn.leaky_relu, golden_function=_golden_function_leaky_relu)
 
 
-def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
+def _golden_function_relu_min(input_tensor_a, lower_limit, *args, **kwargs):
     import torch
 
     return torch.max(input_tensor_a, torch.tensor(lower_limit))
@@ -266,7 +264,7 @@ def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
 ttnn.attach_golden_function(ttnn.relu_min, golden_function=_golden_function_relu_min)
 
 
-def _golden_function_relu_max(input_tensor_a, *args, upper_limit, **kwargs):
+def _golden_function_relu_max(input_tensor_a, upper_limit, *args, **kwargs):
     import torch
 
     return torch.relu(torch.min(input_tensor_a, torch.tensor(upper_limit)))
@@ -275,13 +273,22 @@ def _golden_function_relu_max(input_tensor_a, *args, upper_limit, **kwargs):
 ttnn.attach_golden_function(ttnn.relu_max, golden_function=_golden_function_relu_max)
 
 
-def _golden_function_heaviside(input_tensor_a, *args, value, **kwargs):
+def _golden_function_heaviside(input_tensor_a, value, *args, **kwargs):
     import torch
 
     return torch.heaviside(input_tensor_a, torch.tensor(value, dtype=input_tensor_a.dtype))
 
 
 ttnn.attach_golden_function(ttnn.heaviside, golden_function=_golden_function_heaviside)
+
+
+def _golden_function_fill(input_tensor_a, fill_value, *args, **kwargs):
+    import torch
+
+    return torch.full_like(input_tensor_a, fill_value)
+
+
+ttnn.attach_golden_function(ttnn.fill, golden_function=_golden_function_fill)
 
 
 def _golden_function_polygamma(input_tensor_a, k, *args, **kwargs):
@@ -719,9 +726,6 @@ ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwargs):
     import torch
-
-    if round_mode == "None":
-        round_mode = None
 
     return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=round_mode)
 

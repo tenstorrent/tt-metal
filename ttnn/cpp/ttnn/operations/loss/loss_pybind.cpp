@@ -19,10 +19,7 @@ namespace ttnn::operations::loss {
 
 namespace detail {
 
-void bind_loss_type(py::module& m) {
-
-    export_enum<LossReductionMode>(m, "LossReductionMode");
-}
+void bind_loss_type(py::module& m) { export_enum<LossReductionMode>(m, "LossReductionMode"); }
 
 void bind_mse_loss_function(py::module& module) {
     auto doc = fmt::format(
@@ -57,13 +54,13 @@ void bind_mse_loss_function(py::module& module) {
         ttnn::mse_loss,
         doc,
         ttnn::pybind_overload_t{
-        [](const OperationType& self,
-            const Tensor& ref,
-            const Tensor& prediction,
-            const LossReductionMode mode,
-            const std::optional<MemoryConfig>& memory_config,
-            std::optional<Tensor> optional_output_tensor,
-            uint8_t queue_id) -> ttnn::Tensor {
+            [](const OperationType& self,
+               const Tensor& ref,
+               const Tensor& prediction,
+               const LossReductionMode mode,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> optional_output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, ref, prediction, mode, memory_config, optional_output_tensor);
             },
             py::arg("input_reference"),
@@ -72,8 +69,7 @@ void bind_mse_loss_function(py::module& module) {
             py::arg("reduction") = LossReductionMode::NONE,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0}
-    );
+            py::arg("queue_id") = 0});
 }
 
 void bind_mae_loss_function(py::module& module) {
@@ -109,13 +105,13 @@ void bind_mae_loss_function(py::module& module) {
         ttnn::l1_loss,
         doc,
         ttnn::pybind_overload_t{
-        [](const OperationType& self,
-            const Tensor& ref,
-            const Tensor& prediction,
-            const LossReductionMode mode,
-            const std::optional<MemoryConfig>& memory_config,
-            std::optional<Tensor> optional_output_tensor,
-            uint8_t queue_id) -> ttnn::Tensor {
+            [](const OperationType& self,
+               const Tensor& ref,
+               const Tensor& prediction,
+               const LossReductionMode mode,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> optional_output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, ref, prediction, mode, memory_config, optional_output_tensor);
             },
             py::arg("input_reference"),
@@ -124,17 +120,15 @@ void bind_mae_loss_function(py::module& module) {
             py::arg("reduction") = LossReductionMode::NONE,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0}
-    );
+            py::arg("queue_id") = 0});
 }
 
-} // detail
-
+}  // namespace detail
 
 void py_bind_loss_functions(py::module& module) {
-   detail::bind_loss_type(module);
-   detail::bind_mse_loss_function(module);
-   detail::bind_mae_loss_function(module);
+    detail::bind_loss_type(module);
+    detail::bind_mse_loss_function(module);
+    detail::bind_mae_loss_function(module);
 }
 
-} // ttnn::operations::loss
+}  // namespace ttnn::operations::loss
