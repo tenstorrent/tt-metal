@@ -920,5 +920,5 @@ def test_llama_demo(
         sampling_params=sampling_params,
         instruct_mode=instruct,
         is_ci_env=is_ci_env,
-        print_to_file=True,  # TODO Miguel set this to false before merging
+        print_to_file=False,
     )

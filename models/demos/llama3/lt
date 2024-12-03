@@ -729,13 +729,11 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Open log file
     entry.open_log_file()
 
-    # TODO Miguel: Update LT to the final demo.py configuration
-
     # Define command shortcuts
     command_shortcuts = {
-        "demo": "pytest models/demos/llama3/demo/demo.py -k 'instruct-1 and attention-1'",
-        "demo-batch32": "pytest models/demos/llama3/demo/demo.py -k 'instruct-1 and attention-32'",
-        "demo-1layer": "pytest models/demos/llama3/demo/demo.py -k single_layer",
+        "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
+        "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
+        "demo-long": "pytest models/demos/llama3/demo/demo.py -k long",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
@@ -747,6 +745,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-128 and full'",
         "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-128 and quick'",
         "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance-4096",
+        # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
         "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
