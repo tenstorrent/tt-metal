@@ -236,7 +236,7 @@ class Program_ {
     CBHandle add_circular_buffer(
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
@@ -673,7 +673,7 @@ CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet& core_range_se
 CBHandle detail::Program_::add_circular_buffer(
     const CoreRangeSet& core_range_set,
     const CircularBufferConfig& config,
-    const experimental::GlobalCircularBuffer& global_circular_buffer) {
+    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     std::shared_ptr<CircularBuffer> circular_buffer =
         std::make_shared<CircularBuffer>(core_range_set, config, global_circular_buffer);
@@ -687,7 +687,7 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
 CBHandle Program::add_circular_buffer(
     const CoreRangeSet& core_range_set,
     const CircularBufferConfig& config,
-    const experimental::GlobalCircularBuffer& global_circular_buffer) {
+    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
     return pimpl_->add_circular_buffer(core_range_set, config, global_circular_buffer);
 }
 

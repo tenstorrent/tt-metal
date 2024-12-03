@@ -8,6 +8,7 @@
 #include "command_queue.hpp"
 #include "device.hpp"
 #include "event.hpp"
+#include "global_circular_buffer.hpp"
 #include "kernel.hpp"
 #include "program.hpp"
 #include "trace.hpp"

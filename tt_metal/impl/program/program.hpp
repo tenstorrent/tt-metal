@@ -28,6 +28,9 @@ class Device;
 class Program;
 class CircularBufferConfig;
 
+}  // namespace v0
+
+namespace v1 {
 namespace experimental {
 class GlobalCircularBuffer;
 CBHandle CreateCircularBuffer(
@@ -37,8 +40,7 @@ CBHandle CreateCircularBuffer(
     const GlobalCircularBuffer& global_circular_buffer);
 
 }  // namespace experimental
-
-}  // namespace v0
+}  // namespace v1
 
 class EnqueueProgramCommand;
 class HWCommandQueue;
@@ -168,11 +170,11 @@ class Program {
     std::unique_ptr<detail::Program_> pimpl_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
-    friend CBHandle experimental::CreateCircularBuffer(
+    friend CBHandle v1::experimental::CreateCircularBuffer(
         Program& program,
         const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
         const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
@@ -185,7 +187,7 @@ class Program {
     CBHandle add_circular_buffer(
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
