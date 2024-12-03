@@ -65,7 +65,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            log_info(LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
+            log_info(
+                LogTest,
+                "Running on eth core {}({})",
+                core.str(),
+                device->translated_ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         erisc_kid = CreateKernel(
@@ -82,7 +86,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         KernelHandle ierisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            log_info(LogTest, "Running on inactive eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
+            log_info(
+                LogTest,
+                "Running on inactive eth core {}({})",
+                core.str(),
+                device->translated_ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         ierisc_kid = CreateKernel(
@@ -107,7 +115,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     vector<string> expected_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            CoreCoord phys_core = device->worker_core_from_logical_core({x, y});
+            CoreCoord phys_core = device->translated_worker_core_from_logical_core({x, y});
             for (auto &risc_str : {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
                 string expected = fmt::format("{}:{}", phys_core.str(), risc_str);
                 expected_strings.push_back(expected);
@@ -116,14 +124,14 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(core);
             string expected = fmt::format("{}:erisc", phys_core.str());
             expected_strings.push_back(expected);
         }
     }
     if (has_ieth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(core);
             string expected = fmt::format("{}:ierisc", phys_core.str());
             expected_strings.push_back(expected);
         }
@@ -135,7 +143,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherPause) {
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }

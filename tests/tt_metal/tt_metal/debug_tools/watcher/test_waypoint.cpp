@@ -179,19 +179,19 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord logical_core = {x, y};
-            CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
+            CoreCoord phys_core = device->translated_worker_core_from_logical_core(logical_core);
             check_core(logical_core, phys_core, false, false);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(core);
             check_core(core, phys_core, true, true);
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(core);
             check_core(core, phys_core, true, false);
         }
     }
@@ -200,8 +200,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, this->devices_[0]);
     }
 }

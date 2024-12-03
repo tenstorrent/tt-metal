@@ -118,19 +118,9 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
 
         vector<uint32_t> reader_args = {
-            dram_buffer_src0_addr,
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            NUM_TILES,
-            dram_buffer_src1_addr,
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
-            NUM_TILES,
-            0};
+            dram_buffer_src0_addr, (std::uint32_t)0, NUM_TILES, dram_buffer_src1_addr, (std::uint32_t)0, NUM_TILES, 0};
 
-        vector<uint32_t> writer_args = {
-            dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, NUM_TILES
-        };
+        vector<uint32_t> writer_args = {dram_buffer_dst_addr, (std::uint32_t)0, NUM_TILES};
 
         SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
@@ -155,7 +145,6 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
 }
 
 TEST_F(WatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
 

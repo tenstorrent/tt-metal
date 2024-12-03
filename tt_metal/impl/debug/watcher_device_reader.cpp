@@ -146,7 +146,7 @@ WatcherDeviceReader::WatcherDeviceReader(
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
                 device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
@@ -159,7 +159,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            CoreCoord phys_core = device->translated_ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
                 device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
@@ -211,7 +211,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Dump eth cores
     for (const CoreCoord& eth_core : device->ethernet_cores()) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
-        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        CoreCoord physical_core = device->translated_ethernet_core_from_logical_core(eth_core);
         if (device->is_active_ethernet_core(eth_core)) {
             DumpCore(logical_core, true);
         } else if (device->is_inactive_ethernet_core(eth_core)) {

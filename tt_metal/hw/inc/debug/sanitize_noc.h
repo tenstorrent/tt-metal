@@ -43,16 +43,35 @@ typedef bool debug_sanitize_noc_which_core_t;
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    // Check if the target NOC endpoint is valid in the Tensix Virtual Coordinate Space
+    for (uint32_t idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
+        uint8_t core_x = core_info->virtual_non_worker_cores[idx].x;
+        uint8_t core_y = core_info->virtual_non_worker_cores[idx].y;
 
+        if (x == NOC_0_X(0, core_info->noc_size_x, (uint32_t)core_x) &&
+            y == NOC_0_Y(0, core_info->noc_size_y, (uint32_t)core_y)) {
+            return core_info->virtual_non_worker_cores[idx].type;
+        }
+    }
+    // Was not a valid non-worker Virtual Coordinate. Check if endpoint maps to a valid non-worker Physical Coordinate.
     for (uint32_t idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         uint8_t core_x = core_info->non_worker_cores[idx].x;
         uint8_t core_y = core_info->non_worker_cores[idx].y;
-        if (x == NOC_0_X(0, core_info->noc_size_x, (uint32_t) core_x) &&
-            y == NOC_0_Y(0, core_info->noc_size_y, (uint32_t) core_y)) {
+        if (x == NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)core_x) &&
+            y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)core_y)) {
             return core_info->non_worker_cores[idx].type;
         }
     }
 
+    // Check if coordinate maps to a harvested row in the virtual space.
+    for (uint32_t idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
+        uint16_t harvested_y = core_info->virtual_harvested_y[idx];
+        if (y == NOC_0_Y(0, core_info->noc_size_y, (uint32_t)harvested_y)) {
+            return AddressableCoreType::HARVESTED;
+        }
+    }
+
+    // Check if coordinate maps to a harvested row in the physical space.
     for (uint32_t idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
         uint16_t harvested_y = core_info->harvested_y[idx];
         if (y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)harvested_y)) {
@@ -60,14 +79,14 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
         }
     }
 
-    // Tensix
+    // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space.
     if (x >= NOC_0_X(0, core_info->noc_size_x, (uint32_t) 18) &&
         x <= NOC_0_X(0, core_info->noc_size_x, (uint32_t) 18 + core_info->noc_size_x - 1) &&
         y >= NOC_0_Y(0, core_info->noc_size_y, (uint32_t) 18) &&
         y <= NOC_0_Y(0, core_info->noc_size_y, (uint32_t) 18 + core_info->noc_size_y - 1)) {
         return AddressableCoreType::TENSIX;
     }
-
+    // Check if NOC endpoint is valid in the Tensix Physical Coordinate Space.
     if (noc_id == 0) {
         if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) 0) &&
             x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) core_info->noc_size_x - 1) &&
@@ -245,6 +264,7 @@ uint32_t debug_sanitize_noc_addr(
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) -
         1;  // Default alignment, only override in ceratin cases.
     if (core_type == AddressableCoreType::PCIE) {
+        DPRINT << "Hit PCIe Core" << ENDL();
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         debug_sanitize_post_noc_addr_and_hang(

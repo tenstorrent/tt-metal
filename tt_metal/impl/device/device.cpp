@@ -624,6 +624,7 @@ void Device::initialize_and_launch_firmware() {
     const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
     const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
     const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
+    std::set<CoreCoord> repeated_dram_cores = {};
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
@@ -634,12 +635,22 @@ void Device::initialize_and_launch_firmware() {
     for (const CoreCoord &core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
+    uint32_t num_dram_cores = 0;
     for (const CoreCoord &core : dram_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
+        if (repeated_dram_cores.find(CoreCoord(core.x, core.y)) == repeated_dram_cores.end()) {
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
+            repeated_dram_cores.insert(CoreCoord(core.x, core.y));
+            num_dram_cores++;
+        }
     }
     for (const CoreCoord &core : eth_cores) {
+        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+    }
+    // Track Translated Non Worker Cores (In this case only Eth) separately
+    uint32_t virtual_non_worker_cores_idx = 0;
+    for (const CoreCoord &core : eth_cores) {
         auto translated_core = this->translated_coords_from_physical_coords(core, CoreType::ETH);
-        core_info->non_worker_cores[non_worker_cores_idx++] = {translated_core.x, translated_core.y, AddressableCoreType::ETH};
+        core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {translated_core.x, translated_core.y, AddressableCoreType::ETH};
     }
 
     // Determine which noc-coords are harvested
@@ -657,6 +668,8 @@ void Device::initialize_and_launch_firmware() {
         core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
     }
 
+    core_info->virtual_harvested_y[0] = 27;
+    core_info->virtual_harvested_y[1] = 26;
     core_info->noc_size_x = soc_d.grid_size.x;
     core_info->noc_size_y = soc_d.grid_size.y;
 
@@ -3084,6 +3097,15 @@ CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) c
         TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
 
     return soc_desc.physical_cores.at(physical_coord).type;
+}
+
+CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
+    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
+        return CoreType::WORKER;
+    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
+        return CoreType::ETH;
+    }
+    return this->core_type_from_physical_core(virtual_coord);
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {

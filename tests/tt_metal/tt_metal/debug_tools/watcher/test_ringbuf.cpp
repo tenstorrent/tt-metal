@@ -33,17 +33,17 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
             GTEST_SKIP();
         }
         logical_core = *(device->get_active_ethernet_cores(true).begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        phys_core = device->translated_ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_inactive_ethernet_cores().begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        phys_core = device->translated_ethernet_core_from_logical_core(logical_core);
     } else {
         logical_core = CoreCoord{0, 0};
-        phys_core = device->worker_core_from_logical_core(logical_core);
+        phys_core = device->translated_worker_core_from_logical_core(logical_core);
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, phys_core);
 
@@ -146,7 +146,6 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 
 TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
@@ -157,7 +156,6 @@ TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
 
 TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
@@ -168,7 +166,6 @@ TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
 
 TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
@@ -179,7 +176,6 @@ TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
 
 TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
@@ -190,7 +186,6 @@ TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
 
 TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
@@ -201,7 +196,6 @@ TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
 
 TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
@@ -212,7 +206,6 @@ TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
 
 TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();

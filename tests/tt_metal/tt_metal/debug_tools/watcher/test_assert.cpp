@@ -24,14 +24,14 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
             GTEST_SKIP();
         }
         logical_core = *(device->get_active_ethernet_cores(true).begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        phys_core = device->translated_ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_inactive_ethernet_cores().begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        phys_core = device->translated_ethernet_core_from_logical_core(logical_core);
     } else {
         logical_core = CoreCoord{0, 0};
         phys_core = device->translated_worker_core_from_logical_core(logical_core);
@@ -181,7 +181,6 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 
 TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
@@ -194,7 +193,6 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
 
 TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -205,7 +203,6 @@ TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
 
 TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -216,7 +213,6 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
 
 TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -227,7 +223,6 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
 
 TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -238,7 +233,6 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
 
 TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -249,7 +243,6 @@ TEST_F(WatcherFixture, TestWatcherAssertErisc) {
 
 TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();

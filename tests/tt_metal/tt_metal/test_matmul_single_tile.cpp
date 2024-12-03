@@ -125,23 +125,19 @@ int main(int argc, char **argv) {
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
-
-
         tt_metal::SetRuntimeArgs(
             program,
             mm_reader_kernel,
             core,
             {src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
-            1,
-            1,
-            1,
-            1 * single_tile_size,
-            1 * single_tile_size});
+             0,
+             src1_dram_buffer->address(),
+             0,
+             1,
+             1,
+             1,
+             1 * single_tile_size,
+             1 * single_tile_size});
 
         tt_metal::SetRuntimeArgs(
             program,
