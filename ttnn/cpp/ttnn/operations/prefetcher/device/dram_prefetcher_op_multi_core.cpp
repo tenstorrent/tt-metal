@@ -63,7 +63,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     // DRAM reader CB
     uint32_t in1_reader_cb_index = 0;
-    uint32_t in1_reader_cb_size = in1_block_h * in1_block_w * single_tile_size * 3;
+    uint32_t in1_reader_cb_size =
+        in1_block_h * in1_block_w * single_tile_size * 3;  // TODO: how big should reader CB be?
 
     uint32_t in1_reader_page_sizes[num_tensors], in1_reader_num_pages[num_tensors];
     for (uint32_t i = 0; i < num_tensors; ++i) {
@@ -127,7 +128,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
-    std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
+    uint32_t read_cb_size = in1_reader_cb_size;
+    uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
+    std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc, (std::uint32_t)read_cb_size};
     // tensor addresses
     for (uint32_t i = 0; i < num_tensors; ++i) {
         reader_rt_args.push_back(tensors[i]->address());
@@ -144,7 +147,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (uint32_t i = 0; i < num_tensors; ++i) {
         reader_rt_args.push_back(num_blocks);
     }
-    // num tiles
+    // num tiles in block
     for (uint32_t i = 0; i < num_tensors; ++i) {
         reader_rt_args.push_back(in1_block_num_tiles);
     }
