@@ -143,7 +143,7 @@ class downsample_2d:
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
-        [hidden_states, _out_height, _out_width, self.conv_weights, self.conv_bias] = ttnn.conv2d(
+        [hidden_states, [self.conv_weights, self.conv_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -158,6 +158,8 @@ class downsample_2d:
             bias_tensor=self.conv_bias,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,

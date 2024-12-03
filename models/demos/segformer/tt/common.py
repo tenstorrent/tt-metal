@@ -57,7 +57,7 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        [output_tensor, _out_height, _out_width, self.weights, self.bias] = ttnn.conv2d(
+        [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -72,6 +72,8 @@ class Conv:
             input_width=input_tensor.shape[2],
             conv_config=conv_config,
             groups=self.groups,
+            return_output_dim=True,
+            return_weights_and_bias=False,
         )
 
         return output_tensor, _out_height, _out_width
