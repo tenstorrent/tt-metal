@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_l1 = dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1 or dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1_SMALL ? 1 : 0;
-    bool keep_l1_aligned = src_is_dram && dst_is_l1;
+    bool keep_l1_aligned = dst_is_l1;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.get_layout() == Layout::TILE) {
