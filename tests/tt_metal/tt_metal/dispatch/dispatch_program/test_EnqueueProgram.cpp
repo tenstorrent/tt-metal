@@ -17,6 +17,9 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 using std::vector;
 using namespace tt::tt_metal;
 
