@@ -48,8 +48,7 @@ namespace tt::tt_metal {
  * @endcode
  *
  * @see tt::get_arch_from_string
- * @see tt_ClusterDescriptor::detect_arch
- * @see tt_ClusterDescriptor::get_arch
+ * @see PCIDevice::enumerate_devices_info
  */
 inline tt::ARCH get_platform_architecture() {
     auto arch = tt::ARCH::Invalid;
