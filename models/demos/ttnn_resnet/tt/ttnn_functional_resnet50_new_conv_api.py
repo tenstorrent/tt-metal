@@ -160,7 +160,7 @@ class resnet50Bottleneck:
     ):
         if self.downsample:
             logger.debug(f"Running downsample")
-            ds_out, _, _, self.ds_conv_weight_tensor, self.ds_conv_bias_tensor = ttnn.conv2d(
+            ds_out, [self.ds_conv_weight_tensor, self.ds_conv_bias_tensor] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
                 in_channels=self.ds_conv_input_channels,
@@ -198,6 +198,8 @@ class resnet50Bottleneck:
                     packer_l1_acc=packer_l1_accum_enabled,
                 ),
                 conv_op_cache=conv_op_cache,
+                return_output_dim=False,
+                return_weights_and_bias=True,
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -229,7 +231,7 @@ class resnet50Bottleneck:
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
         module_input_height = input_height
-        out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -258,6 +260,8 @@ class resnet50Bottleneck:
                 packer_l1_acc=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         act_block_h_override = 0
@@ -313,7 +317,7 @@ class resnet50Bottleneck:
 
         reallocate_halo_output = batch_size == 20
         logger.debug(f"Running conv2")
-        out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
+        out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
             in_channels=self.conv2_input_channels,
@@ -349,6 +353,8 @@ class resnet50Bottleneck:
                 packer_l1_acc=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         logger.debug(
@@ -367,7 +373,7 @@ class resnet50Bottleneck:
 
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
-        out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
+        out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             in_channels=self.conv3_input_channels,
@@ -395,6 +401,8 @@ class resnet50Bottleneck:
                 packer_l1_acc=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
 
         if not run_downsample_before_conv2:
@@ -734,7 +742,7 @@ class resnet50:
         logger.debug(f"==== first conv")
 
         # first conv
-        x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -750,6 +758,8 @@ class resnet50:
             conv_config=self.conv1_config,
             compute_config=self.conv1_compute_config,
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         # Relu is fused with conv1
         if self.batch_size == 20:

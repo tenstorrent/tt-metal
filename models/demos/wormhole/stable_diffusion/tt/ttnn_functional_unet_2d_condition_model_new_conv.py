@@ -396,7 +396,8 @@ class UNet2DConditionModel:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        [sample, _out_height, _out_width, self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
+
+        [sample, [self.conv_in_weights, self.conv_in_bias]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.conv_in_weights,
             bias_tensor=self.conv_in_bias,
@@ -412,6 +413,8 @@ class UNet2DConditionModel:
             conv_config=conv_config,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -663,7 +666,7 @@ class UNet2DConditionModel:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        [sample, _out_height, _out_width, self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(
+        [sample, [self.conv_out_weights, self.conv_out_bias]] = ttnn.conv2d(
             input_tensor=sample,
             in_channels=self.conv_out_in_channels,
             out_channels=self.conv_out_out_channels,
@@ -679,6 +682,8 @@ class UNet2DConditionModel:
             conv_config=conv_config,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
