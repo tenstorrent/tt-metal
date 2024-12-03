@@ -15,7 +15,8 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& memory_config,
-    const std::optional<DataType>& output_dtype const bool& is_l1_aligned = false) {
+    const std::optional<DataType>& output_dtype,
+    const bool& is_l1_aligned) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     auto shard_spec = input_tensor.shard_spec().value();

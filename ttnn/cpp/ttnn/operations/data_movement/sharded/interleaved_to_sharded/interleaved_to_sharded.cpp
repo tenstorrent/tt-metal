@@ -72,7 +72,8 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     return operation::run(
                InterleavedToShardedDeviceOperation{
                    .output_mem_config = sharded_mem_config,
-                   .output_dtype = data_type_arg.value_or(input_tensor.get_dtype()).keep_l1_aligned = keep_l1_aligned},
+                   .output_dtype = data_type_arg.value_or(input_tensor.get_dtype()),
+                   .keep_l1_aligned = keep_l1_aligned},
                {input_tensor})
         .at(0);
 }

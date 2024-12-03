@@ -15,7 +15,7 @@ struct ShardedToInterleavedOperation {
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& memory_config,
         const std::optional<DataType>& output_dtype,
-        const bool& is_l1_aligned);
+        const bool& is_l1_aligned = false);
 };
 
 }  // namespace operations::data_movement
