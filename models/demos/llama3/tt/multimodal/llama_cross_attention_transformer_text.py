@@ -272,9 +272,9 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
-        # get_last_token=-1,
         text_only_inference=False,
         vision_tokens=None,
+        get_last_token=-1,
     ):
         for idx, (
             layer,
@@ -301,6 +301,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 mode=mode,
             )
 
+        if get_last_token != -1:
+            h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
         h = self.norm(h, mode=mode)
 
         # TODO: Switch to using dram-sharded LM head and remove this

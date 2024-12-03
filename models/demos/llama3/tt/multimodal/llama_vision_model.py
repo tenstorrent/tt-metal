@@ -286,15 +286,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         h = self.prepare_inputs_common(position_ids, tokens)
         padded_seq_len = _get_padded_prefill_seqlen(S)
 
-        tt_position_id = ttnn.from_torch(
-            position_ids,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
         xattn_mask = cross_attention_masks[:, :, position_ids]
         xattn_mask = torch.nn.functional.pad(
             xattn_mask,
@@ -355,7 +346,6 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_full_text_mask_expand_11SD,
-            tt_position_id,
             rot_mats,
         )
 
@@ -510,10 +500,9 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         return (tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
 
-    def process_output_prefill(self, tt_out, B, S):
-        padded_seq_len = _get_padded_prefill_seqlen(S)
+    def process_output_prefill(self, tt_out, B, last_token_idx):
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-        tt_out = tt_out[0].reshape(B, padded_seq_len, -1)[:, :S, :]
+        tt_out = tt_out[0, 0, last_token_idx, :]
         return tt_out
 
     def process_output_decode(self, tt_out, B, S):
@@ -584,10 +573,10 @@ class CrossAttentionTransformer(torch.nn.Module):
         full_text_mas_expand_1NSH,
         full_text_mask_expand_11SD,
         xattn_caches,
-        position_id,
         rot_mats,
         user_id,
         vision_tokens,
+        get_last_token=-1,
     ):
         """
         This method runs prefill forward. It takes ttnn tensors in, returns ttnn tensors.
@@ -598,12 +587,13 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_1NSH=full_text_mas_expand_1NSH,
             full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
-            current_pos=position_id,
+            current_pos=None,
             rot_mats=rot_mats,
             transformation_mats=None,  # Attention holds its own trans mats
             user_id=user_id,
             mode="prefill",
             vision_tokens=vision_tokens,
+            get_last_token=get_last_token,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         return tt_out
