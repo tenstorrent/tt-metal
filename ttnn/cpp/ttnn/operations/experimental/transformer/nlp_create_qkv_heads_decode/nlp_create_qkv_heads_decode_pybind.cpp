@@ -22,20 +22,20 @@ void bind_nlp_create_qkv_heads_decode(pybind11::module& module) {
                 const ttnn::Tensor& input_tensor,
                 const uint32_t num_q_heads,
                 const std::optional<uint32_t> num_kv_heads,
+                const std::optional<const bool> overlap_qk_coregrid,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 std::optional<std::array<Tensor, 3>> optional_output_tensors,
-                uint8_t queue_id,
-                const std::optional<const bool> overlap_qk_coregrid) {
-                    return self(queue_id, input_tensor, num_q_heads, num_kv_heads, memory_config, optional_output_tensors, overlap_qk_coregrid);
+                uint8_t queue_id) {
+                    return self(queue_id, input_tensor, num_q_heads, num_kv_heads, overlap_qk_coregrid, memory_config, optional_output_tensors);
                 },
                 pybind11::arg("input_tensor").noconvert(),
                 pybind11::kw_only(),
                 pybind11::arg("num_heads").noconvert(),
                 pybind11::arg("num_kv_heads").noconvert() = std::nullopt,
+                pybind11::arg("overlap_qk_coregrid").noconvert() = true,
                 pybind11::arg("memory_config") = std::nullopt,
                 pybind11::arg("output_tensors") = std::nullopt,
-                pybind11::arg("queue_id") = 0,
-                pybind11::arg("overlap_qk_coregrid").noconvert() = true});
+                pybind11::arg("queue_id") = 0});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

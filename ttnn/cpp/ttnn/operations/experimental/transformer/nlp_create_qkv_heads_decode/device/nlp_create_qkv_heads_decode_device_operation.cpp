@@ -25,7 +25,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
     // input
-    uint32_t num_users_supported = 32;
+    const uint32_t num_users_supported = 32;
     uint32_t num_users = input_shape[2];
     TT_FATAL(input_shape[3] % TILE_WIDTH == 0, "Unsupported input shape");  // head_dim must be multiple of TILE_WIDTH
     TT_FATAL(num_users <= num_users_supported, "Unsupported input shape");  // 32 users

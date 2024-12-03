@@ -4,8 +4,9 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "tt_metal/common/constants.hpp"
 
-
+using namespace tt::constants;
 void kernel_main() {
     uint32_t in_tile_offset_by_batch = get_arg_val<uint32_t>(0);
     uint32_t q_start_addr = get_arg_val<uint32_t>(1);
@@ -40,9 +41,9 @@ void kernel_main() {
         get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) + in_tile_offset_by_batch;
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
-    uint32_t tile_size = head_size/head_size_num_tiles;
-    constexpr uint32_t HALF_TILE_ELEMENTS = 16 * 32;
-    uint32_t SUBTILE_ROWS = 16;
+    constexpr uint32_t tile_size = head_size/head_size_num_tiles;
+    constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
+    constexpr uint32_t SUBTILE_ROWS = FACE_HEIGHT;
 
     // Skip Q section if PROCESS_QV is False
     if constexpr (PROCESS_QV == 1) {
@@ -56,7 +57,7 @@ void kernel_main() {
                 }
                 // Read second phase
                 if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                    noc_async_read(qkv_read_addr+256*ELEMENT_SIZE, q_write_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                    noc_async_read(qkv_read_addr+FACE_HW*ELEMENT_SIZE, q_write_addr+FACE_HW*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
                 }
 
                 qkv_read_addr += tile_size;
@@ -97,7 +98,7 @@ void kernel_main() {
                 }
                 // Read second phase
                 if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                    noc_async_read(qkv_read_addr+256*ELEMENT_SIZE, k_write_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                    noc_async_read(qkv_read_addr+FACE_HW*ELEMENT_SIZE, k_write_addr+FACE_HW*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
                 }
 
                 qkv_read_addr += tile_size;
@@ -137,7 +138,7 @@ void kernel_main() {
                 }
                 // Read second phase
                 if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                    noc_async_read(qkv_read_addr+256*ELEMENT_SIZE, v_write_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                    noc_async_read(qkv_read_addr+FACE_HW*ELEMENT_SIZE, v_write_addr+FACE_HW*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
                 }
 
                 qkv_read_addr += tile_size;

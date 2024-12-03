@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::transformer {
         const uint32_t num_q_heads;
         const uint32_t num_kv_heads;
         const uint32_t head_dim;
-        MemoryConfig output_mem_config;
         const bool overlap_qk_coregrid;
+        MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
