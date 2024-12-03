@@ -87,9 +87,8 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
         }});
 }
 
-MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id,
-                                                 const MemoryConfig& output_memory_config,
-                                                 ttnn::SimpleShape logical_output_shape) {
+MassagedConcat build_untilize_rm_retilize_concat(
+    uint8_t queue_id, const MemoryConfig& output_memory_config, ttnn::SimpleShape& logical_output_shape) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
