@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -349,7 +349,6 @@ void kernel_main() {
 #ifdef SHARDED_OUT
 #ifdef UNPAD_UNTILIZE_OUT
     uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
-    print_pages(dst_cb_addr, 64, 64);
 
     uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
     for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
