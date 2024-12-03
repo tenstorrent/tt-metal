@@ -102,8 +102,10 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
 )
 @pytest.mark.parametrize(
     "test_type,max_seq_len",
-    (("normal", 512), ("long", 128 * 1024)),
-    ids=["normal", "long"],
+    (("normal", 512),),
+    ids=[
+        "normal",
+    ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 def test_llama_multimodal_demo_text(
@@ -147,35 +149,15 @@ def test_llama_multimodal_demo_text(
     with open(IMG_PATH / "clutter.jpeg", "rb") as f:
         clutter = PIL_Image.open(f).convert("RGB")
 
-    if test_type == "normal":
-        dialogs = [
-            # image understanding
-            [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
-            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
-        ]
-        if len(dialogs) < max_batch_size:
-            dialogs *= max_batch_size // len(dialogs)
-    else:
-        assert max_batch_size == 1
-        # Slice out approximately the last 32k tokens of the context
-        # max_context_chars = 140000
-        max_context_chars = 50000
-        dialogs = [
-            [
-                UserMessage(
-                    content=[
-                        ImageMedia(image=img),
-                        "The following is context for a question which will be asked at the end. After answering the question, you will be asked to write a haiku for the image. "
-                        + load_inputs("models/demos/llama3/demo/input_data_long.json", max_batch_size)[0][
-                            -max_context_chars:
-                        ]
-                        + " Then, write a haiku for the image.",
-                    ]
-                )
-            ],
-        ]
+    dialogs = [
+        # image understanding
+        [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
+        [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
+        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+        [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+    ]
+    if len(dialogs) < max_batch_size:
+        dialogs *= max_batch_size // len(dialogs)
 
     assert len(dialogs) % max_batch_size == 0
     num_batches = len(dialogs) // max_batch_size
@@ -222,7 +204,7 @@ def test_llama_multimodal_demo_text(
 
             prefill_end = time.perf_counter()
             # Get logits for last prefill token
-            batch_logits = batch_logits[torch.arange(max_batch_size), prefill_lens - 1].view(max_batch_size, 1, -1)
+            batch_logits = batch_logits.view(max_batch_size, 1, -1)
             next_tokens, next_texts = sampler(batch_logits)
             for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
                 tokens[i, prefill_lens[i]] = next_token

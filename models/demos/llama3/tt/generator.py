@@ -187,6 +187,7 @@ class LlamaGenerator:
         Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
         """
         B = tokens.shape[0]
+        last_token_idx = prefill_len - 1
         vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
             batch_images=[vision_images],
             batch_masks=[vision_mask],
@@ -198,7 +199,6 @@ class LlamaGenerator:
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_full_text_mask_expand_11SD,
-            tt_position_id,
             rot_mats,
         ) = self.model.prepare_inputs_prefill(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len=prefill_len
@@ -210,13 +210,13 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_full_text_mask_expand_11SD,
             xattn_caches,
-            tt_position_id,
             rot_mats,
             user_id,
             vision_tokens,
+            get_last_token=(last_token_idx // 32) * 32,
         )
 
-        logits = self.model.process_output_prefill(tt_logits, B, prefill_len)
+        logits = self.model.process_output_prefill(tt_logits, B, last_token_idx=(last_token_idx % 32))
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
 
@@ -225,7 +225,7 @@ class LlamaGenerator:
         Batched version of prefill_forward_single_user for vision model.
         """
         batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, max(prompt_lens), self.model_args.vocab_size)
+        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         output_xattn_masks = []
         output_full_text_row_masked_out_masks = []
 
@@ -246,7 +246,7 @@ class LlamaGenerator:
                 total_len=total_lens[user_id],
                 prefill_len=seq_len,
             )
-            output_logits[user_id, :seq_len] = logits
+            output_logits[user_id] = logits
             output_xattn_masks.append(cross_attention_masks)
             output_full_text_row_masked_out_masks.append(full_text_row_masked_out_mask)
 
