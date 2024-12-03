@@ -114,9 +114,6 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     result_boxes_list.append(result_boxes_padded[:, 6256:6356])
     result_boxes = torch.cat(result_boxes_list, dim=1)
 
-    print(ref_boxes.shape, ref_confs.shape)
-    print(result_boxes.shape, result_confs.shape)
-
     assert_with_pcc(ref_boxes, result_boxes, 0.99)
     assert_with_pcc(ref_confs, result_confs, 0.71)
 
