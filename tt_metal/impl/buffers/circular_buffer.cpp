@@ -42,7 +42,7 @@ CircularBuffer::CircularBuffer(const CoreRangeSet& core_ranges, const CircularBu
 CircularBuffer::CircularBuffer(
     const CoreRangeSet& core_ranges,
     const CircularBufferConfig& config,
-    const experimental::GlobalCircularBuffer& global_circular_buffer) :
+    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(core_ranges),
     config_(config),
@@ -133,7 +133,7 @@ void CircularBuffer::assign_global_address() {
     GetBufferAddress(config_.shadow_global_buffer, &globally_allocated_address_);
 }
 
-void CircularBuffer::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
+void CircularBuffer::set_global_circular_buffer(const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
         global_circular_buffer.all_cores().contains(this->core_ranges_),
         "Specified cores are not contained in associated GlobalCircularBuffer");

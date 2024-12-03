@@ -18,6 +18,10 @@ inline namespace v0 {
 class Buffer;
 class Device;
 
+}  // namespace v0
+
+namespace v1 {
+
 namespace experimental {
 
 class GlobalCircularBuffer {
@@ -69,6 +73,6 @@ private:
 
 }  // namespace experimental
 
-}  // namespace v0
+}  // namespace v1
 
 }  // namespace tt::tt_metal

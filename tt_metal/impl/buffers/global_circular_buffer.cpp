@@ -19,7 +19,7 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
+namespace v1 {
 
 namespace experimental {
 
@@ -156,6 +156,6 @@ uint32_t GlobalCircularBuffer::size() const { return this->size_; }
 
 }  // namespace experimental
 
-}  // namespace v0
+}  // namespace v1
 
 }  // namespace tt::tt_metal

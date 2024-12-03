@@ -9,11 +9,13 @@
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
+namespace v1 {
 namespace experimental {
 class GlobalCircularBuffer;
-}
+}  // namespace experimental
+}  // namespace v1
+inline namespace v0 {
 
 class CircularBuffer {
 public:
@@ -21,7 +23,7 @@ public:
     CircularBuffer(
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
 
     const CBHandle id() const { return id_; }
 
@@ -58,7 +60,7 @@ public:
 
     void set_locally_allocated_address(uint32_t address) { this->locally_allocated_address_ = address; }
 
-    void set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer);
+    void set_global_circular_buffer(const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
 
     DeviceAddr config_address() const;
 
@@ -77,7 +79,7 @@ private:
     std::optional<uint32_t> locally_allocated_address_;
     uint32_t globally_allocated_address_;
     DeviceAddr global_circular_buffer_config_address_;
-    const experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
+    const v1::experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
     // add a callback to invalidate circular buffer allocation
 };
 
