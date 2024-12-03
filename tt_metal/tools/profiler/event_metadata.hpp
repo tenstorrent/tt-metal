@@ -1,8 +1,10 @@
+#pragma once
+
 #include <cstdint>
 #include <cstring>  // for std::memcpy
 
-struct alignas(uint64_t) KernelProfilerEventMetadata {
-    enum class NocXferType : unsigned char {
+struct alignas(uint64_t) KernelProfilerNocEventMetadata {
+    enum class NocEventType : unsigned char {
         UNDEF = 0,
         READ = 1,
         WRITE = 2,
@@ -12,17 +14,17 @@ struct alignas(uint64_t) KernelProfilerEventMetadata {
     };
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
 
-    KernelProfilerEventMetadata() = default;
+    KernelProfilerNocEventMetadata() = default;
 
     // used during deserialization
-    explicit KernelProfilerEventMetadata(const uint64_t raw_data) {
-        std::memcpy(this, &raw_data, sizeof(KernelProfilerEventMetadata));
+    explicit KernelProfilerNocEventMetadata(const uint64_t raw_data) {
+        std::memcpy(this, &raw_data, sizeof(KernelProfilerNocEventMetadata));
     }
 
     // these can be compressed to bit-fields if needed, but byte orientated has less overhead
     uint8_t dst_x = 0;
     uint8_t dst_y = 0;
-    NocXferType noc_xfer_type = NocXferType::UNDEF;
+    NocEventType noc_xfer_type = NocEventType::UNDEF;
     NocType noc_type = NocType::UNDEF;
     uint32_t num_bytes = 0;
 
@@ -32,4 +34,4 @@ struct alignas(uint64_t) KernelProfilerEventMetadata {
         return ret;
     }
 };
-static_assert(sizeof(KernelProfilerEventMetadata) == sizeof(uint64_t));
+static_assert(sizeof(KernelProfilerNocEventMetadata) == sizeof(uint64_t));

@@ -287,7 +287,7 @@ void DeviceProfiler::dumpResultToFile(
     int64_t delta = timestamp - last_timestamp;
     last_timestamp = timestamp;
 
-    KernelProfilerEventMetadata ev_md(data);
+    KernelProfilerNocEventMetadata ev_md(data);
 
     log_file << fmt::format(
         R"({{ "proc":"{}",  "sx":{},  "sy":{},  "dx":{},  "dy":{},  "num_bytes":{},  "type":"{}", "timestamp":{} }},)",
