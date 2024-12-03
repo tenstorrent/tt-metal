@@ -779,7 +779,7 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
         0);
 
     // Clear erisc sync info
