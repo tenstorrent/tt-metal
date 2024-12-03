@@ -337,7 +337,7 @@ def test_logit(device, h, w, scalar):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_pow(device, h, w, scalar):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.9)
+    run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.999)
 
 
 @pytest.mark.parametrize("lower_limit", [0, 1.0, 2])

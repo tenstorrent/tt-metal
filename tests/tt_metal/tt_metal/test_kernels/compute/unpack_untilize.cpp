@@ -9,7 +9,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 #ifndef SHORT_INIT
@@ -19,7 +18,7 @@ void MAIN {
     untilize_init_short(tt::CBIndex::c_0);
 #endif
 
-    for(uint32_t b = 0; b < per_core_block_cnt; ++ b) {
+    for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
         cb_reserve_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
 
@@ -31,4 +30,4 @@ void MAIN {
 
     untilize_uninit(tt::CBIndex::c_0);
 }
-}
+}  // namespace NAMESPACE

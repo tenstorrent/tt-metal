@@ -13,6 +13,7 @@
 #include "tt_metal/types.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <utility>
 #include "tt_metal/common/base.hpp"
@@ -24,6 +25,8 @@
 namespace tt {
 
 namespace tt_metal {
+
+std::atomic<size_t> Buffer::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
     tt::stl::reflection::operator<<(os, spec);
@@ -247,6 +250,7 @@ Buffer::Buffer(
     if (size != 0) {
         validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     }
+    unique_id_ = next_unique_id.fetch_add(1);
 }
 
 std::shared_ptr<Buffer> Buffer::create(
@@ -523,6 +527,8 @@ DeviceAddr ShardSpecBuffer::size() const {
 v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
 
 void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
+
+std::size_t v1::GetId(const BufferHandle& buffer) { return buffer->unique_id(); }
 
 void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
     detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});

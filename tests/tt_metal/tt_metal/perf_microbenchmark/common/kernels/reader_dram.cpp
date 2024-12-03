@@ -10,8 +10,8 @@
 #include "debug/dprint.h"
 
 template <uint32_t bank_base_address, uint32_t page_size, bool use_vc>
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded(uint32_t src_addr, uint32_t dest_addr, uint32_t bank_id = 0, const uint32_t vc = 0) {
+FORCE_INLINE void noc_async_read_tile_dram_sharded(
+    uint32_t src_addr, uint32_t dest_addr, uint32_t bank_id = 0, const uint32_t vc = 0) {
     uint32_t src_addr_;
     uint32_t src_noc_xy;
 
@@ -24,15 +24,16 @@ void noc_async_read_tile_dram_sharded(uint32_t src_addr, uint32_t dest_addr, uin
     while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
     WAYPOINT("NRTD");
 
-    if constexpr(use_vc) {
-        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+    if constexpr (use_vc) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
     }
 
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr_);      // (uint32_t)src_addr
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, src_noc_xy);   // src_addr >> 32
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, page_size);  // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr_);           // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, page_size);              // len_bytes
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     noc_reads_num_issued[noc_index] += 1;
 }
@@ -49,7 +50,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t* page_size = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
     tt_l1_ptr uint32_t* num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
     tt_l1_ptr uint32_t* num_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
-    tt_l1_ptr uint32_t* block_num_tiles = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    tt_l1_ptr uint32_t* block_num_tiles =
+        (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
 
     constexpr uint32_t cb_id = 0;
     constexpr uint32_t total_num_blocks_in_buffer = 3;
@@ -70,7 +72,8 @@ void kernel_main() {
         uint32_t curr_block_size_bytes = curr_num_pages * curr_page_size;
         uint32_t curr_layer_size_bytes = curr_num_blocks * curr_block_size_bytes;
 
-        uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
+        uint32_t src_base_addr =
+            noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
         src_read_addr = src_read_addr_offset_bytes;
 
         // For debug purpose, use trivial DRAM read method
@@ -139,7 +142,5 @@ void kernel_main() {
         cb_push_back(cb_id, curr_block_num_tiles);
 
         src_read_addr_offset_bytes += curr_layer_size_bytes;
-
     }
-
 }

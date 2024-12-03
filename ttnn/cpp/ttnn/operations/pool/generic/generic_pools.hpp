@@ -10,12 +10,13 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
-#include "device/max_pool2d_device_op.hpp"
+#include "device/pool_op.hpp"
 
 namespace ttnn {
 namespace operations::pool {
 
-struct MaxPool2DOp {
+template <Pool2DType pool_type>
+struct Pool2DOp {
     static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
@@ -33,7 +34,8 @@ struct MaxPool2DOp {
 
 }  // namespace operations::pool
 
-constexpr auto max_pool2d =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
+constexpr auto max_pool2d = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::max_pool2d",
+    operations::pool::Pool2DOp<operations::pool::Pool2DType::MAX_POOL2D>>();
 
 }  // namespace ttnn

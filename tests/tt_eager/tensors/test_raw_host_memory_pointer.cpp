@@ -49,7 +49,8 @@ struct ndarray {
     tt::tt_metal::LegacyShape shape;
     void* data;
 
-    ndarray(tt::tt_metal::LegacyShape shape) : shape(shape), data(malloc(tt::tt_metal::compute_volume(shape) * sizeof(DataType))) {}
+    ndarray(tt::tt_metal::LegacyShape shape) :
+        shape(shape), data(malloc(tt::tt_metal::compute_volume(shape) * sizeof(DataType))) {}
     ~ndarray() { free(data); }
 
     std::size_t size() const { return tt::tt_metal::compute_volume(shape); }
@@ -60,8 +61,8 @@ struct ndarray {
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
-    using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::LegacyShape;
+    using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;
     using namespace tt::tt_metal::owned_buffer;

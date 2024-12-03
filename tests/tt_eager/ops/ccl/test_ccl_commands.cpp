@@ -12,13 +12,13 @@
 #include <ranges>
 
 using ttnn::ccl::Shape4D;
-using ttnn::ccl::cmd::tensor_shape_command_arg_t;
-using ttnn::ccl::cmd::tensor_slice_shape_command_arg_t;
-using ttnn::ccl::cmd::tensor_slice_offset_command_arg_t;
-using ttnn::ccl::cmd::worker_start_offset_command_arg_t;
-using ttnn::ccl::cmd::worker_pages_command_arg_t;
-using ttnn::ccl::cmd::full_tensor_command_arg_t;
 using ttnn::ccl::cmd::CclCommandTensor;
+using ttnn::ccl::cmd::full_tensor_command_arg_t;
+using ttnn::ccl::cmd::tensor_shape_command_arg_t;
+using ttnn::ccl::cmd::tensor_slice_offset_command_arg_t;
+using ttnn::ccl::cmd::tensor_slice_shape_command_arg_t;
+using ttnn::ccl::cmd::worker_pages_command_arg_t;
+using ttnn::ccl::cmd::worker_start_offset_command_arg_t;
 
 const Shape4D<uint32_t> uninitialized_test_shape = {
     std::numeric_limits<uint32_t>::max(),
@@ -32,7 +32,7 @@ TEST(CclCommandArgGenerator, PackTensorShapeArg) {
     ASSERT_EQ(size_in_words, 4);
     std::array<uint32_t, size_in_words> args;
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
-    Shape4D<uint32_t> test_shape = {1,2,3,4};
+    Shape4D<uint32_t> test_shape = {1, 2, 3, 4};
     tensor_shape_command_arg_t::pack_to(args.data(), test_shape);
     ASSERT_EQ(args[0], 1);
     ASSERT_EQ(args[1], 2);
@@ -43,7 +43,7 @@ TEST(CclCommandArgGenerator, PackTensorShapeArg) {
 TEST(CclCommandArgGenerator, UnpackTensorShapeArg) {
     constexpr std::size_t size_in_words = tensor_shape_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
-    std::array<uint32_t, tensor_shape_command_arg_t::size_in_words()> args = {1,2,3,4};
+    std::array<uint32_t, tensor_shape_command_arg_t::size_in_words()> args = {1, 2, 3, 4};
     Shape4D<uint32_t> test_shape = uninitialized_test_shape;
     tensor_shape_command_arg_t::unpack(args.data(), test_shape);
 
@@ -59,7 +59,7 @@ TEST(CclCommandArgGenerator, PackTensorSliceShapeArg) {
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = tensor_slice_shape_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
-    Shape4D<uint32_t> test_shape = {1,2,3,4};
+    Shape4D<uint32_t> test_shape = {1, 2, 3, 4};
     tensor_slice_shape_command_arg_t::pack_to(args.data(), test_shape);
     ASSERT_EQ(args[0], 1);
     ASSERT_EQ(args[1], 2);
@@ -68,7 +68,7 @@ TEST(CclCommandArgGenerator, PackTensorSliceShapeArg) {
 }
 
 TEST(CclCommandArgGenerator, UnpackTensorSliceShapeArg) {
-    std::array<uint32_t, tensor_slice_shape_command_arg_t::size_in_words()> args = {1,2,3,4};
+    std::array<uint32_t, tensor_slice_shape_command_arg_t::size_in_words()> args = {1, 2, 3, 4};
     constexpr std::size_t size_in_words = tensor_slice_shape_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
     Shape4D<uint32_t> test_shape = uninitialized_test_shape;
@@ -85,7 +85,7 @@ TEST(CclCommandArgGenerator, PackTensorSliceOffsetArg) {
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = tensor_slice_offset_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
-    Shape4D<uint32_t> test_shape = {1,2,3,4};
+    Shape4D<uint32_t> test_shape = {1, 2, 3, 4};
     tensor_slice_offset_command_arg_t::pack_to(args.data(), test_shape);
     ASSERT_EQ(args[0], 1);
     ASSERT_EQ(args[1], 2);
@@ -94,7 +94,7 @@ TEST(CclCommandArgGenerator, PackTensorSliceOffsetArg) {
 }
 
 TEST(CclCommandArgGenerator, UnpackTensorSliceOffsetArg) {
-    std::array<uint32_t, tensor_slice_offset_command_arg_t::size_in_words()> args = {1,2,3,4};
+    std::array<uint32_t, tensor_slice_offset_command_arg_t::size_in_words()> args = {1, 2, 3, 4};
     constexpr std::size_t size_in_words = tensor_slice_offset_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
     Shape4D<uint32_t> test_shape = uninitialized_test_shape;
@@ -111,7 +111,7 @@ TEST(CclCommandArgGenerator, PackWorkerStartOffsetInSliceArg) {
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = worker_start_offset_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
-    Shape4D<uint32_t> test_shape = {1,2,3,4};
+    Shape4D<uint32_t> test_shape = {1, 2, 3, 4};
     worker_start_offset_command_arg_t::pack_to(args.data(), test_shape);
     ASSERT_EQ(args[0], 1);
     ASSERT_EQ(args[1], 2);
@@ -120,7 +120,7 @@ TEST(CclCommandArgGenerator, PackWorkerStartOffsetInSliceArg) {
 }
 
 TEST(CclCommandArgGenerator, UnpackWorkerStartOffsetInSliceArg) {
-    std::array<uint32_t, worker_start_offset_command_arg_t::size_in_words()> args = {1,2,3,4};
+    std::array<uint32_t, worker_start_offset_command_arg_t::size_in_words()> args = {1, 2, 3, 4};
     constexpr std::size_t size_in_words = worker_start_offset_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
     Shape4D<uint32_t> test_shape = uninitialized_test_shape;
@@ -158,13 +158,7 @@ TEST(CclCommandArgGenerator, PackFullTensorArg) {
     std::array<uint32_t, full_tensor_command_arg_t::size_in_words()> args;
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
 
-    CclCommandTensor test_tensor = {
-        {0,1,2,3},
-        {4,5,6,7},
-        {8,9,10,11},
-        {12,13,14,15},
-        16
-    };
+    CclCommandTensor test_tensor = {{0, 1, 2, 3}, {4, 5, 6, 7}, {8, 9, 10, 11}, {12, 13, 14, 15}, 16};
     full_tensor_command_arg_t::pack_to(args.data(), test_tensor);
     for (std::size_t i = 0; i < size_in_words; i++) {
         ASSERT_EQ(args[i], i);
@@ -178,12 +172,23 @@ TEST(CclCommandArgGenerator, UnpackFullTensorArg) {
     std::iota(args.begin(), args.end(), 0);
 
     full_tensor_command_arg_t::field_type test_tensor = {
-        {std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max()},
-        {std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max()},
-        {std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max()},
-        {std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max(),std::numeric_limits<uint32_t>::max()},
-        std::numeric_limits<uint32_t>::max()
-    };
+        {std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max()},
+        {std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max()},
+        {std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max()},
+        {std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max(),
+         std::numeric_limits<uint32_t>::max()},
+        std::numeric_limits<uint32_t>::max()};
     full_tensor_command_arg_t::unpack(args.data(), test_tensor);
     ASSERT_EQ(test_tensor.tensor_shape.w, 0);
     ASSERT_EQ(test_tensor.tensor_shape.z, 1);
