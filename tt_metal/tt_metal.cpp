@@ -28,6 +28,8 @@
 #include "tt_metal/impl/buffers/global_circular_buffer.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
+#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include "tt_metal/include/tt_metal/program.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
@@ -1124,26 +1126,6 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
     circular_buffer->assign_global_address();
 }
 
-namespace experimental {
-
-CBHandle CreateCircularBuffer(
-    Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const CircularBufferConfig& config,
-    const GlobalCircularBuffer& global_circular_buffer) {
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    return program.add_circular_buffer(core_ranges, config, global_circular_buffer);
-}
-
-void UpdateDynamicCircularBufferAddress(
-    Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer) {
-    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
-    TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
-    circular_buffer->set_global_circular_buffer(global_circular_buffer);
-}
-
-}  // namespace experimental
-
 uint32_t CreateSemaphore(
     Program& program,
     const std::variant<CoreRange, CoreRangeSet>& core_spec,
@@ -1188,18 +1170,6 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
 }
-
-namespace experimental {
-
-std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
-    Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);
-}
-
-}  // namespace experimental
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(
@@ -1392,6 +1362,39 @@ void Synchronize(Device* device, const std::optional<uint8_t> cq_id, tt::stl::Sp
 }
 
 }  // namespace v0
+
+namespace v1 {
+
+namespace experimental {
+
+std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
+    Device* device,
+    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);
+}
+
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const GlobalCircularBuffer& global_circular_buffer) {
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return program.add_circular_buffer(core_ranges, config, global_circular_buffer);
+}
+
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer) {
+    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
+    circular_buffer->set_global_circular_buffer(global_circular_buffer);
+}
+
+}  // namespace experimental
+
+}  // namespace v1
+
 }  // namespace tt_metal
 
 }  // namespace tt

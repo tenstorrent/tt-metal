@@ -42,12 +42,6 @@ class Event;
 class Buffer;
 class GlobalSemaphore;
 
-namespace experimental {
-
-class GlobalCircularBuffer;
-
-}  // namespace experimental
-
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
@@ -264,50 +258,6 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 // clang-format on
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 
-namespace experimental {
-
-// clang-format off
-/**
- * Creates a Circular Buffer (CB) in L1 memory of all cores within core ranges (inclusive) and adds it to the program. There can be a total of NUM_CIRCULAR_BUFFERS (32) circular buffers per core.
- * Circular buffers hold data and have an associated config which indicates usage of the address space.
- * If the config is specified for multiple buffer indices, the circular buffer address space is shared and each buffer index can potentially have a unique view of the shared space.
- *
- * This will create a dynamic CB that uses the address space of the GlobalCircularBuffer specified, and will set up any remote CB IDs specified in the config with the GlobalCircularBuffer's config.
- *
- * Return value: Circular Buffer ID (uintptr_t)
- *
- * | Argument               | Description                                                                                                                                       | Type                                                     | Valid Range | Required |
- * |------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
- * | program                | The program to which buffer will be added to                                                                                                      | Program &                                                |             | Yes      |
- * | core_spec              | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate where the circular buffer will be configured | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
- * | config                 | Config for circular buffer                                                                                                                        | const CircularBufferConfig &                             |             | Yes      |
- * | global_circular_buffer | GlobalCircularBuffer to use the address space and configuration of for setting up remote CBs                                                      | const GlobalCircularBuffer &                             |             | Yes      |
- */
-// clang-format on
-CBHandle CreateCircularBuffer(
-    Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const CircularBufferConfig& config,
-    const GlobalCircularBuffer& global_circular_buffer);
-
-// clang-format off
-/**
- * Update the address of a dynamic circular buffer that was configured with a GlobalCircularBuffer.
- *
- * Return value: void
- *
- * | Argument               | Description                                                                                        | Type                         | Valid Range | Required |
- * |------------------------|----------------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
- * | program                | The program containing the circular buffer                                                         | Program &                    |             | Yes      |
- * | cb_handle              | ID of the circular buffer, returned by `CreateCircularBuffers`                                     | CBHandle (uintptr_t) |       | Yes         |          |
- * | global_circular_buffer | GlobalCircularBuffer to use the address space and configuration of for circular buffer `cb_handle` | const GlobalCircularBuffer & |             | Yes      |
- */
-// clang-format on
-void UpdateDynamicCircularBufferAddress(
-    Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer);
-
-}  // namespace experimental
-
 // clang-format off
 /**
  * Update the address and total size of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
@@ -377,31 +327,6 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 // clang-format on
 std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
-namespace experimental {
-
-// clang-format off
-/**
- * Creates a global circular buffer on the specified sender and receiver cores with the given size.
- * sender_receiver_core_mapping specifies which sender cores will communicate with which receiver cores.
- *
- * Return value: std::shared_ptr<GlobalCircularBuffer>
- *
- * | Argument                     | Description                                                      | Type                                                      | Valid Range  | Required |
- * |------------------------------|------------------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device                       | The device to create the circular buffer on                      | Device *                                                  |              | Yes      |
- * | sender_receiver_core_mapping | Mapping of sender to receiver cores used for the circular buffer | const std::unordered_map<CoreCoord, CoreRangeSet> &       |              | Yes      |
- * | size                         | Circular Buffer size                                             | uint32_t                                                  |              | Yes      |
- * | buffer_type                  | Buffer type to store the global circular buffer                  | BufferType                                                | L1 types     | No       |
- */
-// clang-format on
-std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
-    Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type = BufferType::L1);
-
-}  // namespace experimental
 
 // clang-format off
 /**
