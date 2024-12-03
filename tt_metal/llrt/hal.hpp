@@ -139,6 +139,7 @@ public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
+    using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -155,6 +156,7 @@ private:
     RelocateFunc relocate_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
+    NOCXYMulticastFunc noc_multicast_encoding_func_;
 
 public:
     Hal();
@@ -168,6 +170,9 @@ public:
     }
 
     uint32_t noc_xy_encoding(uint32_t x, uint32_t y) { return noc_xy_encoding_func_(x, y); }
+    uint32_t noc_multicast_encoding(uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
+        return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);
+    }
 
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
