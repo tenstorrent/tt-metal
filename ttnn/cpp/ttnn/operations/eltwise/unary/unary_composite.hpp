@@ -18,54 +18,39 @@ struct ExecutePower {
         const Tensor& input_tensor,
         uint32_t exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            queue_id,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
         uint32_t exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            DefaultQueueId,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         float exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            queue_id,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
         float exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            DefaultQueueId,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const Tensor& exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const Tensor& exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>

@@ -24,6 +24,8 @@ enum class BinaryOpType {
     LOGICAL_XOR,
     LDEXP,
     LOGADDEXP2,
-    DIV_FAST
+    DIV_FAST,
+    RSUB,
+    POWER
 };
 }
