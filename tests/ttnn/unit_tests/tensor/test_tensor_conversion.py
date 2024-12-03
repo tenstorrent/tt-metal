@@ -11,29 +11,10 @@ import torch
 import numpy as np
 
 import ttnn
-
-tt_dtype_to_torch_dtype = {
-    ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
-    ttnn.int32: torch.int32,
-    ttnn.float32: torch.float,
-    ttnn.bfloat16: torch.bfloat16,
-    ttnn.bfloat8_b: torch.float,
-    ttnn.bfloat4_b: torch.float,
-}
-
-tt_dtype_to_np_dtype = {
-    ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
-    ttnn.int32: np.int32,
-    ttnn.float32: np.float32,
-    ttnn.bfloat8_b: np.float32,
-    ttnn.bfloat4_b: np.float32,
-}
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype
 
 
+@pytest.mark.parametrize("convert_to_device", [True, False])
 @pytest.mark.parametrize(
     "tt_dtype",
     [
@@ -49,7 +30,7 @@ tt_dtype_to_np_dtype = {
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 @pytest.mark.parametrize("python_lib", [torch, np])
-def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, device):
+def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to_device, device):
     torch.manual_seed(0)
 
     if python_lib == torch:
@@ -64,7 +45,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, device):
 
     elif python_lib == np:
         if tt_dtype == ttnn.bfloat16:
-            pytest.skip("ttnn.bloat16 dtype is not supported yet for numpy tensors!")
+            pytest.skip("ttnn.bfloat16 dtype is not supported yet for numpy tensors!")
         dtype = tt_dtype_to_np_dtype[tt_dtype]
 
         if dtype in {np.ubyte, np.int16, np.int32}:
@@ -82,8 +63,9 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, device):
         assert tt_tensor.storage_type() == ttnn.StorageType.BORROWED
         assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
-    tt_tensor = tt_tensor.to(device)
-    tt_tensor = tt_tensor.cpu()
+    if convert_to_device:
+        tt_tensor = tt_tensor.to(device)
+        tt_tensor = tt_tensor.cpu()
 
     if python_lib == torch:
         py_tensor_after_round_trip = tt_tensor.to_torch()
@@ -123,6 +105,7 @@ string_to_np_dtype = {
 }
 
 
+@pytest.mark.parametrize("convert_to_device", [True, False])
 @pytest.mark.parametrize(
     "python_dtype_str",
     [
@@ -137,7 +120,7 @@ string_to_np_dtype = {
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 @pytest.mark.parametrize("python_lib", [torch, np])
-def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str, device):
+def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str, convert_to_device, device):
     torch.manual_seed(0)
 
     if python_lib == torch:
@@ -165,8 +148,9 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
     tt_tensor = ttnn.Tensor(py_tensor)
     assert tt_tensor.storage_type() == ttnn.StorageType.BORROWED
 
-    tt_tensor = tt_tensor.to(device)
-    tt_tensor = tt_tensor.cpu()
+    if convert_to_device:
+        tt_tensor = tt_tensor.to(device)
+        tt_tensor = tt_tensor.cpu()
 
     if python_lib == torch:
         py_tensor_after_round_trip = tt_tensor.to_torch()

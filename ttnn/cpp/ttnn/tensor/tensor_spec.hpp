@@ -28,6 +28,7 @@ public:
     DataType data_type() const { return tensor_layout_.get_data_type(); }
     Layout layout() const { return tensor_layout_.get_layout(); }
     PageConfig page_config() const { return tensor_layout_.get_page_config(); }
+    const MemoryConfig& memory_config() const { return tensor_layout_.get_memory_config(); }
     const ttnn::SimpleShape& padded_shape() const { return cached_padded_shape_; }
     const Size& physical_shape() const { return cached_physical_shape_; }
     ttnn::Shape shape() const { return ttnn::Shape(logical_shape_.view(), cached_padded_shape_.view()); }
