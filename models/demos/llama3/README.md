@@ -29,6 +29,7 @@ The main reason for a long context length not fitting on device is lack of memor
 [1] For these configurations, running context lengths greater than those specified on the table will generate a bad repetitive output.
 
 [2] 128k token context-length requires sampling. If run with argmax, the output will be considerably worse.
+At the moment, sampling is run on host, so expect a decrease in performance when using these configurations.
 
 
 ## How to Run
@@ -102,6 +103,8 @@ If you want to provide your own demo configuration, please take a look at the py
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `optimization (LlamaOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
+
+Please note that using `argmax` with `batch_size > 1` or `top-p` with any batch size will be make these ops run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 
 When running the demo, do not forget to setup the `$LLAMA_DIR` environment variable to the corresponding Llama3 model weights.
 
