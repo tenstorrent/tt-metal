@@ -85,3 +85,8 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
 ############################################################################################################################
 
 CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.0)
+
+############################################################################################################################
+# umd : https://github.com/tenstorrent/tt-umd
+############################################################################################################################
+CPMAddPackage(NAME umd GITHUB_REPOSITORY tenstorrent/tt-umd GIT_TAG 1d8c9dd9974404fb286afac4c00c929008ee6ec7)
