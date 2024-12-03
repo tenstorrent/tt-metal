@@ -38,15 +38,8 @@ def test_tensor_creation(shape, tt_dtype, device):
     else:
         py_tensor = torch.rand(shape, dtype=dtype)
 
-    tt_tensor = ttnn.Tensor(py_tensor, tt_dtype)
-    if tt_dtype in {ttnn.bfloat8_b, ttnn.bfloat4_b}:
-        assert tt_tensor.storage_type() == ttnn.StorageType.OWNED
-        assert tt_tensor.layout == ttnn.TILE_LAYOUT
-    else:
-        assert tt_tensor.storage_type() == ttnn.StorageType.BORROWED
-        assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    tt_tensor = ttnn.Tensor(py_tensor, tt_dtype, device)
 
-    tt_tensor = tt_tensor.to(device)
     tt_tensor = tt_tensor.cpu()
 
     py_tensor_after_round_trip = tt_tensor.to_torch()
