@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,12 +19,16 @@
 namespace ttnn::operations::experimental::reshape::detail {
 namespace py = pybind11;
 
-void py_bind_reshape(py::module& module) {
+void py_bind_unsafe_view(py::module& module) {
     auto doc = R"doc(
 
-        Note: for a 0 cost view, the following conditions must be met:
+        Note:
+        - It is recommended to use ttnn.reshape if you are not sure which operation to use
+        - If this is the functionality required for your application, it will be called by ttnn.reshape
+        - The following conditions must be met for the function not corrupt your data:
             * the last dimension must not change
             * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+
 
         Args:
             * input_tensor: Input Tensor.
@@ -35,16 +39,21 @@ void py_bind_reshape(py::module& module) {
 
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 4), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.experimental.reshape(tensor, (1, 1, 2, 2))
+            >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 4), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.experimental.unsafe_view(tensor, (2, 1, 1, 4))
 
         )doc";
     bind_registered_operation(
         module,
-        ttnn::experimental::reshape,
+        ttnn::experimental::unsafe_view,
         doc,
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::reshape)& self, ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
+            [](const decltype(ttnn::experimental::unsafe_view)& self,
+               ttnn::Tensor& input_tensor,
+               int N,
+               int C,
+               int H,
+               int W) {
                 return self(input_tensor, infer_dims_for_reshape(input_tensor, ttnn::SmallVector<int>{N, C, H, W}));
             },
             py::arg("input_tensor"),
@@ -55,13 +64,16 @@ void py_bind_reshape(py::module& module) {
         },
 
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::reshape)& self, ttnn::Tensor& input_tensor, const ttnn::Shape& shape) {
-                return self(input_tensor, shape); },
+            [](const decltype(ttnn::experimental::unsafe_view)& self,
+               ttnn::Tensor& input_tensor,
+               const ttnn::Shape& shape) { return self(input_tensor, shape); },
             py::arg("input_tensor"),
             py::arg("shape"),
         },
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::reshape)& self, ttnn::Tensor& input_tensor, const ttnn::SmallVector<int32_t>& shape) {
+            [](const decltype(ttnn::experimental::unsafe_view)& self,
+               ttnn::Tensor& input_tensor,
+               const ttnn::SmallVector<int32_t>& shape) {
                 return self(input_tensor, infer_dims_for_reshape(input_tensor, shape));
             },
             py::arg("input_tensor"),

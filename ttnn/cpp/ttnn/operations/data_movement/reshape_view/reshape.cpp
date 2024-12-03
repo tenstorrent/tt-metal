@@ -54,7 +54,7 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     //This function is due to embedding issue 15558, once the issue is fixed we want to delete it
     tt::log_warning("host_reshape is deprecated and will be removed in the near future");
     if (!ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
-        return ttnn::experimental::reshape(tensor, shape);
+        return ttnn::experimental::unsafe_view(tensor, shape);
     }
     auto tensor_shape = tensor.shape();
     auto layout = tensor.layout();
@@ -74,7 +74,7 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
         host_tensor_4d = ttnn::slice(host_tensor_4d, begins, ends, step, std::nullopt);
         host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
     }
-    auto host_reshape_tensor = ttnn::experimental::reshape(rm_tensor, shape);
+    auto host_reshape_tensor = ttnn::experimental::unsafe_view(rm_tensor, shape);
     auto final_layout_tensor =
         ttnn::to_layout(host_reshape_tensor, layout, std::nullopt, std::nullopt, (Device*)nullptr);
     auto device_tensor = ttnn::data_transfer_to_device(final_layout_tensor, device, memory_config);
@@ -301,10 +301,10 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
         (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
     {
         //Correct the output shape to add padding metadata before reshape (view)
-        return tensor.reshape(tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
+        return ttnn::experimental::unsafe_view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
     }
     //Perform a reshape (view)
-    return tensor.reshape(shape);
+    return ttnn::experimental::unsafe_view(tensor, shape);
 }
 
 ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -377,7 +377,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return tensor.reshape(shape);
+            return ttnn::experimental::unsafe_view(tensor, shape);
         }
 
     if (this_is_view) {
