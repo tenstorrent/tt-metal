@@ -103,6 +103,8 @@ ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejo
 ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
 ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT
+ttnn/cpp/ttnn/operations/data_movement/fold/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
+ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
