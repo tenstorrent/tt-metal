@@ -339,7 +339,7 @@ Tensor ExecutePrelu::invoke(
     if (s_a.rank() > 2) {
         SmallVector<uint32_t> reshape(s_a.rank(), 1);
         reshape[1] = s_a[1];
-        b = ttnn::reshape(input_b, ttnn::Shape(reshape));
+        b = ttnn::reshape(input_b, ttnn::SimpleShape(reshape));
     }
 
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
