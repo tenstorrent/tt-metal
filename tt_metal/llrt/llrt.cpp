@@ -63,7 +63,7 @@ ll_api::memory const& get_risc_binary(
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path, relo_type);
+      auto *ptr = new ll_api::memory(path, span_type, relo_type);
 
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
