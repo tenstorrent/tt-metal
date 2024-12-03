@@ -12,7 +12,10 @@ namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SingleCore{};
+    if (operation_attributes.dims.back() == tensor_args.input_tensor.get_logical_shape().rank() - 1) {
+        return SingleCore{};
+    }
+    return SingleCoreWidthPermute{};
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(
@@ -20,10 +23,6 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.get_logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
-    TT_FATAL(
-        attributes.dims.back() == tensor_args.input_tensor.get_logical_shape().rank() - 1,
-        "Last dimension of permute must be the last dimension of the input tensor as page-breaking is not supported at "
-        "the moment");
     TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
     TT_FATAL(
         tensor_args.input_tensor.get_layout() == Layout::ROW_MAJOR, "Permute operation only supports row-major layout");

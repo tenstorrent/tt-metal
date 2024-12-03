@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+import itertools
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_blackhole
@@ -169,5 +170,34 @@ def test_permute_pad_value(device, pad_value):
     if pad_value is not None:
         a = ttnn.min(tt_output)
         assert ttnn.to_torch(a) == float("-inf")
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+def generate_permutations(N):
+    """
+    Generator function that yields all permutations of tuples with values 0 to N-1.
+
+    :param N: The number defining the range of values (0 to N-1).
+    :yield: Tuples representing each permutation.
+    """
+    for perm in itertools.permutations(range(N)):
+        yield perm
+
+
+@pytest.mark.parametrize("shape", [(7, 7, 7, 7, 7)])
+@pytest.mark.parametrize("perm", generate_permutations(5))
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_permute_5d_width(shape, perm, memory_config, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape)
+    # print(input_a)
+    torch_output = torch.permute(input_a, perm)
+
+    tt_input = ttnn.from_torch(
+        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=memory_config
+    )
+
+    tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
