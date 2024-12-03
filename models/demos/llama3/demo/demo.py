@@ -219,8 +219,6 @@ def run_llama3_demo(
     for i in range(num_batches):
         batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    # TODO Miguel Add configuration for  the combinations of Llama3 models and TT architectures and max supported sizes
-
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(
         mesh_device,
@@ -230,6 +228,37 @@ def run_llama3_demo(
         max_seq_len=max_seq_len,
     )
     tokenizer = Tokenizer(model_args.tokenizer_path)
+
+    # Check max sequence length compatibility with model and architecture. Refer to README for more information
+    llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
+    tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
+
+    if llama_model_name == "3.2-1B":
+        assert (
+            max_seq_len <= 64 * 1024
+        ), "Llama3.2-1B only supports a max context length of 64k tokens across all architectures"
+    if llama_model_name == "3.2-3B":
+        if tt_device_name in ["N150", "N300"]:
+            assert (
+                max_seq_len <= 32 * 1024
+            ), "N150 and N300 only support a max context length of 32k tokens for Llama3.2-3B"
+        else:  # T3K and TG
+            assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.2-3B"
+    if llama_model_name in ["3.1-8B", "3.2-11B"]:
+        if tt_device_name == "N150":
+            assert (
+                max_seq_len <= 16 * 1024
+            ), "N150 only supports a max context length of 16k tokens for Llama3.1-8B and Llama3.2-11B"
+        elif tt_device_name == "N300":
+            assert (
+                max_seq_len <= 64 * 1024
+            ), "N300 only supports a max context length of 64k tokens for Llama3.1-8B and Llama3.2-11B"
+        else:  # T3K and TG
+            assert (
+                max_seq_len <= 128 * 1024
+            ), "T3K only supports a max context length of 128k tokens for Llama3.1-8B and Llama3.2-11B"
+    if llama_model_name == "3.1-70B":
+        assert tt_device_name in ["T3K", "TG"], "Llama3.1-70B is only supported on T3K or TG"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -467,7 +496,7 @@ def run_llama3_demo(
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
         if argmax_on_device:
-            tt_out_tok = ttnn.argmax(  # TODO When ttnn.argmax supports multicore, avoid falling back to host
+            tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
                 tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
             )
             ttnn.deallocate(tt_out_rm)
@@ -508,10 +537,10 @@ def run_llama3_demo(
         if argmax_on_device:
             tt_out_tok = ttnn.argmax(
                 tt_out_rm, dim=3, use_multicore=False if batch_size > 1 else True, output_tensor=tt_out_tok
-            )  # TODO Multicore is not compatible with batch > 1
+            )  # FIXME Multicore is not compatible with batch > 1
             ttnn.deallocate(tt_out_rm)
         ttnn.plus_one(current_pos_tensor)
-        # ttnn.plus_one(rot_mat_idxs)  # TODO <- This won't work since embedding requires uint32 and plus_one only works for int32
+        # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
 
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
@@ -821,7 +850,7 @@ def run_llama3_demo(
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
     [
-        (  # Latency run - single user, small prompt
+        (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -832,7 +861,7 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
-        (  # Throughput run - 32 users, small prompt
+        (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -843,14 +872,14 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
-        (  # Max length mode run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            64 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
             {"temperature": 0.6, "top_p": 0.08},  # sampling_params (top-p)
         ),

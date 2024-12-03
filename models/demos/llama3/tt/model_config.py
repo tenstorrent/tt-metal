@@ -162,20 +162,6 @@ class TtModelArgs:
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
-        # Reduce full 128k context length for combinations with memory constraints
-        # Currently: n150 8b and t3k 70b with 8b/8b/8b MLPs
-        # Default folder location for weights and cached files
-        # FIXME: Setup the max cache size accordingly depending on the target model, architecture and test type.
-        if (
-            self.num_devices <= 2
-        ):  # for 1-chip or 2-chip devices limit the seqlen to 4K (to avoid OoO on N150/N300 CI tests)
-            self.max_seq_len = 1024 * 4
-
-        if (
-            self.n_layers == 1
-        ):  # When running a single layer just reduce the seq len to 128, since we won't be decoding that many iterations
-            self.max_seq_len = 128
-
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
@@ -395,7 +381,7 @@ class TtModelArgs:
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                # exp_approx_mode=False,
+                exp_approx_mode=False,
                 q_chunk_size=32,
                 k_chunk_size=32,
             )
