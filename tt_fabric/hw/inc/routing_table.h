@@ -16,12 +16,12 @@
 #define tt_l1_ptr
 #define tt_reg_ptr
 #define FORCE_INLINE inline
-namespace tt::tt_fabric {
 #endif
+
+namespace tt::tt_fabric {
 
 using chan_id_t = std::uint8_t;
 
-static constexpr std::uint32_t FABRIC_ROUTER_CONFIG_BASE = 0x20000;
 static constexpr std::uint32_t MAX_MESH_SIZE = 1024;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
 
@@ -57,10 +57,8 @@ struct fabric_router_l1_config_t {
     std::uint16_t my_mesh_id;  // Do we need this if we tag routing tables with magic values for outbound eth channels
                                // and route to local NOC?
     std::uint16_t my_device_id;
-};
+} __attribute__((packed));
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#else
 /*
 FORCE_INLINE std::uint8_t get_eth_chan_from_table(std::uint32_t base_addr, std::uint32_t target_id) {
     //  i.e. intra mesh table:
@@ -69,15 +67,9 @@ FORCE_INLINE std::uint8_t get_eth_chan_from_table(std::uint32_t base_addr, std::
     //  0x5050505   to get to chip 11,10,9,8
     //
     //  0xff denotes outgoing channel, 0xee denotes route to itself
-    return ((*(std::uint32_t* tt_l1_ptr)(base_addr + target_id >> LOG_BASE_2_NUM_CHANNELS_PER_UINT32)) >> (target_id & MODULO_LOG_BASE_2)) & 0xFF;
+    return ((*(std::uint32_t* tt_l1_ptr)(base_addr + target_id >> LOG_BASE_2_NUM_CHANNELS_PER_UINT32)) >> (target_id &
+MODULO_LOG_BASE_2)) & 0xFF;
 };*/
-
-void pack_routing_table(routing_table_t* table, const chan_id_t* data, uint32_t len) {
-  // Loop over data and pack into routing_table_t of chan_id_t
-  for (uint32_t i = 0; i < len; i++) {
-      table->dest_entry[i] = data[i];
-  }
-}
 /*
 void pack_routing_table(routing_table_t* table, const chan_id_t* data, uint32_t len) {
   // Loop over data and pack into routing_table_t of Vdchan_id_t
@@ -87,4 +79,3 @@ void pack_routing_table(routing_table_t* table, const chan_id_t* data, uint32_t 
 }*/
 
 }  // namespace tt::tt_fabric
-#endif

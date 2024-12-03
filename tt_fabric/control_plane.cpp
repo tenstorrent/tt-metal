@@ -45,7 +45,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_yaml_file) {
         const std::filesystem::path tg_cluster_desc_path = std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
                                                            "tests/tt_metal/tt_fabric/common/tg_cluster_desc.yaml";
         this->initialize_from_cluster_desc_yaml_file(tg_cluster_desc_path.string());
-        // TODO: uncomment this when we know where to write the routing tables to
         this->configure_routing_tables();
     } else {
         TT_FATAL(false, "Unsupported mesh graph descriptor file {}", mesh_graph_desc_yaml_file);
@@ -353,15 +352,15 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 }
                 inter_mesh_data.push_back(entry);
             }*/
+
             tt::tt_fabric::fabric_router_l1_config_t fabric_router_config;
-            tt::tt_fabric::pack_routing_table(
-                &(fabric_router_config.intra_mesh_table),
-                eth_chan_intra_mesh_routing_table.data(),
-                eth_chan_intra_mesh_routing_table.size());
-            tt::tt_fabric::pack_routing_table(
-                &(fabric_router_config.inter_mesh_table),
-                eth_chan_inter_mesh_routing_table.data(),
-                eth_chan_inter_mesh_routing_table.size());
+            for (uint32_t i = 0; i < eth_chan_intra_mesh_routing_table.size(); i++) {
+                fabric_router_config.intra_mesh_table.dest_entry[i] = eth_chan_intra_mesh_routing_table[i];
+            }
+            for (uint32_t i = 0; i < eth_chan_inter_mesh_routing_table.size(); i++) {
+                fabric_router_config.inter_mesh_table.dest_entry[i] = eth_chan_inter_mesh_routing_table[i];
+            }
+
             if (chip_eth_chans_map.find(RoutingDirection::N) != chip_eth_chans_map.end()) {
                 fabric_router_config.port_direction.north = this->get_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::N));
             } else {
@@ -409,11 +408,13 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
             }
             std::cout << std::endl;
 */
+            // TODO: use eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE when bug with queues is fixed, hardcoded to
+            // enable sanity testing
             tt::Cluster::instance().write_core(
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 physical_eth_core,
-                tt::tt_fabric::FABRIC_ROUTER_CONFIG_BASE,
+                eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR,
                 false);
         }
     }
