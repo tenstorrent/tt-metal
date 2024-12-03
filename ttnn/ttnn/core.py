@@ -208,7 +208,7 @@ def create_sharded_memory_config(
 
 
 # This function is based off the existing "create_sharded_memory_config". This new function has support for calculating shard shape when tensor shape is not divisible by num of cores.
-# The existing function should be deprecated with this one. Not replacing right now to avoid a big change.git
+# The existing function should be deprecated with this one. Not replacing right now to avoid a big change.
 def create_sharded_memory_config_(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
