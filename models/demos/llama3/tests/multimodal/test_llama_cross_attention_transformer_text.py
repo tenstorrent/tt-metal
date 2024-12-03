@@ -11,11 +11,11 @@ import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mo
 from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
+    get_single_rot_mat,
 )
 from models.utility_functions import (
     comp_pcc,
@@ -46,23 +46,10 @@ from models.utility_functions import skip_for_grayskull
         "batch_1",
     ],
 )
-@pytest.mark.parametrize(
-    "max_seq_len",
-    (4096,),
-)
-@pytest.mark.parametrize(
-    "optimizations",
-    [
-        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
-        # pytest.param(LlamaOptimizations.performance, id="performance"),
-    ],
-)
 @torch.no_grad()
 def test_llama_cross_attention_transformer_text_inference(
     text_seq_len,
     batch,
-    optimizations,
-    max_seq_len,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -73,12 +60,9 @@ def test_llama_cross_attention_transformer_text_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(
-        mesh_device,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-        max_batch_size=batch,
-    )
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch)
+    # Limit the max seqlen to 4k to avoid OOM on host
+    model_args.max_seq_len = 4096
 
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
@@ -100,28 +84,6 @@ def test_llama_cross_attention_transformer_text_inference(
 
     all_tests_pass = True
 
-    # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
-        mesh_device,
-        model_args.max_batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-    )
-    transformation_mats_decode = rope_setup.get_trans_mats()
-
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats_prefill = ttnn.as_tensor(
-        transformation_mat_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
-
     tt_model = TtLlamaCrossAttentionTransformerText(
         mesh_device,
         state_dict,
@@ -129,7 +91,6 @@ def test_llama_cross_attention_transformer_text_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        transformation_mats=transformation_mats,
     )
     vision_tokens = torch.randn((batch, vision_seq_len, dim))
 
@@ -251,6 +212,15 @@ def test_llama_cross_attention_transformer_text_inference(
                 rot_mats = get_prefill_rot_mat(
                     model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len
                 )
+                transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+                transformation_mats = ttnn.as_tensor(
+                    transformation_mat_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
                 tt_out = tt_model(
                     tt_h,
@@ -260,6 +230,7 @@ def test_llama_cross_attention_transformer_text_inference(
                     xattn_caches=tt_xattn_cache,
                     current_pos=None,
                     rot_mat=rot_mats,
+                    transformation_mats=transformation_mats,
                     user_id=b,
                     mode=mode,
                     text_only_inference=TEXT_ONLY,
@@ -288,10 +259,12 @@ def test_llama_cross_attention_transformer_text_inference(
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
-            # TODO Cleanup this RoPE logic when adding paged attn support
-            current_pos_pt = torch.tensor([cur_pos - 1 for _ in range(batch)])
-            # Get cos/sin matrices for the current position of each user
-            rot_mats = rope_setup.get_rot_mats(current_pos_pt)
+            rot_mats, _ = get_single_rot_mat(
+                model_args.head_dim,
+                mesh_device,
+                model_args.num_devices,
+                start_pos=cur_pos - 1,
+            )
 
             transformation_mats = None
 
@@ -339,6 +312,7 @@ def test_llama_cross_attention_transformer_text_inference(
                 xattn_caches=tt_xattn_cache,
                 current_pos=tt_position_id,
                 rot_mat=rot_mats,
+                transformation_mats=transformation_mats,
                 mode=mode,
                 text_only_inference=TEXT_ONLY,
             )
