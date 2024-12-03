@@ -106,7 +106,7 @@ class upsample2d:
         )
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
-        [tt_out, _out_height, _out_width, self.conv_weight_tensor, self.conv_bias_tensor] = ttnn.conv2d(
+        [tt_out, [self.conv_weight_tensor, self.conv_bias_tensor]] = ttnn.conv2d(
             input_tensor=tt_out,
             in_channels=self.conv_in_channels,
             out_channels=self.conv_out_channels,
@@ -122,5 +122,7 @@ class upsample2d:
             conv_config=conv_config,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
         return tt_out

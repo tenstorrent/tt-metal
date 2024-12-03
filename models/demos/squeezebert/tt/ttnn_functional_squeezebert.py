@@ -90,7 +90,7 @@ def ttnn_conv1d(
         packer_l1_acc=packer_l1_acc,
     )
 
-    [tt_output_tensor_on_device, out_length, weights_device, bias_device] = ttnn.Conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=weights,
         in_channels=tt_input_tensor.shape[-1],
@@ -107,6 +107,8 @@ def ttnn_conv1d(
         conv_op_cache={},
         debug=debug,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor_on_device = ttnn.squeeze(tt_output_tensor_on_device, 0)
