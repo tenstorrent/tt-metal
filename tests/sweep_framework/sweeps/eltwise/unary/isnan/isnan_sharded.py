@@ -12,7 +12,7 @@ import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.sweep_framework.sweep_utils.sharding_utils import (
-    gen_sharded_spec_unary_2,
+    gen_sharded_spec_unary,
     parse_sharding_spec,
     invalidate_vector_sharding,
     roundup,
@@ -35,7 +35,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary_2(16),
+        "input_spec": gen_sharded_spec_unary(16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
