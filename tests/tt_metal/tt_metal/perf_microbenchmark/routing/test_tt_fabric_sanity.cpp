@@ -35,21 +35,17 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_data_kb_per_tx = 1024*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
+    constexpr uint32_t default_routing_table_start_addr = 0x7EC00;
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
     constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
-    constexpr uint32_t default_mux_queue_start_addr = 0x80000;
-    constexpr uint32_t default_mux_queue_size_bytes = 0x10000;
-    constexpr uint32_t default_demux_queue_start_addr = 0x90000;
-    constexpr uint32_t default_demux_queue_size_bytes = 0x10000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
 
     // TODO: use eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE which should be 0x19900, set test results size back
     // to 0x7000
-    constexpr uint32_t default_tunneler_queue_start_addr = 0x19000;
     constexpr uint32_t default_tunneler_queue_size_bytes = 0x4000; // maximum queue (power of 2)
     constexpr uint32_t default_tunneler_test_results_addr = 0x39000; // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
     constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
@@ -76,6 +72,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tx_data_sent_per_iter_low = 20;
     constexpr uint32_t default_tx_data_sent_per_iter_high = 240;
 
+    constexpr uint32_t default_fabric_command = 1;
+
     constexpr uint32_t default_dump_stat_json = 0;
     constexpr const char* default_output_dir = "/tmp";
 
@@ -96,14 +94,15 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --mux_y: Y coordinate of the starting mux core, default = {}", default_mux_y);
         log_info(LogTest, "  --demux_x: X coordinate of the starting demux core, default = {}", default_demux_x);
         log_info(LogTest, "  --demux_y: Y coordinate of the starting demux core, default = {}", default_demux_y);
+        log_info(
+            LogTest,
+            "  --routing_table_start_addr: Routing Table start address, default = 0x{:x}",
+            default_routing_table_start_addr);
         log_info(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
         log_info(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
         log_info(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
-        log_info(LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
-        log_info(LogTest, "  --mux_queue_start_addr: MUX queue start address, default = 0x{:x}", default_mux_queue_start_addr);
-        log_info(LogTest, "  --mux_queue_size_bytes: MUX queue size in bytes, default = 0x{:x}", default_mux_queue_size_bytes);
-        log_info(LogTest, "  --demux_queue_start_addr: DEMUX queue start address, default = 0x{:x}", default_demux_queue_start_addr);
-        log_info(LogTest, "  --demux_queue_size_bytes: DEMUX queue size in bytes, default = 0x{:x}", default_demux_queue_size_bytes);
+        log_info(
+            LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
         log_info(LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
         log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
@@ -131,15 +130,13 @@ int main(int argc, char **argv) {
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
     uint32_t data_kb_per_tx = test_args::get_command_option_uint32(input_args, "--data_kb_per_tx", default_data_kb_per_tx);
     uint32_t max_packet_size_words = test_args::get_command_option_uint32(input_args, "--max_packet_size_words", default_max_packet_size_words);
+    uint32_t routing_table_start_addr = test_args::get_command_option_uint32(
+        input_args, "--routing_table_start_addr", default_routing_table_start_addr);
     uint32_t tx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
     uint32_t tx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
     uint32_t rx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
-    uint32_t mux_queue_start_addr = test_args::get_command_option_uint32(input_args, "--mux_queue_start_addr", default_mux_queue_start_addr);
-    uint32_t mux_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--mux_queue_size_bytes", default_mux_queue_size_bytes);
-    uint32_t demux_queue_start_addr = test_args::get_command_option_uint32(input_args, "--demux_queue_start_addr", default_demux_queue_start_addr);
-    uint32_t demux_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--demux_queue_size_bytes", default_demux_queue_size_bytes);
-    uint32_t tunneler_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tunneler_queue_start_addr", default_tunneler_queue_start_addr);
+    uint32_t rx_queue_size_bytes =
+        test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
     uint32_t tunneler_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tunneler_queue_size_bytes", default_tunneler_queue_size_bytes);
     uint32_t test_results_addr = test_args::get_command_option_uint32(input_args, "--test_results_addr", default_test_results_addr);
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);
@@ -155,6 +152,8 @@ int main(int argc, char **argv) {
     uint8_t tx_pkt_dest_size_choice = (uint8_t) test_args::get_command_option_uint32(input_args, "--tx_pkt_dest_size_choice", default_tx_pkt_dest_size_choice);
     uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
     uint32_t tx_data_sent_per_iter_high = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
+    uint32_t fabric_command =
+        test_args::get_command_option_uint32(input_args, "--fabric_command", default_fabric_command);
 
     assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
@@ -217,27 +216,28 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
             tx_phys_core.push_back(device->worker_core_from_logical_core(core));
-            std::vector<uint32_t> compile_args =
-                {
-                    (device->id() << 8) + src_endpoint_start_id + i, // 0: src_endpoint_id
-                    num_dest_endpoints, // 1: num_dest_endpoints
-                    dest_endpoint_start_id, // 2:
-                    tunneler_queue_start_addr, // 3:
-                    tx_queue_start_addr, // 4: queue_start_addr_words
-                    (tx_queue_size_bytes >> 4), // 5: queue_size_words
-                    tunneler_phys_core.x, // 6: router_x
-                    tunneler_phys_core.y, // 7: router_y
-                    test_results_addr, // 8: test_results_addr
-                    test_results_size, // 9: test_results_size
-                    prng_seed, // 10: prng_seed
-                    data_kb_per_tx, // 11: total_data_kb
-                    max_packet_size_words, // 12: max_packet_size_words
-                    timeout_mcycles * 1000 * 1000 * 4, // 13: timeout_cycles
-                    tx_skip_pkt_content_gen, // 14: skip_pkt_content_gen
-                    tx_pkt_dest_size_choice, // 15: pkt_dest_size_choice
-                    tx_data_sent_per_iter_low, // 16: data_sent_per_iter_low
-                    tx_data_sent_per_iter_high // 17: data_sent_per_iter_high
-                };
+            std::vector<uint32_t> compile_args = {
+                (device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
+                num_dest_endpoints,                               // 1: num_dest_endpoints
+                dest_endpoint_start_id,                           // 2:
+                tx_queue_start_addr,                              // 3: queue_start_addr_words
+                (tx_queue_size_bytes >> 4),                       // 4: queue_size_words
+                routing_table_start_addr,                         // 5: routeing table
+                tunneler_phys_core.x,                             // 6: router_x
+                tunneler_phys_core.y,                             // 7: router_y
+                test_results_addr,                                // 8: test_results_addr
+                test_results_size,                                // 9: test_results_size
+                prng_seed,                                        // 10: prng_seed
+                data_kb_per_tx,                                   // 11: total_data_kb
+                max_packet_size_words,                            // 12: max_packet_size_words
+                timeout_mcycles * 1000 * 1000 * 4,                // 13: timeout_cycles
+                tx_skip_pkt_content_gen,                          // 14: skip_pkt_content_gen
+                tx_pkt_dest_size_choice,                          // 15: pkt_dest_size_choice
+                tx_data_sent_per_iter_low,                        // 16: data_sent_per_iter_low
+                tx_data_sent_per_iter_high,                       // 17: data_sent_per_iter_high
+                fabric_command
+
+            };
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
@@ -298,15 +298,12 @@ int main(int argc, char **argv) {
             defines.erase("CHECK_TIMEOUT");
         }
 
-        std::vector<uint32_t> tunneler_l_compile_args =
-            {
-                tunneler_queue_start_addr, // 2: rx_queue_start_addr_words
-                tunneler_queue_start_addr + 1024, // 2: rx_queue_start_addr_words
-                (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
-                tunneler_test_results_addr, // 44: test_results_addr
-                tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
-            };
+        std::vector<uint32_t> tunneler_l_compile_args = {
+            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+            tunneler_test_results_addr,        // 1: test_results_addr
+            tunneler_test_results_size,        // 2: test_results_size
+            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+        };
 
         auto tunneler_l_kernel = tt_metal::CreateKernel(
             program,
@@ -315,15 +312,12 @@ int main(int argc, char **argv) {
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0, .compile_args = tunneler_l_compile_args, .defines = defines});
 
-        std::vector<uint32_t> tunneler_r_compile_args =
-            {
-                tunneler_queue_start_addr, // 2: rx_queue_start_addr_words
-                tunneler_queue_start_addr + 1024, // 2: rx_queue_start_addr_words
-                (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
-                tunneler_test_results_addr, // 44: test_results_addr
-                tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
-            };
+        std::vector<uint32_t> tunneler_r_compile_args = {
+            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+            tunneler_test_results_addr,        // 1: test_results_addr
+            tunneler_test_results_size,        // 2: test_results_size
+            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+        };
 
         auto tunneler_r_kernel = tt_metal::CreateKernel(
             program_r,
