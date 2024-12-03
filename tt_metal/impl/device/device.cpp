@@ -255,7 +255,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     }
     // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
+        config.core_type_from_noc_coord_table.insert({this->translated_coords_from_physical_coords(core.first, core.second.type), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
@@ -624,10 +624,15 @@ void Device::initialize_and_launch_firmware() {
     const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
     const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
     const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
-    std::set<CoreCoord> repeated_dram_cores = {};
+    // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
+    // Get a list of unique DRAM cores.
+    std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+    TT_ASSERT(
+        eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
+        "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
     for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
@@ -635,13 +640,8 @@ void Device::initialize_and_launch_firmware() {
     for (const CoreCoord &core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    uint32_t num_dram_cores = 0;
-    for (const CoreCoord &core : dram_cores) {
-        if (repeated_dram_cores.find(CoreCoord(core.x, core.y)) == repeated_dram_cores.end()) {
-            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
-            repeated_dram_cores.insert(CoreCoord(core.x, core.y));
-            num_dram_cores++;
-        }
+    for (const CoreCoord &core : unique_dram_cores) {
+        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
     for (const CoreCoord &core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
@@ -3106,6 +3106,23 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
         return CoreType::ETH;
     }
     return this->core_type_from_physical_core(virtual_coord);
+}
+
+
+CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    // if (this->coordinate_in_virtual_space(coord)) {
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Get Noc0 Coords
+        CoreCoord phys_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        // Convert NOC0 Coords to Virtual Coords
+        return this->translated_coords_from_physical_coords(phys_coord, this->core_type_from_physical_core(phys_coord));
+    }
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {

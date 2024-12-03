@@ -76,15 +76,11 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) 
 static string get_noc_target_str(
     Device* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
     auto get_core_and_mem_type = [](Device* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
-        // Get the physical coord from the noc coord
-        const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-        CoreCoord phys_core = {
-            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, noc_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, noc_coord.y)};
-
+        // Get the virtual coord from the noc coord
+        CoreCoord virtual_core = device->virtual_noc_coordinate(noc, noc_coord);
         CoreType core_type;
         try {
-            core_type = device->core_type_from_physical_core(phys_core);
+            core_type = device->core_type_from_virtual_core(virtual_core);
         } catch (std::runtime_error& e) {
             // We may not be able to get a core type if the physical coords are bad.
             return {"Unknown", ""};

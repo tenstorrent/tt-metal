@@ -131,6 +131,12 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
 
     // We should be able to find the expected watcher error in the log as well.
     string expected;
+    int noc = (use_ncrisc) ? 1 : 0;
+    CoreCoord target_core = device->virtual_noc_coordinate(noc, input_buf_noc_xy);
+    string risc_name = (is_eth_core) ? "erisc" : "brisc";
+    if (use_ncrisc) {
+        risc_name = "ncrisc";
+    }
     switch(feature) {
         case SanitizeAddress:
             expected = fmt::format(
@@ -148,20 +154,10 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
                 output_buf_noc_xy.str(),
                 output_l1_buffer_addr);
             break;
-        case SanitizeAlignmentL1Write:
-        case SanitizeAlignmentL1Read: {
-            // NoC-1 has a different coordinate for the same DRAM
-            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-            int noc = (use_ncrisc) ? 1 : 0;
-            CoreCoord target_phys_core = {
-                tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, input_buf_noc_xy.x),
-                tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, input_buf_noc_xy.y)};
-            string risc_name = (is_eth_core) ? "erisc" : "brisc";
-            if (use_ncrisc)
-                risc_name = "ncrisc";
+        case SanitizeAlignmentL1Write: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc{} tried to unicast read 102400 "
-                "bytes to local L1[{:#08x}] from DRAM core w/ physical coords {} DRAM[addr=0x{:08x}] (invalid address "
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc{} tried to unicast write 102400 "
+                "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
@@ -172,7 +168,25 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
                 risc_name,
                 noc,
                 l1_buffer_addr,
-                target_phys_core,
+                target_core,
+                output_l1_buffer_addr);
+            break;
+        }
+        case SanitizeAlignmentL1Read: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc{} tried to unicast read 102400 "
+                "bytes to local L1[{:#08x}] from Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
+                "alignment in NOC transaction).",
+                device->id(),
+                (is_eth_core) ? "ethnet" : "worker",
+                core.x,
+                core.y,
+                phys_core.x,
+                phys_core.y,
+                risc_name,
+                noc,
+                l1_buffer_addr,
+                target_core,
                 input_l1_buffer_addr);
         } break;
         default:
