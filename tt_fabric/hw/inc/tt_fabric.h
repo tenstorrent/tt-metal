@@ -9,195 +9,9 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
+#include "tt_fabric_interface.h"
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
-constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
-constexpr uint32_t NUM_WR_CMD_BUFS = 4;
-constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS =
-    (NUM_WR_CMD_BUFS - 1) * (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES) / PACKET_WORD_SIZE_BYTES;
-constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2 * 1024;
-constexpr uint32_t FVC_SYNC_THRESHOLD = 256;
-
-enum SessionCommand : uint32_t {
-    ASYNC_WR = (0x1 << 0),
-    ASYNC_WR_RESP = (0x1 << 1),
-    ASYNC_RD = (0x1 << 2),
-    ASYNC_RD_RESP = (0x1 << 3),
-    DSOCKET_WR = (0x1 << 4),
-    SSOCKET_WR = (0x1 << 5),
-    ATOMIC_INC = (0x1 << 6),
-    ATOMIC_READ_INC = (0x1 << 7),
-};
-
-#define INVALID 0x0
-#define DATA 0x1
-#define MCAST_DATA 0x2
-#define SYNC 0x4
-#define FORWARD 0x8
-#define INLINE_FORWARD 0x10
-#define PACK_N_FORWARD 0x20
-#define TERMINATE 0x40
-#define NOP 0xFF
-
-/*
-struct routing_table {
-    uint8_t entry[1024];
-}
-
-struct {
-    routing_table inter_mesh;
-    routing_table intra_meths;
-    port_directions ;
-    uint32_t my_chips_id;
-    uint32_t my_mesh_id;
-
-}
-*/
-
-typedef struct tt_routing {
-    uint32_t packet_size_bytes;
-    uint16_t dst_mesh_id;  // Remote mesh
-    uint16_t dst_dev_id;   // Remote device
-    uint16_t src_mesh_id;  // Source mesh
-    uint16_t src_dev_id;   // Source device
-    uint16_t ttl;
-    uint8_t version;
-    uint8_t flags;
-} tt_routing;
-
-static_assert(sizeof(tt_routing) == 16);
-
-typedef struct tt_session {
-    SessionCommand command;
-    uint32_t target_offset_l;  // RDMA address
-    uint32_t target_offset_h;
-    uint32_t ack_offset_l;  // fabric client local address for session command acknowledgement.
-                            // This is complete end-to-end acknowledgement of sessoin command completion at the remote
-                            // device.
-    uint32_t ack_offset_h;
-} tt_session;
-
-static_assert(sizeof(tt_session) == 20);
-
-typedef struct mcast_params {
-    uint16_t east;
-    uint16_t west;
-    uint16_t north;
-    uint16_t south;
-    uint32_t socket_id;  // Socket Id for DSocket Multicast. Ignored for ASYNC multicast.
-} mcast_params;
-
-typedef struct socket_params {
-    uint32_t socket_id;
-} socket_params;
-
-typedef struct atomic_params {
-    uint32_t
-        return_offset;  // L1 offset where atomic read should be returned. Noc X/Y is taken from tt_session.ack_offset
-    uint32_t wrap_boundary;  // NOC atomic increment wrapping value.
-} atomic_params;
-
-typedef struct read_params {
-    uint32_t return_offset_l;  // address where read data should be copied
-    uint32_t return_offset_h;
-    uint32_t size;  // number of bytes to read
-} read_params;
-
-typedef struct misc_params {
-    uint32_t words[3];
-} misc_params;
-
-typedef union packet_params {
-    mcast_params mcast_parameters;
-    socket_params socket_parameters;
-    atomic_params atomic_parameters;
-    read_params read_parameters;
-    misc_params misc_parameters;
-    uint8_t bytes[12];
-} packet_params;
-
-typedef struct packet_header {
-    packet_params packet_parameters;
-    tt_session session;
-    tt_routing routing;
-} packet_header_t;
-
-const uint32_t PACKET_HEADER_SIZE_BYTES = 48;
-const uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
-
-static_assert(sizeof(packet_header) == PACKET_HEADER_SIZE_BYTES);
-
-// This is a pull request entry for a fabric router.
-// Pull request issuer populates these entries to identify
-// the data that fabric router needs to pull from requestor.
-// This data is the forwarded by router over ethernet.
-// A pull request can be for packetized data or raw data, as specified by flags field.
-//   - When registering a pull request for raw data, the requestor pushes two entries to router request queue.
-//     First entry is packet_header, second entry is pull_request. This is typical of OP/Endpoint issuing read/writes
-//     over tt-fabric.
-//   - When registering a pull request for packetized data, the requetor only pushed pull_request entry to router
-//   request queue.
-//     This is typical of fabric routers forwarding data over noc/ethernet hops.
-//
-typedef struct pull_request {
-    uint32_t wr_ptr;        // Current value of write pointer.
-    uint32_t rd_ptr;        // Current value of read pointer. Points to first byte of pull data.
-    uint32_t size;          // Total number of bytes that need to be forwarded.
-    uint32_t buffer_size;   // Producer local buffer size. Used for flow control when total data to send does not fit in
-                            // local buffer.
-    uint64_t buffer_start;  // Producer local buffer start. Used for wrapping rd/wr_ptr at the end of buffer.
-    uint64_t ack_addr;  // Producer local address to send rd_ptr updates. fabric router pushes its rd_ptr to requestor
-                        // at this address.
-    uint8_t padding[15];
-    uint8_t flags;  // Router command.
-} pull_request_t;
-
-const uint32_t PULL_REQ_SIZE_BYTES = 48;
-
-static_assert(sizeof(pull_request) == PULL_REQ_SIZE_BYTES);
-static_assert(sizeof(pull_request) == sizeof(packet_header));
-
-typedef union chan_request_entry {
-    pull_request_t pull_request;
-    packet_header_t packet_header;
-    uint8_t bytes[48];
-} chan_request_entry_t;
-
-const uint32_t CHAN_PTR_SIZE_BYTES = 16;
-typedef struct chan_ptr {
-    uint32_t ptr;
-    uint32_t pad[3];
-} chan_ptr;
-static_assert(sizeof(chan_ptr) == CHAN_PTR_SIZE_BYTES);
-
-const uint32_t CHAN_REQ_BUF_LOG_SIZE = 4;  // must be 2^N
-const uint32_t CHAN_REQ_BUF_SIZE = 16;     // must be 2^N
-const uint32_t CHAN_REQ_BUF_SIZE_MASK = (CHAN_REQ_BUF_SIZE - 1);
-const uint32_t CHAN_REQ_BUF_PTR_MASK = ((CHAN_REQ_BUF_SIZE << 1) - 1);
-const uint32_t CHAN_REQ_BUF_SIZE_BYTES = 2 * CHAN_PTR_SIZE_BYTES + CHAN_REQ_BUF_SIZE * PULL_REQ_SIZE_BYTES;
-
-typedef struct chan_req_buf {
-    chan_ptr wrptr;
-    chan_ptr rdptr;
-    chan_request_entry_t chan_req[CHAN_REQ_BUF_SIZE];
-} chan_req_buf;
-
-static_assert(sizeof(chan_req_buf) == CHAN_REQ_BUF_SIZE_BYTES);
-
-typedef struct local_pull_request {
-    chan_ptr wrptr;
-    chan_ptr rdptr;
-    pull_request_t pull_request;
-} local_pull_request_t;
-
-typedef struct chan_payload_ptr {
-    uint32_t ptr;
-    uint32_t pad[2];
-    uint32_t ptr_cleared;
-} chan_payload_ptr;
-
-static_assert(sizeof(chan_payload_ptr) == CHAN_PTR_SIZE_BYTES);
 
 const uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
 const uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
@@ -205,8 +19,10 @@ const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
+extern volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table;
 
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
+bool tt_fabric_is_header_valid(packet_header_t* p_header);
 
 typedef struct fvc_consumer_state {
     volatile chan_payload_ptr remote_rdptr;
@@ -310,7 +126,7 @@ typedef struct fvc_consumer_state {
     inline void advance_pull_wrptr(uint32_t num_words) {
         uint32_t temp = fvc_pull_wrptr + num_words;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         fvc_pull_wrptr = temp;
     }
@@ -318,7 +134,7 @@ typedef struct fvc_consumer_state {
     inline void advance_out_wrptr(uint32_t num_words) {
         uint32_t temp = fvc_out_wrptr + num_words;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         fvc_out_wrptr = temp;
     }
@@ -326,7 +142,7 @@ typedef struct fvc_consumer_state {
     inline void advance_out_rdptr(uint32_t num_words) {
         uint32_t temp = fvc_out_rdptr + num_words;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         fvc_out_rdptr = temp;
     }
@@ -349,14 +165,16 @@ typedef struct fvc_consumer_state {
         }
     }
 
-    inline void check_sync_pending() {
+    inline bool check_sync_pending() {
         if (sync_pending) {
             if (get_num_words_free()) {
                 advance_pull_wrptr(1);
                 sync_buf_advance_wrptr();
                 sync_pending = 0;
             }
+            return true;
         }
+        return false;
     }
 
     inline uint32_t forward_data_from_fvc_buffer() {
@@ -456,6 +274,7 @@ typedef struct fvc_producer_state {
     uint32_t words_since_last_sync;
     uint32_t words_to_forward;
     bool curr_packet_valid;
+    bool packet_corrupted;
     uint64_t packet_dest;
     packet_header_t current_packet_header;
 
@@ -474,7 +293,7 @@ typedef struct fvc_producer_state {
     inline uint32_t inc_ptr_with_wrap(uint32_t ptr, uint32_t inc) {
         uint32_t temp = ptr + inc;
         if (temp >= buffer_size * 2) {
-            temp = 0;
+            temp -= buffer_size * 2;
         }
         return temp;
     }
@@ -605,7 +424,31 @@ typedef struct fvc_producer_state {
             this->packet_words_remaining =
                 (this->current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             this->packet_words_sent = 0;
-            this->curr_packet_valid = true;
+            if (tt_fabric_is_header_valid(&current_packet_header)) {
+                this->curr_packet_valid = true;
+            } else {
+                this->packet_corrupted = true;
+            }
+        }
+    }
+
+    inline void copy_header(pull_request_t* req) {
+        uint32_t* dst = (uint32_t*)req;
+        uint32_t* src = (uint32_t*)&current_packet_header;
+        for (uint32_t i = 0; i < sizeof(pull_request_t) / 4; i++) {
+            dst[i] = src[i];
+        }
+    }
+
+    uint32_t get_next_hop_router_noc_xy() {
+        uint32_t dst_mesh_id = current_packet_header.routing.dst_mesh_id;
+        if (dst_mesh_id != routing_table->my_mesh_id) {
+            uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        } else {
+            uint32_t dst_device_id = current_packet_header.routing.dst_dev_id;
+            uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
 
@@ -615,23 +458,29 @@ typedef struct fvc_producer_state {
         words_available = std::min(words_available, packet_words_remaining);
         if (packet_in_progress == 0) {
             advance_out_wrptr(words_available);
-            local_pull_request->pull_request.wr_ptr = fvc_out_wrptr;
-            local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;  // inbound_rdptr.ptr_cleared;
-            // fvc_pull_rdptr = fvc_out_rdptr;
-            local_pull_request->pull_request.size = this->current_packet_header.routing.packet_size_bytes;
-            local_pull_request->pull_request.buffer_size = buffer_size;
-            local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
-            local_pull_request->pull_request.ack_addr =
-                xy_local_addr + (uint32_t)&local_pull_request->pull_request.rd_ptr;
-            local_pull_request->pull_request.flags = FORWARD;
-            packet_in_progress = 1;
+            if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                copy_header((pull_request_t*)&local_pull_request->pull_request);
+            } else {
+                local_pull_request->pull_request.wr_ptr = fvc_out_wrptr;
+                local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
+                local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
+                local_pull_request->pull_request.buffer_size = buffer_size;
+                local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
+                local_pull_request->pull_request.ack_addr =
+                    xy_local_addr + (uint32_t)&local_pull_request->pull_request.rd_ptr;
+                local_pull_request->pull_request.flags = FORWARD;
+                packet_in_progress = 1;
+            }
             packet_words_remaining -= words_available;
             advance_out_rdptr(words_available);
             // issue noc write to noc target of pull request.
-            // TODO: Allan: Needs to be looked up from routing table
-            //              based on this->current_packet_header.routing. dest mesh/chip
-            uint64_t dest_addr = NOC_XY_ADDR(2, 0, 0x19000);
+            uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
             packet_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
+            if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                curr_packet_valid = false;
+                flush_async_writes<fvc_mode>();
+                return words_available;
+            }
         } else {
             // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
             // it is used to determine when it it safe to reclaim local buffer memory for more data.
@@ -670,29 +519,55 @@ typedef struct fvc_producer_state {
         return words_available;
     }
 
+    inline bool packet_is_for_local_chip() {
+        return (current_packet_header.routing.dst_mesh_id == routing_table->my_mesh_id) &&
+               (current_packet_header.routing.dst_dev_id == routing_table->my_device_id);
+    }
+
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t process_inbound_packet() {
         uint32_t words_processed = 0;
-        if (current_packet_header.routing.flags == FORWARD && current_packet_header.session.command == ASYNC_WR) {
-            if (packet_in_progress == 0) {
-                packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                              current_packet_header.session.target_offset_l;
+        if (packet_is_for_local_chip()) {
+            if (current_packet_header.routing.flags == FORWARD && current_packet_header.session.command == ASYNC_WR) {
+                if (packet_in_progress == 0) {
+                    packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
+                                  current_packet_header.session.target_offset_l;
+                    packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
+                    advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
+                    advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
+                    // subtract the header words. Remaining words are the data to be written to packet_dest.
+                    // Remember to account for trailing bytes which may not be a full packet word.
+                    packet_in_progress = 1;
+                    words_processed = PACKET_HEADER_SIZE_WORDS;
+                    words_processed += issue_async_write();
+                } else {
+                    flush_async_writes();
+                    if (packet_words_remaining) {
+                        words_processed = issue_async_write();
+                    } else {
+                        packet_in_progress = 0;
+                        curr_packet_valid = false;
+                    }
+                }
+            } else if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
+                                    current_packet_header.session.target_offset_l;
+                noc_fast_atomic_increment(
+                    noc_index,
+                    NCRISC_AT_CMD_BUF,
+                    noc_addr,
+                    NOC_UNICAST_WRITE_VC,
+                    current_packet_header.packet_parameters.atomic_parameters.increment,
+                    current_packet_header.packet_parameters.atomic_parameters.wrap_boundary,
+                    false);
+
                 packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
                 advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
                 advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
-                // subtract the header words. Remaining words are the data to be written to packet_dest.
-                // Remember to account for trailing bytes which may not be a full packet word.
-                packet_in_progress = 1;
                 words_processed = PACKET_HEADER_SIZE_WORDS;
-                words_processed += issue_async_write();
-            } else {
-                flush_async_writes();
-                if (packet_words_remaining) {
-                    words_processed = issue_async_write();
-                } else {
-                    packet_in_progress = 0;
-                    curr_packet_valid = false;
-                }
+                fvc_pull_rdptr = fvc_out_rdptr;
+                update_remote_rdptr_cleared<fvc_mode>();
+                curr_packet_valid = false;
             }
         } else {
             words_processed = pull_data_from_fvc_buffer<fvc_mode>();
@@ -700,10 +575,11 @@ typedef struct fvc_producer_state {
         return words_processed;
     }
 
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline void flush_async_writes() {
         noc_async_write_barrier();
         fvc_pull_rdptr = fvc_out_rdptr;
-        update_remote_rdptr_cleared();
+        update_remote_rdptr_cleared<fvc_mode>();
     }
 
 } fvc_producer_state_t;
@@ -723,6 +599,28 @@ inline uint64_t get_timestamp() {
 }
 
 inline uint64_t get_timestamp_32b() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+
+void tt_fabric_add_header_checksum(packet_header_t* p_header) {
+    uint16_t* ptr = (uint16_t*)p_header;
+    uint32_t sum = 0;
+    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
+        sum += ptr[i];
+    }
+    sum = ~sum;
+    sum += sum;
+    p_header->packet_parameters.misc_parameters.words[0] = sum;
+}
+
+bool tt_fabric_is_header_valid(packet_header_t* p_header) {
+    uint16_t* ptr = (uint16_t*)p_header;
+    uint32_t sum = 0;
+    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
+        sum += ptr[i];
+    }
+    sum = ~sum;
+    sum += sum;
+    return (p_header->packet_parameters.misc_parameters.words[0] == sum);
+}
 
 void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     for (uint32_t i = 0; i < size_bytes / 4; i++) {
@@ -747,6 +645,17 @@ static FORCE_INLINE void set_64b_result(uint32_t* buf, uint64_t val, uint32_t in
         buf[index] = val >> 32;
         buf[index + 1] = val & 0xFFFFFFFF;
     }
+}
+
+inline void req_buf_ptr_advance(chan_ptr* ptr) { ptr->ptr = (ptr->ptr + 1) & CHAN_REQ_BUF_PTR_MASK; }
+
+inline void req_buf_advance_wrptr(chan_req_buf* req_buf) { req_buf_ptr_advance(&(req_buf->wrptr)); }
+
+inline void req_buf_advance_rdptr(chan_req_buf* req_buf) {
+    // clear valid before incrementing read pointer.
+    uint32_t rd_index = req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
+    req_buf->chan_req[rd_index].bytes[47] = 0;
+    req_buf_ptr_advance(&(req_buf->rdptr));
 }
 
 inline bool req_buf_ptrs_empty(uint32_t wrptr, uint32_t rdptr) { return (wrptr == rdptr); }
@@ -787,7 +696,7 @@ inline uint32_t num_words_available_to_pull(volatile pull_request_t* pull_reques
 inline uint32_t advance_ptr(uint32_t buffer_size, uint32_t ptr, uint32_t inc_words) {
     uint32_t temp = ptr + inc_words;
     if (temp >= buffer_size * 2) {
-        temp = 0;
+        temp -= buffer_size * 2;
     }
     return temp;
 }
@@ -833,6 +742,7 @@ inline uint32_t get_num_words_to_pull(volatile pull_request_t* pull_request, fvc
 
 inline uint32_t pull_data_to_fvc_buffer(
     volatile pull_request_t* pull_request, fvc_consumer_state_t* fvc_consumer_state) {
+    volatile uint32_t* temp = (volatile uint32_t*)0xffb2010c;
     if (fvc_consumer_state->packet_in_progress == 0) {
         uint32_t size = pull_request->size;
         fvc_consumer_state->packet_words_remaining = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
@@ -842,6 +752,7 @@ inline uint32_t pull_data_to_fvc_buffer(
     uint32_t num_words_to_pull = get_num_words_to_pull(pull_request, fvc_consumer_state);
     bool full_packet_sent = (num_words_to_pull == fvc_consumer_state->packet_words_remaining);
     if (num_words_to_pull == 0) {
+        temp[0] = 0xdead1111;
         return 0;
     }
 
@@ -859,6 +770,58 @@ inline uint32_t pull_data_to_fvc_buffer(
     return num_words_to_pull;
 }
 
+inline uint32_t move_data_to_fvc_buffer(
+    volatile pull_request_t* pull_request, fvc_consumer_state_t* fvc_consumer_state) {
+    if (fvc_consumer_state->packet_in_progress == 0) {
+        fvc_consumer_state->packet_words_remaining = PACKET_HEADER_SIZE_WORDS;
+        fvc_consumer_state->packet_in_progress = 1;
+    }
+
+    // if fvc does not have enough space, try again later.
+    if (fvc_consumer_state->get_num_words_free() < PACKET_HEADER_SIZE_WORDS) {
+        return 0;
+    }
+
+    uint32_t fvc_space_before_wptr_wrap = fvc_consumer_state->words_before_local_buffer_wrap();
+    uint32_t* fvc_addr = (uint32_t*)fvc_consumer_state->get_local_buffer_pull_addr();
+    uint32_t* src = (uint32_t*)pull_request;
+
+    switch (fvc_space_before_wptr_wrap) {
+        case 1:
+            fvc_addr[0] = src[0];
+            fvc_addr[1] = src[1];
+            fvc_addr[2] = src[2];
+            fvc_addr[3] = src[3];
+            fvc_addr = (uint32_t*)fvc_consumer_state->buffer_start;
+            fvc_addr[0] = src[4];
+            fvc_addr[1] = src[5];
+            fvc_addr[2] = src[6];
+            fvc_addr[3] = src[7];
+            fvc_addr[4] = src[8];
+            fvc_addr[5] = src[9];
+            fvc_addr[6] = src[10];
+            fvc_addr[7] = src[11];
+            break;
+        case 2:
+            // uint32_t i = 0;
+            for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_WORDS - 1) * PACKET_WORD_SIZE_BYTES / 4; i++) {
+                fvc_addr[i] = src[i];
+            }
+            fvc_addr = (uint32_t*)fvc_consumer_state->buffer_start;
+            fvc_addr[0] = src[8];
+            fvc_addr[1] = src[9];
+            fvc_addr[2] = src[10];
+            fvc_addr[3] = src[11];
+            break;
+        default:
+            for (uint32_t i = 0; i < PACKET_HEADER_SIZE_BYTES / 4; i++) {
+                fvc_addr[i] = src[i];
+            }
+    }
+
+    fvc_consumer_state->register_pull_data(PACKET_HEADER_SIZE_WORDS);
+    return PACKET_HEADER_SIZE_WORDS;
+}
 /**
  *  Polling for ready signal from the remote peers of all input and output queues.
  *  Blocks until all are ready, but doesn't block polling on each individual queue.
