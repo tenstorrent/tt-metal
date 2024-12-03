@@ -178,6 +178,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_CreateBufferCommand());
     break;
   }
+  case ::tt::target::CommandType::DeallocateBufferCommand: {
+    execute(command->cmd_as_DeallocateBufferCommand());
+    break;
+  }
   case ::tt::target::CommandType::EnqueueWriteBufferCommand: {
     execute(command->cmd_as_EnqueueWriteBufferCommand());
     break;
@@ -236,6 +240,15 @@ void LightMetalReplay::execute(tt::target::CreateBufferCommand const *cmd) {
     default:
         throw std::runtime_error("Unsupported buffer_layout: " + std::string(EnumNameTensorMemoryLayout(cmd->config()->buffer_layout())));
     }
+}
+
+void LightMetalReplay::execute(tt::target::DeallocateBufferCommand const *cmd) {
+    auto buffer = getBufferFromMap(cmd->global_id());
+    if (!buffer) {
+        throw std::runtime_error("Buffer w/ global_id: " + std::to_string(cmd->global_id()) + " not previously created");
+    }
+    DeallocateBuffer(*buffer); // Buffer& expected.
+    removeBufferFromMap(cmd->global_id());
 }
 
 void LightMetalReplay::execute(tt::target::EnqueueWriteBufferCommand const *cmd) {
