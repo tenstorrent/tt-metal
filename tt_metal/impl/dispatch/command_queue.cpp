@@ -4,21 +4,22 @@
 
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
-#include <malloc.h>
-
-#include <algorithm>  // for copy() and assign()
-#include <iterator>   // for back_inserter
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
-#include "allocator/allocator.hpp"
-#include "debug_tools.hpp"
 #include "dev_msgs.h"
 #include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
-#include "noc/noc_parameters.h"
 #include "tt_metal/command_queue.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
@@ -26,7 +27,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
@@ -41,12 +41,6 @@
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
 
 using namespace tt::tt_metal;
-
-using std::map;
-using std::pair;
-using std::set;
-using std::shared_ptr;
-using std::unique_ptr;
 
 namespace tt::tt_metal {
 
@@ -905,7 +899,7 @@ void EnqueueProgramCommand::assemble_device_commands(
             const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
             program_command_sequence.circular_buffers_on_core_ranges[i].reserve(
                 circular_buffers_on_corerange.size());
-            for (const shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
+            for (const std::shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
                 program_command_sequence.circular_buffers_on_core_ranges[i].emplace_back(cb);
                 const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
                 const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
@@ -1368,7 +1362,7 @@ void EnqueueProgramCommand::update_device_commands(
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
-        for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
+        for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
             const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
             for (const auto& buffer_index : cb->local_buffer_indices()) {
