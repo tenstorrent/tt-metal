@@ -114,8 +114,7 @@ bool chip_to_chip_dram_buffer_transfer(
         eth_sender_core,
         {
             (uint32_t)input_dram_byte_address,
-            (uint32_t)input_dram_noc_xy.x,
-            (uint32_t)input_dram_noc_xy.y,
+            0,
             (uint32_t)remaining_bytes,
             (uint32_t)num_loops,
             (uint32_t)MAX_BUFFER,
@@ -138,8 +137,7 @@ bool chip_to_chip_dram_buffer_transfer(
         eth_receiver_core,
         {
             (uint32_t)output_dram_byte_address,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            0,
             (uint32_t)remaining_bytes,
             (uint32_t)num_loops,
             (uint32_t)MAX_BUFFER,

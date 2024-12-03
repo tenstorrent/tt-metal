@@ -120,7 +120,6 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
         .device = device, .size = tile_size, .page_size = tile_size, .buffer_type = tt_metal::BufferType::DRAM};
     auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
 
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(

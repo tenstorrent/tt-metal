@@ -16,14 +16,13 @@ inline uint32_t TADDR(uint32_t ti) {
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    uint32_t src_noc_x = get_arg_val<uint32_t>(1);
-    uint32_t src_noc_y = get_arg_val<uint32_t>(2);
-    uint32_t W         = get_arg_val<uint32_t>(3);
-    uint32_t H         = get_arg_val<uint32_t>(4);
-    uint32_t C         = get_arg_val<uint32_t>(5);
-    uint32_t HW        = get_arg_val<uint32_t>(6);
-    uint32_t N         = get_arg_val<uint32_t>(7);
-    uint32_t CHW       = get_arg_val<uint32_t>(8);
+    uint32_t src_bank_id = get_arg_val<uint32_t>(1);
+    uint32_t W = get_arg_val<uint32_t>(2);
+    uint32_t H = get_arg_val<uint32_t>(3);
+    uint32_t C = get_arg_val<uint32_t>(4);
+    uint32_t HW = get_arg_val<uint32_t>(5);
+    uint32_t N = get_arg_val<uint32_t>(6);
+    uint32_t CHW = get_arg_val<uint32_t>(7);
 
     auto WT = (W >> 5); // number of tiles in W
     auto HT = (H >> 5); // number of tiles in H
@@ -39,7 +38,7 @@ void kernel_main() {
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
-    uint64_t batch_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
+    uint64_t batch_addr = get_noc_addr_from_bank_id<true>(src_bank_id, src_addr);
     for (uint32_t n = 0; n < N; n++) {
         uint32_t htWT = 0;
         for (uint32_t h = 0; h < H; h++) {

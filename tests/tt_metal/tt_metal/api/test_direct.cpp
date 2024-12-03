@@ -47,7 +47,6 @@ bool reader_only(
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
-    auto dram_noc_xy = input_dram_buffer->noc_coordinates();
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
     // auto l1_buffer =
@@ -73,8 +72,7 @@ bool reader_only(
         reader_core,
         {
             (uint32_t)dram_byte_address,
-            (uint32_t)dram_noc_xy.x,
-            (uint32_t)dram_noc_xy.y,
+            0,
             (uint32_t)l1_byte_address,
             (uint32_t)byte_size,
         });
@@ -117,7 +115,6 @@ bool writer_only(
 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
-    auto dram_noc_xy = output_dram_buffer->noc_coordinates();
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
     // auto l1_buffer =
@@ -138,15 +135,13 @@ bool writer_only(
     tt_metal::detail::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
     // tt_metal::detail::WriteToBuffer(l1_buffer, inputs);
 
-
     tt_metal::SetRuntimeArgs(
         program,
         writer_kernel,
         writer_core,
         {
             (uint32_t)dram_byte_address,
-            (uint32_t)dram_noc_xy.x,
-            (uint32_t)dram_noc_xy.y,
+            0,
             (uint32_t)l1_byte_address,
             (uint32_t)byte_size,
         });
@@ -192,10 +187,8 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{cb_index, test_config.l1_data_format}})
         .set_page_size(cb_index, test_config.tile_byte_size);
@@ -230,15 +223,13 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
-
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
         test_config.core,
         {
             (uint32_t)input_dram_byte_address,
-            (uint32_t)input_dram_noc_xy.x,
-            (uint32_t)input_dram_noc_xy.y,
+            0,
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
@@ -247,8 +238,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         test_config.core,
         {
             (uint32_t)output_dram_byte_address,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            0,
             (uint32_t)test_config.num_tiles,
         });
 
@@ -290,10 +280,8 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         };
     auto input_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
         .set_page_size(input0_cb_index, test_config.tile_byte_size);
@@ -341,15 +329,13 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
-
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
         test_config.core,
         {
             (uint32_t)input_dram_byte_address,
-            (uint32_t)input_dram_noc_xy.x,
-            (uint32_t)input_dram_noc_xy.y,
+            0,
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
@@ -358,8 +344,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         test_config.core,
         {
             (uint32_t)output_dram_byte_address,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            0,
             (uint32_t)test_config.num_tiles,
         });
 

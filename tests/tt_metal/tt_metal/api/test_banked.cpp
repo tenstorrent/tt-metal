@@ -115,8 +115,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     } else {
         reader_runtime_args = {
             (uint32_t)input_buffer->address(),
-            (uint32_t)input_buffer->noc_coordinates().x,
-            (uint32_t)input_buffer->noc_coordinates().y,
+            0,
             (uint32_t)cfg.num_tiles,
         };
     }
@@ -128,8 +127,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     } else {
         writer_runtime_args = {
             (uint32_t)output_buffer->address(),
-            (uint32_t)output_buffer->noc_coordinates().x,
-            (uint32_t)output_buffer->noc_coordinates().y,
+            0,
             (uint32_t)cfg.num_tiles,
         };
     }
