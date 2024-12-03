@@ -52,18 +52,26 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
     uint32_t source_read_size_bytes = ((source_page_size_bytes-1) & MASK_64) + 128;
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
+    uint32_t write_start_offset = 0;
     tt::tt_metal::Buffer *src_buffer = input.buffer();
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the begining of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
-    uint32_t responsibility = (input_log_shape[-2] - 1) / num_cores_total + 1;
+    uint32_t responsibility = ((input_log_shape[-2] - 1) / num_cores_total) + 1;
     while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
         responsibility++;
     }
     const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
+    const uint32_t offset_jump = (responsibility * source_page_size_bytes) % dest_page_size_bytes;
     uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-
+    printf(
+        "source is %d bytes, dest is %d bytes, responsibility %d, wj %d, oj %d\n",
+        source_page_size_bytes,
+        dest_page_size_bytes,
+        responsibility,
+        write_jump,
+        offset_jump);
     const uint32_t cb_size0 = source_read_size_bytes;
     const uint32_t cb_size1 = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
@@ -115,7 +123,8 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
                 // set the runtime args
                 // set the compile time args
                 const uint32_t start_of_read = read_start_page;
-                const uint32_t end_of_read = read_start_page + responsibility;
+                uint32_t end_of_read = read_start_page + responsibility;
+                end_of_read = end_of_read < input_log_shape[-2] ? end_of_read : input_log_shape[-2];
 
                 const std::vector<uint32_t> reader_runtime_args = {
                     src_buffer->address(),
@@ -124,11 +133,17 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
                     start_of_read,
                     end_of_read,
                     write_start_page,
-                    0,
+                    write_start_offset,
                     done
 
                 };
-                write_start_page += write_jump;
+                write_start_offset += offset_jump;
+                if (write_start_offset >= dest_page_size_bytes) {
+                    write_start_page += write_jump + 1;
+                    write_start_offset -= dest_page_size_bytes;
+                } else {
+                    write_start_page += write_jump;
+                }
                 read_start_page = end_of_read;
                 done = (end_of_read == input_log_shape[-2]) ? 1 : 0;
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -182,218 +197,6 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
                     const std::vector<uint32_t> reader_runtime_args = {
                         src_buffer->address(),
                         dst_buffer->address(),
-                        source_read_size_bytes,
-                        start_of_read,
-                        end_of_read,
-                        write_start_page,
-                        0,
-                        done
-
-                    };
-                    write_start_page += write_jump;
-                    read_start_page = end_of_read;
-                    done = (end_of_read == input_log_shape[-2]) ? 1 : 0;
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                }
-            }
-        }
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
-}
-
-operation::ProgramWithCallbacks rm_reshape_preparer_multi_risk(const Tensor& input, const Tensor& output) {
-    // NOTE: This function is an improvement on rm_reshape_preparer_single_risk but it has a bug causing a hang for some
-    // cases that needs to be debugged first This function uses both risk cores
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    const uint32_t data_size = input.element_size();
-    tt::tt_metal::Device* device = input.device();
-    // Multi device pre-computation
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-    ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
-    uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
-    uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
-    uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 256;
-    uint32_t read_start_page = 0;
-    uint32_t write_start_page = 0;
-    tt::tt_metal::Buffer* src_buffer = input.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the begining of a read and
-    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
-    uint32_t responsibility = (input_log_shape[-2] - 1) / num_cores_total + 1;
-    while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
-        responsibility++;
-    }
-    const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
-    uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-
-    const uint32_t cb_size0 = source_read_size_bytes;
-    const uint32_t cb_size1 = source_read_size_bytes;
-    const uint32_t cb_size2 = (((dest_page_size_bytes - 1) & MASK_64) + 80);
-
-    const uint32_t src0_cb_index = 0;
-    const uint32_t src1_cb_index = 1;
-    const uint32_t src2_cb_index = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_size0 * 2, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, cb_size0);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, cb_size1);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    tt::tt_metal::CircularBufferConfig cb_src2_config =
-        tt::tt_metal::CircularBufferConfig(cb_size2, {{src2_cb_index, cb_data_format}})
-            .set_page_size(src2_cb_index, cb_size2);
-    auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
-
-    std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
-        (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,
-        src0_cb_index,
-        src1_cb_index,
-        src2_cb_index};
-
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved_reader.cpp",
-        total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved_writer.cpp",
-        total_cores,
-        tt::tt_metal::WriterDataMovementConfig(compile_time_args));
-    uint32_t done = 0;
-    for (int core_x = 0; core_x < num_cores_x; core_x++) {
-        for (int core_y = 0; core_y < num_cores_y; core_y++) {
-            CoreCoord core = {core_x, core_y};
-            if (done == 1) {
-                const std::vector<uint32_t> reader_runtime_args = {
-                    src_buffer->address(),
-                    dst_buffer->address(),
-                    source_page_size_bytes,
-                    dest_page_size_bytes,
-                    source_read_size_bytes,
-                    0,
-                    0,
-                    0,
-                    0,
-                    1,
-                    0,
-                    0,
-                    0,
-                    0
-
-                };
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
-            } else {
-                // Create the circular buffers
-                auto ping_read_buf_has_data = CreateSemaphore(program, core, 0);
-                auto pong_read_buf_has_data = CreateSemaphore(program, core, 0);
-                auto ping_read_buf_is_free = CreateSemaphore(program, core, 1);
-                auto pong_read_buf_is_free = CreateSemaphore(program, core, 1);
-                // set the runtime args
-                // set the compile time args
-                const uint32_t start_of_read = read_start_page;
-                const uint32_t end_of_read = read_start_page + responsibility;
-
-                const std::vector<uint32_t> reader_runtime_args = {
-                    src_buffer->address(),
-                    dst_buffer->address(),
-                    source_page_size_bytes,
-                    dest_page_size_bytes,
-                    source_read_size_bytes,
-                    start_of_read,
-                    end_of_read,
-                    write_start_page,
-                    0,
-                    done,
-                    ping_read_buf_has_data,
-                    pong_read_buf_has_data,
-                    ping_read_buf_is_free,
-                    pong_read_buf_is_free
-
-                };
-                write_start_page += write_jump;
-                read_start_page = end_of_read;
-                done = (end_of_read == input_log_shape[-2]) ? 1 : 0;
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
-            }
-        }
-    }
-    auto override_runtime_args_callback = [reader_kernel_id, compute_with_storage_grid_size](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto input = input_tensors.at(0);
-        auto output = output_tensors.at(0);
-        const uint32_t data_size = input.element_size();
-        tt::tt_metal::Buffer* src_buffer = input.buffer();
-        tt::tt_metal::Buffer* dst_buffer = output.buffer();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        uint32_t num_cores_total = num_cores_x * num_cores_y;
-        ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-        ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-        uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
-        uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
-        uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
-        uint32_t read_start_page = 0;
-        uint32_t write_start_page = 0;
-        uint32_t responsibility = (input_log_shape[-2] - 1) / num_cores_total + 1;
-        while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
-            responsibility++;
-        }
-        const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
-        uint32_t done = 0;
-        for (int core_x = 0; core_x < num_cores_x; core_x++) {
-            for (int core_y = 0; core_y < num_cores_y; core_y++) {
-                CoreCoord core = {core_x, core_y};
-                if (done == 1) {
-                    const std::vector<uint32_t> reader_runtime_args = {
-                        src_buffer->address(),
-                        dst_buffer->address(),
-                        source_page_size_bytes,
-                        dest_page_size_bytes,
-                        source_read_size_bytes,
-                        0,
-                        0,
-                        0,
-                        0,
-                        1
-
-                    };
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                } else {
-                    // Create the circular buffers
-
-                    // set the runtime args
-                    // set the compile time args
-                    const uint32_t start_of_read = read_start_page;
-                    const uint32_t end_of_read = read_start_page + responsibility;
-
-                    const std::vector<uint32_t> reader_runtime_args = {
-                        src_buffer->address(),
-                        dst_buffer->address(),
-                        source_page_size_bytes,
-                        dest_page_size_bytes,
                         source_read_size_bytes,
                         start_of_read,
                         end_of_read,

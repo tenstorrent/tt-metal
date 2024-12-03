@@ -96,8 +96,10 @@ void kernel_main() {
     cb_push_back(cb_id_in1, 1);
 
     uint64_t dst_noc_addr = get_noc_addr(write_page, d);
-    uint64_t write_offset = dst_noc_addr&OFFSET_16 + write_start_offset;
+    uint64_t write_offset = (dst_noc_addr & OFFSET_16) + write_start_offset;
     uint64_t begin_write_offset = write_offset;
+    constexpr bool can_be_clean = ((source_page_size_bytes % 16) == 0 && (dest_page_size_bytes % 16) == 0);
+    uint64_t dst_noc_addr_offset = 0;
     for (uint32_t i = read_start_page; i < read_end_page; i++) {
         //Read from source
         uint64_t src_noc_addr = s.get_noc_addr(i,0);
@@ -124,23 +126,34 @@ void kernel_main() {
             noc_async_write_barrier();
             if (readable < writable)
             {
-                tt::data_movement::common::tt_memmove<false, true, false>(
-                    dest_buffer + write_offset, source_buffer + read_offset, readable);
+                if constexpr (can_be_clean) {
+                    noc_async_write(source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
+                    dst_noc_addr_offset = dst_noc_addr_offset + readable;
+                } else {
+                    tt::data_movement::common::tt_memmove<false, true, false>(
+                        dest_buffer + write_offset, source_buffer + read_offset, readable);
+                    if (i == read_end_page - 1) {
+                        noc_async_write(dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
+                        return;
+                    }
+                }
                 writable = writable -readable;
                 write_offset = write_offset + readable;
                 readable = 0;
                 end_to_write = end_to_write + readable;
-                if (i == read_end_page-1)
-                {
-                    noc_async_write(dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
-                    return;
-                }
+
             }
             else if (readable == writable)
             {
-                tt::data_movement::common::tt_memmove<false, false, false>(
-                    dest_buffer + write_offset, source_buffer + read_offset, readable);
-                noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, dest_page_size_bytes);
+                if constexpr (can_be_clean) {
+                    noc_async_write(source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
+                } else {
+                    tt::data_movement::common::tt_memmove<false, false, false>(
+                        dest_buffer + write_offset, source_buffer + read_offset, readable);
+                    noc_async_write(dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
+                }
+                dst_noc_addr_offset = 0;
+
                 writable = dest_page_size_bytes;
                 readable = 0;
                 if (i == read_end_page - 1) {
@@ -154,15 +167,19 @@ void kernel_main() {
             }
             else
             {
-                //writable < readable
-
-                tt::data_movement::common::tt_memmove<false, false, false>(
-                    dest_buffer + write_offset, source_buffer + read_offset, writable);
-                noc_async_write(dest_buffer+begin_write_offset,dst_noc_addr, dest_page_size_bytes);
+                if constexpr (can_be_clean) {
+                    noc_async_write(source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, writable);
+                } else {
+                    tt::data_movement::common::tt_memmove<false, false, false>(
+                        dest_buffer + write_offset, source_buffer + read_offset, writable);
+                    noc_async_write(dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
+                }
+                // writable < readable
                 end_to_write = 0;
                 readable = readable - writable;
                 read_offset = read_offset + writable;
                 write_page++;
+                dst_noc_addr_offset = 0;
                 dst_noc_addr = get_noc_addr(write_page, d);
                 write_offset = dst_noc_addr&OFFSET_16;
                 begin_write_offset = write_offset;
