@@ -4,8 +4,6 @@
 
 #include "module_base.hpp"
 
-#include "auto_context.hpp"
-
 namespace ttml::autograd {
 
 void ModuleBase::register_tensor(const TensorPtr& tensor_ptr, const std::string& name) {
@@ -30,8 +28,8 @@ const std::string& ModuleBase::get_name() const {
     return m_name;
 }
 
-NamedParameters ModuleBase::parameters() const {
-    NamedParameters params;
+serialization::NamedParameters ModuleBase::parameters() const {
+    serialization::NamedParameters params;
 
     std::queue<std::pair<const ModuleBase*, std::string>> modules_to_process;
     modules_to_process.emplace(this, get_name() + "/");

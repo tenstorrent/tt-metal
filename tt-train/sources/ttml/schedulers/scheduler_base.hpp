@@ -1,0 +1,30 @@
+// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "core/not_null.hpp"
+#include "optimizers/optimizer_base.hpp"
+
+namespace ttml::schedulers {
+
+class LRSchedulerBase {
+public:
+    explicit LRSchedulerBase(core::not_null<optimizers::OptimizerBase *> optimizer);
+
+    virtual ~LRSchedulerBase() = default;
+
+    virtual void step() = 0;
+
+    [[nodiscard]] virtual float get_last_lr() const = 0;
+
+    [[nodiscard]] virtual float get_current_lr() const = 0;
+
+    [[nodiscard]] core::not_null<optimizers::OptimizerBase *> get_optimizer() const;
+
+private:
+    core::not_null<optimizers::OptimizerBase *> m_optimizer;
+};
+
+}  // namespace ttml::schedulers

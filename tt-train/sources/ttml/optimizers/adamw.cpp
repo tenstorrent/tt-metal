@@ -10,6 +10,7 @@
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "serialization/serializable.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace {
@@ -21,7 +22,7 @@ const std::string kSecondMoment = "second_moment/";
 
 namespace ttml::optimizers {
 
-MorehAdamW::MorehAdamW(autograd::NamedParameters parameters, const AdamWConfig& config) :
+MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [key, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -90,29 +91,19 @@ void MorehAdamW::step() {
     }
 }
 
-[[nodiscard]] autograd::NamedParameters MorehAdamW::get_state_dict() const {
-    autograd::NamedParameters state_dict;
-    for (const auto& [key, first_moment] : m_first_moment) {
-        state_dict.emplace(kFirstMoment + key, first_moment);
-    }
-
-    for (const auto& [key, second_moment] : m_second_moment) {
-        state_dict.emplace(kSecondMoment + key, second_moment);
-    }
+[[nodiscard]] serialization::StateDict MorehAdamW::get_state_dict() const {
+    serialization::StateDict state_dict;
+    state_dict["first_moment"] = m_first_moment;
+    state_dict["second_moment"] = m_second_moment;
+    state_dict["steps"] = m_steps;
 
     return state_dict;
 }
 
-void MorehAdamW::set_state_dict(const autograd::NamedParameters& dict) {
-    for (const auto& [key, tensor] : dict) {
-        if (key.starts_with(kFirstMoment)) {
-            m_first_moment[key.substr(kFirstMoment.size())] = tensor;
-        } else if (key.starts_with(kSecondMoment)) {
-            m_second_moment[key.substr(kSecondMoment.size())] = tensor;
-        } else {
-            throw std::runtime_error(fmt::format("AdamW: Invalid key in state dict. Key = {}", key));
-        }
-    }
+void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at("first_moment"));
+    m_second_moment = std::get<serialization::NamedParameters>(dict.at("second_moment"));
+    m_steps = serialization::get_value_type<size_t>(dict, "steps");
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -123,7 +114,14 @@ void MorehAdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
-AdamW::AdamW(autograd::NamedParameters parameters, const AdamWConfig& config) :
+float MorehAdamW::get_learning_rate() const {
+    return m_config.lr;
+}
+void MorehAdamW::set_learning_rate(float lr) {
+    m_config.lr = lr;
+}
+
+AdamW::AdamW(serialization::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [key, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -196,29 +194,19 @@ void AdamW::step() {
     }
 }
 
-[[nodiscard]] autograd::NamedParameters AdamW::get_state_dict() const {
-    autograd::NamedParameters state_dict;
-    for (const auto& [key, first_moment] : m_first_moment) {
-        state_dict.emplace(kFirstMoment + key, first_moment);
-    }
-
-    for (const auto& [key, second_moment] : m_second_moment) {
-        state_dict.emplace(kSecondMoment + key, second_moment);
-    }
+[[nodiscard]] serialization::StateDict AdamW::get_state_dict() const {
+    serialization::StateDict state_dict;
+    state_dict["first_moment"] = m_first_moment;
+    state_dict["second_moment"] = m_second_moment;
+    state_dict["steps"] = m_steps;
 
     return state_dict;
 }
 
-void AdamW::set_state_dict(const autograd::NamedParameters& dict) {
-    for (const auto& [key, tensor] : dict) {
-        if (key.starts_with(kFirstMoment)) {
-            m_first_moment[key.substr(kFirstMoment.size())] = tensor;
-        } else if (key.starts_with(kSecondMoment)) {
-            m_second_moment[key.substr(kSecondMoment.size())] = tensor;
-        } else {
-            throw std::runtime_error(fmt::format("AdamW: Invalid key in state dict. Key = {}", key));
-        }
-    }
+void AdamW::set_state_dict(const serialization::StateDict& dict) {
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at("first_moment"));
+    m_second_moment = std::get<serialization::NamedParameters>(dict.at("second_moment"));
+    m_steps = serialization::get_value_type<size_t>(dict, "steps");
 }
 
 [[nodiscard]] size_t AdamW::get_steps() const {
@@ -229,4 +217,10 @@ void AdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
+float AdamW::get_learning_rate() const {
+    return m_config.lr;
+}
+void AdamW::set_learning_rate(float lr) {
+    m_config.lr = lr;
+}
 }  // namespace ttml::optimizers

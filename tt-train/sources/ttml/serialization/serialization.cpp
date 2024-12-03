@@ -127,12 +127,13 @@ void read_autograd_tensor(MsgPackFile& file, std::string_view name, ttml::autogr
     }
 }
 
-void write_named_parameters(MsgPackFile& file, std::string_view name, const ttml::autograd::NamedParameters& params) {
+void write_named_parameters(
+    MsgPackFile& file, std::string_view name, const ttml::serialization::NamedParameters& params) {
     for (const auto& [key, value] : params) {
         write_autograd_tensor(file, std::string(name) + "/" + key, value);
     }
 }
-void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::autograd::NamedParameters& params) {
+void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::serialization::NamedParameters& params) {
     for (auto& [key, value] : params) {
         read_autograd_tensor(file, std::string(name) + "/" + key, value);
     }
@@ -169,6 +170,37 @@ void read_module(MsgPackFile& file, std::string_view name, autograd::ModuleBase*
     assert(module);
     auto named_parameters = module->parameters();
     read_named_parameters(file, name, named_parameters);
+}
+
+void write_state_dict(MsgPackFile& file, std::string_view name, const serialization::StateDict& state_dict) {
+    for (const auto& [key, value] : state_dict) {
+        if (std::holds_alternative<ValueType>(value)) {
+            file.put(std::string(name) + "/" + key, std::get<ValueType>(value));
+        } else if (std::holds_alternative<ttnn::Tensor>(value)) {
+            write_ttnn_tensor(file, std::string(name) + "/" + key, std::get<ttnn::Tensor>(value));
+        } else if (std::holds_alternative<ttml::autograd::TensorPtr>(value)) {
+            write_autograd_tensor(file, std::string(name) + "/" + key, std::get<ttml::autograd::TensorPtr>(value));
+        } else if (std::holds_alternative<NamedParameters>(value)) {
+            write_named_parameters(file, std::string(name) + "/" + key, std::get<NamedParameters>(value));
+        } else {
+            throw std::runtime_error("Unsupported type in state dict");
+        }
+    }
+}
+void read_state_dict(MsgPackFile& file, std::string_view name, serialization::StateDict& state_dict) {
+    for (auto& [key, value] : state_dict) {
+        if (std::holds_alternative<ValueType>(value)) {
+            file.get(std::string(name) + "/" + key, std::get<ValueType>(value));
+        } else if (std::holds_alternative<ttnn::Tensor>(value)) {
+            read_ttnn_tensor(file, std::string(name) + "/" + key, std::get<ttnn::Tensor>(value));
+        } else if (std::holds_alternative<ttml::autograd::TensorPtr>(value)) {
+            read_autograd_tensor(file, std::string(name) + "/" + key, std::get<ttml::autograd::TensorPtr>(value));
+        } else if (std::holds_alternative<NamedParameters>(value)) {
+            read_named_parameters(file, std::string(name) + "/" + key, std::get<NamedParameters>(value));
+        } else {
+            throw std::runtime_error("Unsupported type in state dict");
+        }
+    }
 }
 
 }  // namespace ttml::serialization

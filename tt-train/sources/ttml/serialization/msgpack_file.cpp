@@ -142,6 +142,10 @@ public:
         m_data[std::string(key)] = std::vector<std::string>(value.begin(), value.end());
     }
 
+    void put(std::string_view key, const ValueType& value) {
+        m_data[std::string(key)] = value;
+    }
+
     // Serialization method
     void serialize(const std::string& filename) {
         // Create a buffer for packing
@@ -236,23 +240,11 @@ public:
         return get_value(key, value);
     }
 
-private:
-    using ValueType = std::variant<
-        bool,
-        char,
-        int,
-        float,
-        double,
-        uint32_t,
-        size_t,
-        std::string,
-        std::vector<char>,
-        std::vector<int>,
-        std::vector<float>,
-        std::vector<double>,
-        std::vector<uint32_t>,
-        std::vector<std::string>>;
+    bool get(std::string_view key, ValueType& value) const {
+        return get_value(key, value);
+    }
 
+private:
     std::unordered_map<std::string, ValueType> m_data;
 
     // Helper function to get value from m_data
@@ -266,6 +258,17 @@ private:
             } else {
                 throw std::runtime_error(fmt::format("Type mismatch for key: {}", key));
             }
+        } else {
+            // Key not found
+            throw std::runtime_error(fmt::format("Key not found: {}", key));
+        }
+    }
+    template <>
+    bool get_value<ValueType>(std::string_view key, ValueType& value) const {
+        auto it = m_data.find(std::string(key));
+        if (it != m_data.end()) {
+            value = it->second;
+            return true;
         } else {
             // Key not found
             throw std::runtime_error(fmt::format("Key not found: {}", key));
@@ -332,6 +335,14 @@ void MsgPackFile::put(std::string_view key, std::span<const std::string> value) 
     m_impl->put(key, value);
 }
 
+void MsgPackFile::put(std::string_view key, const char* value) {
+    put(key, std::string_view(value));
+}
+
+void MsgPackFile::put(std::string_view key, const ValueType& value) {
+    m_impl->put(key, value);
+}
+
 void MsgPackFile::serialize(const std::string& filename) {
     m_impl->serialize(filename);
 }
@@ -392,7 +403,8 @@ void MsgPackFile::get(std::string_view key, std::vector<std::string>& value) con
     m_impl->get(key, value);
 }
 
-void MsgPackFile::put(std::string_view key, const char* value) {
-    put(key, std::string_view(value));
+void MsgPackFile::get(std::string_view key, ValueType& value) {
+    m_impl->get(key, value);
 }
+
 }  // namespace ttml::serialization
