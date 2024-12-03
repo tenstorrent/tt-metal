@@ -37,51 +37,46 @@ void kernel_main() {
     uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_strides[x_dim];
 
-    // for (uint32_t i = 0; i < N; i++) {
-    //     DPRINT << "input_shape[" << i << "] = " << input_shape[i] << " ";
-    // }
-    // DPRINT << ENDL();
-    // for (uint32_t i = 0; i < N; i++) {
-    //     DPRINT << "src_strides[" << i << "] = " << src_strides[i] << " ";
-    // }
-    // DPRINT << ENDL();
-
     const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = page_size};
 
     uint32_t curr_addr = src_addr;
-    // DPRINT << "Reading " << num_rows << " rows of " << X << " elements each" << ENDL();
-    // DPRINT << "X dimension: " << x_dim << ENDL();
+    uint32_t idxs[N];
+    idxs[N - 1] = 0;
     for (uint32_t i = 0; i < num_rows/X; ++i) {
-        uint32_t idxs[N];
-        idxs[N - 1] = 0;
+        // Map linear index i to multidimensional indices idxs[]
         uint32_t remainder = i;
         for (int32_t d = N - 2; d >= 0; --d) { // Exclude W dimension
             if (d == (int32_t)x_dim) {
-                continue; // Skip X dimension
+                idxs[d] = 0; // Initialize x_dim to zero (will be set in inner loop)
+                continue;    // Skip x_dim during mapping
             }
             idxs[d] = remainder % input_shape[d];
             remainder /= input_shape[d];
         }
+        idxs[N - 1] = 0; // Initialize W dimension index to zero if not already set
+
+        // Precompute the base address offset (excluding x_dim)
+        uint64_t base_addr_offset = 0;
+        for (uint32_t d = 0; d < N; ++d) {
+            if (d != x_dim) {
+                base_addr_offset += idxs[d] * src_strides[d];
+            }
+        }
+
         cb_reserve_back(tt::CBIndex::c_0, X);
         uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+
+        // Read along the X dimension
         for (uint32_t j = 0; j < X; ++j) {
-            idxs[x_dim] = j;
-            // for (uint32_t k = 0; k < N; ++k) {
-            //     DPRINT << "idxs[" << k << "] = " << idxs[k] << " ";
-            // }
-            // Compute the address using indices and strides
-            uint64_t addr_offset = 0;
-            for (uint32_t d = 0; d < N; ++d) {
-                addr_offset += idxs[d] * src_strides[d];
-            }
-            // DPRINT << "Reading page " << addr_offset << " into buffer " << ENDL();
+            // Set the index for the X dimension
+            uint32_t idx_x = j;
+            // Compute the address offset for this index
+            uint64_t addr_offset = base_addr_offset + idx_x * X_stride;
             uint64_t src_noc_addr = get_noc_addr(addr_offset, s0);
             noc_async_read(src_noc_addr, src_buffer_l1_addr, page_size);
             src_buffer_l1_addr += page_size;
         }
         noc_async_read_barrier();
-        // src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
-        // print_pages(src_buffer_l1_addr, 8, X, 0);
         cb_push_back(tt::CBIndex::c_0, X);
     }
 }
