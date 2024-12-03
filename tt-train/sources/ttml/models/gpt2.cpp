@@ -25,6 +25,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     fmt::print("    Num heads: {}\n", num_heads);
     fmt::print("    Dropout probability: {}\n", dropout_prob);
     fmt::print("    Num blocks: {}\n", num_blocks);
+    fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {

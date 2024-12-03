@@ -183,14 +183,16 @@ int main(int argc, char **argv) {
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
     bool is_eval = false;
+    bool add_time_to_name = true;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
+    app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
 
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
-    wandbcpp::init({.project = config.project_name});
+    wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
     wandbcpp::update_config({
         {"model", "transformer"},
         {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
