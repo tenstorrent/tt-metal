@@ -8,14 +8,15 @@ BERT stands for Bidirectional Encoder Representations from Transformers. Unlike 
 
 ## How to Run
 
-Use `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo[wormhole_b0-True-models/demos/wormhole/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-128-device_params0]` to run the demo.
-
-If you wish to run the demo with a different input use `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo[wormhole_b0-True-<address_to_your_json_file.json>-mrm8488/bert-tiny-finetuned-squadv2-128-device_params0]`. This file is expected to have exactly 16 inputs.
+Use `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo[wormhole_b0-True-models/demos/wormhole/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-8-128-device_params0]` to run the demo.
 
 
-Our second demo is designed to run SQuADV2 dataset, run this with `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo_squadv2[wormhole_b0-True-1-mrm8488/bert-tiny-finetuned-squadv2-384-device_params0]`.
+If you wish to run the demo with a different input use `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo[wormhole_b0-True-<address_to_your_json_file.json>-mrm8488/bert-tiny-finetuned-squadv2-8-128-device_params0]`. This file is expected to have exactly 16 inputs.
 
-If you wish to run for `n_iterations` samples, use `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo_squadv2[wormhole_b0-True-<n_iterations>-mrm8488/bert-tiny-finetuned-squadv2-384-device_params0]`
+
+Our second demo is designed to run SQuADV2 dataset, run this with `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo_squadv2[wormhole_b0-True-1-mrm8488/bert-tiny-finetuned-squadv2-384-8-device_params0]`.
+
+If you wish to run for `n_iterations` samples, use `pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo_squadv2[wormhole_b0-True-<n_iterations>-mrm8488/bert-tiny-finetuned-squadv2-384-8-device_params0]`
 
 
 # Inputs

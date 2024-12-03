@@ -30,9 +30,11 @@ def get_expected_times(bert_tiny):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("sequence_size", [128])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 def test_perf_bert_tiny(
     mesh_device,
+    batch_size,
     sequence_size,
     model_name,
     model_location_generator,
@@ -45,7 +47,7 @@ def test_perf_bert_tiny(
     pytorch_model = hugging_face_reference_model
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
 
     torch_bert_input = torch.randint(0, 100, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
@@ -122,7 +124,7 @@ def test_perf_bert_tiny(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        (16, 6946.78),
+        (8, 6946.78),
     ],
 )
 def test_perf_device_bare_metal(batch_size, expected_perf):
@@ -141,7 +143,7 @@ def test_perf_device_bare_metal(batch_size, expected_perf):
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"ttnn_bert_tiny{batch_size}",
-        batch_size=batch_size if mesh_device_flag else 8,
+        batch_size=2 * batch_size if mesh_device_flag else batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
         comments="",
