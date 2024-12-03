@@ -60,7 +60,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t index_end_dim = index_dims.back();
 
     Tensor input_5d = input;
-    input_5d = ttnn::experimental::reshape(input_5d, input_5d_shape);
+    input_5d = ttnn::experimental::unsafe_view(input_5d, input_5d_shape);
 
     auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
 

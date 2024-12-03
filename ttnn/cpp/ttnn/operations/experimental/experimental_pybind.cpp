@@ -79,7 +79,7 @@ void py_module(py::module& module) {
 
     plusone::detail::bind_experimental_plusone_operation(module);
 
-    reshape::detail::py_bind_reshape(module);
+    reshape::detail::py_bind_unsafe_view(module);
 
     // CCL ops
     auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");

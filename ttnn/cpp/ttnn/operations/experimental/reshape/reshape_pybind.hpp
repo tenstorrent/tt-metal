@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::experimental::reshape::detail {
 
-void py_bind_reshape(pybind11::module& module);
+void py_bind_unsafe_view(pybind11::module& module);
 
 }  // namespace ttnn::operations::experimental

@@ -58,7 +58,7 @@ ttnn::Tensor ReshapeOperation::invoke(
          padded_output_shape[3] == input_tensor.get_padded_shape()[3])) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        return ttnn::experimental::reshape(input_tensor, output_shape);
+        return ttnn::experimental::unsafe_view(input_tensor, output_shape);
     }
     if (input_tensor.get_padded_shape() == padded_output_shape) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(

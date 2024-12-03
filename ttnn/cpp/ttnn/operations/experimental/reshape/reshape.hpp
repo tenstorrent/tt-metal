@@ -20,7 +20,8 @@ struct ReshapeOperation {
 }  // namespace operations::experimental::reshape
 
 namespace experimental {
-constexpr auto reshape =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::experimental::reshape", ttnn::operations::experimental::reshape::ReshapeOperation>();
+constexpr auto unsafe_view = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::unsafe_view",
+    ttnn::operations::experimental::reshape::ReshapeOperation>();
 }  // namespace experimental
 }  // namespace ttnn

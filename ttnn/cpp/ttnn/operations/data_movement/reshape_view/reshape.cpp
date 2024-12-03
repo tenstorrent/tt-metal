@@ -274,10 +274,10 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
         (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
     {
         //Correct the output shape to add padding metadata before reshape (view)
-        return tensor.reshape(tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
+        return ttnn::experimental::unsafe_view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
     }
     //Perform a reshape (view)
-    return tensor.reshape(shape);
+    return ttnn::experimental::unsafe_view(tensor, shape);
 }
 
 ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -361,7 +361,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return tensor.reshape(shape);
+            return ttnn::experimental::unsafe_view(tensor, shape);
         }
 
     if (this_is_view) {
