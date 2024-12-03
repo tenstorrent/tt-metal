@@ -6,6 +6,9 @@
 
 #include "host_api.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 inline std::tuple<Program, CoreCoord, std::unique_ptr<GlobalSemaphore>> create_single_sync_program(
     Device* device, SubDevice sub_device) {
     auto syncer_coord = sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;

@@ -9,6 +9,10 @@
 #include "tt_metal/common/constants.hpp"
 
 #include "transpose_program_factory.hpp"
+
+// FIXME: ARCH_NAME specific include
+#include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
+
 using namespace tt::constants;
 
 namespace ttnn::operations::data_movement {

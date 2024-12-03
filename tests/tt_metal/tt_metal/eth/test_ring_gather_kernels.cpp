@@ -19,6 +19,9 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;

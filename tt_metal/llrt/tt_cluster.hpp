@@ -15,11 +15,7 @@
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_xy_pair.h"
 
-// clang-format off
-#include "noc/noc_parameters.h"
-#include "eth_l1_address_map.h"
 #include "dev_msgs.h"
-// clang-format on
 
 #include "llrt/hal.hpp"
 

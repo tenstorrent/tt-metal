@@ -9,6 +9,9 @@
 #include "host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
+// FIXME: ARCH_NAME
+#include "noc/noc_parameters.h"
+
 using namespace tt;
 using namespace tt::test_utils;
 

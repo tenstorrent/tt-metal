@@ -32,6 +32,7 @@
 
 // FIXME: ARCH_NAME specific
 #include "dev_msgs.h" // RUN_MSG_DONE
+#include "dev_mem_map.h" // MEM_IERISC_FIRMWARE_BASE
 #include "eth_l1_address_map.h" // address_map
 
 

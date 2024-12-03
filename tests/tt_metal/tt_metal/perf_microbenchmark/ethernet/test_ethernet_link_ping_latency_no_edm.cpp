@@ -27,6 +27,9 @@
 
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;

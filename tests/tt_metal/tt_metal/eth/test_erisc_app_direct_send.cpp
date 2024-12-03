@@ -17,6 +17,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet

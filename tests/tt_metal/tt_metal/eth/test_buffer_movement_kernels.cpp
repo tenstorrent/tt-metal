@@ -15,6 +15,9 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// FIXME: ARCH_NAME
+#include "eth_l1_address_map.h"
+
 using namespace tt;
 using namespace tt::test_utils;
 
