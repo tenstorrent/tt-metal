@@ -138,6 +138,7 @@ class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
+    using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -153,6 +154,7 @@ private:
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
+    NOCXYEncodingFunc noc_xy_encoding_func_;
 
 public:
     Hal();
@@ -164,6 +166,8 @@ public:
         -> decltype(noc_size - 1 - coord) {
         return noc_index == 0 ? coord : (noc_size - 1 - coord);
     }
+
+    uint32_t noc_xy_encoding(uint32_t x, uint32_t y) { return noc_xy_encoding_func_(x, y); }
 
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
