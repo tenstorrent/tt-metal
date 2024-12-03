@@ -1793,7 +1793,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         ttnn::SmallVector<int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        const ttnn::Shape required = ttnn::Shape(intended_shape_array);
+        const auto required = ttnn::SimpleShape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
             dim,
@@ -1812,7 +1812,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         ttnn::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        const ttnn::Shape required = ttnn::Shape(intended_shape_array);
+        const auto required = ttnn::SimpleShape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
             dim,
@@ -1873,7 +1873,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // all_dimensions = False
     Tensor updated_grad = prod_result;
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    if (prod_result.get_logical_shape() != grad.get_padded_shape()) {
+    if (prod_result.get_logical_shape() != grad.get_logical_shape()) {
         if (dim == 3 || dim == -1) {
             ttnn::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
