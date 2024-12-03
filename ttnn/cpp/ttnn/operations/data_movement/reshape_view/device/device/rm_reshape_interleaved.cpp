@@ -142,11 +142,11 @@ void kernel_main() {
                             dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
                         return;
                     }
+                    write_offset = write_offset + readable;
+                    end_to_write = end_to_write + readable;
                 }
-                writable = writable -readable;
-                write_offset = write_offset + readable;
+                writable = writable - readable;
                 readable = 0;
-                end_to_write = end_to_write + readable;
 
             }
             else if (readable == writable)
@@ -167,11 +167,13 @@ void kernel_main() {
                 if (i == read_end_page - 1) {
                     return;
                 }
-                end_to_write = 0;
                 write_page++;
                 dst_noc_addr = get_noc_addr(write_page, d);
-                write_offset = dst_noc_addr&OFFSET_16;
-                begin_write_offset = write_offset;
+                if constexpr (!can_be_clean) {
+                    end_to_write = 0;
+                    write_offset = dst_noc_addr & OFFSET_16;
+                    begin_write_offset = write_offset;
+                }
             }
             else
             {
@@ -185,14 +187,16 @@ void kernel_main() {
                         dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
                 }
                 // writable < readable
-                end_to_write = 0;
                 readable = readable - writable;
                 read_offset = read_offset + writable;
                 write_page++;
                 dst_noc_addr_offset = 0;
                 dst_noc_addr = get_noc_addr(write_page, d);
-                write_offset = dst_noc_addr&OFFSET_16;
-                begin_write_offset = write_offset;
+                if constexpr (!can_be_clean) {
+                    end_to_write = 0;
+                    write_offset = dst_noc_addr & OFFSET_16;
+                    begin_write_offset = write_offset;
+                }
                 writable = dest_page_size_bytes;
             }
         }

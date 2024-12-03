@@ -65,13 +65,6 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
     const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
     const uint32_t offset_jump = (responsibility * source_page_size_bytes) % dest_page_size_bytes;
     uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    printf(
-        "source is %d bytes, dest is %d bytes, responsibility %d, wj %d, oj %d\n",
-        source_page_size_bytes,
-        dest_page_size_bytes,
-        responsibility,
-        write_jump,
-        offset_jump);
     const uint32_t cb_size0 = source_read_size_bytes;
     const uint32_t cb_size1 = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
