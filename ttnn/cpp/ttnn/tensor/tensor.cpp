@@ -735,21 +735,24 @@ Tensor create_device_tensor(
 namespace detail {
 template <typename DataType>
 void* get_raw_host_data_ptr(const Tensor& tensor) {
-    return std::visit(tt::stl::overloaded{
-        [](OwnedStorage& s) {
-            auto buffer = owned_buffer::get_as<DataType>(s.buffer);
-            return buffer.data();
-        },
-        [](BorrowedStorage& s)
-            requires(std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
-                     std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
-                     std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>)
-        {
-            auto buffer = borrowed_buffer::get_as<DataType>(s.buffer);
-            return buffer.data();
-        },
-        [](BorrowedStorage&) -> void* { TT_THROW("Borrowed storage doesn't support this data type"); },
-        [](auto&&) -> void* { TT_THROW("Device storage doesn't support this data type"); }},
+    return std::visit(
+        tt::stl::overloaded{
+            [](OwnedStorage& s) {
+                auto buffer = owned_buffer::get_as<DataType>(s.buffer);
+                return buffer.data();
+            },
+            [](BorrowedStorage& s) {
+                if constexpr (
+                    std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
+                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
+                    std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>) {
+                    auto buffer = borrowed_buffer::get_as<DataType>(s.buffer);
+                    return buffer.data();
+                } else {
+                    TT_THROW("Borrowed storage doesn't support this data type");
+                }
+            },
+            [](auto&&) -> void* { TT_THROW("Device storage doesn't support this data type"); }},
         tensor.get_storage());
 }
 }  // namespace detail
