@@ -8,8 +8,8 @@
 
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/cluster.h"
+#include "umd/device/pci_device.hpp"
+#include "umd/device/tt_soc_descriptor.h"
 
 namespace tt::tt_metal {
 
@@ -58,12 +58,14 @@ inline tt::ARCH get_platform_architecture() {
         TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
         arch = tt::get_arch_from_string(arch_env);
     } else {
-        auto cluster_desc = tt_ClusterDescriptor::create();
-        if (cluster_desc->get_number_of_chips() > 0) {
-            const std::unordered_set<chip_id_t> &device_ids = cluster_desc->get_all_chips();
-            arch = cluster_desc->get_arch(*device_ids.begin());
-            for (auto device_id : device_ids) {
-                tt::ARCH detected_arch = cluster_desc->get_arch(device_id);
+
+        // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
+        // This map holds PCI info for each mmio chip.
+        auto devices_info = PCIDevice::enumerate_devices_info();
+        if (devices_info.size() > 0) {
+            arch = devices_info.begin()->second.get_arch();
+            for (auto &[device_id, device_info] : devices_info) {
+                tt::ARCH detected_arch = device_info.get_arch();
                 TT_FATAL(
                     arch == detected_arch,
                     "Expected all devices to be {} but device {} is {}",
