@@ -30,6 +30,7 @@
 #include "tt_metal/types.hpp"
 
 // FIXME: ARCH_NAME specific
+#include "noc/noc_parameters.h" // NOC_XY_ENCODING
 #include "eth_l1_address_map.h"
 
 namespace tt {
