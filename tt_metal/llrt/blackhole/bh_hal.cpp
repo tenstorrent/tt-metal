@@ -71,6 +71,11 @@ void Hal::initialize_bh() {
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0));
     };
+
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
+        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+    };
 }
 
 }  // namespace tt_metal
