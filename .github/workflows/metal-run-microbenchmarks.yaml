@@ -19,6 +19,7 @@ jobs:
           # {arch: wormhole_b0, runs-on: ["pipeline-perf", "N150", "bare-metal", "in-service"]},
           # N300
           {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"]},
+          {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], ccl: true},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -37,7 +38,12 @@ jobs:
           ./create_venv.sh
       - name: Run microbenchmark tests
         timeout-minutes: 90
-        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
+        run: |
+          PIPELINE_TYPE="microbenchmarks"
+          if [ "${{ matrix.runner-info.ccl }}" == "true" ]; then
+            PIPELINE_TYPE="ccl_microbenchmarks"
+          fi
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type "$PIPELINE_TYPE"
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v4
         with:
