@@ -371,6 +371,8 @@ int main(int argc, char **argv) {
                 if (global_step >= config.max_steps) {
                     break;
                 }
+
+                gradient_accumulator_helper.reset();
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
