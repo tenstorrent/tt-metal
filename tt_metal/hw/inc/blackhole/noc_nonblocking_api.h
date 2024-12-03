@@ -58,31 +58,31 @@ extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 #define   OPERAND_NCRISC_NOC0_STREAM    2
 #define   OPERAND_NCRISC_NOC1_STREAM    3
 
-template<uint32_t risc_type>
+template <uint32_t proc_type>
 inline __attribute__((always_inline)) uint32_t get_stream_index(uint32_t noc) {
-  if constexpr (risc_type == static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0)) {
-    return noc == 0 ? OPERAND_BRISC_NOC0_STREAM : OPERAND_BRISC_NOC1_STREAM;
-  } else {
-    return noc == 0 ? OPERAND_NCRISC_NOC0_STREAM : OPERAND_NCRISC_NOC1_STREAM;
-  }
+    if constexpr (proc_type == static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0)) {
+        return noc == 0 ? OPERAND_BRISC_NOC0_STREAM : OPERAND_BRISC_NOC1_STREAM;
+    } else {
+        return noc == 0 ? OPERAND_NCRISC_NOC0_STREAM : OPERAND_NCRISC_NOC1_STREAM;
+    }
 }
 
 // noc_nonposted_writes_acked
-template<uint32_t risc_type>
+template <uint32_t proc_type>
 inline __attribute__((always_inline)) uint32_t get_noc_nonposted_writes_acked(uint32_t noc) {
-  return NOC_STREAM_READ_REG(get_stream_index<risc_type>(noc), STREAM_NONPOSTED_WR_ACK_RECEIVED);
+    return NOC_STREAM_READ_REG(get_stream_index<proc_type>(noc), STREAM_NONPOSTED_WR_ACK_RECEIVED);
 }
 
-template<uint32_t risc_type>
+template <uint32_t proc_type>
 inline __attribute__((always_inline)) void inc_noc_nonposted_writes_acked(uint32_t noc, uint32_t inc = 1) {
-  uint32_t stream_id = get_stream_index<risc_type>(noc);
-  uint32_t val = NOC_STREAM_READ_REG(stream_id, STREAM_NONPOSTED_WR_ACK_RECEIVED) + inc;
-  NOC_STREAM_WRITE_REG(stream_id, STREAM_NONPOSTED_WR_ACK_RECEIVED, val);
+    uint32_t stream_id = get_stream_index<proc_type>(noc);
+    uint32_t val = NOC_STREAM_READ_REG(stream_id, STREAM_NONPOSTED_WR_ACK_RECEIVED) + inc;
+    NOC_STREAM_WRITE_REG(stream_id, STREAM_NONPOSTED_WR_ACK_RECEIVED, val);
 }
 
-template<uint32_t risc_type>
+template <uint32_t proc_type>
 inline __attribute__((always_inline)) void set_noc_nonposted_writes_acked(uint32_t noc, uint32_t val) {
-  NOC_STREAM_WRITE_REG(get_stream_index<risc_type>(noc), STREAM_NONPOSTED_WR_ACK_RECEIVED, val);
+    NOC_STREAM_WRITE_REG(get_stream_index<proc_type>(noc), STREAM_NONPOSTED_WR_ACK_RECEIVED, val);
 }
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
@@ -135,7 +135,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -164,7 +164,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
-            inc_noc_nonposted_writes_acked<risc_type>(noc, num_dests);
+            inc_noc_nonposted_writes_acked<proc_type>(noc, num_dests);
         }
     } else {
         if (posted) {
@@ -176,7 +176,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     }
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -203,14 +203,14 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<risc_type>(noc, num_dests);
+        inc_noc_nonposted_writes_acked<proc_type>(noc, num_dests);
     } else {
         noc_nonposted_writes_num_issued[noc] += 1;
         noc_nonposted_writes_acked[noc] += num_dests;
     }
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_exclude_region(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -238,14 +238,14 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_exclude_region(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<risc_type>(noc, num_dests);
+        inc_noc_nonposted_writes_acked<proc_type>(noc, num_dests);
     } else {
         noc_nonposted_writes_num_issued[noc] += 1;
         noc_nonposted_writes_acked[noc] += num_dests;
     }
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, uint32_t num_times_to_write) {
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
@@ -257,7 +257,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<risc_type>(noc, num_times_to_write);
+        inc_noc_nonposted_writes_acked<proc_type>(noc, num_times_to_write);
     } else {
         noc_nonposted_writes_num_issued[noc] += num_times_to_write;
         noc_nonposted_writes_acked[noc] += num_times_to_write;
@@ -272,10 +272,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_
     return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc]);
 }
 
-template<uint32_t risc_type>
+template <uint32_t proc_type>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
-    uint32_t self_risc_acked = get_noc_nonposted_writes_acked<risc_type>(noc);
-    uint32_t other_risc_acked = get_noc_nonposted_writes_acked<1-risc_type>(noc);
+    uint32_t self_risc_acked = get_noc_nonposted_writes_acked<proc_type>(noc);
+    uint32_t other_risc_acked = get_noc_nonposted_writes_acked<1 - proc_type>(noc);
     return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == (self_risc_acked + other_risc_acked));
 }
 
@@ -421,7 +421,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -436,7 +436,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     bool posted = false) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write<risc_type, noc_mode>(
+        ncrisc_noc_fast_write<proc_type, noc_mode>(
             noc,
             cmd_buf,
             src_addr,
@@ -453,11 +453,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write<risc_type, noc_mode>(
+    ncrisc_noc_fast_write<proc_type, noc_mode>(
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve, posted);
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopback_src(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -471,7 +471,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
     bool multicast_path_reserve) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write_loopback_src<risc_type, noc_mode>(
+        ncrisc_noc_fast_write_loopback_src<proc_type, noc_mode>(
             noc,
             cmd_buf,
             src_addr,
@@ -487,11 +487,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write_loopback_src<risc_type, noc_mode>(
+    ncrisc_noc_fast_write_loopback_src<proc_type, noc_mode>(
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude_region(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -506,7 +506,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude
     uint32_t exclude_region = 0) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write_exclude_region<risc_type, noc_mode>(
+        ncrisc_noc_fast_write_exclude_region<proc_type, noc_mode>(
             noc,
             cmd_buf,
             src_addr,
@@ -523,7 +523,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write_exclude_region<risc_type, noc_mode>(
+    ncrisc_noc_fast_write_exclude_region<proc_type, noc_mode>(
         noc,
         cmd_buf,
         src_addr,
@@ -537,7 +537,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude
         exclude_region);
 }
 
-template<uint32_t risc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -569,7 +569,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
-            inc_noc_nonposted_writes_acked<risc_type>(noc);
+            inc_noc_nonposted_writes_acked<proc_type>(noc);
         }
     } else {
         if (posted) {
