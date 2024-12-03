@@ -70,11 +70,7 @@ TT-NN includes two primary implementations of normalization operations to handle
 
 #### 1. Non-Distributed Norm
 
-**Non-Distributed Norm** refers to the standard implementation of normalization operations applied to activations that are not distributed across multiple devices. This implementation supports both sharded and interleaved inputs. It is employed in the following scenarios:
-- **Single-Device Activations**: When the entire embedding resides on a single device.
-- **Multi-Device Replicated Activations**: When activation data is replicated across devices in a data-parallel setup.
-
-
+**Non-Distributed Norm** refers to the standard implementation of normalization operations applied to activations that are not distributed across multiple devices. This type of normalization is suitable for setups where the entire activation or embedding is available locally on a single device or is replicated identically across multiple devices in a data-parallel setup.  This implementation supports both sharded and interleaved inputs.
 
 **Example: RMSNorm on Single Device (Decode Scenario)**
 
