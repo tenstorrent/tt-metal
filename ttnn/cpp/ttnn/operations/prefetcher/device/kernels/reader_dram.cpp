@@ -39,41 +39,41 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded(
 }
 
 void kernel_main() {
-    constexpr uint32_t input_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t input_start_tile_id = get_compile_time_arg_val(1);
-    constexpr uint32_t noc = get_compile_time_arg_val(2);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(3);
+    constexpr uint32_t noc = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
 
     uint32_t rt_args_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
-    tt_l1_ptr uint32_t* page_size = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
-    tt_l1_ptr uint32_t* num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
-    tt_l1_ptr uint32_t* num_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    const uint32_t read_cb_size = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t total_num_blocks_in_buffer = get_arg_val<uint32_t>(rt_args_idx++);
+    tt_l1_ptr uint32_t* tensor_addrs = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
+    tt_l1_ptr uint32_t* page_sizes = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
+    tt_l1_ptr uint32_t* num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
+    tt_l1_ptr uint32_t* num_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     tt_l1_ptr uint32_t* block_num_tiles =
         (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
 
     constexpr uint32_t cb_id = 0;
-    constexpr uint32_t total_num_blocks_in_buffer = 3;
 
     uint32_t block_size_bytes = num_pages[0] * page_size[0];
     uint32_t l1_buffer_start_addr = get_write_ptr(cb_id);
-    uint32_t l1_buffer_end_addr = get_write_ptr(cb_id) + block_size_bytes * total_num_blocks_in_buffer;
+    uint32_t l1_buffer_end_addr = get_write_ptr(cb_id) + read_cb_size;
 
     uint32_t src_read_addr = 0;
     uint32_t src_read_addr_offset_bytes = 0;
 
-    for (uint32_t l = 0; l < num_layers; ++l) {
+    for (uint32_t l = 0; l < num_tensors; ++l) {
         uint32_t curr_page_size = page_size[l];
         uint32_t curr_num_pages = num_pages[l];
         uint32_t curr_num_blocks = num_blocks[l];
         uint32_t curr_block_num_tiles = block_num_tiles[l];
 
         uint32_t curr_block_size_bytes = curr_num_pages * curr_page_size;
-        uint32_t curr_layer_size_bytes = curr_num_blocks * curr_block_size_bytes;
+        uint32_t curr_tensor_size_bytes = curr_num_blocks * curr_block_size_bytes;
 
         uint32_t src_base_addr =
-            noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
+            noc_async_read_tile_dram_sharded_set_state<true>(tensor_addrs[l], curr_page_size, bank_id, vc);
         src_read_addr = src_read_addr_offset_bytes;
 
         // For debug purpose, use trivial DRAM read method
@@ -141,6 +141,6 @@ void kernel_main() {
         noc_async_read_barrier_with_trid(block_trid_to_wait);
         cb_push_back(cb_id, curr_block_num_tiles);
 
-        src_read_addr_offset_bytes += curr_layer_size_bytes;
+        src_read_addr_offset_bytes += curr_tensor_size_bytes;
     }
 }
