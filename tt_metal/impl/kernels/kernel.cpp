@@ -174,7 +174,10 @@ std::string DataMovementKernel::config_hash() const {
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
-    return fmt::format("eth_{}_{}", magic_enum::enum_name(this->config_.noc), this->config_.eth_mode);
+    return fmt::format("eth_{}_{}_{}",
+        magic_enum::enum_name(this->config_.noc),
+        this->config_.eth_mode,
+        this->config_.processor);
 }
 
 std::string ComputeKernel::config_hash() const {
