@@ -29,6 +29,7 @@ on:
           - eltwise.unary.abs.abs
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
+          - eltwise.unary.cos.cos_pytorch2_range
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
           - eltwise.unary.tril.tril_pytorch2
