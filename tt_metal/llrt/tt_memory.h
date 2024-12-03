@@ -20,9 +20,6 @@ class memory {
     enum class Relocate : std::uint8_t { ABS, XIP };
 
  private:
-  static constexpr uint32_t initial_data_space_ = 0x400;
-  static constexpr uint32_t initial_span_space_ = 4;
-
   struct span {
       // Note: the offset of the data for a span in data_ is generated on the
       // fly by processing spans in order
@@ -33,13 +30,15 @@ class memory {
 
   std::vector<word_t> data_;
   std::vector<struct span> link_spans_;
-  uint32_t text_size_;
-  uint32_t packed_size_;
-  uint32_t text_addr_;
+  uint32_t text_size_ = 0;
+  uint32_t packed_size_ = 0;
+  uint32_t text_addr_ = 0;
+    Packing packing_;
+    Relocate relocate_;
 
  public:
   memory();
-  memory(std::string const &path, Relocate relo_type);
+  memory(std::string const &path, Packing packing, Relocate relo_type);
 
   public:
   // These can be large objects, so ban copying ...

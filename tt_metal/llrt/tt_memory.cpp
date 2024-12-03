@@ -14,13 +14,14 @@
 namespace ll_api {
 
 memory::memory() {
+    constexpr uint32_t initial_data_space_ = 0x400;
+    constexpr uint32_t initial_span_space_ = 4;
+
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
-    text_size_ = 0;
-    packed_size_ = 0;
 }
 
-memory::memory(std::string const& path, Relocate relo_type) : memory() {
+memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
     ElfFile elf;
 
     elf.ReadImage(path);
