@@ -244,8 +244,19 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
         this->program_config);
 }
 std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    auto output_spec = compute_output_specs(input_tensors)[0];
-    return {create_device_tensor(output_spec, input_tensors.at(0).device())};
+    return std::visit(
+        [&](const auto& program_config) -> std::vector<Tensor> {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (this->distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
+                    program_config.inplace) {
+                    return {input_tensors.at(0)};
+                }
+            }
+            auto output_spec = compute_output_specs(input_tensors)[0];
+            return {create_device_tensor(output_spec, input_tensors.at(0).device())};
+        },
+        this->program_config);
 }
 operation::ProgramWithCallbacks LayerNorm::create_program(
     const std::vector<Tensor>& input_tensors,
