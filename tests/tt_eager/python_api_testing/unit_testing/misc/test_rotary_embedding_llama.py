@@ -181,7 +181,7 @@ def run_test_rotary_embedding_llama(
             # Set up rope with 2 * batch size (for fused qk)
             rope_setup_decode = TtLlamaRotarySetup(device, batch * 2, head_dim, max_seq_len)
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
+            cos, sin = rope_setup_decode.get_rot_mats(position_ids.repeat(2))
 
             assert (
                 batch % 8 == 0 or batch == 1
