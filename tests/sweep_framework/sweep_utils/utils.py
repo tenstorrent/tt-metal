@@ -259,34 +259,3 @@ def get_device_grid_size():
         y, x = 8, 8
 
     return y, x
-
-
-def get_sharded_config(input_shape, sharding_strategy, device_grid_size, shard_orientation):
-    assert sharding_strategy in ["block", "width", "height", "tensor_hw"]
-    assert shard_orientation in ["col_major", "row_major"]
-
-    if shard_orientation == "col_major":
-        orientation = ttnn.ShardOrientation.COL_MAJOR
-    else:
-        orientation = ttnn.ShardOrientation.ROW_MAJOR
-
-    if sharding_strategy == "block":
-        strategy = ttnn.ShardStrategy.BLOCK
-    elif sharding_strategy == "width":
-        strategy = ttnn.ShardStrategy.WIDTH
-    elif sharding_strategy == "height":
-        strategy = ttnn.ShardStrategy.HEIGHT
-    else:
-        strategy = ttnn.ShardStrategy.BLOCK
-
-    tensor_hw_as_shard_shape = True if sharding_strategy == "tensor_hw" else False
-
-    sharded_config = ttnn.create_sharded_memory_config(
-        shape=input_shape,
-        core_grid=device_grid_size,
-        strategy=strategy,
-        orientation=orientation,
-        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
-    )
-
-    return sharded_config
