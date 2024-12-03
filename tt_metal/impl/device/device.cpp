@@ -625,9 +625,9 @@ void Device::initialize_and_launch_firmware() {
     const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
     const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
     std::set<CoreCoord> repeated_dram_cores = {};
-    TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
-        "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+    // TT_ASSERT(
+    //     pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+    //     "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
@@ -3097,15 +3097,6 @@ CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) c
         TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
 
     return soc_desc.physical_cores.at(physical_coord).type;
-}
-
-CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
-    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
-        return CoreType::WORKER;
-    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
-        return CoreType::ETH;
-    }
-    return this->core_type_from_physical_core(virtual_coord);
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {

@@ -50,9 +50,6 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto dram_src_noc_xy = src_dram_buffer_bf16->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = test_config.src0_cb_index;
     uint32_t num_input_tiles = test_config.reader_ublock;
 
@@ -130,24 +127,22 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
         unary_reader_kernel,
         core,
         {dram_buffer_src_addr,
-        (std::uint32_t)dram_src_noc_xy.x,
-        (std::uint32_t)dram_src_noc_xy.y,
-        num_tiles,
-        src0_cb_index,
-        test_config.reader_ublock,
-        false});
+         (uint32_t)0,  // dram bank id
+         num_tiles,
+         src0_cb_index,
+         test_config.reader_ublock,
+         false});
 
     tt_metal::SetRuntimeArgs(
         program,
         unary_writer_kernel,
         core,
         {dram_buffer_dst_addr,
-        (std::uint32_t)dram_dst_noc_xy.x,
-        (std::uint32_t)dram_dst_noc_xy.y,
-        num_tiles,
-        ouput_cb_index,
-        test_config.writer_ublock,
-        false});
+         (uint32_t)0,  // dram bank id
+         num_tiles,
+         ouput_cb_index,
+         test_config.writer_ublock,
+         false});
 
     tt_metal::detail::LaunchProgram(device, program);
 
