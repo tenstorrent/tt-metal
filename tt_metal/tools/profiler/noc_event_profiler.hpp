@@ -6,12 +6,7 @@
 
 #include "event_metadata.hpp"
 #include "risc_attribs.h"
-
-// fwd decl to get around circular dependency (dataflow_api -----> kernel_profiler --X--> noc_event_profiler ----->
-// kernel_profiler)
-namespace kernel_profiler {
-void timeStampedDataNoID(uint64_t data);
-}
+#include "kernel_profiler_fwd.hpp"
 
 namespace noc_event_profiler {
 
@@ -65,7 +60,12 @@ inline void recordNocEvent(
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    kernel_profiler::timeStampedDataNoID(ev_md.asU64());
+#if defined(DISPATCH_KERNEL)
+#define DISPATCH true
+#else 
+#define DISPATCH false
+#endif
+    kernel_profiler::timeStampedData<STATIC_ID,DISPATCH>(ev_md.asU64());
 }
 
 // for noc_async_(read|write)_tile functions

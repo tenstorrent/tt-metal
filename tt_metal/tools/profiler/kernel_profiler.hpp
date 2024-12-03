@@ -419,11 +419,6 @@ namespace kernel_profiler{
         }
     }
 
-    void timeStampedDataNoID(uint64_t data)
-    {
-        timeStampedData<0>(data);
-    }
-
     template<bool dispatch=false>
     inline __attribute__((always_inline)) void recordEvent(uint16_t event_id)
     {
