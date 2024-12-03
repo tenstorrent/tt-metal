@@ -30,7 +30,6 @@
 #include "tt_metal/types.hpp"
 
 // FIXME: ARCH_NAME specific
-#include "noc/noc_parameters.h" // NOC_XY_ENCODING
 #include "eth_l1_address_map.h"
 
 namespace tt {
@@ -1290,7 +1289,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[13] = 0; // unused: remote ds semaphore
                         compile_args[14] = 0; // preamble size
                         compile_args[15] = true,    // split_prefetcher
-                        compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                        compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                         compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                         compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
                         compile_args[19] = settings.num_compute_cores;
@@ -1345,7 +1344,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[13] = 0; // unused: remote ds semaphore
                             compile_args[14] = 0; // preamble size
                             compile_args[15] = true,    // split_prefetcher
-                            compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                            compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                             compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                             compile_args[18] = mux_settings.cb_pages,
                             compile_args[19] = settings.num_compute_cores;
@@ -3146,7 +3145,7 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
     const auto& grid_size = this->grid_size();
-    return NOC_XY_ENCODING(
+    return tt::tt_metal::hal.noc_xy_encoding(
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
     );
@@ -3157,14 +3156,14 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
         );
     } else {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
