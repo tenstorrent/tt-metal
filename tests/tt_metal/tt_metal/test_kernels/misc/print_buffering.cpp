@@ -6,10 +6,6 @@
 #include "debug/dprint.h"
 #include "debug/assert.h"
 
-/*
- * Test kernel that DPRINTs a message that is larger than the size of the device buffer.
- */
-
 void kernel_main() {
     uint32_t core_x = get_arg_val<uint32_t>(0);
     uint32_t core_y = get_arg_val<uint32_t>(1);

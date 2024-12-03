@@ -11,7 +11,7 @@
 #include "tt_metal/host_api.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
-// A test for checking that prints are not interleaved.
+// A test for checking that prints are properly buffered before being displayed to the user.
 ////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 using namespace tt::tt_metal;
@@ -67,7 +67,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     for (const CoreCoord& core : cores) {
         KernelHandle kernel_id = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_large.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_buffering.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -84,7 +84,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TEST_F(DPrintFixture, TensixTestNoInterleavedPrints) {
+TEST_F(DPrintFixture, TensixTestPrintBuffering) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);

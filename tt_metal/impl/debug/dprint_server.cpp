@@ -174,17 +174,20 @@ private:
     // A counter to keep track of how many iterations the print server has gone through without
     std::atomic<int> wait_loop_iterations_ = 0;
 
+    // For keeping track of the previous dprint type read for each risc. In some cases, the way that the current dprint
+    // type is parsed depends on the previous dprint type.
     std::map<HartKey, DPrintTypeID, HartKeyComparator> risc_to_prev_type_;
 
     ofstream* outfile_ = nullptr;  // non-cout
     ostream* stream_ = nullptr;    // either == outfile_ or is &cout
 
+    // For buffering up partial dprints from each risc.
     std::map<HartKey, ostringstream*, HartKeyComparator> risc_to_intermediate_stream_;
 
-    // For printing each riscs dprint to a separate file, a map from {device id, core coord x, y, hard index} to files.
+    // For printing each risc's dprint to a separate file, a map from {device id, core, hart index} to files.
     std::map<HartKey, ofstream*, HartKeyComparator> risc_to_file_stream_;
 
-    // A map to from {device id, core coord x, y, hart index} to the signal code it's waiting for.
+    // A map from {device id, core, hart index} to the signal code it's waiting for.
     std::map<HartKey, uint32_t, HartKeyComparator> hart_waiting_on_signal_;
     // Keep a separate set of raised signal codes so that multiple harts can wait for the same
     // signal.
@@ -198,6 +201,8 @@ private:
                                                            // know whether dprint can be compiled out.
     std::mutex device_to_core_range_lock_;
 
+    // Used to signal to the print server to flush all intermediate streams for a device so that any remaining prints
+    // are printed out.
     std::map<Device*, bool> device_intermediate_streams_force_flush_;
     std::mutex device_intermediate_streams_force_flush_lock_;
 
@@ -213,17 +218,26 @@ private:
     bool PeekOneHartNonBlocking(
         Device* device, const CoreDescriptor& logical_core, int hart_index, bool new_data_this_iter);
 
+    // Transfers data from each intermediate stream associated with the given device to the output stream and flushes
+    // the output stream so that the data is visible to the user.
     void TransferIntermediateStreamsToOutputStreamAndFlush(Device* device);
 
+    // Transfers data from the given intermediate stream to the output stream and flushes the output stream so that the
+    // data is visible to the user.
     void TransferToAndFlushOutputStream(const HartKey& hart_key, ostringstream* intermediate_stream);
 
+    // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
+    // stdout, or nothing.
     ostream* GetOutputStream(const HartKey& hart_key);
-
-    void ResetIntermediateStream(const HartKey& hart_key);
 
     // Stores the last value of setw, so that array elements can reuse the width.
     char most_recent_setw = 0;
 };
+
+static void ResetStream(ostringstream* stream) {
+    stream->str("");
+    stream->clear();
+}  // ResetStream
 
 static bool StreamEndsWithNewlineChar(const ostringstream* stream) {
     const string stream_str = stream->str();
@@ -712,6 +726,8 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
         }
     }
 
+    // When we detach a device, we should poll to make sure that any leftover prints in the intermediate stream are
+    // transferred to the output stream and flushed to ensure that they are printed out to the user.
     if (!server_killed_due_to_hang_) {
         device_intermediate_streams_force_flush_lock_.lock();
         device_intermediate_streams_force_flush_[device] = true;
@@ -883,6 +899,8 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         *intermediate_stream << "STRING BUFFER OVERFLOW DETECTED\n";
                         TransferToAndFlushOutputStream(hart_key, intermediate_stream);
                     } else {
+                        // if we come across a newline char, we should transfer the data up to the newline to the output
+                        // stream and flush it
                         const char* newline_pos = strchr(cptr, '\n');
                         bool contains_newline = newline_pos != nullptr;
                         while (contains_newline) {
@@ -1167,12 +1185,10 @@ void DebugPrintServerContext::TransferToAndFlushOutputStream(
     const string& intermediate_stream_data = intermediate_stream->str();
     ostream* output_stream = GetOutputStream(hart_key);
     *output_stream << intermediate_stream_data << flush;
-    ResetIntermediateStream(hart_key);
+    ResetStream(intermediate_stream);
 }  // TransferToAndFlushOutputStream
 
 ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
-    // Choose which stream to output the dprint data to. Can be auto-generated files, the user-selected file, stdout, or
-    // nothing.
     ostream* output_stream = stream_;
     if (tt::llrt::OptionsG.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[hart_key]) {
@@ -1198,11 +1214,6 @@ ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
 
     return output_stream;
 }  // GetOutputStream
-
-void DebugPrintServerContext::ResetIntermediateStream(const HartKey& hart_key) {
-    risc_to_intermediate_stream_[hart_key]->str("");
-    risc_to_intermediate_stream_[hart_key]->clear();
-}  // ResetIntermediateStream
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
 bool DebugPrintServerContext::ProfilerIsRunning = false;

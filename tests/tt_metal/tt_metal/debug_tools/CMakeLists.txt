@@ -3,7 +3,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_invalid_print_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_mute_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_mute_print_server.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_no_interleaved_print.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_buffering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_all_harts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_before_finish.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_hanging.cpp
