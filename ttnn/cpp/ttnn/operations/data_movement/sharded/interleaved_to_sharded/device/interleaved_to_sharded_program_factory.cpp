@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
-    const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
+    const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
@@ -38,6 +38,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_l1 = dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1 or dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1_SMALL ? 1 : 0;
+    bool keep_l1_aligned = src_is_dram && dst_is_l1;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.get_layout() == Layout::TILE) {
