@@ -55,7 +55,7 @@
 | [ViT (224x224)](./models/demos/grayskull/vit)                               | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [ViT (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 912     | 1,600      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
-| [Yolo V4 (320x320)](./models/demos/yolov4)                                  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 95      | 300        |             |
+| [Yolo V4 (320x320)](./models/demos/yolov4)                                  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 198     | 300        |             |
 | [Segformer Semantic Segmentation (512x512)](./models/demos/segformer)       | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 90      | 300        |             |
 
 
@@ -80,7 +80,7 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 ## Benchmarks
 - [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
 
-  
+
 ---
 
 <div align="center">
