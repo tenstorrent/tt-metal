@@ -109,7 +109,7 @@ struct OptimizedConvNew {
             enable_subblock_padding(enable_subblock_padding),
             use_non_tile_height(use_non_tile_height) {}
 
-    std::pair<uint32_t,uint32_t> estimate_L1_usage(DataType input_dtype, DataType weights_dtype, DataType output_dtype, DataType accum_dtype, bool enable_bias) const;
+    std::pair<uint32_t,uint32_t> estimate_L1_usage(const Tensor& input_tensor, const Tensor &weights_tensor, const Tensor &output_tensor, DataType accum_dtype, bool enable_bias) const;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
