@@ -246,11 +246,11 @@ class VideoProcessor(VideoProcessorBase):
 
 
 st.sidebar.image("TT.png", use_column_width=True)
-st.sidebar.image("GS.png", use_column_width=True)
+st.sidebar.image("GS.jpg", use_column_width=True)
 
 webrtc_streamer(
     key="example",
-    video_transformer_factory=VideoProcessor,
+    video_processor_factory=VideoProcessor,
     media_stream_constraints={
         "video": {
             "width": {"min": 320, "ideal": 400, "max": 960},
