@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "tools/profiler/timestamped_noc_calls.hpp"
 
 void kernel_main() {
 
@@ -56,7 +55,7 @@ void kernel_main() {
                 for(uint32_t h = 0; h < out_subblock_h; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for(uint32_t w = 0; w < out_subblock_w; w++) {
-                        noc_async_write_tile_ts(out_tensor_tile_id, s, l1_read_addr);
+                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
                         l1_read_addr+=single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;
@@ -64,7 +63,7 @@ void kernel_main() {
                     out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                 }
 
-                noc_async_write_barrier_ts(); // This will wait until the write is done. As
+                noc_async_write_barrier(); // This will wait until the write is done. As
                                            // an alternative, noc_async_write_flushed()
                                            // can be faster because it waits until the
                                            // write request is sent. In that case, you
