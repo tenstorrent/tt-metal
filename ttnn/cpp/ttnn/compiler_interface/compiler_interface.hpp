@@ -68,8 +68,7 @@ QueryResponse op_constraints(Device* device, Callable&& callable) {
         const nlohmann::json op_trace = callable();
         ttnn::graph::GraphProcessor::end_graph_capture();
 
-        auto interleaved_storage_cores =
-            device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+        auto interleaved_storage_cores = device->num_banks(tt::tt_metal::BufferType::L1);
         return extract_data_from_trace(op_trace, interleaved_storage_cores);
     } catch (const std::exception& e) {
         tt::log_debug(tt::LogOp, "compiler_interface - error: {}", e.what());
