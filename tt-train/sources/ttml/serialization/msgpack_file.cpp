@@ -6,12 +6,11 @@
 
 #include <fmt/format.h>
 
-#include <exception>
+#include <cstdint>
 #include <fstream>
 #define MSGPACK_NO_BOOST
 #include <fstream>
 #include <msgpack.hpp>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -122,6 +121,10 @@ public:
     }
 
     // Overloads for std::span
+    void put(std::string_view key, std::span<const uint8_t> value) {
+        m_data[std::string(key)] = std::vector<uint8_t>(value.begin(), value.end());
+    }
+
     void put(std::string_view key, std::span<const int> value) {
         m_data[std::string(key)] = std::vector<int>(value.begin(), value.end());
     }
@@ -220,6 +223,10 @@ public:
         return get_value(key, value);
     }
 
+    bool get(std::string_view key, std::vector<uint8_t>& value) const {
+        return get_value(key, value);
+    }
+
     bool get(std::string_view key, std::vector<int>& value) const {
         return get_value(key, value);
     }
@@ -315,6 +322,10 @@ void MsgPackFile::put(std::string_view key, std::string_view value) {
     m_impl->put(key, value);
 }
 
+void MsgPackFile::put(std::string_view key, std::span<const uint8_t> value) {
+    m_impl->put(key, value);
+}
+
 void MsgPackFile::put(std::string_view key, std::span<const int> value) {
     m_impl->put(key, value);
 }
@@ -383,6 +394,10 @@ void MsgPackFile::get(std::string_view key, std::string& value) const {
     m_impl->get(key, value);
 }
 
+void MsgPackFile::get(std::string_view key, std::vector<uint8_t>& value) const {
+    m_impl->get(key, value);
+}
+
 void MsgPackFile::get(std::string_view key, std::vector<int>& value) const {
     m_impl->get(key, value);
 }
@@ -403,7 +418,7 @@ void MsgPackFile::get(std::string_view key, std::vector<std::string>& value) con
     m_impl->get(key, value);
 }
 
-void MsgPackFile::get(std::string_view key, ValueType& value) {
+void MsgPackFile::get(std::string_view key, ValueType& value) const {
     m_impl->get(key, value);
 }
 

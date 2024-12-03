@@ -26,6 +26,7 @@ using ValueType = std::variant<
     std::vector<int>,
     std::vector<float>,
     std::vector<double>,
+    std::vector<uint8_t>,
     std::vector<uint32_t>,
     std::vector<std::string>>;
 
@@ -60,6 +61,7 @@ public:
     void put(std::string_view key, const char* value);
 
     // Overloads for std::span
+    void put(std::string_view key, std::span<const uint8_t> value);
     void put(std::string_view key, std::span<const int> value);
     void put(std::string_view key, std::span<const float> value);
     void put(std::string_view key, std::span<const double> value);
@@ -84,6 +86,7 @@ public:
     void get(std::string_view key, std::string& value) const;
 
     // Methods to get vectors (from spans)
+    void get(std::string_view key, std::vector<uint8_t>& value) const;
     void get(std::string_view key, std::vector<int>& value) const;
     void get(std::string_view key, std::vector<float>& value) const;
     void get(std::string_view key, std::vector<double>& value) const;

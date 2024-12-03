@@ -21,24 +21,23 @@ namespace ttml::serialization {
 
 // trivial type to the std::string
 template <typename T>
-std::string to_bytes(const T& value) {
-    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
-    std::string bytes(sizeof(T), '\0');
-    std::memcpy(bytes.data(), &value, sizeof(T));
-    return bytes;
+std::span<const uint8_t> to_bytes(T& value) {
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+    auto ptr = reinterpret_cast<uint8_t*>(&value);
+    return std::span<const uint8_t>(ptr, sizeof(T));
 }
 
 template <typename T>
-void from_bytes(const std::string& bytes, T& value) {
-    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+void from_bytes(std::span<const uint8_t> bytes, T& value) {
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
 
     if (bytes.size() != sizeof(T)) {
-        throw std::invalid_argument(fmt::format(
-            "Invalid byte size for conversion to type T. Expected: {} Actual: {}, type: {} ",
-            sizeof(T),
-            bytes.size(),
-            core::demangle(typeid(T).name())));
+        std::ostringstream oss;
+        oss << "Invalid byte size for conversion to type T. Expected: " << sizeof(T) << " Actual: " << bytes.size()
+            << ", type: " << typeid(T).name();
+        throw std::invalid_argument(oss.str());
     }
+
     std::memcpy(&value, bytes.data(), sizeof(T));
 }
 
@@ -77,7 +76,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     tt::tt_metal::StorageType storage_type{};
 
     auto shape = core::create_shape({1, 1, 1, 1});
-    std::string bytes;
+    std::vector<uint8_t> bytes;
     file.get(std::string(name) + "/shape", bytes);
     from_bytes<ttnn::Shape>(bytes, shape);
 
