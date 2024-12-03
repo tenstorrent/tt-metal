@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import os
+import logging
 from fastapi import FastAPI, File, UploadFile
 from io import BytesIO
 from PIL import Image
@@ -24,6 +25,12 @@ app = FastAPI(
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+# Configure the logger
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
+)
 
 
 def get_dispatch_core_type():
@@ -184,7 +191,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
     t1 = time.time()
     response = model.run_traced_inference(image)
     t2 = time.time()
-    print("the inference on the sever side took: ", t2 - t1)
+    logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
     conf_thresh = 0.6
     nms_thresh = 0.5
 
@@ -198,5 +205,6 @@ async def objdetection_v2(file: UploadFile = File(...)):
         print("No objects detected!")
         return []
     t3 = time.time()
-    print("the post processing to get the boexes took: ", t3 - t2)
+    logging.info("The post-processing to get the boxes took: %.3f seconds", t3 - t2)
+
     return output

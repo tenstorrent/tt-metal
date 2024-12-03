@@ -550,7 +550,6 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             print("-----------------------------------")
 
             boxes = post_processing(img, conf_thresh, nms_thresh, output)
-            print(boxes)
 
             class_names = load_class_names(class_name)
             img = cv2.imread(imgfile)

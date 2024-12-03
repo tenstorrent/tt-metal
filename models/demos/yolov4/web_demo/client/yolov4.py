@@ -13,12 +13,19 @@ import requests
 import torch
 import orjson
 import av
+import logging
 import streamlit as st
 import numpy as np
 
 
 from torch import nn
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
+
+
+# Configure the logger
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
+)
 
 
 class VideoProcessor(VideoProcessorBase):
@@ -115,7 +122,6 @@ class VideoProcessor(VideoProcessorBase):
 
         url = f"{self.api_url}/objdetection_v2"
 
-        t10 = time.time()
         try:
             # Use a persistent session for multiple requests
             with requests.Session() as session:
@@ -134,8 +140,6 @@ class VideoProcessor(VideoProcessorBase):
             return None
 
         t3 = time.time()
-        print("Request and parsing took: ", t3 - t10)
-
         # Convert frame to ndarray and perform post-processing
         bgr_image = frame.to_ndarray(format="bgr24")
         conf_thresh = 0.6
@@ -147,7 +151,9 @@ class VideoProcessor(VideoProcessorBase):
         image_final = self.plot_boxes_cv2(bgr_image, output, None, class_names)
 
         t4 = time.time()
-        print(f" IMG-IN | WH | Post | Total time: {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} ")
+        logging.info(
+            f" IMG-IN | WH | Post | Total time: {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} "
+        )
 
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
