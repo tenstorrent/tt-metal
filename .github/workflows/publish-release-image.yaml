@@ -13,9 +13,9 @@ on:
       timeout:
         required: false
         type: number
-        default: 35
+        default: 10
 jobs:
-  create-docker-image:
+  create-docker-release-image:
     strategy:
       matrix:
         os: [ubuntu-20.04]
@@ -72,13 +72,16 @@ jobs:
                 arch: wormhole_b0,
                 runs-on: ["cloud-virtual-machine", "N150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
-              }
+              },
+              {
+                arch: wormhole_b0,
+                runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+                cmd: pytest tests/end_to_end_tests,
+              },
           ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test_group.arch }}
       LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test_group.runs-on }}
     steps:
       - name: Checkout

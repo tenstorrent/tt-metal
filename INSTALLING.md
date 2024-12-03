@@ -159,8 +159,7 @@ sudo cpupower frequency-set -g performance
 
 #### Option 3: From Docker Release Image
 
-Download the latest Docker release from our
-[releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-dev) page for
 the particular Tenstorrent card architecture that you have installed on your
 system. (ie. Grayskull, Wormhole, etc)
 
