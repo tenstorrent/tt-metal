@@ -134,49 +134,6 @@ static Tensor full_impl(
     }
 }
 
-// TODO: #14974 - Can this be deleted, as it is only used in tests?
-template <typename T>
-static Tensor full(
-    const tt::tt_metal::LegacyShape& shape,
-    const T value,
-    const DataType data_type,
-    const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return full_impl(
-        ttnn::DefaultQueueId,
-        shape,
-        value,
-        data_type,
-        layout,
-        device ? std::vector<Device*>{device} : std::vector<Device*>{},
-        output_mem_config,
-        std::nullopt);
-}
-
-// TODO: #14974 - Can this be deleted, as it is only used in tests?
-static Tensor zeros(
-    const tt::tt_metal::LegacyShape& shape,
-    const DataType data_type = DataType::BFLOAT16,
-    const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return full(shape, 0.0f, data_type, layout, device, output_mem_config);
-}
-
-// TODO: #14974 - Can this be deleted, as it is only used in tests?
-static Tensor ones(
-    const tt::tt_metal::LegacyShape& shape,
-    const DataType data_type = DataType::BFLOAT16,
-    const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return full(shape, 1.0f, data_type, layout, device, output_mem_config);
-}
-
 template <typename T>
 static Tensor arange(
     const int64_t start,

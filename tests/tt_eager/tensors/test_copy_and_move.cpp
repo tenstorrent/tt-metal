@@ -2,12 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "common/bfloat16.hpp"
 #include "common/constants.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -58,7 +55,7 @@ bool test_tensor_copy_semantics(Device* device) {
     pass &= dev_a_data == host_d_copy_data;
 
     // dev tensor updated with host tensor copy assignment
-    Tensor host_e = ttnn::numpy::ones(single_tile_shape).to(Layout::TILE);
+    Tensor host_e = ttnn::ones(single_tile_shape, DataType::BFLOAT16, Layout::TILE);
     Tensor dev_e_copy = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device);
     dev_e_copy = host_e;
     pass &= (dev_e_copy.storage_type() == StorageType::OWNED);
@@ -67,8 +64,8 @@ bool test_tensor_copy_semantics(Device* device) {
     pass &= host_e_data == dev_e_copy_data;
 
     // dev tensor updated with dev tensor copy assignment
-    Tensor dev_b = ttnn::numpy::ones(single_tile_shape).to(Layout::TILE).to(device);
-    Tensor dev_b_copy = ttnn::numpy::zeros(single_tile_shape).to(Layout::TILE).to(device);
+    Tensor dev_b = ttnn::ones(single_tile_shape, DataType::BFLOAT16, Layout::TILE, *device);
+    Tensor dev_b_copy = ttnn::zeros(single_tile_shape, DataType::BFLOAT16, Layout::TILE, *device);
     dev_b_copy = dev_b;
     pass &= (dev_b_copy.storage_type() == StorageType::DEVICE);
     auto dev_b_on_host = dev_b.cpu();
