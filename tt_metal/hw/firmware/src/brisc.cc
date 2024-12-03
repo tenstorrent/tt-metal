@@ -478,10 +478,14 @@ int main() {
 
             wait_ncrisc_trisc();
 
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                // barrier to make sure all writes are finished
+                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
+                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
+            }
+
 #if defined(PROFILE_KERNEL)
             if (noc_mode == DM_DYNAMIC_NOC) {
-                // barrier to make sure profiler finishes writes
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
                 // re-init for profiler to able to run barrier in dedicated noc mode
                 noc_local_state_init(noc_index);
             }
