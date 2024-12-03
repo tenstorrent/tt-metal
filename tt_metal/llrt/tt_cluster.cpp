@@ -37,11 +37,10 @@
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+
 #include "dev_msgs.h"
-#include "tensix.h"
-//
-//
-#include "llrt/hal.hpp"                                              // for Hal
+
+#include "llrt/hal.hpp"
 
 #include "third_party/tracy/public/tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
