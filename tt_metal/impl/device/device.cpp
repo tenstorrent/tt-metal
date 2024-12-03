@@ -19,7 +19,6 @@
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
-#include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -29,6 +28,9 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
+
+// FIXME: ARCH_NAME specific
+#include "eth_l1_address_map.h"
 
 namespace tt {
 
