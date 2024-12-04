@@ -159,3 +159,22 @@ inline void captureEnqueueWriteBuffer(CommandQueue& cq, std::variant<std::refere
     auto cmd_variant = tt::target::CreateEnqueueWriteBufferCommand(ctx.getBuilder(), cq_global_id, buffer_global_id, src_vector, blocking);
     captureCommand(tt::target::CommandType::EnqueueWriteBufferCommand, cmd_variant.Union());
 }
+
+inline void captureEnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, void* dst, bool blocking) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+
+    // We don't want to use shared_ptr to extend lifetime of buffer when adding to global_id map.
+    Buffer* buffer_ptr = std::holds_alternative<std::shared_ptr<Buffer>>(buffer)
+                             ? std::get<std::shared_ptr<Buffer>>(buffer).get()
+                             : &std::get<std::reference_wrapper<Buffer>>(buffer).get();
+
+    uint32_t cq_global_id = cq.id(); // FIXME - Maybe not correct, probably should handle same way as Buffers.
+    uint32_t buffer_global_id = ctx.getGlobalId(buffer_ptr);
+
+    log_info(tt::LogMetalTrace, "{} for cq_global_id: {} buffer_global_id: {}", __FUNCTION__, cq_global_id, buffer_global_id);
+
+    // Idea store a read_global_id to keep track of read results.
+    auto cmd_variant = tt::target::CreateEnqueueReadBufferCommand(ctx.getBuilder(), cq_global_id, buffer_global_id, blocking);
+    captureCommand(tt::target::CommandType::EnqueueReadBufferCommand, cmd_variant.Union());
+}
