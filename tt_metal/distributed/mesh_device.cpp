@@ -269,6 +269,10 @@ static MeshDeviceID generate_unique_mesh_id() {
     return next_id++;
 }
 
+Device* MeshDevice::reference_device() const {
+    return this->devices.at(0);
+}
+
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh) :
     mesh_device_shape(mesh_device_shape),
     type(type),
@@ -403,13 +407,11 @@ const DeviceIds MeshDevice::get_device_ids() const {
 
 size_t MeshDevice::num_devices() const { return this->devices.size(); }
 
-CoreCoord MeshDevice::compute_with_storage_grid_size() const {
-    return get_device_index(0)->compute_with_storage_grid_size();
-}
+CoreCoord MeshDevice::compute_with_storage_grid_size() const { return this->reference_device()->compute_with_storage_grid_size(); }
 
-CoreCoord MeshDevice::dram_grid_size() const { return get_device_index(0)->dram_grid_size(); }
+CoreCoord MeshDevice::dram_grid_size() const { return this->reference_device()->dram_grid_size(); }
 
-tt::ARCH MeshDevice::arch() const { return get_device_index(0)->arch(); }
+tt::ARCH MeshDevice::arch() const { return this->reference_device()->arch(); }
 
 size_t MeshDevice::num_rows() const { return this->mesh_device_shape.first; }
 
@@ -515,6 +517,17 @@ void MeshDevice::remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_devic
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
     this->sub_device_manager_ids.resize(mesh_device.num_devices());
+}
+
+int MeshDevice::num_dram_channels() const {
+    return this->reference_device()->num_dram_channels() * this->num_devices();
+}
+
+allocator::Statistics MeshDevice::get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
+    // With current implementation, we assume that all devices have the same memory allocation statistics.
+    // This will be made more explicit in the future to have lock-step allocation across devices.
+    // Right now, we just return the statistics of the first device.
+    return this->reference_device()->get_memory_allocation_statistics(buffer_type, sub_device_id);
 }
 
 }  // namespace tt::tt_metal::distributed
