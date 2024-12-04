@@ -18,13 +18,13 @@ Below is an updated table with max prefill context-length support for our demo. 
 
 The main reason for a long context length not fitting on device is lack of memory memory. Any exceptions are marked in the table.
 
-|              |      N150     |       N300      |      T3K       | TG
----------------|---------------|-----------------|----------------|-------------|
-| Llama3.2-1B  | 64k tokens     | 64k tokens     | 64k tokens [1] | TBD         |
-| Llama3.2-3B  | 32k tokens     | 32k tokens [1] | 64k tokens [1] | TBD         |
-| Llama3.1-8B  | 16k tokens     | 64k tokens     | 128k tokens    | TBD         |
-| Llama3.2-11B | 16k tokens     | 64k tokens     | 128k tokens    | TBD         |
-| Llama3.1-70B | Not supported  | Not supported  | 32k tokens [2] | 128k tokens |
+|              |      N150     |       N300      |      T3K      |      TG     |
+|--------------|---------------|-----------------|---------------|-------------|
+| Llama3.2-1B  | 64k tokens    | 64k tokens     | 64k tokens [1] | TBD         |
+| Llama3.2-3B  | 32k tokens    | 64k tokens     | 64k tokens [1] | TBD         |
+| Llama3.1-8B  | 16k tokens    | 64k tokens     | 128k tokens    | TBD         |
+| Llama3.2-11B | 16k tokens    | 64k tokens     | 128k tokens    | TBD         |
+| Llama3.1-70B | Not supported | Not supported  | 64k tokens [2] | 128k tokens |
 
 [1] For these configurations, running context lengths greater than those specified on the table will generate a bad repetitive output.
 
