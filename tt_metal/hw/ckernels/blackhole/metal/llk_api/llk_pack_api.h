@@ -226,6 +226,7 @@ inline void llk_pack_untilize(
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
+}
 
 template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_matmul_pack(
