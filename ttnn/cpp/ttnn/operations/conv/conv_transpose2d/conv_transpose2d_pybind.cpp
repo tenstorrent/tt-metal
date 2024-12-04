@@ -103,8 +103,8 @@ void py_bind_conv_transpose2d(py::module& module) {
                 std::array<uint32_t, 2> dilation,
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
-                std::optional<const Conv2dConfig> conv_config,
-                const std::optional<const MemoryConfig> memory_config,
+                const std::optional<const Conv2dConfig>& conv_config,
+                const std::optional<const MemoryConfig>& memory_config,
                 const uint8_t& queue_id) -> Result {
                 return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
@@ -144,8 +144,8 @@ void py_bind_conv_transpose2d(py::module& module) {
                 std::array<uint32_t, 2> dilation,
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
-                std::optional<const Conv2dConfig> conv_config,
-                const std::optional<const MemoryConfig> memory_config,
+                const std::optional<const Conv2dConfig>& conv_config,
+                const std::optional<const MemoryConfig>& memory_config,
                 const uint8_t& queue_id) -> Result {
                 return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
