@@ -29,7 +29,8 @@ void bind_interleaved_to_sharded(
                tt::tt_metal::TensorMemoryLayout shard_scheme,
                tt::tt_metal::ShardOrientation shard_orientation,
                const std::optional<ttnn::DataType>& output_dtype,
-               uint8_t queue_id const bool keep_l1_aligned) -> ttnn::Tensor {
+               uint8_t queue_id,
+               const bool keep_l1_aligned) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, grid, shard_shape, shard_scheme, shard_orientation, output_dtype);
             },
             py::arg("input_tensor").noconvert(),
@@ -57,7 +58,7 @@ void bind_interleaved_to_sharded(
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
             py::arg("queue_id") = 0,
-            py : arg("keep_l1_aligned") = false,
+            py::arg("keep_l1_aligned") = false,
 
         });
 }

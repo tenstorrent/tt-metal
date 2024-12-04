@@ -17,12 +17,12 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& sharded_memory_config,
     const std::optional<DataType>& data_type_arg,
-    const bool& keep_l1_aligned) {
+    const std::optional<bool>& keep_l1_aligned) {
     return operation::run(
                InterleavedToShardedDeviceOperation{
                    .output_mem_config = sharded_memory_config,
                    .output_dtype = data_type_arg.value_or(input_tensor.get_dtype()),
-                   .keep_l1_aligned = keep_l1_aligned},
+                   .keep_l1_aligned = keep_l1_aligned.value_or(false)},
                {input_tensor})
         .at(0);
 }
@@ -35,7 +35,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     const TensorMemoryLayout shard_scheme,
     const ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg,
-    const bool& keep_l1_aligned) {
+    const std::optional<bool>& keep_l1_aligned) {
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
@@ -73,7 +73,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
                InterleavedToShardedDeviceOperation{
                    .output_mem_config = sharded_mem_config,
                    .output_dtype = data_type_arg.value_or(input_tensor.get_dtype()),
-                   .keep_l1_aligned = keep_l1_aligned},
+                   .keep_l1_aligned = keep_l1_aligned.value_or(false)},
                {input_tensor})
         .at(0);
 }
