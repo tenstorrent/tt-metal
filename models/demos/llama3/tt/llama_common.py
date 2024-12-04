@@ -319,6 +319,8 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
             ),
             pt_out,
         )
+
+
 def get_padded_prefill_len(seq_len):
     """
     If seq_len is less than 32, pad to 32
