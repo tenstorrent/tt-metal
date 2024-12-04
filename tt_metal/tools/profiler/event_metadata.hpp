@@ -8,15 +8,27 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         UNDEF = 0,
         READ,
         READ_SET_STATE,
+        READ_SET_TRID,
         READ_WITH_STATE,
+        READ_WITH_STATE_AND_TRID,
         READ_BARRIER,
+        READ_BARRIER_WITH_TRID,
+
         WRITE,
+        WRITE_INLINE,
+        WRITE_MULTICAST,
         WRITE_SET_STATE,
         WRITE_WITH_STATE,
         WRITE_BARRIER,
+        WRITE_BARRIER_WITH_TRID,
         WRITE_FLUSH,
+
         ATOMIC_BARRIER,
-        SEMAPHORE_INC
+        SEMAPHORE_INC,
+        SEMAPHORE_WAIT,
+        SEMAPHORE_SET,
+
+        UNSUPPORTED
     };
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
 
