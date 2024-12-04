@@ -1294,8 +1294,8 @@ void LightMetalBeginCapture(Device *device) {
     device->light_metal_begin_capture();
 }
 
-void LightMetalEndCapture(Device *device) {
-    device->light_metal_end_capture();
+std::vector<uint8_t> LightMetalEndCapture(Device *device) {
+    return device->light_metal_end_capture();
 }
 
 void LightMetalLoadTraceId(Device *device, const uint32_t trace_id, const uint8_t cq_id) {

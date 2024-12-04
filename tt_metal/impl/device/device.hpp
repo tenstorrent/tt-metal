@@ -235,7 +235,7 @@ class Device {
     // Light Metal
     void light_metal_configure(const std::string& filename, const bool auto_serialize_metal_trace); // TODO - Could go away
     void light_metal_begin_capture();
-    void light_metal_end_capture();
+    std::vector<uint8_t> light_metal_end_capture();
     void light_metal_load_trace_id(const uint32_t tid, const uint8_t cq_id); // TODO - Should take TraceDescriptor
     void light_metal_save_trace_id(const uint32_t tid);
     void load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor &trace_desc);

@@ -3365,15 +3365,14 @@ void Device::light_metal_begin_capture() {
     lm_capture_ctx.setTracing(true);   // Enable tracing
 }
 
-// End Light Metal capture, and serialize to flatbuffer binary now.
-// FIXME - Eventually want to return blob to caller instead of writing to disk here.
-void Device::light_metal_end_capture() {
+// End Light Metal capture, and serialize to flatbuffer binary, return to caller.
+std::vector<uint8_t> Device::light_metal_end_capture() {
     log_info(tt::LogMetal, "KCM End Light Metal Capture");
     auto& lm_capture_ctx = LightMetalCaptureContext::getInstance();
     TT_ASSERT(lm_capture_ctx.isTracing(), "Light Metal Capture was not enabled.");
     lm_capture_ctx.setTracing(false); // Disable tracing
     auto blob = lm_capture_ctx.createLightMetalBinary();
-    writeBinaryBlobToFile(this->light_metal_trace_.config.filename, blob);
+    return blob;
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {

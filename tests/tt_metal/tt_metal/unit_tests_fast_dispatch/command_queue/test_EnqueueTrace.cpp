@@ -18,7 +18,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
-
+#include "tt_metal/impl/lightmetal/lightmetal_replay.hpp"
 
 using std::vector;
 using namespace tt;
@@ -83,6 +83,24 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
     return program;
 }
 
+// Just write, limited error checking.
+bool writeBlobToFile(const std::string& filename, const std::vector<uint8_t>& blob) {
+    log_info(tt::LogTest, "Writing blob of {} bytes to file: {}", blob.size(), filename);
+    std::ofstream outFile(filename, std::ios::binary);
+    outFile.write(reinterpret_cast<const char*>(blob.data()), blob.size());
+    return outFile.good();
+}
+
+// Mimic the light-metal standalone run replay tool by executing the binary.
+void runLightMetalBinary(const std::vector<uint8_t>& blob) {
+    tt::tt_metal::LightMetalReplay lm_replay(blob);
+    if (!lm_replay.executeLightMetalBinary()) {
+        log_fatal("Light Metal Binary failed to execute or encountered errors.");
+    } else {
+        log_info(tt::LogMetalTrace, "Light Metal Binary executed successfully!");
+    }
+}
+
 // All basic trace tests just assert that the replayed result exactly matches
 // the eager mode results
 namespace basic_tests {
@@ -128,14 +146,8 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
-    // Some initial LightMetalBinary setup/configuration for testing purposes.
-    bool serialize_trace = std::getenv("TT_METAL_SERIALIZE_TRACE");
-    bool deserialize_trace = std::getenv("TT_METAL_DESERIALIZE_TRACE");
+    bool lightmetal_capture = std::getenv("LIGHTMETAL_CAPTURE");
     std::string trace_bin_path = "/tmp/light_metal_trace_capture_ttmetal.bin";
-    bool auto_serialize_metal_trace = true;
-    log_info(LogTest, "KCM Starting test. serialize: {} deserialize: {} filename: {}",serialize_trace, deserialize_trace, trace_bin_path);
-
-    LightMetalConfigure(this->device_, trace_bin_path, auto_serialize_metal_trace);
 
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -156,14 +168,13 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
 
     EnqueueWriteBuffer(command_queue, *input, input_data.data(), true);
 
-    if (serialize_trace) {
+    if (lightmetal_capture) {
         LightMetalBeginCapture(this->device_);
     }
 
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
-    log_info(tt::LogTest, "KCM Done capturing metal trace");
 
     // Create and Enqueue a Program with a live trace to ensure that a warning is generated
     auto input_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -180,8 +191,9 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     Finish(command_queue);
     ReleaseTrace(this->device_, tid);
 
-    if (serialize_trace) {
-        LightMetalEndCapture(this->device_);
+    if (lightmetal_capture) {
+        auto blob = LightMetalEndCapture(this->device_);
+        writeBlobToFile(trace_bin_path, blob);
     }
 }
 
@@ -241,13 +253,12 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
 TEST_F(SingleDeviceTraceFixture, WriteReadSanity) {
     Setup(2048);
 
-    // KCM - Light Metal Binary configuration.
-    bool serialize_trace = std::getenv("TT_METAL_SERIALIZE_TRACE");
+    bool lightmetal_capture = std::getenv("LIGHTMETAL_CAPTURE");
+    bool lightmetal_run = std::getenv("LIGHTMETAL_RUN");
     std::string trace_bin_path = "/tmp/light_metal_trace_capture_ttmetal.bin";
-    log_info(LogTest, "KCM Starting test. serialize: {} filename: {}", serialize_trace, trace_bin_path);
-    LightMetalConfigure(this->device_, trace_bin_path, true);
+    log_info(tt::LogTest, "Starting w/ capture: {} run: {} file: {}", lightmetal_capture, lightmetal_run, trace_bin_path);
 
-    if (serialize_trace) {
+    if (lightmetal_capture) {
         LightMetalBeginCapture(this->device_);
     }
 
@@ -295,8 +306,13 @@ TEST_F(SingleDeviceTraceFixture, WriteReadSanity) {
 
     Finish(command_queue);
 
-    if (serialize_trace) {
-        LightMetalEndCapture(this->device_);
+    if (lightmetal_capture) {
+        auto blob = LightMetalEndCapture(this->device_);
+        writeBlobToFile(trace_bin_path, blob);
+        if (lightmetal_run) {
+            TearDown();
+            runLightMetalBinary(blob);
+        }
     }
 }
 

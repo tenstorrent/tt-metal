@@ -657,7 +657,7 @@ void LightMetalConfigure(Device *device, const std::string &filename, const bool
 void LightMetalBeginCapture(Device *device);
 
 // Ends Light Metal Binary capture
-void LightMetalEndCapture(Device *device);
+std::vector<uint8_t> LightMetalEndCapture(Device *device);
 
 // KCM - Consider flipping the order of these arguments to match other APIs
 void LightMetalLoadTraceId(Device *device, const uint32_t trace_id, const uint8_t cq_id);
