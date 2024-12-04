@@ -103,7 +103,8 @@ Result conv_transpose2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_)   {
+    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const MemoryConfig>& memory_config ) {
         conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
 
         //Inverse of sliding_window.get_output_shape()
@@ -118,6 +119,12 @@ Result conv_transpose2d(
             .is_transpose = true
         };
 
+
+        // ConvTranspose2d is implemented via the Conv2d u_op with flipped weights.
+        //The input tensor is first passed to the halo op that paddeds the input.
+        //In the scenario, where stride > 1, the halo op will add interleaved 0s to the input tensor.
+        //The Conv2d u_op is then called with stride = 1, padding = 0.
+        //SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is being called for ConvTranspose2d.
         uint32_t output_height = (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
         uint32_t output_width  = (input_width  - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
 
@@ -143,6 +150,25 @@ Result conv_transpose2d(
 
         log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
+        const bool mm_conv = conv2d::use_matmul_for_1x1_conv(kernel_size, {1, 1}, {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right}, dilation, groups);
+
+        const auto compute_grid_size = device->compute_with_storage_grid_size();
+
+        if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+            // In this case we deduce the shard layout.
+            conv2d::adjust_conv_op_config_for_auto_shard(
+                mm_conv,
+                batch_size,
+                in_channels,
+                out_channels,
+                output_height,
+                output_width,
+                weight_tensor.get_shape()[3],
+                full_input_width,
+                compute_grid_size,
+                conv_config,
+                input_tensor.layout());
+        }
 
         DeviceComputeKernelConfig compute_kernel_config;
         switch (device->arch()) {
@@ -170,8 +196,6 @@ Result conv_transpose2d(
             default:
                 TT_THROW("Invalid Device Arch, Got {}",device->arch());
         }
-
-        const bool mm_conv = conv2d::use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
 
         //Call Halo Transpose
         auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = conv2d::shard_or_reshard_tensor_if_required(
@@ -262,6 +286,39 @@ Result conv_transpose2d(
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width);
         }
+        if(mm_conv) {
+            // run conv as matmul
+            uint32_t num_cores_c = conv2d::get_num_cores_channels_from_parallel_config(parallel_config);
+            auto matmul_program_config = conv2d::determine_matmul_op_config_from_conv_op_config(
+                opt_conv_op_parallel_config,
+                opt_conv_op_block_config,
+                parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+                conv_config.activation,
+                parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+                num_cores_c);
+            Tensor matmul_input = ttnn::to_layout(
+                input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device
+            );
+            auto matmul_output = ttnn::operations::matmul::matmul(
+                matmul_input,
+                weight_tensor_on_device,
+                bias_tensor_on_device,
+                ttnn::operations::matmul::Matmul{
+                matmul_program_config,
+                /*bcast_batch=*/std::nullopt,
+                conv_out_memory_config,
+                conv_config.dtype,
+                compute_kernel_config});
+            if (conv_config.deallocate_activation) {
+                ttnn::operations::core::deallocate(matmul_input);
+            }
+
+            if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
+                matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
+            }
+
+            return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        }
         // call conv micro op
         auto conv_output = optimized_conv_new(
             halo_output,
@@ -283,6 +340,9 @@ Result conv_transpose2d(
             conv_config.enable_act_double_buffer,
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
+        if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
+            conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
+        }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 
@@ -303,8 +363,9 @@ Result ConvTranpose2dOperation::invoke(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_){
-    return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_));
+    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const MemoryConfig>& memory_config ) {
+    return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(memory_config));
 }
 
 Result ConvTranpose2dOperation::invoke(
@@ -324,8 +385,9 @@ Result ConvTranpose2dOperation::invoke(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_){
-    return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_));
+    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const MemoryConfig>& memory_config ) {
+    return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(memory_config));
 }
 
 }
