@@ -15,14 +15,17 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& memory_config,
-    const std::optional<DataType>& output_dtype) {
+    const std::optional<DataType>& output_dtype,
+    const std::optional<bool>& is_l1_aligned) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     auto shard_spec = input_tensor.shard_spec().value();
     TT_FATAL(input_tensor.shard_spec().has_value(), "Error");
     return operation::run(
                ShardedToInterleavedDeviceOperation{
-                   .output_mem_config = memory_config, .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
+                   .output_mem_config = memory_config,
+                   .output_dtype = output_dtype.value_or(input_tensor.get_dtype()),
+                   .is_l1_aligned = is_l1_aligned.value_or(false)},
                {input_tensor})
         .at(0);
 }

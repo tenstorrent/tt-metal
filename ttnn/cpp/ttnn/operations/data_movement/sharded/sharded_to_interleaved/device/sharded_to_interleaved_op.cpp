@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks ShardedToInterleavedDeviceOperation::create_prog
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return detail::sharded_to_interleaved_multi_core(input_tensor, output_tensor);
+    return detail::sharded_to_interleaved_multi_core(input_tensor, output_tensor, this->is_l1_aligned);
 }
 
 }  // namespace ttnn::operations::data_movement
