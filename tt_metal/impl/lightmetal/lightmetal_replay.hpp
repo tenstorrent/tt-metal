@@ -23,6 +23,7 @@ namespace tt::target {
     struct EnqueueTraceCommand;
     struct LoadTraceCommand;
     struct CreateBufferCommand;
+    struct EnqueueWriteBufferCommand;
 
     // Forward decl for binary_generated.h
     namespace lightmetal {
@@ -58,6 +59,7 @@ public:
     void execute(tt::target::ReplayTraceCommand const *command);
     void execute(tt::target::LoadTraceCommand const *command);
     void execute(tt::target::CreateBufferCommand const *command);
+    void execute(tt::target::EnqueueWriteBufferCommand const *command);
 
     // Object maps public accessors
     void addBufferToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Buffer> buffer);

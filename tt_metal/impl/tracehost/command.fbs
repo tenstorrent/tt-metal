@@ -28,11 +28,19 @@ table CreateBufferCommand {
     address: uint32; // Optional for pre-allocated buffers.
 }
 
+table EnqueueWriteBufferCommand {
+    cq_global_id: uint32;       // reference to CommandQueue
+    buffer_global_id: uint32;   // Reference to Buffer used as destination
+    src: [uint32];              // Data to be written. Support only some types for now.
+    blocking: bool;
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
     LoadTraceCommand,
-    CreateBufferCommand
+    CreateBufferCommand,
+    EnqueueWriteBufferCommand
 }
 
 table Command {

@@ -2912,6 +2912,7 @@ void EnqueueWriteBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking) {
+    TRACE_FUNCTION_CALL(captureEnqueueWriteBuffer, cq, buffer, src, blocking);
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = src});
