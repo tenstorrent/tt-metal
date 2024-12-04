@@ -147,6 +147,7 @@ private:
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
+    uint32_t num_nocs_;
 
     void initialize_gs();
     void initialize_wh();
@@ -162,6 +163,8 @@ public:
     Hal();
 
     tt::ARCH get_arch() const { return arch_; }
+
+    uint32_t get_num_nocs() const { return num_nocs_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

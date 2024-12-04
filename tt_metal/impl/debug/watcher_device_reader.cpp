@@ -356,7 +356,8 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             DumpL1Status(core, &mbox_data->launch[launch_msg_read_ptr]);
         }
         if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled()) {
-            for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+            const auto NUM_NOCS_ = tt::tt_metal::hal.get_num_nocs();
+            for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(core, core_str, mbox_data, noc);
             }
         }

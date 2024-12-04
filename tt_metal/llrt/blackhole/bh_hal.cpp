@@ -76,6 +76,8 @@ void Hal::initialize_bh() {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+
+    num_nocs_ = NUM_NOCS;
 }
 
 }  // namespace tt_metal
