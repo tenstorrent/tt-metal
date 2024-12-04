@@ -19,33 +19,33 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::vector<string>& golden_output = {
-    "(0,0): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,0): Adding "
-    "the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,0): Now, in reverse, to make it "
-    "even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
-    "(0,1): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,1): Adding "
-    "the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,1): Now, in reverse, to make it "
-    "even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
-    "(0,2): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,2): Adding "
-    "the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,2): Now, in reverse, to make it "
-    "even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
-    "(0,0): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He "
-    "was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he "
-    "found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars "
-    "and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability "
-    "to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the "
-    "little mouse learned that bravery and kindness can change the world.",
-    "(0,1): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He "
-    "was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he "
-    "found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars "
-    "and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability "
-    "to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the "
-    "little mouse learned that bravery and kindness can change the world.",
-    "(0,2): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He "
-    "was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he "
-    "found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars "
-    "and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability "
-    "to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the "
-    "little mouse learned that bravery and kindness can change the world.",
+    "(0,0): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,0): Adding \
+the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,0): Now, in reverse, to make it \
+even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
+    "(0,1): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,1): Adding \
+the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,1): Now, in reverse, to make it \
+even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
+    "(0,2): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,2): Adding \
+the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,2): Now, in reverse, to make it \
+even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
+    "(0,0): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He \
+was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he \
+found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars \
+and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability \
+to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the \
+little mouse learned that bravery and kindness can change the world.",
+    "(0,1): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He \
+was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he \
+found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars \
+and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability \
+to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the \
+little mouse learned that bravery and kindness can change the world.",
+    "(0,2): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He \
+was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he \
+found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars \
+and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability \
+to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the \
+little mouse learned that bravery and kindness can change the world.",
     "(0,0): This DPRINT message",
     "contains several newline characters",
     "and should be displayed over multiple lines.",
