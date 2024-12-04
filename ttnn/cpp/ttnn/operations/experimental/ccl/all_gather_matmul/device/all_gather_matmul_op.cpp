@@ -229,7 +229,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                                                     /* Fusion params */
                                                     all_gather_core_grid_offset},
                 {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor},
-                optional_input_tensors]);
+                optional_input_tensors);
         },
         {input_tensor, weight_tensor},
         output_tensors,
