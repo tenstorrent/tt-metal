@@ -53,7 +53,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_llama_decoder_inference(
     max_seq_len,
@@ -172,14 +172,12 @@ def test_llama_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
-
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-                :1, :, :, : model_args.dim
-            ]
-            .permute(2, 1, 0, 3)
-            .squeeze(1)[: model_args.max_batch_size, :, :]
-        )  # [seq, batch_size, dim]
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        tt_out = tt_out[:, 0:1, :, : model_args.dim].view(1, -1, model_args.dim)
+        tt_output_torch = tt_out[:, : model_args.max_batch_size, :]
 
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)

@@ -49,6 +49,7 @@ class RMSNorm(LightweightModule):
         eps: float = 1e-05,
         sharded_program_config=None,
         sharded_output_config=None,
+        TG=False,
     ):
         super().__init__()
         self.eps = eps
@@ -88,7 +89,9 @@ class RMSNorm(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2) if is_mesh_device else None,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=device.shape)
+            if is_mesh_device
+            else None,
         )
 
         self.sharded_output_config = sharded_output_config

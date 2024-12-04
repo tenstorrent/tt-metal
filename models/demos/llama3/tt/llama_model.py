@@ -63,8 +63,10 @@ class TtTransformer(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                TG=args.is_galaxy,
             ),
             args,
+            args.is_galaxy,
         )
 
         self.lm_head = LMHead(
@@ -87,7 +89,7 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
     ):
         # No-op if callers already provide the right memory config
-        if mode == "decode":
+        if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         for layer in self.layers:
@@ -103,7 +105,7 @@ class TtTransformer(LightweightModule):
         # Output norm
         x = self.norm(x, mode=mode)
 
-        if mode == "prefill":
+        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         return self.lm_head(x)

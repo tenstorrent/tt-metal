@@ -143,7 +143,7 @@ def test_llama_attention_inference(
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_inputs_ttnn_prefill(
         tt_attention_input,
-        force_replicated=True,
+        force_replicated=False if model_args.is_galaxy else True,
     )
 
     tt_out = tt_model(
@@ -154,12 +154,10 @@ def test_llama_attention_inference(
         mode="prefill",
         page_table=page_table_tt,
     )
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-        0, :, :, : model_args.dim
-    ].view(
-        batch_size, max_seq_len, -1
-    )  # [ batch_size, seq, dim]
-
+    tt_out = ttnn.to_torch(
+        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
+    )
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
         model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
@@ -189,7 +187,14 @@ def test_llama_attention_inference(
         if paged_attention:
             tt_layer_present = [
                 (
-                    ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[reverse_permutation]
+                    ttnn.to_torch(
+                        cache,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device,
+                            dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                            mesh_shape=model_args.cluster_shape,
+                        ),
+                    )[reverse_permutation]
                     .reshape(
                         model_args.max_batch_size,
                         paged_attention_config.max_num_blocks // model_args.max_batch_size,
@@ -206,7 +211,14 @@ def test_llama_attention_inference(
             ]
         else:
             tt_layer_present = [
-                ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                ttnn.to_torch(
+                    cache,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
+                )[:batch_size, :, :, :]
                 for cache in tt_model.layer_past
             ]
 

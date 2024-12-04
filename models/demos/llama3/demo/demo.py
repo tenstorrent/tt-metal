@@ -420,9 +420,12 @@ def run_llama3_demo(
                 )
 
             pt_out.append(
-                ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-                    0, 0, (decoding_pos[batch_id] - 1) % 32, :
-                ]
+                ttnn.to_torch(
+                    tt_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=mesh_device.shape
+                    ),
+                )[0, 0, (decoding_pos[batch_id] - 1) % 32, :]
             )
             ttnn.deallocate(tt_out)
 
@@ -480,7 +483,10 @@ def run_llama3_demo(
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
+        decode_input = ttnn.to_memory_config(
+            decode_input,
+            ttnn.L1_MEMORY_CONFIG if model_args.is_galaxy else tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
@@ -489,7 +495,12 @@ def run_llama3_demo(
             page_table=page_table_tt,
         )
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            if tt_model.args.is_galaxy:
+                tt_out_gathered = ttnn.all_gather(
+                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                )
+            else:
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -528,7 +539,12 @@ def run_llama3_demo(
             page_table=page_table_tt,
         )
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            if tt_model.args.is_galaxy:
+                tt_out_gathered = ttnn.all_gather(
+                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                )
+            else:
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -598,7 +614,10 @@ def run_llama3_demo(
             ttnn.wait_for_event(1, op_event)
             if argmax_on_device:
                 tt_output_torch = ttnn.to_torch(
-                    tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+                    tt_out_tok.cpu(blocking=True, cq_id=1),
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=(3, 1) if tt_model.args.is_galaxy else (1, -1), mesh_shape=mesh_device.shape
+                    ),
                 )[0, 0, 0, :batch_size]
             else:
                 tt_out_tok_reset, tt_output_torch = sample_host(
@@ -758,7 +777,7 @@ def run_llama3_demo(
     logger.info("")
 
     supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
-    supported_devices = ["N150", "N300", "T3K"]
+    supported_devices = ["N150", "N300", "T3K", "TG"]
 
     # TODO update targets based on the llama3 model and the target device
     llama_model_name = model_args.model_name
@@ -772,22 +791,27 @@ def run_llama3_demo(
         "N150_3.2-1B": 1050,  # TODO Update target
         "N300_3.2-1B": 1050,  # TODO Update target
         "T3K_3.2-1B": 1050,  # TODO Update target
+        "TG_3.2-1B": 1050,  # TODO Update target
         #
         "N150_3.2-3B": 1050,  # TODO Update target
         "N300_3.2-3B": 1050,  # TODO Update target
         "T3K_3.2-3B": 1050,  # TODO Update target
+        "TG_3.2-3B": 1050,  # TODO Update target
         #
         "N150_3.1-8B": 1050,
         "N300_3.1-8B": 1050,
         "T3K_3.1-8B": 1050,
+        "TG_3.1-8B": 1050,
         #
         "N150_3.2-11B": 1050,  # TODO Update target
         "N300_3.2-11B": 1050,  # TODO Update target
         "T3K_3.2-11B": 1050,  # TODO Update target
+        "TG_3.2-11B": 1050,  # TODO Update target
         #
         "N150_3.1-70B": 1050,  # TODO Update target
         "N300_3.1-70B": 1050,  # TODO Update target
         "T3K_3.1-70B": 1050,  # TODO Update target
+        "TG_3.1-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{llama_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
@@ -795,20 +819,25 @@ def run_llama3_demo(
         "N150_3.2-1B": 160,  # TODO Update target
         "N300_3.2-1B": 250,  # TODO Update target
         "T3K_3.2-1B": 300,  # TODO Update target
+        "TG_3.2-1B": 300,  # TODO Update target
         #
         "N150_3.2-3B": 60,  # TODO Update target
         "N300_3.2-3B": 100,  # TODO Update target
         "T3K_3.2-3B": 150,  # TODO Update target
+        "TG_3.2-3B": 150,  # TODO Update target
         #
         "N150_3.1-8B": 23,  # TODO Update target
         "N300_3.1-8B": 38,
         "T3K_3.1-8B": 45,
+        "TG_3.1-8B": 45,  # TODO Update target
         #
         "N150_3.2-11B": 23,
         "N300_3.2-11B": 38,  # TODO Update target
         "T3K_3.2-11B": 45,  # TODO Update target
+        "TG_3.2-11B": 45,  # TODO Update target
         #
         "T3K_3.1-70B": 20,  # TODO Update target
+        "TG_3.1-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{llama_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * batch_size
