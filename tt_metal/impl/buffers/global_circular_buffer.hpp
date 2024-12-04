@@ -48,6 +48,7 @@ public:
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
     uint32_t size() const;
+    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("sender_receiver_core_mapping", "size");
     const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
