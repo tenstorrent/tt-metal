@@ -40,7 +40,7 @@ tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(fvc_consumer_req_buf_start);
 uint64_t xy_local_addr;
 
-#define SWITCH_THRESHOLD 16
+#define SWITCH_THRESHOLD 1000
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -68,6 +68,7 @@ void kernel_main() {
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
     uint32_t loop_count = 0;
+    uint32_t switch_counter = 0;
     fvc_consumer_state.init(
         fvc_data_buf_start, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
     fvc_producer_state.init(
@@ -97,26 +98,38 @@ void kernel_main() {
                 fvc_consumer_state.check_sync_pending();
                 if (fvc_consumer_state.packet_in_progress == 1 and fvc_consumer_state.packet_words_remaining == 0 and
                     fvc_consumer_state.pull_words_in_flight == 0) {
-                    fvc_consumer_req_buf->rdptr.ptr++;
+                    // clear the flags field to invalidate pull request slot.
+                    // flags will be set to non-zero by next requestor.
+                    req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
+                    // req->bytes[47] = 0;
+                    // fvc_consumer_req_buf->rdptr.ptr++;
                     fvc_consumer_state.packet_in_progress = 0;
                 }
+                loop_count = 0;
             }
         }
 
         fvc_producer_state.update_remote_rdptr_sent();
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
+            loop_count = 0;
         }
 
         loop_count++;
         if (loop_count >= 1000000) {
             break;
         }
-    }
 
-    bool all_outputs_finished = false;
+        // need to optimize this.
+        // context switch to base fw is very costly.
+        switch_counter++;
+        if (switch_counter >= SWITCH_THRESHOLD) {
+            switch_counter = 0;
+            internal_::risc_context_switch();
+            switch_counter = SWITCH_THRESHOLD;
+        }
+    }
     uint64_t start_timestamp = get_timestamp();
-    uint32_t switch_counter = 0;
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
 
