@@ -158,7 +158,6 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor})),
         ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor}))};
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
-    std::vector<std::optional<ttnn::Tensor>> optional_output_tensors = {std::nullopt};
 
     operation::launch_op(
         [dim,
@@ -230,13 +229,11 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                                                     /* Fusion params */
                                                     all_gather_core_grid_offset},
                 {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor},
-                optional_input_tensors,
-                optional_output_tensors);
+                optional_input_tensors]);
         },
         {input_tensor, weight_tensor},
         output_tensors,
-        optional_input_tensors,
-        optional_output_tensors);
+        optional_input_tensors);
     return {output_tensors[0], output_tensors[1], output_tensors[2]};
 }
 
