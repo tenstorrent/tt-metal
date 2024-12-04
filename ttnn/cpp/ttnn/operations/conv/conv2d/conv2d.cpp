@@ -837,7 +837,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     }
 }
 
-static void adjust_conv_op_config_for_auto_shard(
+void adjust_conv_op_config_for_auto_shard(
     bool is_mm_conv,
     uint32_t batch_size,
     uint32_t in_channels,
