@@ -180,7 +180,7 @@ jobs:
             infra/machine_setup/scripts/setup_hugepages.py
             metal_libs-*+*.whl
           fail_on_unmatched_files: true
-  create-docker-image:
+  create-docker-release-image:
     needs: [
       create-tag,
       create-and-upload-draft-release
@@ -189,7 +189,7 @@ jobs:
     secrets: inherit
     with:
       version: ${{ needs.create-tag.outputs.version }}
-      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}  
   release-docs:
     needs: [
       get-params,
