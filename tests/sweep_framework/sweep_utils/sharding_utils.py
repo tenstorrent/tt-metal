@@ -35,7 +35,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
     x = 8
 
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
-    sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "TENSOR_WH"]
+    sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "TENSOR_HW"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
     spec_list = []
 
@@ -43,7 +43,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
         sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts
     ):
         for _ in range(num_shapes):
-            if sharding_strategy == "TENSOR_WH":
+            if sharding_strategy == "TENSOR_HW":
                 # Gets stuck:
                 # X 8 Y 8 input_shape [1, 17792, 8] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape True
 
