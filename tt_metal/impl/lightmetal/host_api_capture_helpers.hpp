@@ -107,6 +107,13 @@ inline void captureLoadTrace(Device *device, const uint8_t cq_id, const uint32_t
     captureCommand(tt::target::CommandType::LoadTraceCommand, cmd_variant.Union());
 }
 
+inline void captureReleaseTrace(Device *device, uint32_t tid) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+    log_info(tt::LogMetalTrace, "captureReleaseTrace: tid: {}", tid);
+    captureCommand(tt::target::CommandType::ReleaseTraceCommand, tt::target::CreateReleaseTraceCommand(ctx.getBuilder(), tid).Union());
+}
+
 // FIXME - Seems better idea to pass Buffer* to capture functions intead so it's clear we don't extend lifetime of buffer?
 inline void captureCreateBuffer(std::shared_ptr<Buffer> buffer, const InterleavedBufferConfig &config) {
     auto& ctx = LightMetalCaptureContext::getInstance();

@@ -174,6 +174,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_LoadTraceCommand());
     break;
   }
+  case ::tt::target::CommandType::ReleaseTraceCommand: {
+    execute(command->cmd_as_ReleaseTraceCommand());
+    break;
+  }
   case ::tt::target::CommandType::CreateBufferCommand: {
     execute(command->cmd_as_CreateBufferCommand());
     break;
@@ -218,6 +222,11 @@ void LightMetalReplay::execute(tt::target::LoadTraceCommand const *cmd) {
     // Get the trace descriptor from flatbuffer and load it to device.
     auto trace_desc = getTraceByTraceId(cmd->tid());
     LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
+}
+
+void LightMetalReplay::execute(tt::target::ReleaseTraceCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay ReleaseTrace(). tid: {}", cmd->tid());
+    ReleaseTrace(this->device_, cmd->tid());
 }
 
 void LightMetalReplay::execute(tt::target::CreateBufferCommand const *cmd) {
