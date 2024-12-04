@@ -236,6 +236,71 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
+
+// No programs just a simple write and readback.
+TEST_F(SingleDeviceTraceFixture, WriteReadSanity) {
+    Setup(2048);
+
+    // KCM - Light Metal Binary configuration.
+    bool serialize_trace = std::getenv("TT_METAL_SERIALIZE_TRACE");
+    std::string trace_bin_path = "/tmp/light_metal_trace_capture_ttmetal.bin";
+    log_info(LogTest, "KCM Starting test. serialize: {} filename: {}", serialize_trace, trace_bin_path);
+    LightMetalConfigure(this->device_, trace_bin_path, true);
+
+    if (serialize_trace) {
+        LightMetalBeginCapture(this->device_);
+    }
+
+    CommandQueue& command_queue = this->device_->command_queue();
+    uint32_t num_loops = parse_env<int>("NUM_LOOPS", 1);
+
+    // Hack to keep buffers alive for longer.
+    bool keep_buffers_alive = std::getenv("KEEP_BUFFERS_ALIVE");
+    std::vector<std::shared_ptr<Buffer>> buffers_vec;
+
+    for (uint32_t loop_idx=0; loop_idx<num_loops; loop_idx++) {
+
+        log_info(tt::LogTest, "Running loop: {}", loop_idx);
+
+        // Switch to use top level CreateBuffer API that has trace support.
+        uint32_t size_bytes = 64; // 16 elements.
+        auto buffer = CreateBuffer(InterleavedBufferConfig{this->device_, size_bytes, size_bytes, BufferType::DRAM});
+        log_info(tt::LogTest, "KCM created buffer loop: {} with size: {} bytes addr: 0x{:x}", loop_idx, buffer->size(), buffer->address());
+
+        if (keep_buffers_alive) {
+            buffers_vec.push_back(buffer);
+        }
+
+        // We don't want to capture inputs in binary, but do it to start for testing.
+        uint32_t start_val = loop_idx * 100;
+        vector<uint32_t> input_data(buffer->size() / sizeof(uint32_t), 0);
+        for (uint32_t i = 0; i < input_data.size(); i++) {
+            input_data[i] = start_val + i;
+        }
+        log_info(tt::LogTest, "KCM initialize input_data with {} elements start_val: {}", input_data.size(), start_val);
+
+        vector<uint32_t> readback_data;
+        readback_data.resize(input_data.size()); // This is required.
+
+        // Write data to buffer, then readback and verify.
+        EnqueueWriteBuffer(command_queue, *buffer, input_data.data(), true);
+        EnqueueReadBuffer(command_queue, *buffer, readback_data.data(), true);
+        EXPECT_TRUE(input_data == readback_data);
+
+        // For dev/debug go ahead and print the results. Had a replay bug, was seeing wrong data.
+        for (size_t i = 0; i < readback_data.size(); i++) {
+            log_info(tt::LogMetalTrace, "loop: {} rd_data i: {:3d} => data: {}", loop_idx, i, readback_data[i]);
+        }
+    }
+
+    Finish(command_queue);
+
+    if (serialize_trace) {
+        LightMetalEndCapture(this->device_);
+    }
+}
+
+
 TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
     Setup(6144);
     // Get command queue from device for this test, since its running in async mode
