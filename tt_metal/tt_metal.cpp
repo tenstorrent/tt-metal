@@ -1139,8 +1139,11 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
-    return Buffer::create(
+    auto buffer = Buffer::create(
         config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+    // FIXME - Just capturing a single path to start. Consider capturing within Buffer::create()
+    TRACE_FUNCTION_CALL(captureCreateBuffer, buffer, config);
+    return buffer;
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {

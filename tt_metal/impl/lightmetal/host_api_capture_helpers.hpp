@@ -19,6 +19,36 @@
     #define TRACE_FUNCTION_CALL(capture_func, ...) do { } while (0)
 #endif
 
+//////////////////////////////////////////////////////////////
+// To-flatbuffer helper functions                           //
+//////////////////////////////////////////////////////////////
+
+// Original types defined in buffer_constants.hpp
+inline tt::target::BufferType toFlatbuffer(BufferType type) {
+    switch(type) {
+        case BufferType::DRAM: return tt::target::BufferType::DRAM;
+        case BufferType::L1: return tt::target::BufferType::L1;
+        case BufferType::SYSTEM_MEMORY: return tt::target::BufferType::SystemMemory;
+        case BufferType::L1_SMALL: return tt::target::BufferType::L1Small;
+        case BufferType::TRACE: return tt::target::BufferType::Trace;
+    }
+}
+
+// Original types defined in buffer_constants.hpp
+inline tt::target::TensorMemoryLayout toFlatbuffer(TensorMemoryLayout layout) {
+    switch(layout) {
+        case TensorMemoryLayout::INTERLEAVED: return tt::target::TensorMemoryLayout::Interleaved;
+        case TensorMemoryLayout::SINGLE_BANK: return tt::target::TensorMemoryLayout::SingleBank;
+        case TensorMemoryLayout::HEIGHT_SHARDED: return tt::target::TensorMemoryLayout::HeightSharded;
+        case TensorMemoryLayout::WIDTH_SHARDED: return tt::target::TensorMemoryLayout::WidthSharded;
+        case TensorMemoryLayout::BLOCK_SHARDED: return tt::target::TensorMemoryLayout::BlockSharded;
+    }
+}
+
+//////////////////////////////////////////////////////////////
+// Host API tracing helper functions                        //
+//////////////////////////////////////////////////////////////
+
 // Generic helper to build command and add to vector of cmds (CQ)
 inline void captureCommand(tt::target::CommandType cmd_type, ::flatbuffers::Offset<void> fb_offset) {
     auto& ctx = LightMetalCaptureContext::getInstance();
@@ -48,4 +78,19 @@ inline void captureLoadTrace(Device *device, const uint8_t cq_id, const uint32_t
     log_info(tt::LogMetalTrace, "{}: cq_id: {}, tid: {}", __FUNCTION__, cq_id, tid);
     auto cmd_variant = tt::target::CreateLoadTraceCommand(ctx.getBuilder(), tid, cq_id);
     captureCommand(tt::target::CommandType::LoadTraceCommand, cmd_variant.Union());
+}
+
+// FIXME - Seems better idea to pass Buffer* to capture functions intead so it's clear we don't extend lifetime of buffer?
+inline void captureCreateBuffer(std::shared_ptr<Buffer> buffer, const InterleavedBufferConfig &config) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+
+    uint32_t buffer_global_id = ctx.addToMap(buffer.get());
+    log_info(tt::LogMetalTrace, "{}: size: {} page_size: {} buffer_type: {} buffer_layout: {} buffer_global_id: {}",
+        __FUNCTION__, config.size, config.page_size, config.buffer_type, config.buffer_layout, buffer_global_id);
+
+    assert (config.device->id() == 0 && "multichip not supported yet");
+    auto buffer_config_offset = tt::target::CreateInterleavedBufferConfig(ctx.getBuilder(), config.device->id(), config.size, config.page_size, toFlatbuffer(config.buffer_type), toFlatbuffer(config.buffer_layout));
+    auto cmd_variant = tt::target::CreateCreateBufferCommand(ctx.getBuilder(), buffer_global_id, buffer_config_offset);
+    captureCommand(tt::target::CommandType::CreateBufferCommand, cmd_variant.Union());
 }

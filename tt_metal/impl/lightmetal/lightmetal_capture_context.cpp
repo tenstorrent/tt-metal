@@ -3,6 +3,7 @@
 #include "flatbuffers/flatbuffers.h"
 #include "command_generated.h"
 #include "binary_generated.h"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -54,6 +55,59 @@ std::vector<uint8_t> LightMetalCaptureContext::createLightMetalBinary() {
 void LightMetalCaptureContext::reset() {
     builder_.Clear();
     cmdsVector_.clear();
+}
+
+// Public Object Maps Accessors - Buffers
+
+bool LightMetalCaptureContext::isInMap(Buffer* obj) {
+    return bufferToGlobalIdMap_.find(obj) != bufferToGlobalIdMap_.end();
+}
+
+uint32_t LightMetalCaptureContext::addToMap(Buffer* obj) {
+    if (isInMap(obj)) log_warning(tt::LogMetalTrace, "Buffer already exists in global_id map.");
+    uint32_t global_id = nextGlobalId_++;
+    bufferToGlobalIdMap_[obj] = global_id;
+    return global_id;
+}
+
+void LightMetalCaptureContext::removeFromMap(Buffer* obj) {
+    if (!isInMap(obj)) log_warning(tt::LogMetalTrace, "Buffer not found in global_id map.");
+    bufferToGlobalIdMap_.erase(obj);
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(Buffer* obj) {
+    auto it = bufferToGlobalIdMap_.find(obj);
+    if (it != bufferToGlobalIdMap_.end()) {
+        return it->second;
+    } else {
+        throw std::runtime_error("Buffer not found in global_id global_id map");
+    }
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj, bool must_exist) {
+    auto it = programToGlobalIdMap_.find(obj);
+    if (it != programToGlobalIdMap_.end()) {
+        return it->second;
+    } else if (must_exist) {
+        throw std::runtime_error("Program object not found in global_id map");
+    }
+
+    uint32_t global_id = nextGlobalId_++;
+    programToGlobalIdMap_[obj] = global_id;
+    return global_id;
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(KernelHandle kernel_id, bool must_exist) {
+    auto it = kernelHandleToGlobalIdMap_.find(kernel_id);
+    if (it != kernelHandleToGlobalIdMap_.end()) {
+        return it->second;
+    } else if (must_exist) {
+        throw std::runtime_error("KernelHandle not found in global_id map");
+    }
+
+    uint32_t global_id = nextGlobalId_++;
+    kernelHandleToGlobalIdMap_[kernel_id] = global_id;
+    return global_id;
 }
 
 ////////////////////////////////////////////
