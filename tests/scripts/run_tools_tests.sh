@@ -13,14 +13,14 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     rm -rf built
     echo "FD Compile Args Test - 1CQ"
 
-    TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
     for i in $check_list; do
         grep $i log.new > $i.new; sort -n -o $i.new{,}
     done
     find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
     rm -rf built
 
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
+    TT_METAL_OLD_FD_INIT=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
     for i in $check_list; do
         grep $i log.old > $i.old; sort -n -o $i.old{,}
     done
@@ -46,13 +46,13 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         echo "FD Compile Args Test - 2CQ"
 
-        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
         for i in $check_list; do
             grep $i log.new > $i.new; sort -n -o $i.new{,}
         done
         find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
 
-        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_OLD_FD_INIT=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
         for i in $check_list; do
             grep $i log.old > $i.old; sort -n -o $i.old{,}
         done
