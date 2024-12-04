@@ -120,6 +120,7 @@ def test_llama_cross_attention_transformer_text_inference(
     # Test forward pass of the model
 
     prev_pos = 0
+    n_iter = 10
     # tokens = torch.randint(100, 1000, (batch, text_seq_len+n_iter), dtype=torch.long)#, device="cuda"
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
     for i in range(n_iter):
@@ -216,16 +217,6 @@ def test_llama_cross_attention_transformer_text_inference(
                 rot_mats = get_prefill_rot_mat(
                     model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len
                 )
-                transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-                transformation_mats = ttnn.as_tensor(
-                    transformation_mat_torch,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
                 tt_out = tt_model(
                     tt_h,
                     xattn_mask=tt_xattn_mask,
@@ -234,7 +225,6 @@ def test_llama_cross_attention_transformer_text_inference(
                     xattn_caches=tt_xattn_cache,
                     current_pos=None,
                     rot_mats=rot_mats,
-                    transformation_mats=transformation_mats,
                     user_id=b,
                     mode=mode,
                     text_only_inference=TEXT_ONLY,
@@ -271,8 +261,6 @@ def test_llama_cross_attention_transformer_text_inference(
             )
             tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
             rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)
-
-            transformation_mats = None
 
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
@@ -318,7 +306,6 @@ def test_llama_cross_attention_transformer_text_inference(
                 xattn_caches=tt_xattn_cache,
                 current_pos=tt_position_id,
                 rot_mats=rot_mats,
-                transformation_mats=transformation_mats,
                 mode=mode,
                 text_only_inference=TEXT_ONLY,
             )

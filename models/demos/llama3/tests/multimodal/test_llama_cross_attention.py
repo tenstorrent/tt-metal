@@ -114,9 +114,10 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
     """
     Test forward, prefill and decode!
     """
-    for i in range(10):
-        seq_len = text_seq_len if i == 0 else 1
+    n_iter = 10
+    for i in range(n_iter):
         mode = "prefill" if i == 0 else "decode"
+        seq_len = text_seq_len if mode == "prefill" else 1
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
 
@@ -261,6 +262,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
                 )
                 for x in tt_xattn_cache
             ]
+
             for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
                 passing, pcc_message = comp_pcc(pt, tt, pcc_required)
 

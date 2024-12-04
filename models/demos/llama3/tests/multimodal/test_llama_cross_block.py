@@ -199,7 +199,7 @@ def test_llama_cross_attention_transformer_block_inference(
         else:
             tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
-                ttnn.DRAM_MEMORY_CONFIG,
+                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
