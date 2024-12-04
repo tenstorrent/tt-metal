@@ -20,6 +20,33 @@
 #endif
 
 //////////////////////////////////////////////////////////////
+// Debug Code                                               //
+//////////////////////////////////////////////////////////////
+
+inline void PrintHostDataType(const HostDataType& data) {
+    std::visit([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, const std::shared_ptr<std::vector<uint8_t>>>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
+        } else if constexpr (std::is_same_v<T, const std::shared_ptr<std::vector<uint16_t>>>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
+        } else if constexpr (std::is_same_v<T, const std::shared_ptr<std::vector<int32_t>>>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
+        } else if constexpr (std::is_same_v<T, const std::shared_ptr<std::vector<uint32_t>>>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
+        } else if constexpr (std::is_same_v<T, const std::shared_ptr<std::vector<float>>>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
+        } else if constexpr (std::is_same_v<T, const std::shared_ptr<std::vector<bfloat16>>>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
+        } else if constexpr (std::is_same_v<T, const void*>) {
+            log_info(tt::LogMetalTrace, "HostDataType contains: const void*");
+        } else {
+            log_info(tt::LogMetalTrace, "HostDataType contains: Unknown type");
+        }
+    }, data);
+}
+
+//////////////////////////////////////////////////////////////
 // To-flatbuffer helper functions                           //
 //////////////////////////////////////////////////////////////
 
@@ -93,4 +120,42 @@ inline void captureCreateBuffer(std::shared_ptr<Buffer> buffer, const Interleave
     auto buffer_config_offset = tt::target::CreateInterleavedBufferConfig(ctx.getBuilder(), config.device->id(), config.size, config.page_size, toFlatbuffer(config.buffer_type), toFlatbuffer(config.buffer_layout));
     auto cmd_variant = tt::target::CreateCreateBufferCommand(ctx.getBuilder(), buffer_global_id, buffer_config_offset);
     captureCommand(tt::target::CommandType::CreateBufferCommand, cmd_variant.Union());
+}
+
+
+inline void captureEnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+
+    // We don't want to use shared_ptr to extend lifetime of buffer when adding to global_id map.
+    Buffer* buffer_ptr = std::holds_alternative<std::shared_ptr<Buffer>>(buffer)
+                             ? std::get<std::shared_ptr<Buffer>>(buffer).get()
+                             : &std::get<std::reference_wrapper<Buffer>>(buffer).get();
+
+    uint32_t cq_global_id = cq.id(); // FIXME - Maybe not correct, probably should handle same way as Buffers.
+    uint32_t buffer_global_id = ctx.getGlobalId(buffer_ptr);
+
+    log_info(tt::LogMetalTrace, "{} for cq_global_id: {} buffer_global_id: {}", __FUNCTION__, cq_global_id, buffer_global_id);
+    // PrintHostDataType(src);
+
+    // FIXME - Currently support limited data formats. Long term we might not store data in flatbuffer,
+    // but have it provided at runtime so just do what's easiest here and support few types for now.
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint32_t>> src_vector;
+    if (auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
+        src_vector = ctx.getBuilder().CreateVector(**uint32_vec);
+    } else if (auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
+        // Convert uint16_t to uint32_t before creating the FlatBuffers vector
+        std::vector<uint32_t> converted(uint16_vec->get()->begin(), uint16_vec->get()->end());
+        src_vector = ctx.getBuilder().CreateVector(converted);
+    } else if (auto* void_ptr = std::get_if<const void*>(&src)) {
+        // Assuming the void* points to a buffer of uint32_t values. Infer size, cast to uint32_t.
+        size_t num_elements = buffer_ptr->size() / sizeof(uint32_t);
+        auto uint32_data = static_cast<const uint32_t*>(*void_ptr);
+        src_vector = ctx.getBuilder().CreateVector(uint32_data, num_elements);
+    } else {
+        throw std::runtime_error("Unsupported HostDataType for captureEnqueueWriteBuffer()");
+    }
+
+    auto cmd_variant = tt::target::CreateEnqueueWriteBufferCommand(ctx.getBuilder(), cq_global_id, buffer_global_id, src_vector, blocking);
+    captureCommand(tt::target::CommandType::EnqueueWriteBufferCommand, cmd_variant.Union());
 }

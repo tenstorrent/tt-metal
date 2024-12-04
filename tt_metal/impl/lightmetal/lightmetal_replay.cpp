@@ -178,6 +178,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_CreateBufferCommand());
     break;
   }
+  case ::tt::target::CommandType::EnqueueWriteBufferCommand: {
+    execute(command->cmd_as_EnqueueWriteBufferCommand());
+    break;
+  }
   default:
     throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
     break;
@@ -226,6 +230,19 @@ void LightMetalReplay::execute(tt::target::CreateBufferCommand const *cmd) {
     }
 }
 
+void LightMetalReplay::execute(tt::target::EnqueueWriteBufferCommand const *cmd) {
+    auto buffer = getBufferFromMap(cmd->buffer_global_id());
+    if (!buffer) {
+        throw std::runtime_error("Buffer w/ global_id: " + std::to_string(cmd->buffer_global_id()) + " not previously created");
+    }
+
+    log_info(tt::LogMetalTrace, "LightMetalReplay EnqueueWriteBufferCommand(). cq_global_id: {} buffer_global_id: {} addr: 0x{:x}",
+        cmd->cq_global_id(), cmd->buffer_global_id(), buffer->address());
+
+    // FIXME - get cq object from global CQ map instead.
+    CommandQueue &cq = this->device_->command_queue(cmd->cq_global_id());
+    EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
+}
 
 // Main entry point to execute a light metal binary blob, return true if pass.
 bool LightMetalReplay::executeLightMetalBinary() {
