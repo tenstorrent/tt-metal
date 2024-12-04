@@ -1288,7 +1288,10 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
     device->replay_trace(cq_id, tid, blocking);
 }
 
-void ReleaseTrace(Device *device, const uint32_t tid) { device->release_trace(tid); }
+void ReleaseTrace(Device *device, const uint32_t tid) {
+    TRACE_FUNCTION_CALL(captureReleaseTrace, device, tid);
+    device->release_trace(tid);
+}
 
 void LightMetalConfigure(Device *device, const std::string &filename, const bool auto_serialize_metal_trace) {
     device->light_metal_configure(filename, auto_serialize_metal_trace);

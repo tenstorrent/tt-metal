@@ -22,6 +22,11 @@ table LoadTraceCommand {
     cq_id: int;
 }
 
+table ReleaseTraceCommand {
+    // FIXME Device.
+    tid: int; // Pointer to trace data.
+}
+
 table CreateBufferCommand {
     global_id: uint32;
     config: InterleavedBufferConfig; // Later grow to union for Sharded.
@@ -54,6 +59,7 @@ union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
     LoadTraceCommand,
+    ReleaseTraceCommand,
     CreateBufferCommand,
     DeallocateBufferCommand,
     EnqueueWriteBufferCommand,
