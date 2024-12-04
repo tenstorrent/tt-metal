@@ -186,6 +186,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_EnqueueReadBufferCommand());
     break;
   }
+  case ::tt::target::CommandType::FinishCommand: {
+    execute(command->cmd_as_FinishCommand());
+    break;
+  }
   default:
     throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
     break;
@@ -270,6 +274,12 @@ void LightMetalReplay::execute(tt::target::EnqueueReadBufferCommand const *cmd) 
             log_info(tt::LogMetalTrace, " rd_data i: {:3d} => data: {}", i, readback_data[i]);
         }
     }
+}
+
+void LightMetalReplay::execute(tt::target::FinishCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay FinishCommand(). cq_global_id: {}", cmd->cq_global_id());
+    CommandQueue &cq = this->device_->command_queue(cmd->cq_global_id());
+    Finish(cq);
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.

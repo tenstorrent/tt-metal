@@ -42,13 +42,18 @@ table EnqueueReadBufferCommand {
     blocking: bool;
 }
 
+table FinishCommand {
+    cq_global_id: uint32;       // reference to CommandQueue
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
     LoadTraceCommand,
     CreateBufferCommand,
     EnqueueWriteBufferCommand,
-    EnqueueReadBufferCommand
+    EnqueueReadBufferCommand,
+    FinishCommand
 }
 
 table Command {
