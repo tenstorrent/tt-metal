@@ -79,23 +79,23 @@ void GroupNorm::validate(
         TT_FATAL(input_mask.value().get_legacy_shape()[3] % TILE_WIDTH == 0, "Error");
     }
 }
-std::vector<ttnn::SimpleShape> GroupNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_logical_shape()};
+std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    if (this->program_config.inplace) {
+        return {input_tensor.get_tensor_spec()};
+    }
+    auto mem_config = this->output_mem_config;
+    mem_config.shard_spec = input_tensor.shard_spec();
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
 }
 std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (this->program_config.inplace) {
-        return {input_tensors.at(0)};
-    } else {
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = input_tensor.shard_spec();
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            program_config.out_data_format,
-            this->program_config.output_layout,
-            input_tensor.device(),
-            mem_config)};
+        return {input_tensor};
     }
+    return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
 }
 operation::ProgramWithCallbacks GroupNorm::create_program(
     const std::vector<Tensor>& input_tensors,

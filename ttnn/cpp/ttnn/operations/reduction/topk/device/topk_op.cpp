@@ -85,10 +85,22 @@ void TopK::validate_with_output_tensors(
     }
 }
 
-std::vector<ttnn::SimpleShape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> TopK::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (output_tensors.size() == 2) {
+        if (output_tensors.at(0).has_value() && output_tensors.at(1).has_value()) {
+            return {output_tensors[0]->get_tensor_spec(), output_tensors[1]->get_tensor_spec()};
+        }
+    }
+    const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensors.at(0).get_logical_shape();
     output_shape[-1] = this->k;
-    return {output_shape, output_shape};
+
+    auto values_spec =
+        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+    auto index_spec =
+        TensorSpec(output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), output_mem_config));
+    return {values_spec, index_spec};
 }
 
 std::vector<Tensor> TopK::create_output_tensors(
@@ -98,13 +110,12 @@ std::vector<Tensor> TopK::create_output_tensors(
             return {output_tensors[0].value(), output_tensors[1].value()};
         }
     }
+    auto output_specs = compute_output_specs(input_tensors, output_tensors);
     const auto& input_tensor = input_tensors.at(0);
-    const auto shapes = compute_output_shapes(input_tensors);
-    auto values_tensor = create_device_tensor(
-        shapes[0], input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config);
-    auto index_tensor =
-        create_device_tensor(shapes[1], DataType::UINT16, Layout::TILE, input_tensor.device(), this->output_mem_config);
-    return {values_tensor, index_tensor};
+    return {
+        create_device_tensor(output_specs[0], input_tensor.device()),
+        create_device_tensor(output_specs[1], input_tensor.device()),
+    };
 }
 
 operation::ProgramWithCallbacks TopK::create_program(

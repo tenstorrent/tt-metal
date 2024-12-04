@@ -31,7 +31,7 @@ std::vector<Tensor> run_operation(
     static_assert(
         operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
     // Create output tensor vector by examining the number of output shapes created by the device operation
-    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors);
+    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors, {});
     size_t output_shapes_size = 0;
     if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(output_shapes)) {
         output_shapes_size = std::get<std::vector<ttnn::SimpleShape>>(output_shapes).size();
