@@ -108,8 +108,14 @@ jobs:
         if: ${{ inputs.is_major_version }}
         run: |
           set -eu # basic shell hygiene
+          LATEST_TAG=latest
+          if [ "${{  inputs.is_major_version }}" = "true" ]; then
+            LATEST_TAG=latest
+          else then
+            LATEST_TAG=latest-rc
+          fi
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
-          docker tag $TAG_NAME $REPO_IMAGE_NAME:latest
-          docker push $REPO_IMAGE_NAME:latest
+          docker tag $TAG_NAME $REPO_IMAGE_NAME:$LATEST_TAG
+          docker push $REPO_IMAGE_NAME:$LATEST_TAG
