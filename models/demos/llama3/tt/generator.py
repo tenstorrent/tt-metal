@@ -360,6 +360,7 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
+            _,
         ) = self.model.prepare_decode_inputs_host(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id
         )
@@ -425,6 +426,7 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
+            _,
         ) = self.model.prepare_decode_inputs_host(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
