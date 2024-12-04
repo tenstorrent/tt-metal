@@ -165,6 +165,8 @@ def run_conv_transpose2d(
     assert passing
 
 
+@skip_for_blackhole()
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -217,6 +219,8 @@ def test_simple_conv_t2d(
     config,
     shard_layout,
 ):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,
