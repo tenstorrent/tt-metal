@@ -211,6 +211,7 @@ void kernel_main() {
     uint32_t curr_packet_size = 0;
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
+    bool all_packets_initialized = false;
 
     while (true) {
         iter++;
@@ -223,9 +224,14 @@ void kernel_main() {
             }
         }
 #endif
-        bool all_packets_initialized = test_buffer_handler();
 
+        if (test_producer.curr_packet_valid == false) {
+            all_packets_initialized = test_buffer_handler();
+        }
         if (test_producer.get_curr_packet_valid()) {
+            if (test_producer.current_packet_header.routing.flags != FORWARD) {
+                break;
+            }
             curr_packet_size = (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
             curr_packet_words_sent += curr_data_words_sent;

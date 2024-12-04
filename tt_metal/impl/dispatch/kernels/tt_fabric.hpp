@@ -445,7 +445,7 @@ typedef struct fvc_producer_state {
     uint32_t packet_words_remaining;
     uint32_t packet_words_sent;
     uint32_t fvc_out_wrptr;
-    uint32_t fvc_out_rdptr;
+    volatile uint32_t fvc_out_rdptr;
     volatile uint32_t fvc_pull_rdptr;
     uint32_t buffer_size;
     uint32_t buffer_start;
@@ -804,7 +804,7 @@ inline uint32_t num_words_available_to_pull(volatile pull_request_t *pull_reques
 inline uint32_t advance_ptr(uint32_t buffer_size, uint32_t ptr, uint32_t inc_words) {
     uint32_t temp = ptr + inc_words;
     if (temp >= buffer_size * 2) {
-        temp = 0;
+        temp -= buffer_size * 2;
     }
     return temp;
 }
