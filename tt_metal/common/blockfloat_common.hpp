@@ -55,9 +55,12 @@ inline uint32_t get_exp_dword(const std::vector<uint8_t>& vec) {
 
 inline std::vector<uint32_t> pack_exponents(const std::vector<uint8_t>& exponents, size_t num_elements_in_dword) {
     TT_FATAL(
-        exponents.size() % num_elements_in_dword == 0, "Input vector size {} must be divisible by 4", exponents.size());
+        exponents.size() % num_elements_in_dword == 0,
+        "Input vector size {} must be divisible by num_elements_in_dword",
+        exponents.size());
 
     std::vector<uint32_t> packed_result;
+    packed_result.reserve(exponents.size() / num_elements_in_dword);
 
     for (size_t i = 0; i < exponents.size(); i += num_elements_in_dword) {
         uint32_t packed_value = 0;
@@ -327,6 +330,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
         std::vector<uint32_t> packed_data;
         std::vector<uint8_t> exponents_with_padding;
+        exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
