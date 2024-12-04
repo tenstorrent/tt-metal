@@ -67,7 +67,7 @@ Other useful resources:
 
 ### 2.6 Decoder
 <div align="center">
-<img src="decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
+<img src="images/2.6-decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
 </div>
 When the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward.
 According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass.
@@ -137,7 +137,7 @@ The number of iterations required depends on the size of the weights and the num
 Below is an illustration of how the LMHead weights are partitioned across two devices, followed by its implementation. For ilustrative purposes it uses 128K for the `vocab_size` instead of the real Llama3.1 value of `128256`.
 
 <div align="center">
-<img src="lm_head.png" alt="LM Head Diagram" title="LM_Head" width="650" height="350">
+<img src="images/2.7-lm-head.png" alt="LM Head Diagram" title="LM_Head" width="650" height="350">
 </div>
 
 ```py
@@ -232,7 +232,7 @@ def forward(self, x: ttnn.Tensor):
 ### 2.8 Model
 
 <div align="center">
-<img src="llama_model.png" alt="Llama model" title="Llama model" width="350" height="350">
+<img src="images/2.8-llama-model.png" alt="Llama model" title="Llama model" width="350" height="350">
 </div> <br>
 
 Once the model components (discussed in previous sections) are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in [Section 2.1 Embedding](#21-embedding).
