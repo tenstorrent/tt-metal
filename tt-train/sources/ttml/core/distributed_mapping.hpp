@@ -3,41 +3,59 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_all_includes.hpp>
 #include <unordered_map>
 
-#include "mesh_device.hpp"
+#include "core/xtensor_utils.hpp"
 
 namespace ttml::core {
-
 template <typename T>
 std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& tensor, int num_chunks, int dim) {
-    int size_along_dim = tensor.shape()[dim];
+    if (num_chunks <= 0) {
+        throw std::invalid_argument("num_chunks must be > 0");
+    }
+    if (dim < 0 || static_cast<std::size_t>(dim) >= tensor.dimension()) {
+        throw std::invalid_argument("invalid dimension index");
+    }
+
+    int size_along_dim = static_cast<int>(tensor.shape()[dim]);
+    if (num_chunks > size_along_dim) {
+        throw std::invalid_argument("num_chunks cannot exceed the size of the tensor along the given dimension.");
+    }
+
     int chunk_size = size_along_dim / num_chunks;
     int remainder = size_along_dim % num_chunks;
 
     std::vector<xt::xarray<T>> chunks;
+    chunks.reserve(static_cast<std::size_t>(num_chunks));
+
     int start = 0;
     for (int i = 0; i < num_chunks; ++i) {
-        int current_chunk_size = chunk_size + (i < remainder ? 1 : 0);  // Distribute remainder
+        int current_chunk_size = chunk_size + ((i < remainder) ? 1 : 0);
         int end = start + current_chunk_size;
 
         // Build indices for slicing
         xt::xstrided_slice_vector indices(tensor.dimension(), xt::all());
         indices[dim] = xt::range(start, end);
 
-        auto chunk = xt::strided_view(tensor, indices);
-        chunks.push_back(xt::xarray<T>(chunk));
+        auto chunk_view = xt::strided_view(tensor, indices);
+
+        // Construct xarray from the view
+        // This forces a copy of that slice into a new xarray
+        chunks.push_back(xt::xarray<T>(chunk_view));
         start = end;
     }
+
     return chunks;
 }
 
 template <class Derived, typename T>
 class TensorToMesh {
 public:
-    TensorToMesh(std::shared_ptr<ttnn::distributed::MeshDevice> device) : m_mesh_device(std::move(device)) {
+    TensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
     }
+
     std::vector<xt::xarray<T>> map(const xt::xarray<T>& tensor) {
         return static_cast<Derived*>(this)->map_impl(tensor);
     }
@@ -47,27 +65,33 @@ public:
     }
 
 protected:
-    std::shared_ptr<ttnn::distributed::MeshDevice> m_mesh_device;
+    tt::tt_metal::distributed::MeshShape m_mesh_shape;
 };
 
 template <class Derived, typename T>
 class MeshToTensor {
 public:
+    MeshToTensor(tt::tt_metal::distributed::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
+    }
+
     xt::xarray<T> compose(const std::vector<xt::xarray<T>>& tensors) {
         return static_cast<Derived*>(this)->compose_impl(tensors);
     }
+
+protected:
+    tt::tt_metal::distributed::MeshShape m_mesh_shape;
 };
 
 template <typename T>
 class ShardTensorToMesh : public TensorToMesh<ShardTensorToMesh<T>, T> {
 public:
     using Base = TensorToMesh<ShardTensorToMesh<T>, T>;
-    ShardTensorToMesh(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device, int dim) :
-        Base(mesh_device), m_shard_dim(dim) {
+    ShardTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape, int dim) :
+        Base(std::move(mesh_shape)), m_shard_dim(dim) {
     }
 
     std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
-        int num_devices = Base::m_mesh_device->num_devices();
+        int num_devices = Base::m_mesh_shape.first * Base::m_mesh_shape.second;
         auto sliced_tensors = chunk(tensor, num_devices, m_shard_dim);
         return sliced_tensors;
     }
@@ -85,14 +109,10 @@ class ShardTensor2dMesh : public TensorToMesh<ShardTensor2dMesh<T>, T> {
 public:
     using Base = TensorToMesh<ShardTensor2dMesh<T>, T>;
     ShardTensor2dMesh(
-        const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device,
-        const std::pair<int, int>& mesh_shape,
+        tt::tt_metal::distributed::MeshShape mesh_shape,
         const std::pair<std::optional<int>, std::optional<int>>& dims) :
-        Base(mesh_device), m_mesh_shape(mesh_shape), m_dims(dims) {
-        if (m_mesh_shape.first > Base::m_mesh_device->shape().first ||
-            m_mesh_shape.second > Base::m_mesh_device->shape().second) {
-            throw std::invalid_argument("ShardTensor2dMesh: Device mesh shape does not match the provided mesh shape.");
-        }
+        Base(std::move(mesh_shape)), m_dims(dims) {
+        // We trust the provided mesh shape and do not validate against a MeshDevice.
     }
 
     std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
@@ -100,8 +120,8 @@ public:
             throw std::invalid_argument("ShardTensor2dMesh requires at least one dimension to shard");
         }
 
-        int rows = m_mesh_shape.first;
-        int cols = m_mesh_shape.second;
+        int rows = Base::m_mesh_shape.first;
+        int cols = Base::m_mesh_shape.second;
         auto row_dim = m_dims.first;
         auto col_dim = m_dims.second;
 
@@ -132,7 +152,7 @@ public:
             }
         }
 
-        if (tensor_shards.size() != rows * cols) {
+        if (static_cast<int>(tensor_shards.size()) != rows * cols) {
             throw std::runtime_error(
                 "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh "
                 "dimensions.");
@@ -144,75 +164,73 @@ public:
     std::unordered_map<std::string, std::string> config_impl() {
         return {
             {"strategy", "shard_2d"},
-            {"mesh_shape_y", std::to_string(m_mesh_shape.first)},
-            {"mesh_shape_x", std::to_string(m_mesh_shape.second)}};
+            {"mesh_shape_y", std::to_string(Base::m_mesh_shape.first)},
+            {"mesh_shape_x", std::to_string(Base::m_mesh_shape.second)}};
     }
 
 private:
-    std::pair<int, int> m_mesh_shape;
     std::pair<std::optional<int>, std::optional<int>> m_dims;
 };
 
-// ConcatMesh2dToTensor using CRTP
 template <typename T>
 class ConcatMesh2dToTensor : public MeshToTensor<ConcatMesh2dToTensor<T>, T> {
 public:
-    using Base = TensorToMesh<ConcatMesh2dToTensor<T>, T>;
+    using Base = MeshToTensor<ConcatMesh2dToTensor<T>, T>;
     ConcatMesh2dToTensor(
-        const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device,
-        const std::pair<int, int>& mesh_shape,
-        const std::pair<int, int>& dims) :
-        Base(mesh_device), m_mesh_shape(mesh_shape), m_dims(dims) {
+        tt::tt_metal::distributed::MeshShape mesh_shape, const tt::tt_metal::distributed::MeshShape& dims) :
+        Base(std::move(mesh_shape)), m_dims(dims) {
         if (m_dims.first == m_dims.second) {
             throw std::invalid_argument("Both dimensions in 'dims' must be different");
         }
     }
 
     xt::xarray<T> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
-        int rows = m_mesh_shape.first;
-        int cols = m_mesh_shape.second;
-        int row_dim = m_dims.first;
-        int col_dim = m_dims.second;
+        int rows = Base::m_mesh_shape.first;
+        int cols = Base::m_mesh_shape.second;
+        size_t row_dim = m_dims.first;
+        size_t col_dim = m_dims.second;
 
-        // Reshape the list of shards into a 2D list representing the device mesh
+        // Reshape the list of shards into a 2D grid representing the mesh
         std::vector<std::vector<xt::xarray<T>>> mesh_shape_tensors;
+        mesh_shape_tensors.reserve(rows);
         for (int i = 0; i < rows; ++i) {
             std::vector<xt::xarray<T>> row_tensors;
+            row_tensors.reserve(cols);
             for (int j = 0; j < cols; ++j) {
                 int index = i * cols + j;
                 row_tensors.push_back(tensors[index]);
             }
-            mesh_shape_tensors.push_back(row_tensors);
+            mesh_shape_tensors.push_back(std::move(row_tensors));
         }
 
         // Concatenate along columns first (within each row)
         std::vector<xt::xarray<T>> row_concatenated;
+        row_concatenated.reserve(static_cast<size_t>(rows));
         for (const auto& row : mesh_shape_tensors) {
-            auto concatenated_row = xt::concatenate(row, col_dim);
-            row_concatenated.push_back(concatenated_row);
+            auto concatenated_row = core::concatenate(row, col_dim);
+            row_concatenated.push_back(std::move(concatenated_row));
         }
 
         // Then concatenate the resulting tensors along rows
-        auto result = xt::concatenate(row_concatenated, row_dim);
+        auto result = core::concatenate(row_concatenated, row_dim);
         return result;
     }
 
 private:
-    std::pair<int, int> m_mesh_shape;
-    std::pair<int, int> m_dims;
+    tt::tt_metal::distributed::MeshShape m_dims;
 };
 
-// ReplicateTensorToMesh using CRTP
 template <typename T>
 class ReplicateTensorToMesh : public TensorToMesh<ReplicateTensorToMesh<T>, T> {
 public:
     using Base = TensorToMesh<ReplicateTensorToMesh<T>, T>;
-    ReplicateTensorToMesh(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device) : Base(mesh_device) {
+    ReplicateTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
     }
 
     std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
-        int num_devices = Base::m_mesh_device->num_devices();
+        int num_devices = Base::m_mesh_shape.first * Base::m_mesh_shape.second;
         std::vector<xt::xarray<T>> tensors;
+        tensors.reserve(static_cast<size_t>(num_devices));
         for (int i = 0; i < num_devices; ++i) {
             tensors.push_back(tensor);  // Note: this copies the tensor
         }
@@ -220,7 +238,8 @@ public:
     }
 
     std::unordered_map<std::string, std::string> config_impl() {
-        return {{"strategy", "replicate"}, {"replication_factor", std::to_string(Base::m_mesh_device->num_devices())}};
+        int num_devices = Base::m_mesh_shape.first * Base::m_mesh_shape.second;
+        return {{"strategy", "replicate"}, {"replication_factor", std::to_string(num_devices)}};
     }
 };
 
@@ -228,12 +247,12 @@ template <typename T>
 class ConcatMeshToTensor : public MeshToTensor<ConcatMeshToTensor<T>, T> {
 public:
     using Base = MeshToTensor<ConcatMeshToTensor<T>, T>;
-    ConcatMeshToTensor(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device, int dim) :
-        Base(mesh_device), m_concat_dim(dim) {
+    ConcatMeshToTensor(tt::tt_metal::distributed::MeshShape mesh_shape, int dim) :
+        Base(std::move(mesh_shape)), m_concat_dim(dim) {
     }
 
     xt::xarray<T> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
-        auto result = xt::concatenate(tensors, m_concat_dim);
+        auto result = core::concatenate(tensors, m_concat_dim);
         return result;
     }
 
@@ -245,9 +264,12 @@ template <typename T>
 class VectorMeshToTensor : public MeshToTensor<VectorMeshToTensor<T>, T> {
 public:
     using Base = MeshToTensor<VectorMeshToTensor<T>, T>;
-    VectorMeshToTensor(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device) : Base(mesh_device) {
+    VectorMeshToTensor(tt::tt_metal::distributed::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
     }
 
+    // Not overriding compose_impl because we return a vector instead of a single tensor.
+    // If needed, we can provide a compose_impl that returns xt::xarray<T>. For now,
+    // consider this class as a special case.
     std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) {
         return tensors;
     }
@@ -255,6 +277,7 @@ public:
 
 template <typename T>
 using TensorToMeshVariant = std::variant<ShardTensorToMesh<T>, ShardTensor2dMesh<T>, ReplicateTensorToMesh<T>>;
+
 template <typename T>
 using MeshToTensorVariant = std::variant<ConcatMeshToTensor<T>, ConcatMesh2dToTensor<T>, VectorMeshToTensor<T>>;
 

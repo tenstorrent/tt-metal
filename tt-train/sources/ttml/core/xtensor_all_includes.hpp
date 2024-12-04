@@ -6,5 +6,8 @@
 
 #include <xtensor/xadapt.hpp>
 #include <xtensor/xarray.hpp>
+#include <xtensor/xbuilder.hpp>
 #include <xtensor/xexpression.hpp>
+#include <xtensor/xslice.hpp>
+#include <xtensor/xstrided_view.hpp>
 #include <xtensor/xtensor.hpp>
