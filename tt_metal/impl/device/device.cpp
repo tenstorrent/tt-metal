@@ -27,6 +27,7 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
+#include "noc/noc_parameters.h"
 
 // FIXME: ARCH_NAME specific
 #include "eth_l1_address_map.h"
@@ -3603,8 +3604,8 @@ void Device::generate_device_bank_to_noc_tables()
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
     dram_bank_to_noc_xy_.clear();
-    dram_bank_to_noc_xy_.reserve(NUM_NOCS * dram_noc_coord_per_bank.size());
-    for (unsigned int noc = 0; noc < NUM_NOCS; noc++) {
+    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
             uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
             uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
@@ -3614,8 +3615,8 @@ void Device::generate_device_bank_to_noc_tables()
     }
 
     l1_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.reserve(NUM_NOCS * l1_noc_coord_per_bank.size());
-    for (unsigned int noc = 0; noc < NUM_NOCS; noc++) {
+    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
             uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, l1_noc_coord_per_bank[bank_id].x);
             uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, l1_noc_coord_per_bank[bank_id].y);
