@@ -52,7 +52,7 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in ttnn::experimental::unsafe_view()!");
     }
     auto output = std::visit(
-        [&input_tensor, &new_shape, &tile](auto&& storage) -> Tensor {
+        [&input_tensor, &new_shape](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
@@ -60,7 +60,12 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
                 for (int i = 0; i < updated_storage.shapes.size(); i++) {
                     updated_storage.shapes[i] = new_shape;
                 }
-                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                    const auto tile = input_tensor.get_tensor_spec().tile();
+                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                } else {
+                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
+                }
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
@@ -70,7 +75,12 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
                     new_shapes.insert({device_id, new_shape});
                 }
                 updated_storage.shapes = new_shapes;
-                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                    const auto tile = input_tensor.get_tensor_spec().tile();
+                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
+                } else {
+                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
+                }
             }
             if constexpr (std::is_same_v<T, DeviceStorage>) {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
