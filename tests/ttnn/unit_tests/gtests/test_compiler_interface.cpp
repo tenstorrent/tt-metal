@@ -24,17 +24,14 @@
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/binary/binary_compiler_interface.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary/unary_compiler_interface.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/matmul/matmul_compiler_interface.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/operations/normalization/softmax/softmax_compiler_interface.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -46,7 +43,7 @@ namespace operations {
 namespace binary {
 namespace test {
 
-using ResourceUsageMap = std::unordered_map<BoardType, ttnn::compiler_interface::ResourceUsage>;
+using ResourceUsageMap = std::unordered_map<BoardType, ttnn::graph::ResourceUsage>;
 
 namespace detail {
 static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorMemoryLayout& tensor_memory_layout) {
@@ -203,9 +200,10 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
     {
         tt::Device* device = &getDevice();
         const auto& output_spec = input_spec;
-        auto query = compiler_interface::unary_op_constraints<ttnn::relu>(device, input_spec, output_spec);
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::relu, device, input_spec, output_spec.tensor_layout().get_memory_config());
 
-        EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
@@ -220,12 +218,12 @@ INSTANTIATE_TEST_SUITE_P(
             g_height_shard_3_1_1024_1024_tiled_to_16_cores,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 0,
                      .l1_buffers_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                      .l1_output_buffer_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 0,
                      .l1_buffers_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                      .l1_output_buffer_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16}}}),
@@ -233,12 +231,12 @@ INSTANTIATE_TEST_SUITE_P(
             g_interleave_4_2_160_244_tiled,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = (2 * 2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = (2 * 2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 6144,
                      .l1_output_buffer_per_core = 6144}}})),
@@ -280,9 +278,10 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
     {
         tt::Device* device = &getDevice();
         const auto& output_spec = input_spec;
-        auto query = compiler_interface::softmax_op_constraints(device, input_spec, dim_arg, output_spec);
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
 
-        EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
@@ -299,12 +298,12 @@ INSTANTIATE_TEST_SUITE_P(
 
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 2 * (1 * 32 * 32 * 32 * 32) / 16 + 3 * (2 * 32 * 32),
                      .l1_buffers_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                      .l1_output_buffer_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 2 * (1 * 32 * 32 * 32 * 32) / 16 + 3 * (2 * 32 * 32),
                      .l1_buffers_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                      .l1_output_buffer_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16}}}),
@@ -313,12 +312,12 @@ INSTANTIATE_TEST_SUITE_P(
             -1,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 7 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 7 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 6144,
                      .l1_output_buffer_per_core = 6144}}})),
@@ -362,10 +361,15 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
         tt::Device* device = &getDevice();
         const auto& output_spec = input_spec_a;
 
-        auto query =
-            compiler_interface::binary_op_constraints<ttnn::add>(device, input_spec_a, input_spec_b, input_spec_a);
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::add,
+            device,
+            input_spec_a,
+            input_spec_b,
+            output_spec.data_type(),
+            output_spec.tensor_layout().get_memory_config());
 
-        EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
@@ -381,12 +385,12 @@ INSTANTIATE_TEST_SUITE_P(
             g_height_shard_3_1_1024_1024_tiled_to_16_cores,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 0,
                      .l1_buffers_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                      .l1_output_buffer_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 0,
                      .l1_buffers_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                      .l1_output_buffer_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16}}}),
@@ -395,12 +399,12 @@ INSTANTIATE_TEST_SUITE_P(
             g_interleave_4_2_160_244_tiled,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 6144,
                      .l1_output_buffer_per_core = 6144}}}),
@@ -409,12 +413,12 @@ INSTANTIATE_TEST_SUITE_P(
             g_interleave_1_1_160_244_tiled,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 20480,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 12288,
                      .l1_output_buffer_per_core = 6144}}}),
@@ -423,12 +427,12 @@ INSTANTIATE_TEST_SUITE_P(
             g_interleave_1_2_160_244_tiled,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 20480,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
                      .l1_buffers_peak_per_core = 12288,
                      .l1_output_buffer_per_core = 6144}}})),
@@ -504,12 +508,20 @@ TEST_P(MatmulOpIfTest, Matmul) {
             input_spec_b.logical_shape(),
             output_spec.logical_shape());
 
-        auto query = compiler_interface::matumul_op_constraints(
-            device, input_spec_a, input_spec_b, output_spec, false, false, matmul_program_config);
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::matmul,
+            device,
+            input_spec_a,
+            input_spec_b,
+            false,  // transpose_a
+            false,  // transpose_b
+            output_spec.tensor_layout().get_memory_config(),
+            output_spec.data_type(),
+            matmul_program_config);
 
         tt::log_info("query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
 
-        EXPECT_EQ(query.status, ttnn::compiler_interface::ExecutionStatus::Success);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
@@ -526,12 +538,12 @@ INSTANTIATE_TEST_SUITE_P(
             std::nullopt,
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 24576,
                      .l1_buffers_peak_per_core = 6144,
                      .l1_output_buffer_per_core = 6144}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 24576,
                      .l1_buffers_peak_per_core = 4096,
                      .l1_output_buffer_per_core = 4096}}}),
@@ -551,12 +563,12 @@ INSTANTIATE_TEST_SUITE_P(
                 .mcast_in0 = true},
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 524288,
                      .l1_buffers_peak_per_core = 151552,
                      .l1_output_buffer_per_core = 151552}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 524288,
                      .l1_buffers_peak_per_core = 77824,
                      .l1_output_buffer_per_core = 77824}}}),
@@ -576,12 +588,12 @@ INSTANTIATE_TEST_SUITE_P(
                 .fused_activation = std::nullopt},
             ResourceUsageMap{
                 {BoardType::N300,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 28736,
                      .l1_buffers_peak_per_core = 59392,
                      .l1_output_buffer_per_core = 59392}},
                 {BoardType::E150,
-                 ttnn::compiler_interface::ResourceUsage{
+                 ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 28736,
                      .l1_buffers_peak_per_core = 30720,
                      .l1_output_buffer_per_core = 30720}}})));
