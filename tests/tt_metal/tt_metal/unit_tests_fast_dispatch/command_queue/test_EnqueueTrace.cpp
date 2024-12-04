@@ -143,12 +143,19 @@ TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
 
 TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     Setup(2048);
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     bool lightmetal_capture = std::getenv("LIGHTMETAL_CAPTURE");
     std::string trace_bin_path = "/tmp/light_metal_trace_capture_ttmetal.bin";
 
+    if (lightmetal_capture) {
+        LightMetalBeginCapture(this->device_);
+    }
+
+    // For now, these APIs are not light-metal traced, need to use top level host API.
+    // auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    // auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = CreateBuffer(InterleavedBufferConfig{this->device_, 2048, 2048, BufferType::DRAM});
+    auto output = CreateBuffer(InterleavedBufferConfig{this->device_, 2048, 2048, BufferType::DRAM});
     CommandQueue& command_queue = this->device_->command_queue();
 
     Program simple_program = create_simple_unary_program(*input, *output);
@@ -168,17 +175,16 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
 
     EnqueueWriteBuffer(command_queue, *input, input_data.data(), true);
 
-    if (lightmetal_capture) {
-        LightMetalBeginCapture(this->device_);
-    }
-
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Create and Enqueue a Program with a live trace to ensure that a warning is generated
-    auto input_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    // auto input_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    // auto output_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input_temp = CreateBuffer(InterleavedBufferConfig{this->device_, 2048, 2048, BufferType::DRAM});
+    auto output_temp = CreateBuffer(InterleavedBufferConfig{this->device_, 2048, 2048, BufferType::DRAM});
+
     Program simple_program_temp = create_simple_unary_program(*input_temp, *output_temp);
     EnqueueProgram(command_queue, simple_program_temp, true);
     // Run trace that can clobber the temporary buffers created above
