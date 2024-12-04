@@ -42,10 +42,28 @@ void AutoContext::reset_graph() {
     m_graph.reset();
 }
 
+void AutoContext::init_device(tt::tt_metal::distributed::MeshShape shape) {
+    m_device = std::make_unique<core::MeshDevice>(shape);
+}
+
 ttnn::distributed::MeshDevice& AutoContext::get_device() {
-    return device.get_device();
+    if (!m_device) {
+        init_device(m_mesh_shape);
+    }
+    if (m_mesh_shape != m_device->get_device().shape()) {
+        throw std::runtime_error(
+            "Device shape mismatch. It means set_mesh_shape was called after the device was created.");
+    }
+    return m_device->get_device();
 }
 
 AutoContext::AutoContext() : m_generator(m_seed) {
+}
+
+void AutoContext::set_mesh_shape(tt::tt_metal::distributed::MeshShape shape) {
+    m_mesh_shape = shape;
+}
+tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
+    return m_mesh_shape;
 }
 }  // namespace ttml::autograd

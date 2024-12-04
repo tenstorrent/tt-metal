@@ -4,14 +4,15 @@
 
 #pragma once
 
-#include <memory>
 #include <core/ttnn_all_includes.hpp>
+#include <distributed/mesh_device_view.hpp>
+#include <memory>
 
 namespace ttml::core {
 // should I implement pimpl or its fine
 class MeshDevice {
 public:
-    explicit MeshDevice(int device_index);
+    explicit MeshDevice(tt::tt_metal::distributed::MeshShape shape);
     MeshDevice(MeshDevice&& device) = default;
     MeshDevice(const MeshDevice&) = delete;
 

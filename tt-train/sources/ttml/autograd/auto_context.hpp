@@ -40,6 +40,10 @@ public:
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
     ttnn::distributed::MeshDevice& get_device();
+
+    void set_mesh_shape(tt::tt_metal::distributed::MeshShape shape);
+    [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -48,8 +52,10 @@ private:
     GradMode m_grads_mode = GradMode::ENABLED;
 
     Graph m_graph;
+    tt::tt_metal::distributed::MeshShape m_mesh_shape = {1, 1};
+    std::unique_ptr<core::MeshDevice> m_device;
 
-    core::MeshDevice device{0};
+    void init_device(tt::tt_metal::distributed::MeshShape shape);
 };
 
 inline auto& ctx() {
