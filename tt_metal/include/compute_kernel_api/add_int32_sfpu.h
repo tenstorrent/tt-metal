@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_add_int32.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -16,7 +16,7 @@
 namespace ckernel {
 
 /**
- * Performs an elementwise binop operation with the two floating point inputs: y = binop(x0,x1)
+ * Performs an elementwise add operation with the two integer inputs: y = add(x0,x1)
  * Output overwrites first operand in DST.
  *
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
@@ -31,34 +31,13 @@ namespace ckernel {
  * than the size of the DST register buffer | True     | | idst1          | The index of the tile in DST register buffer
  * to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-enum { ADD_BINARY = 0, SUB_BINARY = 1, MUL_BINARY = 2, DIV_BINARY = 3, RSUB_BINARY = 4, POW_BINARY = 5 };
-ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ADD_BINARY>(idst0, idst1)));
-}
-
-ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, SUB_BINARY>(idst0, idst1)));
-}
-
-ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, MUL_BINARY>(idst0, idst1)));
-}
-
-ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, DIV_BINARY>(idst0, idst1)));
-}
-
-ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, RSUB_BINARY>(idst0, idst1)));
-}
-
-ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, POW_BINARY>(idst0, idst1)));
+ALWI void add_int32_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_add_int32<APPROX>(idst0, idst1)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void eltwise_binop_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX>())); }
+ALWI void add_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_add_int32_init<APPROX>())); }
 
 }  // namespace ckernel
