@@ -47,6 +47,15 @@ static const std::vector<dispatch_kernel_node_t> single_card_arch_2cq = {
     {3, 0, 1, DISPATCH_HD, { 2,  x,  x,  x}, { x,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
+static const std::vector<dispatch_kernel_node_t> single_card_arch_2cq_dispatch_s = {
+    {0, 0, 0, PREFETCH_HD, { x,  x,  x,  x}, { 1,  4,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, DISPATCH_HD, { 0,  x,  x,  x}, { 4,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 1, PREFETCH_HD, { x,  x,  x,  x}, { 3,  5,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {3, 0, 1, DISPATCH_HD, { 2,  x,  x,  x}, { 5,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {4, 0, 0, DISPATCH_S,  { 0,  x,  x,  x}, { 1,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {5, 0, 1, DISPATCH_S,  { 2,  x,  x,  x}, { 3,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+};
+
 static const std::vector<dispatch_kernel_node_t> two_card_arch_1cq = {
     { 0, 0, 0, PREFETCH_HD,        { x,  x,  x,  x}, { 1,  2,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     { 1, 0, 0, DISPATCH_HD,        { 0,  x,  x,  x}, { 2,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
@@ -94,31 +103,85 @@ std::vector<FDKernel *> node_id_to_kernel;
 // Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
-void populate_fd_kernels(uint32_t num_devices, uint32_t num_hw_cqs) {
-    tt::log_warning("FD Config: {} devices, {} HW CQs", num_devices, num_hw_cqs);
-    // Select/generate the right input table. TODO: read this out of YAML instead of the structs above?
+void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_cqs) {
+    // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
+    // of active devices. TODO: read this out of YAML instead of the structs above?
+    uint32_t total_devices = tt::Cluster::instance().number_of_user_devices();
+    uint32_t num_devices = device_ids.size();
+    TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
+    TT_ASSERT(num_devices <= total_devices);
+    tt::log_warning("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
     std::vector<dispatch_kernel_node_t> nodes;
-    if (num_devices == 0)
-        num_devices = tt::Cluster::instance().number_of_user_devices();
 
-    if (num_devices == 1) { // E150, N150
-        nodes = (num_hw_cqs == 1) ? single_card_arch_1cq : single_card_arch_2cq;
-    } else if (num_devices == 2) { // N300
-        nodes = (num_hw_cqs == 1) ? two_card_arch_1cq : two_card_arch_2cq;
-    } else if (num_devices == 8) { // T3K
-        const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &two_card_arch_1cq : &two_card_arch_2cq;
-        // TODO: specify replication + device id mapping from struct/yaml? Just to avoid having these huge graphs typed out
-        uint32_t num_mmio_devices = 4;
-        uint32_t num_nodes_for_one_mmio = nodes_for_one_mmio->size();
-        for (int mmio_device_id = 0; mmio_device_id < num_mmio_devices; mmio_device_id++) {
-            for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
-                TT_ASSERT(node.device_id == 0 || node.device_id == 1);
-                if (node.device_id == 0)
-                    node.device_id = mmio_device_id;
-                else
-                    node.device_id = mmio_device_id + num_mmio_devices;
-                increment_node_ids(node, mmio_device_id * num_nodes_for_one_mmio);
-                nodes.push_back(node);
+    // Helper function to get nodes for single device
+    auto populate_single_device = [&]() {
+        if (num_hw_cqs == 1) {
+            return single_card_arch_1cq;
+        } else {
+            // Special case here, single-device can either have dispatch_s or no dispatch_s, depending on the dispatch
+            // core type. This is only an issue for single-chip, since multi-chip always has ethernet dispatch (and
+            // therefore no dispatch_s). TODO: determine whether dispatch_s is inserted at this level, instead of inside
+            // Device::dispatch_s_enabled().
+            if (dispatch_core_manager::instance().get_dispatch_core_type(0) == CoreType::WORKER) {
+                return single_card_arch_2cq_dispatch_s;
+            } else {
+                return single_card_arch_2cq;
+            }
+        }
+    };
+
+    if (total_devices == 1) { // E150, N150
+        nodes = populate_single_device();
+    } else if (total_devices == 2) { // N300
+        if (num_devices == 1) {
+            nodes = populate_single_device();
+        } else {
+            nodes = (num_hw_cqs == 1) ? two_card_arch_1cq : two_card_arch_2cq;
+        }
+    } else if (total_devices == 8) { // T3K
+        // Need to determine the submesh of devices that are being used. TODO: user to pass in the correct architecture?
+        std::set<chip_id_t> mmio_devices;
+        std::set<chip_id_t> remote_devices;
+        for (auto id : device_ids) {
+            if (tt::Cluster::instance().get_associated_mmio_device(id) == id)
+                mmio_devices.insert(id);
+            else
+                remote_devices.insert(id);
+        }
+        tt::log_warning("T3000, mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
+
+        // Supported grid either has one remote per mmio or none
+        TT_ASSERT(mmio_devices.size() == remote_devices.size() or remote_devices.empty(), "Unexpected device grid");
+        if (remote_devices.empty()) {
+            // All mmio chips, replicate as required
+            std::vector<dispatch_kernel_node_t> nodes_for_one_mmio = populate_single_device();
+            uint32_t index_offset = 0;
+            for (auto id : mmio_devices) {
+                for (auto node : nodes_for_one_mmio) {
+                    node.device_id = id;
+                    increment_node_ids(node, index_offset);
+                    nodes.push_back(node);
+                }
+                index_offset += nodes_for_one_mmio.size();
+            }
+        } else {
+            // Paired mmio/remote chips
+            // Here we assume that the mmio chips are enumerated first, and the remote chips are enumerated afterwards
+            // in the same order as they are connected. TODO: This seems to always be the case, but may need to change in the future.
+            const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &two_card_arch_1cq : &two_card_arch_2cq;
+            uint32_t num_mmio_devices = 4;
+            uint32_t index_offset = 0;
+            for (auto mmio_device_id : mmio_devices) {
+                for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
+                    TT_ASSERT(node.device_id == 0 || node.device_id == 1);
+                    if (node.device_id == 0)
+                        node.device_id = mmio_device_id;
+                    else
+                        node.device_id = mmio_device_id + num_mmio_devices;
+                    increment_node_ids(node, index_offset);
+                    nodes.push_back(node);
+                }
+                index_offset += nodes_for_one_mmio->size();
             }
         }
     } else { // TG, TGG
