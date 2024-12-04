@@ -51,7 +51,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
     bool gather_in0,
-    bool untilize_out);
+    bool untilize_out,
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb
+    // std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
+);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -174,6 +177,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -211,7 +215,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,

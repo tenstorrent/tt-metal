@@ -1072,7 +1072,8 @@ Matmul create_matmul_struct(
         parameters.user_run_batched,
         parameters.transpose_a,
         parameters.transpose_b,
-        output_tile};
+        output_tile,
+        parameters.global_cb};
 }
 
 Tensor matmul(
@@ -1892,7 +1893,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     program_config.mcast_in0,
                     program_config.gather_in0,
-                    this->untilize_out);
+                    this->untilize_out,
+                    this->global_cb);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
