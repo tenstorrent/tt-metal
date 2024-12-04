@@ -41,8 +41,8 @@ struct Conv2dConfig {
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
-    uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
-                                  //Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
+    uint32_t act_block_w_div = 1; // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
+                                  // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     std::optional<TensorMemoryLayout> shard_layout;
@@ -126,6 +126,14 @@ uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelCo
 
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
+ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
+    OptimizedConvParallelizationConfig conv_parallelization_config,
+    OptimizedConvBlockConfig conv_blocking_config,
+    bool height_sharded,
+    const string& activation,
+    bool transpose_mcast,
+    uint32_t grid_size_along_c);
+
 MemoryConfig create_sharded_memory_config_from_parallel_config(const ttnn::Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
@@ -156,6 +164,19 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::Paralle
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv);
+
+void adjust_conv_op_config_for_auto_shard(
+    bool is_mm_conv,
+    uint32_t batch_size,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t output_height,
+    uint32_t output_width,
+    uint32_t weights_width,
+    uint32_t input_width,
+    const CoreCoord& compute_grid_size,
+    Conv2dConfig& conv_config,
+    Layout input_tensor_layout);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
 

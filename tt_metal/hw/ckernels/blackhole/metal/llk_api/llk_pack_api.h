@@ -44,7 +44,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    const std::uint32_t tile_size = cb_interface[output_id].fifo_page_size;
+    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
     _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en, tilize>(
         pack_src_format[output_id],
@@ -84,7 +84,7 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    const std::uint32_t tile_size = cb_interface[output_id].fifo_page_size;
+    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
     _llk_pack_reduce_hw_configure_<untilize, type, dim, is_fp32_dest_acc_en>(
         pack_src_format[output_id],
@@ -139,14 +139,15 @@ template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
-        pack_tile_addr = cb_interface[output_id].fifo_wr_ptr +
-                         (std::uint32_t)(cb_interface[output_id].fifo_page_size) * output_tile_index - 1;
+        pack_tile_addr = get_local_cb_interface(output_id).fifo_wr_ptr +
+                         (std::uint32_t)(get_local_cb_interface(output_id).fifo_page_size) * output_tile_index - 1;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
-            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
-            cb_interface[output_id].fifo_wr_tile_ptr += cb_interface[output_id].fifo_page_size;
+            pack_tile_addr =
+                get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+            get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_local_cb_interface(output_id).fifo_page_size;
         }
     }
     return pack_tile_addr;
@@ -213,7 +214,7 @@ inline void llk_pack_untilize(
     static_assert(diagonal == false && "Diagonal packing is not supported for BH!");
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
-        cb_interface[output_id].fifo_wr_ptr - 1 +
+        get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
         SCALE_DATUM_SIZE(
             pack_dst_format[output_id],
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
@@ -223,7 +224,7 @@ inline void llk_pack_untilize(
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, num_faces, block_rt * block_ct_dim);
 
-        pack_tile_addr += full_ct_dim * cb_interface[output_id].fifo_page_size;
+        pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
 }
 
@@ -301,7 +302,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor, false>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
-        cb_interface[output_id].fifo_page_size,
+        get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
         tile_c_dim,
         num_faces,
@@ -345,7 +346,7 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
         const std::uint32_t num_faces = get_output_num_faces(output_id);
         const bool partial_face = get_output_partial_face(output_id);
         const bool narrow_tile = get_output_narrow_tile(output_id);
-        const std::uint32_t tile_size = cb_interface[output_id].fifo_page_size;
+        const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
         const llk_relu_config_u relu_config = {
             .f = {
                 .ApplyRelu = (std::uint32_t)ReluType::NO_RELU,

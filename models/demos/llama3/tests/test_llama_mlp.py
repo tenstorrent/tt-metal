@@ -20,15 +20,6 @@ from models.utility_functions import skip_for_grayskull
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
-    (
-        64 * 1024,
-        32 * 1024,
-        # 1024,
-        32,
-    ),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -37,13 +28,21 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "seq_len",
+    (
+        64 * 1024,
+        32 * 1024,
+        32,
+    ),
+)
+def test_llama_mlp_inference(seq_len, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=1, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 

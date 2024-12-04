@@ -15,7 +15,10 @@
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
+#if !defined(UCK_CHLKC_MATH)
 #include "circular_buffer.h"
+#include "circular_buffer_init.h"
+#endif
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -97,9 +100,14 @@ int main(int argc, char *argv[]) {
         uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if !defined(UCK_CHLKC_MATH)
-        uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            launch_msg->kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg->kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t end_cb_index = launch_msg->kernel_config.max_local_cb_end_index;
+        setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, cb_init_read, cb_init_write, cb_init_write);
+
+        cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
+        end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        experimental::setup_remote_cb_interfaces(cb_l1_base, end_cb_index);
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
