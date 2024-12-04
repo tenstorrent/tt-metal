@@ -1,7 +1,5 @@
 #pragma once
 
-#define PROFILE_KERNEL 1
-#define PROFILE_NOC_EVENTS 1
 // NOTE: this ifdef must be **exactly aligned** with ifdef in kernel_profiler.hpp, or
 // timeStampedData will be fwd declared and used, but then never defined.
 #if defined(PROFILE_NOC_EVENTS) && defined(PROFILE_KERNEL) && \
