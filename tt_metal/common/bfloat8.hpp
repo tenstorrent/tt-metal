@@ -130,7 +130,7 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
     uint32_t num_tile_words = tile_HW / 4;
     uint32_t num_bfp8_in_tile = num_tile_words + num_exp_words;
 
-    // mask out all the extra bits when calculating the exponent index in the exponent dword
+    // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
     uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
 
     int num_elements_in_dword = 4;

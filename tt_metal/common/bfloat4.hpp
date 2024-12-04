@@ -60,6 +60,7 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(
     int data_dwords_per_exp_dword_log2 = log2(data_dwords_per_exp * num_exps_in_dword);
     int data_dwords_per_exp_log2 = log2(data_dwords_per_exp);
 
+    // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
     uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
 
     uint32_t size_bytes = bfp_tiles.size() * 4;
