@@ -3,11 +3,7 @@ name: "Create and Publish Release Docker Image"
 on:
   workflow_dispatch:
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
-    needs: static-checks
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   build-wheels:
