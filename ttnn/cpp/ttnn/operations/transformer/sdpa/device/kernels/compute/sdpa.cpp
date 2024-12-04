@@ -133,25 +133,34 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
+template <uint32_t rows, uint32_t cols>
+void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
 
-    uint32_t num_tiles = rows * cols;
+    constexpr uint32_t num_tiles = rows * cols;
+    constexpr uint32_t dst_tiles = DHT_GRANULARITY;
+    constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
     for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < cols; ++j) {
-            acquire_dst();
-            mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-            cb_pop_front(in0_cb, 1);
-            cb_reserve_back(in0_cb, 1);
-            pack_tile(0, in0_cb);
-            cb_push_back(in0_cb, 1);
-            release_dst();
+        for (uint32_t u = 0; u < granularity; ++u) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                mul_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+            }
+            tile_regs_commit();
+            cb_pop_front(in0_cb, dst_tiles);
+            cb_reserve_back(in0_cb, dst_tiles);
+            tile_regs_wait();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
+            }
+            cb_push_back(in0_cb, dst_tiles);
+            tile_regs_release();
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -421,6 +430,10 @@ void MAIN {
                 }
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
+                // On (k_chunk == 0), mm2 should store directly in cb_out_accumulate_im
+                uint32_t alias_mm2_out = cb_out_accumulate_im;
+                // TODO: alias cur_sum to prev_sum in first iteration
+
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
@@ -485,16 +498,29 @@ void MAIN {
                     /* OUT_IM = QK @ V_CHUNK */
                     {
                         DeviceZoneScopedN("matmul_blocks_1");
-                        matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
+                        matmul_blocks(
+                            cb_qk_im,
+                            cb_v_in,
+                            alias_mm2_out,
+                            Sq_chunk_t,
+                            DHt,
+                            Sk_chunk_t,
+                            out_num_blocks,
+                            out_in0_num_subblocks,
+                            out_in1_num_subblocks,
+                            out_in0_block_w,
+                            out_subblock_h,
+                            out_subblock_w,
+                            false /*transpose*/);
                     }
                     reconfig_data_format_srca(cb_out_im);
+                    // After first iteration, mm2 should store in cb_out_im
+                    alias_mm2_out = cb_out_im;
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk == 0) {
                         DeviceZoneScopedN("copy_block");
-                        copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
-
                         copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                     } else {
                         DeviceZoneScopedN("stats");
@@ -514,7 +540,7 @@ void MAIN {
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
                         {
                             DeviceZoneScopedN("mul_block_bcast_cols_inplace");
-                            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+                            mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, cb_exp_max_diff);
                         }
 
                         /* cb_cur_sum += cb_prev_sum */
@@ -537,7 +563,7 @@ void MAIN {
                 recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
-                mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, DHt);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, cb_prev_sum);
                 pack_reconfig_data_format(cb_out);
                 copy_block(cb_out_accumulate_im, cb_out, out_chunk_tiles);
 
