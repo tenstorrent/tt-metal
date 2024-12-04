@@ -8,7 +8,7 @@
 
 namespace tt::stl::concepts {
 
-template <typename ...T>
+template <typename... T>
 inline constexpr bool always_false_v = false;
 
 template <typename T>

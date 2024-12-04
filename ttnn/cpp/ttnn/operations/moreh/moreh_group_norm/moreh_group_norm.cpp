@@ -6,17 +6,19 @@
 
 #include "device/moreh_group_norm_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_group_norm {
 std::vector<std::optional<Tensor>> MorehGroupNorm::invoke(
     const Tensor& input,
     const uint32_t num_groups,
     const float eps,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> output,
-    const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd,
+    const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& mean,
+    const std::optional<const Tensor>& rstd,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,
@@ -36,28 +38,27 @@ std::vector<std::optional<Tensor>> MorehGroupNorm::invoke(
         rstd_memory_config,
         compute_kernel_config);
 }
-std::vector<Tensor> MorehGroupNorm::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    return {
-        Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
-        Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
-        Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
-    };
-}
-std::vector<bool> MorehGroupNorm::create_async_return_flag(
+
+OptionalTensors MorehGroupNorm::create_async_optional_output_tensors(
     const Tensor& input,
     const uint32_t num_groups,
     const float eps,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> output,
-    const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd,
+    const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& mean,
+    const std::optional<const Tensor>& rstd,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return are_required_outputs;
+    return {
+        are_required_outputs.at(0) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                                   : std::nullopt,
+        are_required_outputs.at(1) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                                   : std::nullopt,
+        are_required_outputs.at(2) ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                                   : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm

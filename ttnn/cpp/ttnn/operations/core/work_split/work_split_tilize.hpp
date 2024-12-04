@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 
 namespace ttnn {
 
@@ -25,11 +25,12 @@ struct BlockSplit {
 };
 
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
-    const uint32_t nblocks_per_core = std::ceil(static_cast<float>(nblocks) / (grid_size.x * grid_size.y));
-    const uint32_t ncores = std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
-    const uint32_t nblocks_per_core_cliff = nblocks % nblocks_per_core;
+    size_t grid_area = grid_size.x * grid_size.y;
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
-    const uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
+    const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
     const uint32_t ncores_x_cliff = ncores - (ncores_y - 1) * ncores_x;
 
     std::set<CoreRange> core_range, cliff_core_range;
@@ -176,8 +177,18 @@ struct FullRep {
 };
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
-    TT_FATAL(logical_shape.rank() >= 2 && logical_shape.rank() <= 4, "Only 2D, 3D, and 4D tensors are supported. Shape: {}", "Error", logical_shape, padding);
+    const ttnn::SimpleShape& logical_shape,
+    const tt::tt_metal::Padding& padding,
+    uint32_t num_cores,
+    uint32_t blocks_per_core,
+    bool has_cliff,
+    uint32_t nblocks_per_core_cliff) {
+    TT_FATAL(
+        logical_shape.rank() >= 2 && logical_shape.rank() <= 4,
+        "Only 2D, 3D, and 4D tensors are supported. Shape: {}",
+        "Error",
+        logical_shape,
+        padding);
 
     auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;
     auto input_z = logical_shape.rank() >= 3 ? logical_shape[-3] : 1;
@@ -232,7 +243,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     return core_assignments;
 }
 
-} // namespace operations::core::work_split
+}  // namespace operations::core::work_split
 
 using namespace operations::core::work_split;
 

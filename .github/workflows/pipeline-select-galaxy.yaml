@@ -37,6 +37,7 @@ on:
         type: boolean
         default: false
       tg-model-perf:
+        description: "TG model perf tests (requires tracy build)"
         required: false
         type: boolean
         default: false

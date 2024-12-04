@@ -9,10 +9,10 @@ namespace ttnn::operations::moreh::moreh_sum {
 struct MorehSum {
     static Tensor invoke(
         const Tensor& input,
-        std::optional<std::variant<int64_t, std::vector<int64_t>>> dims,
-        const bool keep_batch_dim,
+        const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dims,
+        const bool keepdim,
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& output_mem_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_sum

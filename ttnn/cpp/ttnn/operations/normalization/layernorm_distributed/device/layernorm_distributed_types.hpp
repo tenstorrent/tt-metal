@@ -6,12 +6,10 @@
 
 #include <variant>
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 
 namespace ttnn::operations::normalization {
 
-enum class LayerNormDistributedType {
-    LAYERNORM, RMSNORM
-};
+enum class LayerNormDistributedType { LAYERNORM, RMSNORM };
 
 }  // namespace ttnn::operations::normalization

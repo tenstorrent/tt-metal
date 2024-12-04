@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
@@ -76,10 +77,8 @@ def ResnetLinear(
     """
 
     matmul_config = hardcoded_matmul_config_linear[batch_size]
-    weight_shape = weight.shape.with_tile_padding()
-    weight = weight.reshape(1, 1, weight_shape[-2], weight_shape[-1])
-    bias_shape = bias.shape.with_tile_padding()
-    bias = bias.reshape(1, 1, bias_shape[-2], bias_shape[-1])
+    weight = weight.reshape(weight.shape.to_rank(4))
+    bias = bias.reshape(bias.shape.to_rank(4))
 
     def linear_(act):
         output = ttnn.linear(
@@ -390,7 +389,24 @@ class resnet50:
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
+        self.conv1_input_height = 451
+        self.conv1_input_width = 451
+        self.conv1_output_height = ttnn.get_conv_output_dim(self.conv1_input_height, 4, 1, 0)
+        self.conv1_output_width = ttnn.get_conv_output_dim(self.conv1_input_width, 4, 1, 0)
         assert self.conv1_weight_tensor.shape[2] == 4
+
+        self.grayskull_conv1_input_memory_config = get_conv_input_memory_config(
+            self.batch_size,
+            self.conv1_input_channels,
+            self.conv1_input_height,
+            self.conv1_input_width,
+            self.conv1_output_channels,
+            self.conv1_output_height,
+            self.conv1_output_width,
+            device.compute_with_storage_grid_size(),
+            16,
+            True,
+        )
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -520,6 +536,11 @@ class resnet50:
             elif batch_size == 20:
                 act_block_h_override = 640
 
+        if is_grayskull():
+            input_tensor = ttnn.to_device(
+                input_tensor, device=device, memory_config=self.grayskull_conv1_input_memory_config
+            )
+
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -531,8 +552,8 @@ class resnet50:
             stride=(1, 1),
             padding=(0, 0),
             batch_size=self.batch_size,
-            input_height=451,
-            input_width=451,
+            input_height=self.conv1_input_height,
+            input_width=self.conv1_input_width,
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -743,9 +764,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 
@@ -777,7 +798,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -815,7 +836,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -832,9 +853,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 
@@ -956,9 +977,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 
@@ -990,7 +1011,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -1028,7 +1049,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -1045,9 +1066,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 

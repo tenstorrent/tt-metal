@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <variant>
 
 #include "ttnn/decorators.hpp"
@@ -37,7 +39,7 @@ struct MorehSumOperation {
         const int64_t dim;
         const bool keepdim;
 
-        const MemoryConfig output_mem_config;
+        const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
 
@@ -74,7 +76,7 @@ struct MorehSumOperation {
         const int64_t dim,
         const bool keepdim,
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& output_mem_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
@@ -83,4 +85,4 @@ struct MorehSumOperation {
 namespace ttnn::prim {
 constexpr auto moreh_sum =
     ttnn::register_operation<"ttnn::prim::moreh_sum", ttnn::operations::moreh::moreh_sum::MorehSumOperation>();
-}
+}  // namespace ttnn::prim

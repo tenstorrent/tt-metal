@@ -18,61 +18,72 @@
 namespace ll_api {
 
 class ElfFile {
-   public:
+public:
     // ELF32
     using address_t = std::uint32_t;  // Address in memory
     using offset_t = std::uint32_t;   // Offset within region
     using word_t = std::uint32_t;     // Contents
 
     struct Segment {
+        std::vector<offset_t> relocs;      // 32-bit relocs to apply
         std::span<word_t const> contents;  // Non-owning span
         address_t address = 0;             // byte address or 0 for XIP
         offset_t bss = 0;                  // words of BSS
 
-       public:
-        constexpr Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
+    public:
+        inline Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
             contents(contents), address(addr), bss(bss) {}
     };
 
-   public:
+public:
     ElfFile() = default;
     ~ElfFile();
 
     // Uncopyable -- because of the owning buffer & pimpl object.
-    ElfFile(ElfFile const &) = delete;
-    ElfFile operator=(ElfFile const &) = delete;
+    ElfFile(ElfFile const&) = delete;
+    ElfFile operator=(ElfFile const&) = delete;
 
     // Move constructable & assignable -- take ownership
-    ElfFile(ElfFile &&s) : pimpl_(s.pimpl_),
-	contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
+    ElfFile(ElfFile&& s) : pimpl_(s.pimpl_), contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
         s.contents_ = std::span<std::byte>();
-	s.pimpl_ = nullptr;
+        s.pimpl_ = nullptr;
     }
-    ElfFile &operator=(ElfFile &&s) {
+    ElfFile& operator=(ElfFile&& s) {
         std::swap(contents_, s.contents_);
         segments_ = std::move(s.segments_);
-	std::swap(pimpl_, s.pimpl_);
+        std::swap(pimpl_, s.pimpl_);
         return *this;
     }
 
-   public:
-    std::vector<Segment> const &GetSegments() const { return segments_; }
+public:
+    std::vector<Segment> const& GetSegments() const { return segments_; }
 
-   public:
+public:
     // Release the implementation data, leaving the segments and
     // contents. Use this, after processing, if the elf object is long-lived.
     void ReleaseImpl();
 
     // Read an elf file, populate segments vector.
     // Path must remain live throughout processing.
-    void ReadImage(std::string const &path);
+    void ReadImage(std::string const& path);
 
-   private:
+    // Write the (now-processed) elf file.
+    void WriteImage(std::string const& path);
+
+    // Weaken data symbols, remove all others. Keep STRONG_NAMES
+    // strong (can be non-data symbols).  Names can be exact or simple
+    // globs ending in '*'.
+    void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+
+    // XIPify
+    void MakeExecuteInPlace();
+
+private:
     class Impl;
     // We can't use unique_ptr here, because the above move semantics
     // would require Impl be complete at this point, which is what
     // we're trying to avoid.
-    Impl *pimpl_ = nullptr;
+    Impl* pimpl_ = nullptr;
 
     std::span<std::byte> contents_;  // Owning buffer
 

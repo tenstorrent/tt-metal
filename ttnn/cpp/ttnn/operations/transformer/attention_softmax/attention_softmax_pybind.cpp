@@ -42,11 +42,9 @@ void py_bind_attention_softmax(pybind11::module& module) {
             py::kw_only(),
             py::arg("head_size") = std::nullopt,
             py::arg("attention_mask") = std::nullopt,
-            py::arg("program_config").noconvert() =
-                ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
+            py::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             py::arg("causal_mask") = false,
             py::arg("memory_config") = std::nullopt});
-
 
     ttnn::bind_registered_operation(
         module,
@@ -76,8 +74,7 @@ void py_bind_attention_softmax(pybind11::module& module) {
             py::kw_only(),
             py::arg("head_size") = std::nullopt,
             py::arg("attention_mask") = std::nullopt,
-            py::arg("program_config").noconvert() =
-                ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
+            py::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             py::arg("causal_mask") = false,
             py::arg("memory_config") = std::nullopt});
 }

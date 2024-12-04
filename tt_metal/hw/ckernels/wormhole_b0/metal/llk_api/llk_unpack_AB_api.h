@@ -12,7 +12,7 @@
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure(
-    const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0) {
+    const llk_unpack_AB_params_t* unpack_AB_params, const int within_face_16x16_transpose = 0) {
     // In0 -> unpA
     // In1 -> unpB
     const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
@@ -20,7 +20,7 @@ inline void llk_unpack_AB_hw_configure(
 
     // unpA -> srcA
     // unpB -> srcB
-    const uint32_t num_faces = get_operand_num_faces(unpA_operand_id);  // num faces in unpA and unpB are the same
+    const uint32_t num_faces = get_operand_num_faces(unpA_operand_id);    // num faces in unpA and unpB are the same
     const uint32_t face_r_dim = get_operand_face_r_dim(unpA_operand_id);  // face r dim in unpA and unpB are the same
 
     _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
@@ -73,11 +73,11 @@ inline void llk_unpack_AB(
     const bool transpose_of_faces = 0 /*not used*/) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
-    std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
-    std::uint32_t offset_address_a = cb_interface[operandA_id].fifo_page_size * tile_index_a;
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
     std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
-    std::uint32_t offset_address_b = cb_interface[operandB_id].fifo_page_size * tile_index_b;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     WAYPOINT("UABW");
@@ -100,10 +100,11 @@ inline void llk_unpack_AB_reduce_init(
 
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(
+        ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
     constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
     config_unpacker_x_end<UNP_SEL>(face_r_dim);
 
-    _llk_unpack_AB_mop_config_<BType>(transpose>0, num_faces, narrow_tile); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose > 0, num_faces, narrow_tile);  // transpose of faces 0,2,1,3
 }

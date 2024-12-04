@@ -14,6 +14,7 @@ enum SfpuType {
     reciprocal,
     sqrt,
     lrelu,
+    prelu,
     power,
     square,
     tanh_derivative,
@@ -59,6 +60,7 @@ enum SfpuType {
     logical_not_unary,
     erfinv,
     i0,
+    i1,
     silu,
     mask,
     negative,
@@ -87,5 +89,6 @@ enum SfpuType {
     ceil,
     unused,
     reshuffle_rows,
-    cumsum
+    cumsum,
+    fill
 };

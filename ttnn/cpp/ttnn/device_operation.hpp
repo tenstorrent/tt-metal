@@ -14,6 +14,7 @@
 #include "tt_stl/reflection.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/distributed/api.hpp"
 
 namespace ttnn {
 
@@ -32,16 +33,25 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename device_operation_t>
+concept HasComputeOutputShapes = requires(device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {op.compute_output_shapes(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::shape_return_value_t>;
+};
+
+template <typename device_operation_t>
+concept HasComputeOutputSpecs = requires(device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {op.compute_output_specs(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::spec_return_value_t>;
+};
+
+template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
         device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-
-        using shape_return_value_t = typename device_operation_t::shape_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::compute_output_shapes(operation_attributes, tensor_args)),
-                      shape_return_value_t>);
 
         using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
         static_assert(std::same_as<
@@ -56,7 +66,7 @@ concept DeviceOperationConcept = requires {
             },
             program_factory);
     };
-};
+} && (HasComputeOutputSpecs<device_operation_t> || HasComputeOutputShapes<device_operation_t>);
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
@@ -157,7 +167,7 @@ struct CheckDeviceBufferIsAllocated {
 
     void operator()(const Tensor& tensor) {
         if (not tensor.is_allocated()) {
-            tt::log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
+            tt::log_debug(tt::LogOp, "Tensor at index {} is not allocated", index);
         }
         index++;
     }
@@ -258,7 +268,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
 
-    const auto enqueue_or_launch_program = [=](Program& program) {
+    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -275,8 +285,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program.set_runtime_id(device_operation_id);
 
-        GraphTracker::instance().track_program(&program);
-        if(GraphTracker::instance().hook_program(&program)) {
+        tt::tt_metal::GraphTracker::instance().track_program(&program);
+        if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
         }
 
@@ -304,8 +314,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program->set_runtime_id(device_operation_id);
 
-        GraphTracker::instance().track_program(program.get());
-        if(GraphTracker::instance().hook_program(program.get())) {
+        tt::tt_metal::GraphTracker::instance().track_program(program.get());
+        if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
 
@@ -351,7 +361,7 @@ typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t ind
 }
 
 static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
-    return create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
+    return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
 }
 
 static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {
@@ -455,7 +465,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     ZoneScopedN("Run Device Operation");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
-    GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
+    tt::tt_metal::GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
 
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
@@ -486,7 +496,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     }
     */
 
-    GraphTracker::instance().track_function_end(tensor_return_value);
+    tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
 }
 

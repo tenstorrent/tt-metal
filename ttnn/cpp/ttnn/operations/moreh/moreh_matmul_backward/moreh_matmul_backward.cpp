@@ -4,8 +4,8 @@
 
 #include "moreh_matmul_backward.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -19,8 +19,7 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         other.get_legacy_shape().rank() != 4) {
         return false;
     }
-    return tt::operations::primary::is_scalar(output_grad) && tt::operations::primary::is_1d_tensor(input) &&
-           tt::operations::primary::is_1d_tensor(other) && tt::operations::primary::is_same_shape(input, other);
+    return is_scalar(output_grad) && is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
 std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
@@ -81,19 +80,7 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     return outputs;
 }
 
-std::vector<Tensor> MorehMatmulBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& output_grad = input_tensors.at(0);
-    const auto& input = input_tensors.at(1);
-    const auto& other = input_tensors.at(2);
-
-    return {
-        Tensor(operation::get_workers_for_op_output({output_grad, input, other})),
-        Tensor(operation::get_workers_for_op_output({output_grad, input, other})),
-    };
-}
-
-std::vector<bool> MorehMatmulBackward::create_async_return_flag(
+OptionalTensors MorehMatmulBackward::create_async_optional_output_tensors(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
@@ -102,7 +89,13 @@ std::vector<bool> MorehMatmulBackward::create_async_return_flag(
     const std::optional<const Tensor>& other_grad,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    return {are_required_outputs.at(0), are_required_outputs.at(1)};
+    return {
+        are_required_outputs.at(0)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other}))
+            : std::nullopt,
+        are_required_outputs.at(1)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other}))
+            : std::nullopt};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward

@@ -22,11 +22,8 @@ struct MorehLayerNormBackward {
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
-    static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
-
     // The parameters of this function must be identical to those of invoke.
-    static std::vector<bool> create_async_return_flag(
+    static OptionalTensors create_async_optional_output_tensors(
         const Tensor& output_grad,
         const Tensor& input,
         const Tensor& mean,
@@ -45,4 +42,4 @@ namespace ttnn {
 constexpr auto moreh_layer_norm_backward = ttnn::register_operation_with_auto_launch_op<
     "ttnn::moreh_layer_norm_backward",
     ttnn::operations::moreh::moreh_layer_norm_backward::MorehLayerNormBackward>();
-}
+}  // namespace ttnn

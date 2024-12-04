@@ -4,15 +4,11 @@
 
 #pragma once
 
-#include <functional>
-#include <cassert>
+#include <cstddef>
 #include <cstdint>
-#include <istream>
-#include <sstream>
+#include <functional>
 #include <string>
 #include <vector>
-
-// #include "command_assembler/memory.h"
 
 namespace ll_api {
 
@@ -20,6 +16,8 @@ class memory {
  public:
   typedef std::uint64_t address_t;
   typedef std::uint32_t word_t;
+  enum class PackSpans { PACK, NO_PACK };
+  enum class Relocate { XIP, NONE };
 
  private:
   static constexpr uint32_t initial_data_space_ = 0x400;
@@ -35,24 +33,37 @@ class memory {
 
   std::vector<word_t> data_;
   std::vector<struct span> link_spans_;
+  uint32_t text_size_;
+  uint32_t packed_size_;
+  uint32_t text_addr_;
 
  public:
   memory();
-  memory(std::string const &path);
+  memory(std::string const &path, Relocate relo_type);
 
- public:
+  public:
+  // These can be large objects, so ban copying ...
+  memory(memory const&) = delete;
+  memory& operator=(memory const&) = delete;
+  // ... but permit moving.
+  memory(memory&&) = default;
+  memory& operator=(memory&&) = default;
+
+  public:
   const std::vector<word_t>& data() const { return this->data_; }
 
   // memory& operator=(memory &&src);
   bool operator==(const memory& other) const;
 
+  void set_text_size(uint32_t size) { this->text_size_ = size; }
+  void set_packed_size(uint32_t size) { this->packed_size_ = size; }
+  uint32_t get_text_size() const { return this->text_size_; }
+  uint32_t get_packed_size() const { return this->packed_size_; }
+  uint32_t get_text_addr() const { return this->text_addr_; }
+
   size_t size() const { return data_.size(); }
 
   size_t num_spans() const { return link_spans_.size(); }
-
-private:
-  // Read from file
-  void fill_from_discontiguous_hex(std::string const &path);
 
 public:
   // Process spans in arg mem to fill data in *this (eg, from device)

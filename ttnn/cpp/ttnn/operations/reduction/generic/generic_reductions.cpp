@@ -14,7 +14,7 @@ namespace operations::reduction {
 template <ReduceType reduce_type>
 static Tensor reduce_impl(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
+    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -29,22 +29,35 @@ static Tensor reduce_impl(
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    std::vector<int> dim{};
+    ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
-        if (not std::holds_alternative<std::vector<int>>(dim_arg.value())) {
+        if (not std::holds_alternative<ttnn::SmallVector<int>>(dim_arg.value())) {
             auto dim_as_int = std::get<int>(dim_arg.value());
-            dim = std::vector<int>({dim_as_int});
+            dim = ttnn::SmallVector<int>({dim_as_int});
         } else {
-            dim = std::get<std::vector<int>>(dim_arg.value());
+            dim = std::get<ttnn::SmallVector<int>>(dim_arg.value());
         }
     } else {
-        dim = std::vector<int>(rank);
+        dim = ttnn::SmallVector<int>(rank);
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
         }
     }
 
-    if (dim.size() == 1) {
+    for (int i = 0; i < dim.size(); i++) {
+        if (dim[i] < 0) {
+            dim[i] += rank;
+        }
+        int dim_i = dim[i];
+        TT_FATAL(
+            dim_i >= 0 && dim_i < rank,
+            "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}",
+            dim_i,
+            i,
+            rank);
+    }
+
+    if (dim.size() == 1 && rank == 4) {
         if (dim[0] == rank - 3) {
             // Pad before running the op to only pay cost of formatting once
             auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), true);
@@ -83,18 +96,10 @@ static Tensor reduce_impl(
         }
     }
 
-    for (int& axis : dim) {
-        if (axis < 0) {
-            axis += rank;
-        }
-        if (axis >= rank) {
-            TT_THROW("Invalid dim");
-        }
-    }
     std::sort(dim.begin(), dim.end());
 
-    std::vector<uint32_t> output_shape;
-    std::vector<uint32_t> padded_output_shape;
+    ttnn::SmallVector<uint32_t> output_shape;
+    ttnn::SmallVector<uint32_t> padded_output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
         if (std::find(dim.begin(), dim.end(), axis) != dim.end()) {
             if (keepdim) {
@@ -113,18 +118,21 @@ static Tensor reduce_impl(
 
     Tensor output_tensor;
     if (!dim_arg.has_value()) {
-        if constexpr (reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max  || reduce_type == ReduceType::Min) {
+        if constexpr (
+            reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
             output_tensor = input_tensor;
             for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<reduce_type>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
+                output_tensor = reduce_impl<reduce_type>(
+                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
         } else if constexpr (reduce_type == ReduceType::Mean) {
             output_tensor = input_tensor;
             for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<ReduceType::Sum>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
+                output_tensor = reduce_impl<ReduceType::Sum>(
+                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
-            float inv_volume = 1.0f/input_tensor.volume();
-            return ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
+            float inv_volume = 1.0f / input_tensor.get_logical_volume();
+            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -146,22 +154,58 @@ static Tensor reduce_impl(
         }
 
         if constexpr (reduce_type == ReduceType::Sum) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, scalar,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                scalar,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                1.0 / reduced_volume,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Max) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::MAX, reduce_op_dim, scalar,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::MAX,
+                reduce_op_dim,
+                scalar,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Min) {
-            output_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::MIN, reduce_op_dim, scalar,
-                memory_config, std::nullopt, compute_kernel_config);
+            output_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::MIN,
+                reduce_op_dim,
+                scalar,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
         } else if constexpr (reduce_type == ReduceType::Var or reduce_type == ReduceType::Std) {
-            auto mean_tensor = tt::tt_metal::reduce(input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume,
-                memory_config, std::nullopt, compute_kernel_config);
-            auto mean_square_tensor = tt::tt_metal::reduce(ttnn::pow(input_tensor, 2.0f, memory_config), tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim,
-                1.0 / reduced_volume, memory_config, std::nullopt, compute_kernel_config);
+            auto mean_tensor = tt::tt_metal::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                1.0 / reduced_volume,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
+            auto mean_square_tensor = tt::tt_metal::reduce(
+                ttnn::pow(input_tensor, 2.0f, memory_config),
+                tt::tt_metal::ReduceOpMath::SUM,
+                reduce_op_dim,
+                1.0 / reduced_volume,
+                memory_config,
+                std::nullopt,
+                compute_kernel_config);
             output_tensor = ttnn::subtract(
                 mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
             if constexpr (reduce_type == ReduceType::Std) {
@@ -173,7 +217,7 @@ static Tensor reduce_impl(
     }
 
     if (reshape) {
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{tt::tt_metal::LegacyShape{output_shape, padded_output_shape}});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{output_shape, padded_output_shape});
     }
 
     return output_tensor;
@@ -182,7 +226,7 @@ static Tensor reduce_impl(
 template <ReduceType reduce_type>
 Tensor Reduce<reduce_type>::invoke(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
+    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,

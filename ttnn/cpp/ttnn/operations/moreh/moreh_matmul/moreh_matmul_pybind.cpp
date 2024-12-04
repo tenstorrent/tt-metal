@@ -14,7 +14,7 @@ void bind_moreh_matmul_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_matmul,
-        "Moreh moreh_matmul Operation",
+        "Moreh Matmul Operation",
         ttnn::pybind_arguments_t{
             py::arg("input").noconvert(),
             py::arg("other").noconvert(),

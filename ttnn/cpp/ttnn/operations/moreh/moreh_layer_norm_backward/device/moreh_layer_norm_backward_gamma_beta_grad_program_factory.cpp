@@ -6,7 +6,7 @@
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {
@@ -69,8 +69,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
-    auto num_inner = tt::operations::primary::compute_inner(output_grad_shape, normalized_dims);
-    auto num_outer = tt::operations::primary::compute_outer(output_grad_shape, normalized_dims);
+    auto num_inner = compute_inner(output_grad_shape, normalized_dims);
+    auto num_outer = compute_outer(output_grad_shape, normalized_dims);
 
     const bool gamma_grad_has_value = gamma_grad.has_value();
     const bool beta_grad_has_value = beta_grad.has_value();
@@ -113,41 +113,41 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},                            // output_grad(==dy)
-            {tt::CB::c_in1, in1_t},                            // input(==x)
-            {tt::CB::c_in2, in2_t},                            // mean
-            {tt::CB::c_in3, in3_t},                            // rstd
-            {tt::CB::c_in4, in4_t},                            // scaler
-            {tt::CB::c_in5, in5_t},                            // mask_h
-            {tt::CB::c_out0, out0_t},                          // gamma_grad(==dgamma)
-            {tt::CB::c_out1, out1_t},                          // beta_grad(==dbeta)
-            {tt::CB::c_intermed0, im0_t, intermed_cb_format},  // output(==y)
-            {tt::CB::c_intermed1, im1_t, intermed_cb_format},  // y * dy
-            {tt::CB::c_intermed2, im2_t, intermed_cb_format},  // Add[dy]
-            {tt::CB::c_intermed3, im3_t, intermed_cb_format},  // Add[y * dy]
-            {tt::CB::c_intermed4, im4_t, intermed_cb_format},  // x - mean
-            {tt::CB::c_intermed5, im5_t, intermed_cb_format},  // dycopy
+            {tt::CBIndex::c_0, in0_t},                       // output_grad(==dy)
+            {tt::CBIndex::c_1, in1_t},                       // input(==x)
+            {tt::CBIndex::c_2, in2_t},                       // mean
+            {tt::CBIndex::c_3, in3_t},                       // rstd
+            {tt::CBIndex::c_4, in4_t},                       // scaler
+            {tt::CBIndex::c_5, in5_t},                       // mask_h
+            {tt::CBIndex::c_16, out0_t},                     // gamma_grad(==dgamma)
+            {tt::CBIndex::c_17, out1_t},                     // beta_grad(==dbeta)
+            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // output(==y)
+            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // y * dy
+            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // Add[dy]
+            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Add[y * dy]
+            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // x - mean
+            {tt::CBIndex::c_29, im5_t, intermed_cb_format},  // dycopy
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(mean)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(rstd)),
+        static_cast<uint32_t>(is_dram(output_grad)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(mean)),
+        static_cast<uint32_t>(is_dram(rstd)),
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(do_mask_h)};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(gamma_grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(beta_grad)),
+        static_cast<uint32_t>(is_dram(gamma_grad)),
+        static_cast<uint32_t>(is_dram(beta_grad)),
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(beta_grad_has_value)};
 
@@ -167,10 +167,9 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
 
-    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_cols_per_core_group_1,
@@ -187,7 +186,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -208,7 +207,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
             static_cast<uint32_t>(is_lastdim_layer_norm),
             static_cast<uint32_t>(is_groupnorm)};
 
-        tt::operations::primary::CreateComputeKernel(
+        CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -234,9 +233,9 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_cols_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");

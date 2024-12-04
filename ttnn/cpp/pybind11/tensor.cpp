@@ -6,6 +6,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
 
+#include <utility>
+
 #include "tensor.hpp"
 #include "ttnn/cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
@@ -15,8 +17,10 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "tt_metal/host_api.hpp"
 
+using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
@@ -71,6 +75,7 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     export_enum<MathFidelity>(m_tensor);
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
+    export_enum<ShardMode>(m_tensor);
 
     py::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
@@ -133,17 +138,22 @@ void tensor_mem_config_module(py::module& m_tensor) {
     py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
 
     auto py_tile = static_cast<py::class_<Tile>>(m_tensor.attr("Tile"));
-    py_tile.def(py::init<const std::array<uint32_t, 2>&>())
-        .def(py::init<>([](const std::array<uint32_t, 2>& tile) {
-            return Tile{tile};
+    py_tile
+        .def(py::init<const std::array<uint32_t, 2>&, bool>(),
+            py::arg("tile_shape"), py::arg("transpose_tile") = false)
+        .def(py::init<>([](const std::array<uint32_t, 2>& tile_shape, bool transpose_tile = false) {
+            return Tile{tile_shape, transpose_tile};
         }))
         .def("__repr__", [](const Tile& self) {
             return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
         })
         .def_readonly("tile_shape", &Tile::tile_shape)
         .def_readonly("face_shape", &Tile::face_shape)
-        .def_readonly("num_faces", &Tile::num_faces);
-    py::implicitly_convertible<std::array<uint32_t, 2>, Tile>();
+        .def_readonly("num_faces", &Tile::num_faces)
+        .def_readonly("partial_face", &Tile::partial_face)
+        .def_readonly("narrow_tile", &Tile::narrow_tile)
+        .def_readonly("transpose_within_face", &Tile::transpose_within_face)
+        .def_readonly("transpose_of_faces", &Tile::transpose_of_faces);
 
     auto py_shape = static_cast<py::class_<tt::tt_metal::LegacyShape>>(m_tensor.attr("Shape"));
     py_shape.def(py::init<std::array<uint32_t, 4>>())
@@ -163,11 +173,11 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def("__eq__", [](const LegacyShape& self, const LegacyShape& other) { return self == other; })
         .def("__eq__", [](const LegacyShape& self, const std::vector<uint32_t>& other) { return self == LegacyShape{other}; })
         .def("__eq__", [](const LegacyShape& self, const std::array<uint32_t, 4>& other) { return self == LegacyShape{other}; })
-        .def("__eq__", [](const LegacyShape& self, const py::none) { return false; })
+        .def("__eq__", [](const LegacyShape& self, const py::none&) { return false; })
         .def("__getitem__", [](const LegacyShape& self, const std::int64_t index) { return self[index]; })
         .def(
             "__getitem__",
-            [](const LegacyShape& self, const py::slice slice) {
+            [](const LegacyShape& self, const py::slice& slice) {
                 size_t start = 0, stop = 0, step = 0, slicelength = 0;
                 if (!slice.compute(self.rank(), &start, &stop, &step, &slicelength)) {
                     throw std::runtime_error("Invalid slice");
@@ -194,7 +204,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
             py::init<>(
                 [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
                     return MemoryConfig{
-                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = shard_spec};
+                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = std::move(shard_spec)};
                 }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,
@@ -249,6 +259,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     auto pyCoreRangeSet = static_cast<py::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+        .def(py::init<>([](const std::vector<CoreRange>& core_ranges) { return CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges)); }))
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
@@ -260,10 +271,13 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::init<>([](const CoreRangeSet& core_sets,
                            const std::array<uint32_t, 2>& shard_shape,
                            const ShardOrientation& shard_orientation,
-                           const bool& halo) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo); }))
+                           const bool& halo,
+                           const ShardMode& shard_mode) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo, shard_mode); }),
+            py::arg("grid"), py::arg("shard_shape"), py::arg("shard_orientation"), py::arg("halo"), py::arg("shard_mode") = ShardMode::PHYSICAL)
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
+        .def_readwrite("mode", &ShardSpec::mode, "Treat shard shape as physical (default) or logical")
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self);
@@ -294,13 +308,13 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     m_tensor.def(
         "load_tensor",
-        static_cast<Tensor (*)(const std::string&, Device*)>(&load_tensor<Device*>),
+        py::overload_cast<const std::string&, Device*>(&load_tensor),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
     m_tensor.def(
         "load_tensor",
-        static_cast<Tensor (*)(const std::string&, MeshDevice*)>(&load_tensor<MeshDevice*>),
+        py::overload_cast<const std::string&, MeshDevice*>(&load_tensor),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");

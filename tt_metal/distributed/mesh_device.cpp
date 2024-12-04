@@ -4,17 +4,19 @@
 
 #include "tt_metal/distributed/mesh_device.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 
-#include "device/tt_cluster_descriptor_types.h"
+#include "umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::distributed {
 
 using LogicalCoordinate = Coordinate;
 using PhysicalCoordinate = eth_coord_t;
@@ -43,10 +45,16 @@ static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translatio
 
     std::unordered_map<LogicalCoordinate, PhysicalCoordinate> result;
     for (const auto& mapping : j[key]) {
-        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 4) {
+        if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 5) {
             throw std::runtime_error("Invalid coordinate format in JSON file: " + filename);
         }
-        result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{mapping[1][1], mapping[1][0], mapping[1][2], mapping[1][3]});
+        result.emplace(LogicalCoordinate{mapping[0][0], mapping[0][1]}, PhysicalCoordinate{
+            mapping[1][0], // cluster_id
+            mapping[1][2], // x
+            mapping[1][1], // y
+            mapping[1][3], // rack
+            mapping[1][4] // shelf
+        });
     }
 
     return result;
@@ -92,8 +100,20 @@ SystemMesh& SystemMesh::instance() {
 }
 void SystemMesh::initialize() {
     this->physical_device_id_to_coordinate = tt::Cluster::instance().get_user_chip_ethernet_coordinates();
-    for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate) {
-        this->physical_coordinate_to_device_id.emplace(physical_coordinate, chip_id);
+    if (this->physical_device_id_to_coordinate.empty()) {
+        // Only WH has ethernet coordinates. Fabric will assign chip ids for BH
+        auto arch = tt::Cluster::instance().arch();
+        TT_FATAL(arch == ARCH::GRAYSKULL or arch == ARCH::BLACKHOLE, "Expected Wormhole chips to have ethernet coordinates assigned by cluster descriptor");
+        const int num_detected_devices = tt::Cluster::instance().number_of_devices();
+        for (auto chip_id = 0; chip_id < num_detected_devices; chip_id++) {
+            PhysicalCoordinate coord{0, chip_id, 0, 0, 0};
+            this->physical_device_id_to_coordinate.emplace(chip_id, coord);
+            this->physical_coordinate_to_device_id.emplace(coord, chip_id);
+        }
+    } else {
+        for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate) {
+            this->physical_coordinate_to_device_id.emplace(physical_coordinate, chip_id);
+        }
     }
 
     // Initialize the system mesh shape and translation map
@@ -151,11 +171,11 @@ void SystemMesh::register_mesh_device(const std::shared_ptr<MeshDevice> &mesh_de
 }
 
 std::vector<Device*> SystemMesh::map_mesh_device(
-    std::shared_ptr<MeshDevice> mesh_device,
+    const std::shared_ptr<MeshDevice>& mesh_device,
     size_t num_command_queues,
     size_t l1_small_size,
     size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config) {
 
     auto [requested_num_rows, requested_num_cols] = mesh_device->shape();
@@ -172,7 +192,7 @@ std::vector<Device*> SystemMesh::map_mesh_device(
         config.physical_device_ids;
 
     this->opened_devices[mesh_device->get_mesh_id()] = tt::tt_metal::detail::CreateDevices(
-        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
     std::vector<Device*> mapped_devices;
     for (auto physical_device_id : physical_device_ids) {
@@ -214,17 +234,17 @@ static MeshDeviceID generate_unique_mesh_id() {
 }
 
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh)
-    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(parent_mesh) {}
+    : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type)
+    const DispatchCoreConfig &dispatch_core_config)
 {
     auto mesh_device = std::make_shared<MeshDevice>(config.mesh_shape, config.mesh_type);
-    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, config);
+    mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
 
     return mesh_device;
 }
@@ -281,7 +301,7 @@ void MeshDevice::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
+    const DispatchCoreConfig &dispatch_core_config,
     const MeshDeviceConfig& config)
 {
     auto [num_rows, num_cols] = this->shape();
@@ -294,8 +314,8 @@ void MeshDevice::initialize(
 
     auto& instance = SystemMesh::instance();
     this->devices = instance.map_mesh_device(
-        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_type, config);
-    this->primary_view = std::make_shared<tt::tt_metal::MeshDeviceView>(*this);
+        shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_config, config);
+    this->primary_view = std::make_shared<MeshDeviceView>(*this);
 }
 
 MeshDevice::~MeshDevice() {
@@ -340,7 +360,7 @@ size_t MeshDevice::num_cols() const { return this->mesh_device_shape.second; }
 MeshShape MeshDevice::shape() const { return this->mesh_device_shape; }
 
 void MeshDevice::close_devices() {
-    for (auto submesh : this->submeshes) {
+    for (const auto& submesh : this->submeshes) {
         submesh->close_devices();
     }
     if (not this->devices.empty()) {
@@ -367,13 +387,15 @@ std::shared_ptr<MeshDevice> SystemMesh::get_mesh_device(const std::vector<chip_i
     log_trace(LogMetal, "Getting mesh device for {} physical devices: {}", physical_device_ids.size(), physical_device_ids);
     std::unordered_set<chip_id_t> input_set(physical_device_ids.begin(), physical_device_ids.end());
 
-    for (const auto& [mesh_id, mesh_device] : this->assigned_mesh_device_devices) {
-        const auto& assigned_devices = this->assigned_devices.at(mesh_id);
-        std::unordered_set<chip_id_t> assigned_set(assigned_devices.begin(), assigned_devices.end());
-        log_trace(LogMetal, "Assigned devices: {}", assigned_devices);
+    for (const auto& [mesh_id, weak_mesh_device] : this->assigned_mesh_device_devices) {
+        if (auto mesh_device = weak_mesh_device.lock()) {
+            const auto& assigned_devices = this->assigned_devices.at(mesh_id);
+            std::unordered_set<chip_id_t> assigned_set(assigned_devices.begin(), assigned_devices.end());
+            log_trace(LogMetal, "Assigned devices: {}", assigned_devices);
 
-        if (input_set == assigned_set) {
-            return mesh_device;
+            if (input_set == assigned_set) {
+                return mesh_device;
+            }
         }
     }
     TT_THROW("No mesh device found for the provided devices");
@@ -393,15 +415,6 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
-bool validate_worker_modes(const std::vector<Device*>& workers) {
-    bool worker_modes_match = true;
-    auto first_worker_mode = workers.at(0)->get_worker_mode();
-    for (auto worker : workers) {
-        worker_modes_match &= (worker->get_worker_mode() == first_worker_mode);
-    }
-    return worker_modes_match;
-}
-
 void MeshDevice::enable_async(bool enable) {
     for (auto device : this->devices) {
         device->enable_async(enable);
@@ -420,14 +433,12 @@ void MeshDevice::disable_and_clear_program_cache() {
     }
 }
 
-std::vector<int> get_t3k_physical_device_ids_ring() {
-    auto& instance = SystemMesh::instance();
-    auto num_devices = instance.get_num_devices();
-    TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
-
-    auto physical_device_ids = instance.get_mapped_physical_device_ids(
-        MeshDeviceConfig(MeshShape{1, 8}, MeshOffset{0, 0}));
-    return physical_device_ids;
+size_t MeshDevice::num_program_cache_entries() const {
+    size_t total_entries = 0;
+    for (auto device : this->devices) {
+        total_entries += device->num_program_cache_entries();
+    }
+    return total_entries;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed

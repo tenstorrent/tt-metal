@@ -4,9 +4,11 @@
 
 
 
+#include "common/constants.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
 
 namespace py = pybind11;
@@ -56,8 +58,9 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
-                const uint8_t& queue_id) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config);
+                const std::optional<const MemoryConfig>& memory_config,
+                const uint8_t& queue_id) -> Result {
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -75,6 +78,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -93,8 +97,9 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
-                const uint8_t& queue_id) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config);
+                const std::optional<const MemoryConfig>& memory_config,
+                const uint8_t& queue_id) -> Result {
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -112,62 +117,10 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
 
-    module.def(
-        "get_conv_padded_input_shape_and_mem_config",
-        [](ttnn::Device* device,
-           const ttnn::Tensor& input_tensor,
-           const Conv2dConfig& conv_config,
-           uint32_t batch_size,
-           uint32_t height,
-           uint32_t width,
-           uint32_t in_channels,
-           uint32_t out_channels,
-           std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
-                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
-        },
-        py::kw_only(),
-        py::arg("device"),
-        py::arg("input_tensor"),
-        py::arg("conv_config"),
-        py::arg("batch_size"),
-        py::arg("height"),
-        py::arg("width"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("kernel_size"),
-        py::arg("stride"));
-
-    module.def(
-        "get_conv_padded_input_shape_and_mem_config",
-        [](MeshDevice* device,
-           const ttnn::Tensor& input_tensor,
-           const Conv2dConfig& conv_config,
-           uint32_t batch_size,
-           uint32_t height,
-           uint32_t width,
-           uint32_t in_channels,
-           uint32_t out_channels,
-           std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
-                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
-        },
-        py::kw_only(),
-        py::arg("device"),
-        py::arg("input_tensor"),
-        py::arg("conv_config"),
-        py::arg("batch_size"),
-        py::arg("height"),
-        py::arg("width"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("kernel_size"),
-        py::arg("stride"));
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -192,9 +145,43 @@ void py_bind_conv2d(py::module& module) {
         py::arg("num_groups"),
         py::arg("output_dtype").noconvert() = std::nullopt);
 
+    module.def(
+        "determine_parallel_config",
+        [](const ttnn::TensorMemoryLayout& shard_layout,
+           uint32_t batch_size,
+           uint32_t input_channels,
+           uint32_t output_height,
+           uint32_t output_width,
+           uint32_t output_channels,
+           const CoreCoord& compute_grid_size,
+           ShardOrientation block_shard_orientation,
+           bool enable_channels_padding,
+           bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
+            return ttnn::operations::conv::conv2d::determine_parallel_config(
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled);
+        },
+        py::arg("shard_layout"),
+        py::arg("batch_size"),
+        py::arg("input_channels"),
+        py::arg("output_height"),
+        py::arg("output_width"),
+        py::arg("output_channels"),
+        py::arg("compute_grid_size"),
+        py::arg("block_shard_orientation"),
+        py::arg("enable_channels_padding"),
+        py::arg("is_out_tiled") = true);
+
+    module.def(
+        "create_sharded_memory_config_from_parallel_config",
+        &ttnn::operations::conv::conv2d::create_sharded_memory_config_from_parallel_config,
+        py::arg("tensor_shape"),
+        py::arg("parallel_config"),
+        py::arg("tile_size"));
+
+
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -215,6 +202,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
             py::arg("enable_act_double_buffer") = false,
+            py::arg("enable_weights_double_buffer") = false,
             py::arg("enable_split_reader") = false,
             py::arg("enable_subblock_padding") = false
         );
@@ -237,6 +225,7 @@ void py_bind_conv2d(py::module& module) {
         py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
         py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
         py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer);
+        py_conv_config.def_readwrite("enable_weights_double_buffer", &Conv2dConfig::enable_weights_double_buffer);
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 

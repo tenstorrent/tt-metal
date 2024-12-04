@@ -59,6 +59,7 @@ enum SfpuType {
     logical_not_unary,
     erfinv,
     i0,
+    i1,
     silu,
     mask,
     negative,
@@ -86,5 +87,7 @@ enum SfpuType {
     fmod,
     ceil,
     unused,
-    cumsum
+    cumsum,
+    fill,
+    prelu,
 };

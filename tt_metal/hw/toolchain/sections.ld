@@ -23,7 +23,7 @@
 #if defined(TYPE_FIRMWARE)
 /* Need separation beteen end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
-#if defined(TARGET_IERISC)
+#if defined(TARGET_IERISC) || defined(TARGET_SLAVE_IERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
 #define MEM_PAD 0
@@ -39,9 +39,19 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
+
+PHDRS {
+  attributes 0x70000003;
+  text PT_LOAD;
+  data PT_LOAD;
+#if defined(TYPE_FIRMWARE)
+  stack PT_GNU_STACK;
+#endif
+}
+
 SECTIONS
 {
-  .text TEXT_START :
+  .text TEXT_START : ALIGN(4)
   {
     /* Because TEXT_START might not be the start of a region, we
        need to force this section to be emitted so that following sections
@@ -55,71 +65,71 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_CODE
+  } > REGION_CODE :text
   .init.fini :
   {
     /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
-    KEEP (*(.init))
-    KEEP (*(.fini))
-    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
-  } > REGION_CODE
-
-  l1_data :
-  {
-    *(l1_data_test_only)
-  } > REGION_CODE
+    KEEP (*(.init .fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
+  } > REGION_CODE :text
 
   . = ALIGN(. + MEM_PAD, MEM_ALIGN);
 
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = .;
+#if defined(TARGET_NCRISC)
   PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
+#endif
 #endif
 
 #if defined(TYPE_KERNEL)
   __kernel_init_local_l1_base = .;
 #endif
 
+#if defined(TYPE_FIRMWARE)
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
-  .data DATA_START :
+#endif
+  .data DATA_START : ALIGN(4)
   {
      . = .; /* Force section emission.  */
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
+
     PROVIDE_HIDDEN (__preinit_array_start = .);
     KEEP (*(.preinit_array))
     PROVIDE_HIDDEN (__preinit_array_end = .);
     PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
-    KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP (*(.init_array))
     PROVIDE_HIDDEN (__init_array_end = .);
+
     PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
-    KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP (*(.fini_array))
     PROVIDE_HIDDEN (__fini_array_end = .);
-    KEEP (*crtbegin.o(.ctors))
-    KEEP (*crtbegin?.o(.ctors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
-    KEEP (*(SORT(.ctors.*)))
-    KEEP (*(.ctors))
-    KEEP (*crtbegin.o(.dtors))
-    KEEP (*crtbegin?.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
-    KEEP (*(SORT(.dtors.*)))
-    KEEP (*(.dtors))
+
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
+
     *(.data .data.* .gnu.linkonce.d.*)
-    SORT(CONSTRUCTORS)
     *(.data1)
+
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+    . = ALIGN(4);
     __ldm_data_end = .;
-  }
-  .bss ALIGN(4):
+  } > REGION_DATA :data
+  .ctors.dtors :
+  {
+    /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.ctors .ctors.* .dtors .dtors.*))
+    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
+  } > REGION_DATA :data
+  .bss : ALIGN(4)
   {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
@@ -131,12 +141,7 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } > REGION_DATA
-
-  local_data_noinit (NOLOAD) :
-  {
-    *(local_data_noinit)
-  } > REGION_DATA
+  } > REGION_DATA :data
 
 #ifdef TYPE_FIRMWARE
   . = ALIGN(MEM_ALIGN);
@@ -144,14 +149,14 @@ SECTIONS
 #endif
 
 #ifdef TYPE_FIRMWARE
-  /* Move to end of local memory for stack */
   .stack :
   {
-    __stack_bottom = .;
    . += FIRMWARE_STACK_SIZE;
     __stack_top = .;
-  } > REGION_STACK
+  } > REGION_STACK :stack
 #endif
+
+  .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

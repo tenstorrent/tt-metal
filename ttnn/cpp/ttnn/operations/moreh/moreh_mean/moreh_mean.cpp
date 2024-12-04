@@ -4,19 +4,19 @@
 
 #include "moreh_mean.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean {
 Tensor MorehMean::invoke(
     const Tensor& input,
-    const std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     const bool keepdim,
     const std::optional<uint32_t>& divisor,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    std::vector<int64_t> dims = tt::operations::primary::get_dim(dim, input.get_shape().rank());
+    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.get_shape().rank());
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;

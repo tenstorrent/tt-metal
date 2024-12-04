@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -20,17 +20,16 @@ void MorehBiasAddBackwardOperation::validate_inputs(
         auto bias_grad_shape = bias_grad->get_shape();
         auto bias_grad_tensor = bias_grad.value();
         TT_FATAL(
-            tt::operations::primary::is_scalar(bias_grad_tensor) ||
-                tt::operations::primary::is_1d_tensor(bias_grad_tensor),
-            "bias_grad tensor should be 1d or scalar");
+            is_scalar(bias_grad_tensor) || is_1d_tensor(bias_grad_tensor), "bias_grad tensor should be 1d or scalar");
     }
 }
 
 MorehBiasAddBackwardOperation::program_factory_t MorehBiasAddBackwardOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& bias_grad = tensor_args.bias_grad.value();
-    if (tt::operations::primary::is_scalar(bias_grad))
+    if (is_scalar(bias_grad)) {
         return SingleCoreProgramFactory();
+    }
     return MultiCoreProgramFactory();
 }
 
@@ -51,6 +50,11 @@ MorehBiasAddBackwardOperation::shape_return_value_t MorehBiasAddBackwardOperatio
 
 MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.bias_grad.has_value()) {
+        return tensor_args.bias_grad.value();
+    }
+
+    TT_FATAL(tensor_args.bias.has_value(), "bias tensor should not be std::nullopt");
     const auto& output_shape = compute_output_shapes(operation_attributes, tensor_args);
     auto dtype = tensor_args.bias.value().get_dtype();
     Layout layout{Layout::TILE};
@@ -58,9 +62,6 @@ MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperati
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
 
-    if (tensor_args.bias_grad.has_value()) {
-        return tensor_args.bias_grad.value();
-    }
     return create_device_tensor(output_shape, dtype, layout, device, bias_grad_memory_config);
 }
 

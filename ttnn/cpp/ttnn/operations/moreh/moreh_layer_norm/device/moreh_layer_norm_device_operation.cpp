@@ -4,7 +4,7 @@
 
 #include "moreh_layer_norm_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -89,8 +89,8 @@ MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_o
     auto input_rank = input_shape.rank();
     auto output_rank = input_rank - normalized_dims;
 
-    std::vector<uint32_t> output_size_vec;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    ttnn::SmallVector<uint32_t> output_size_vec;
+    ttnn::SmallVector<Padding::PadDimension> dimensions_pads;
 
     if (output_rank == 1) {
         output_size_vec.push_back(32);
@@ -99,7 +99,7 @@ MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_o
 
     for (uint32_t dim = 0; dim < output_rank; dim++) {
         auto input_shape_without_padding_size = input_shape_without_padding[dim];
-        if (tt::operations::primary::is_hw_dim(dim, output_rank)) {
+        if (is_hw_dim(dim, output_rank)) {
             output_size_vec.push_back(round_up_to_mul32(input_shape_without_padding_size));
             auto padding_back = output_size_vec[dim] - input_shape_without_padding_size;
             dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});
@@ -125,21 +125,24 @@ MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_o
     std::vector<std::optional<Tensor>> result;
     result.reserve(3);
 
-    if (tensor_args.output.has_value())
+    if (tensor_args.output.has_value()) {
         result.push_back(tensor_args.output.value());
-    else
+    } else {
         result.push_back(
             create_device_tensor(output_shapes.at(0).value, dtype, layout, device, operation_attributes.memory_config));
+    }
 
-    if (tensor_args.mean.has_value())
+    if (tensor_args.mean.has_value()) {
         result.push_back(tensor_args.mean.value());
-    else
+    } else {
         result.push_back(std::nullopt);
+    }
 
-    if (tensor_args.rstd.has_value())
+    if (tensor_args.rstd.has_value()) {
         result.push_back(tensor_args.rstd.value());
-    else
+    } else {
         result.push_back(std::nullopt);
+    }
 
     return std::move(result);
 }

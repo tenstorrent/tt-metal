@@ -4,8 +4,9 @@
 
 #include "moreh_sgd_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_sgd {
 void MorehSgdOperation::validate_inputs(
@@ -13,20 +14,19 @@ void MorehSgdOperation::validate_inputs(
     auto& params_in = tensor_args.param_in;
     auto& grad = tensor_args.grad;
 
-    tt::operations::primary::check_tensor(params_in, "moreh_sgd", "params_in");
-    tt::operations::primary::check_tensor(grad, "moreh_sgd", "grad");
+    check_tensor(params_in, "moreh_sgd", "params_in", {DataType::BFLOAT16});
+    check_tensor(grad, "moreh_sgd", "grad", {DataType::BFLOAT16});
 
     if (tensor_args.momentum_buffer_in) {
-        tt::operations::primary::check_tensor(*tensor_args.momentum_buffer_in, "moreh_sgd", "momentum_buffer_in");
+        check_tensor(*tensor_args.momentum_buffer_in, "moreh_sgd", "momentum_buffer_in", {DataType::BFLOAT16});
     }
 
     if (tensor_args.param_out.has_value()) {
-        tt::operations::primary::check_tensor(tensor_args.param_out.value(), "moreh_sgd", "param_out");
+        check_tensor(tensor_args.param_out.value(), "moreh_sgd", "param_out", {DataType::BFLOAT16});
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        tt::operations::primary::check_tensor(
-            tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out");
+        check_tensor(tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out", {DataType::BFLOAT16});
     }
 }
 

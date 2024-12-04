@@ -5,13 +5,12 @@
 #pragma once
 
 #include <memory>
-
-#include "tt_metal/distributed/mesh_device.hpp"
+#include "tt_metal/host_api.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::events {
 
-struct MultiDeviceEvent
-{
+struct MultiDeviceEvent {
     MultiDeviceEvent(MeshDevice* mesh_device);
     std::vector<std::shared_ptr<Event>> events;
 };
@@ -24,4 +23,4 @@ MultiDeviceEvent create_event(MeshDevice* mesh_device);
 void record_event(uint8_t cq_id, const MultiDeviceEvent& event);
 void wait_for_event(uint8_t cq_id, const MultiDeviceEvent& event);
 
-} // namespace ttnn::events
+}  // namespace ttnn::events

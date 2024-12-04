@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
@@ -35,7 +35,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(core_range, num_kernel_rows);
+        split_work_to_cores_wt_core_range(core_range, num_kernel_rows);
 
     auto arch = input_grad.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -46,20 +46,20 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
     // create circular buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 2},                                                                  // output
-            {tt::CB::c_in1, 2},                                                                  // output_grad
-            {tt::CB::c_in2, 1},                                                                  // scaler
-            {tt::CB::c_in3, 1},                                                                  // mask
-            {tt::CB::c_out0, 2},                                                                 // input_grad
-            {tt::CB::c_intermed0, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
-            {tt::CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
-            {tt::CB::c_intermed3,
+            {tt::CBIndex::c_0, 2},                                                             // output
+            {tt::CBIndex::c_1, 2},                                                             // output_grad
+            {tt::CBIndex::c_2, 1},                                                             // scaler
+            {tt::CBIndex::c_3, 1},                                                             // mask
+            {tt::CBIndex::c_16, 2},                                                            // input_grad
+            {tt::CBIndex::c_24, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
+            {tt::CBIndex::c_27,
              2,
              fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // add(output * output_grad)
         });
@@ -72,10 +72,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxBackwardOp::SOFTMAX)
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
         compute_defines["LOG"] = 1;
@@ -86,14 +87,14 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
         "reader_moreh_softmax_backward_w_large.cpp",
         all_cores,
         {y_is_dram, dy_is_dram},
         reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_w.cpp",
         all_cores,
@@ -101,7 +102,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
         writer_defines);
 
     // create compute kernel
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w_large.cpp",
         {
@@ -120,9 +121,9 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
@@ -130,9 +131,10 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
 
         float scaler = 1.0f;
         uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0)
+        if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
-        vector<uint32_t> reader_args = {
+        }
+        std::vector<uint32_t> reader_args = {
             output.buffer()->address(),
             output_grad.buffer()->address(),
             num_tiles_per_core,
@@ -141,7 +143,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
             *reinterpret_cast<uint32_t*>(&scaler),
             mask_w};
 
-        vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
+        std::vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

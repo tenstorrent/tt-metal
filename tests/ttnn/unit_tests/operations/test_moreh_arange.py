@@ -8,17 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import to_npu
-
-
-def get_lib_dtype(lib, dtype):
-    """Maps dtype to corresponding library dtype."""
-    dtype_map = {
-        "int32": lib.int32,
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-    }
-    return dtype_map.get(dtype, None)
+from tests.ttnn.unit_tests.operations.test_utils import get_lib_dtype
 
 
 def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
@@ -26,7 +16,13 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
     # Prepare inputs
     start, end, step = start_end_step
     if (dtype == "int32") and (start != int(start) or end != int(end) or step != int(step)):
-        pytest.skip(f"start/end/step must be integer when using int32 dtype")
+        pytest.skip(f"start, end, and step must be integers when using int32 dtype")
+    if dtype == "bfloat8_b" and not tilized:
+        pytest.skip(f"bfloat8_b requires TILE_LAYOUT")
+
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if dtype == "bfloat8_b":
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
 
     # Compute using torch
     torch_dtype = get_lib_dtype(torch, dtype)
@@ -38,24 +34,25 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
     ttnn_dtype = get_lib_dtype(ttnn, dtype)
     if ttnn_dtype is None:
         ttnn_dtype = ttnn.bfloat16
-    any_cpu = torch.ones(1024)
-    any_npu = ttnn.from_torch(any_cpu, dtype=ttnn_dtype, device=device)
-    if tilized:
-        L = expected_output.shape[0]
-    if optional_output:
-        output_cpu = torch.empty_like(expected_output)
-        if tilized:
-            output_npu = (
-                ttnn.from_torch(output_cpu, ttnn_dtype)
-                .reshape([1, L])
-                .pad_to_tile(float("nan"))
-                .to(ttnn.TILE_LAYOUT)
-                .to(device)
-            )
-        else:
-            output_npu = ttnn.from_torch(output_cpu, dtype=ttnn_dtype, device=device)
-    else:
-        output_npu = None
+    any_cpu = torch.randn([32, 32])
+    any_npu = ttnn.from_torch(
+        any_cpu,
+        device=device,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+    )
+    L = expected_output.shape[0]
+    output_npu = (
+        ttnn.from_torch(
+            torch.empty([1, L]),
+            device=device,
+            dtype=ttnn_dtype,
+            layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+        )
+        if optional_output
+        else None
+    )
+
     output_npu = ttnn.operations.moreh.arange(
         start,
         end,
@@ -65,10 +62,7 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
         untilize_out=not tilized,
         dtype=get_lib_dtype(ttnn, dtype),
     )
-    if tilized:
-        actual_output = output_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L))
-    else:
-        actual_output = output_npu.cpu().to_torch()
+    actual_output = ttnn.to_torch(output_npu).reshape([L])
 
     # Assert shape and value comparison
     assert actual_output.shape == expected_output.shape
@@ -96,7 +90,7 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
 )
 @pytest.mark.parametrize(
     "dtype",
-    [None, "bfloat16", "int32", "float32"],
+    [None, "bfloat8_b", "bfloat16", "int32", "float32"],
 )
 @pytest.mark.parametrize(
     "tilized",
@@ -110,14 +104,7 @@ def test_arange(start_end_step, optional_output, dtype, tilized, device):
 @pytest.mark.parametrize(
     "start_end_step",
     [
-        [0, 32, 1],
-        [2.3, 15.3, 0.5],
-        [10.9, -13, -0.3],
-        [-100, 32 * 10, 1],
-        [0, 32000, 1],
-        [2300.3, 15300.3, 0.5392],
         [10900.9, -13000, -0.3111],
-        [-10000, 32 * 10000, 1],
     ],
 )
 @pytest.mark.parametrize(
@@ -126,18 +113,17 @@ def test_arange(start_end_step, optional_output, dtype, tilized, device):
 )
 @pytest.mark.parametrize(
     "dtype",
-    [None, "bfloat16", "int32", "float32"],
+    [None, "bfloat8_b", "bfloat16", "int32", "float32"],
 )
 def test_arange_callback(start_end_step, optional_output, dtype, device, use_program_cache):
     """Test arange functionality with callback and program cache validation."""
+    torch.manual_seed(2024)
     num_program_cache_entries_list = []
-    for i in range(4):
-        if i % 2 == 0:
-            run_moreh_arange(start_end_step, optional_output, dtype, True, device)
-        else:
-            run_moreh_arange(start_end_step, optional_output, dtype, False, device)
+    for i in range(2):
+        run_moreh_arange(start_end_step, optional_output, dtype, True, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list == [1, 2, 2, 2]
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

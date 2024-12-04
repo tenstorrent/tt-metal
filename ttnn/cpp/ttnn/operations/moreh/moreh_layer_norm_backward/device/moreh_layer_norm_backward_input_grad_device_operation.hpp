@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -74,4 +76,4 @@ namespace ttnn::prim {
 constexpr auto moreh_layer_norm_backward_input_grad = ttnn::register_operation_with_auto_launch_op<
     "ttnn::prim::moreh_layer_norm_backward_input_grad",
     operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation>();
-}
+}  // namespace ttnn::prim

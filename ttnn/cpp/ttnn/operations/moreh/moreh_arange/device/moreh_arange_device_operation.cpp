@@ -4,7 +4,7 @@
 
 #include "moreh_arange_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
@@ -23,8 +23,9 @@ void MorehArangeOperation::validate_inputs(
     TT_FATAL(dtype != DataType::UINT32, "moreh arange not support uint32 dtype.");
 
     const auto& output = tensor_args.output;
-    if (!output.has_value())
+    if (!output.has_value()) {
         return;
+    }
     TT_FATAL(output->buffer() != nullptr, "Must have 1 output tensor.");
     TT_FATAL(
         dtype == output->get_dtype(), "If output is provided as input, its dtype should match the dtype parameter.");
@@ -59,13 +60,14 @@ MorehArangeOperation::shape_return_value_t MorehArangeOperation::compute_output_
     uint32_t num_elems = static_cast<uint32_t>(
         ceil((operation_attributes.end - operation_attributes.start) / operation_attributes.step));
 
-    if (operation_attributes.untilize_out)
+    if (operation_attributes.untilize_out) {
         return ttnn::Shape(tt::tt_metal::LegacyShape({num_elems}));
+    }
 
-    std::vector<uint32_t> output_size = {
+    SmallVector<uint32_t> output_size = {
         tt::constants::TILE_HEIGHT, tt::round_up(num_elems, tt::constants::TILE_WIDTH)};
 
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    auto dimensions_pads = SmallVector<Padding::PadDimension>();
     dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
     dimensions_pads.push_back(
         Padding::PadDimension{.front = 0, .back = tt::round_up(num_elems, tt::constants::TILE_WIDTH) - num_elems});
@@ -77,8 +79,9 @@ MorehArangeOperation::shape_return_value_t MorehArangeOperation::compute_output_
 MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output;
-    if (output.has_value())
+    if (output.has_value()) {
         return output.value();
+    }
     return create_device_tensor(
         compute_output_shapes(operation_attributes, tensor_args),
         operation_attributes.dtype,

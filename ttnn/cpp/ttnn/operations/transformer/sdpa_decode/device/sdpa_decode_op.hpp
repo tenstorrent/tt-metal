@@ -14,6 +14,7 @@
 namespace ttnn::operations::transformer {
 
 struct ScaledDotProductAttentionDecode {
+    const bool is_causal;
     std::vector<uint32_t> cur_pos;
     const std::optional<float> scale;
     const MemoryConfig output_mem_config;
@@ -23,10 +24,11 @@ struct ScaledDotProductAttentionDecode {
     const bool paged_attention;
     const std::optional<bool> share_cache;
 
-    void validate(const std::vector<Tensor>& input_tensors,
+    void validate(
+        const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
 
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
 
@@ -35,7 +37,8 @@ struct ScaledDotProductAttentionDecode {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
 
-    operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors,
+    operation::Hash compute_program_hash(
+        const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 

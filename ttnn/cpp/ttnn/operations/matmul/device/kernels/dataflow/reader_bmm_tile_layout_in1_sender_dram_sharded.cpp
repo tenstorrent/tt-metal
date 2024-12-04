@@ -23,9 +23,9 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(4);
     const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(5);
     const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t *per_core_N_reshard_bytes = (tt_l1_ptr uint32_t *)(get_arg_addr(7));
-    tt_l1_ptr uint32_t *in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t *)(get_arg_addr(8));
-    tt_l1_ptr uint32_t *in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t *)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
 
     // COMPILE TIME ARGS
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
@@ -61,7 +61,7 @@ void kernel_main() {
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
     uint32_t in1_base_addr =
-        noc_async_read_tile_dram_sharded_set_state<in1_page_size, true>(in1_tensor_addr, dram_bank_id, vc);
+        noc_async_read_tile_dram_sharded_set_state<true>(in1_tensor_addr, in1_page_size, dram_bank_id, vc);
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -131,7 +131,7 @@ void kernel_main() {
     uint32_t l1_read_addr_in3 = 0;
 
     uint32_t in3_base_addr =
-        noc_async_read_tile_dram_sharded_set_state<in3_page_size, true>(in3_tensor_addr, dram_bank_id, vc);
+        noc_async_read_tile_dram_sharded_set_state<true>(in3_tensor_addr, in3_page_size, dram_bank_id, vc);
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
         noc_async_read_tile_dram_sharded_with_state(in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);

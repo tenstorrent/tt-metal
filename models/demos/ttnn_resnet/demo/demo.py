@@ -11,8 +11,6 @@ import ttnn
 
 from models.utility_functions import (
     disable_compilation_reports,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
     profiler,
 )
 
@@ -37,7 +35,6 @@ def run_resnet_imagenet_inference(
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
-    disable_persistent_kernel_cache()
     disable_compilation_reports()
     profiler.clear()
 
@@ -95,7 +92,6 @@ def run_resnet_inference(
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
-    disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     # set up image processor
@@ -163,7 +159,6 @@ def run_resnet_inference(
     del tt_out
 
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     ttnn.synchronize_device(device)

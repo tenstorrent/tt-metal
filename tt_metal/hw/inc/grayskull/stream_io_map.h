@@ -9,7 +9,6 @@
 
 #include "risc_attribs.h"
 
-
 // TODO: in ll-buda we can probably just start at stream 0 and not at stream 8?
 /*
    Kernel operand mapping scheme:

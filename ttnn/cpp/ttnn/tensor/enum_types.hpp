@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <ostream>
+
 namespace tt::tt_metal {
 
 enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

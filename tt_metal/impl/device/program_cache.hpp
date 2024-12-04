@@ -55,9 +55,9 @@ struct ProgramCache {
 
     std::size_t num_entries() const { return this->cache_.size(); }
 
-   private:
-    inline static bool is_enabled_ = false;
+private:
+    bool is_enabled_ = false;
     std::unordered_map<uint64_t, CachedProgramFactory> cache_{};
 };
 
-}  // namespace tt::tt_metal::program_cache
+}  // namespace tt::tt_metal::program_cache::detail

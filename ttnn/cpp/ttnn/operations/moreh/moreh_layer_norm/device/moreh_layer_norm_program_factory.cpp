@@ -6,7 +6,7 @@
 
 #include "moreh_layer_norm_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_layer_norm {
@@ -71,8 +71,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    auto num_inner = tt::operations::primary::compute_inner(input_shape, normalized_dims);
-    auto num_outer = tt::operations::primary::compute_outer(input_shape, normalized_dims);
+    auto num_inner = compute_inner(input_shape, normalized_dims);
+    auto num_outer = compute_outer(input_shape, normalized_dims);
 
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();
@@ -168,44 +168,44 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         log_info(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
     }
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},                            // input
-            {tt::CB::c_in1, in1_t},                            // scaler
-            {tt::CB::c_in2, in2_t},                            // epsilon
-            {tt::CB::c_in3, in3_t},                            // gamma
-            {tt::CB::c_in4, in4_t},                            // beta
-            {tt::CB::c_in5, in5_t},                            // mask_h
-            {tt::CB::c_in6, in6_t},                            // mask_w
-            {tt::CB::c_out0, out0_t},                          // output
-            {tt::CB::c_out1, out1_t},                          // mean
-            {tt::CB::c_out2, out2_t},                          // rstd
-            {tt::CB::c_intermed0, im0_t, intermed_cb_format},  // E[x]
-            {tt::CB::c_intermed1, im1_t, intermed_cb_format},  // x - E[x]
-            {tt::CB::c_intermed2, im2_t, intermed_cb_format},  // (x - E[x])^2
-            {tt::CB::c_intermed3, im3_t, intermed_cb_format},  // Sum[(x - E[x])^2]
-            {tt::CB::c_intermed4, im4_t, intermed_cb_format},  // E[(x - E[x])^2] = Var[x]
-            {tt::CB::c_intermed5, im5_t, intermed_cb_format},  // 1.0/(sqrt(Var[x] + eps))
-            {tt::CB::c_intermed6, im6_t, intermed_cb_format},  // y * gamm + beta
-            {tt::CB::c_intermed7, im7_t, intermed_cb_format},  // Sum[x]
+            {tt::CBIndex::c_0, in0_t},                       // input
+            {tt::CBIndex::c_1, in1_t},                       // scaler
+            {tt::CBIndex::c_2, in2_t},                       // epsilon
+            {tt::CBIndex::c_3, in3_t},                       // gamma
+            {tt::CBIndex::c_4, in4_t},                       // beta
+            {tt::CBIndex::c_5, in5_t},                       // mask_h
+            {tt::CBIndex::c_6, in6_t},                       // mask_w
+            {tt::CBIndex::c_16, out0_t},                     // output
+            {tt::CBIndex::c_17, out1_t},                     // mean
+            {tt::CBIndex::c_18, out2_t},                     // rstd
+            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // E[x]
+            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // x - E[x]
+            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // (x - E[x])^2
+            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Sum[(x - E[x])^2]
+            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // E[(x - E[x])^2] = Var[x]
+            {tt::CBIndex::c_29, im5_t, intermed_cb_format},  // 1.0/(sqrt(Var[x] + eps))
+            {tt::CBIndex::c_30, im6_t, intermed_cb_format},  // y * gamm + beta
+            {tt::CBIndex::c_31, im7_t, intermed_cb_format},  // Sum[x]
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(gamma)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(beta)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(gamma)),
+        static_cast<uint32_t>(is_dram(beta)),
         block_size};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(mean_as_tensor)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(rstd_as_tensor)),
+        static_cast<uint32_t>(is_dram(output)),
+        static_cast<uint32_t>(is_dram(mean_as_tensor)),
+        static_cast<uint32_t>(is_dram(rstd_as_tensor)),
         static_cast<uint32_t>(mean_has_value),
         static_cast<uint32_t>(rstd_has_value),
         block_size};
@@ -242,10 +242,9 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
 
-    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -265,7 +264,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
@@ -288,7 +287,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
             static_cast<uint32_t>(is_lastdim_layer_norm),
             static_cast<uint32_t>(is_groupnorm)};
 
-        tt::operations::primary::CreateComputeKernel(
+        CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
@@ -336,9 +335,9 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_rows_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");

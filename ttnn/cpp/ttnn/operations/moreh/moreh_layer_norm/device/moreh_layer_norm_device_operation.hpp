@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -77,4 +79,4 @@ struct MorehLayerNormOperation {
 namespace ttnn::prim {
 constexpr auto moreh_layer_norm = ttnn::
     register_operation<"ttnn::prim::moreh_layer_norm", operations::moreh::moreh_layer_norm::MorehLayerNormOperation>();
-}
+}  // namespace ttnn::prim

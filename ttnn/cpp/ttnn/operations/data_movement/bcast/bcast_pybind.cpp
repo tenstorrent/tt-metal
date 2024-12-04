@@ -12,7 +12,6 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void py_bind_bcast(py::module& module) {
-
     auto doc =
         R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = std::nullopt, output_tensor: Optional[Tensor]) -> ttnn.Tensor
 
@@ -78,7 +77,6 @@ void py_bind_bcast(py::module& module) {
             py::arg("output_tensor") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id").noconvert() = 0});
-
 }
 
 }  // namespace ttnn::operations::data_movement::detail

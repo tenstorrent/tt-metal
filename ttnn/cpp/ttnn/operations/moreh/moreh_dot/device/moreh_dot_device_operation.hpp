@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -67,4 +69,4 @@ struct MorehDotOperation {
 namespace ttnn::prim {
 constexpr auto moreh_dot =
     ttnn::register_operation<"ttnn::prim::moreh_dot", ttnn::operations::moreh::moreh_dot::MorehDotOperation>();
-}
+}  // namespace ttnn::prim

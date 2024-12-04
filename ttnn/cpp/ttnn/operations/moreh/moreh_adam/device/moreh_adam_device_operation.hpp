@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <variant>
 #include <vector>
 
@@ -21,7 +23,7 @@ struct MorehAdamOperation {
         uint32_t step = 0;
         bool amsgrad = false;
 
-        const MemoryConfig output_mem_config;
+        const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
 
@@ -42,6 +44,10 @@ struct MorehAdamOperation {
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
+            KernelHandle compute_kernel_group1_id;
+            KernelHandle compute_kernel_group2_id;
+            CoreRangeSet core_group_1;
+            CoreRangeSet core_group_2;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -82,7 +88,7 @@ struct MorehAdamOperation {
         const std::optional<uint32_t> step,
         const std::optional<bool> amsgrad,
 
-        const std::optional<const Tensor> max_exp_avg_sq_in,
+        const std::optional<const Tensor>& max_exp_avg_sq_in,
         const std::optional<const Tensor> param_out,
         const std::optional<const Tensor> exp_avg_out,
         const std::optional<const Tensor> exp_avg_sq_out,
@@ -90,6 +96,8 @@ struct MorehAdamOperation {
 
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam
 

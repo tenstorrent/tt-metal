@@ -15,7 +15,7 @@ namespace tt_metal {
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
@@ -23,20 +23,20 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_grouped_layout(
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 // Converts convolution weights to depthwise layout with broadcasted weights
-Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_depthwise_layout(
+    Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
-
-const tt::tt_metal::LegacyShape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
 // TODO: Remove this once we switch to SimpleShape .volume()
 static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
@@ -47,12 +47,13 @@ static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
     return volume;
 }
 
-static std::vector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
-    if (shape.rank() == 0)
+static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
+    if (shape.rank() == 0) {
         return {};
+    }
 
     auto num_elements = shape.volume();
-    std::vector<uint32_t> strides;
+    ttnn::SmallVector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
         if (shape[index] == 0) {
             // Insert 0 to indicate no memory access for this dimension
@@ -66,7 +67,7 @@ static std::vector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
     return strides;
 }
 
-static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t> strides) {
+static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
@@ -74,17 +75,20 @@ static int compute_flat_indices(const vector<int>& indices, const vector<std::ui
     return flat_index;
 };
 
-static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type) {
+static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
+    auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {
-        TT_ASSERT(volume % constants::TILE_HW == 0);
-        const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;
+        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp8_b);
+        TT_ASSERT(volume % tile_hw == 0);
+        const auto bfloat8_b_volume = volume / tile_hw * tile_size_bytes;
         TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
         return bfloat8_b_volume / sizeof(std::uint32_t);
     }
     if (data_type == DataType::BFLOAT4_B) {
-        TT_ASSERT(volume % constants::TILE_HW == 0);
-        const auto bfloat4_b_volume = volume / constants::TILE_HW * constants::BFLOAT4_B_TILE_HW;
+        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp4_b);
+        TT_ASSERT(volume % tile_hw == 0);
+        const auto bfloat4_b_volume = volume / tile_hw * tile_size_bytes;
         TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
         return bfloat4_b_volume / sizeof(std::uint32_t);
     }
@@ -105,28 +109,14 @@ bool is_arch_whb0(const tt::ARCH& arch);
 bool is_cpu_tensor(const Tensor& tensor);
 bool is_device_tensor(const Tensor& tensor);
 
-// Given a multi-device tensor and a device, returns the tensor on the given device.
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device);
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
-
-// Returns true has MultiDeviceHost/MultiDevice Storage
-bool is_multi_device_tensor(const Tensor& tensor);
-
-// Given a multi-device tensor and a device, returns a list of per-device tensors.
-std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor);
-
-// Given a list of per-device shards, return a multi-device tensor
-Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy);
-
-// Given a multi-device tensor, and a function that transforms a tensor, apply the function to all per-device
+// Given a multi-device tensor, and a function that transforms a tensor, applies the function to all per-device
 // tensors.
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
 
-// Given a multi-device tensor, and a callable, apply the function to all per-device tensors.
-void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable);
+// Given a multi-device tensor, and a callable, applies the function to all per-device tensors.
+void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
-// Given a multi-device tensor, return all the devices it is mapped to.
+// Given a multi-device tensor, returns all the devices it is mapped to.
 std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
 
 uint32_t num_buffers_in_tensor(const Tensor& tensor);
@@ -186,16 +176,7 @@ inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
     return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
 }
 
-inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
-    for (const auto& tensor : tensors) {
-        if (is_tensor_on_multi_device(tensor)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-template<class T>
+template <class T>
 inline uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
     for (auto i = 0; i < shape.rank() - 2; i++) {
@@ -203,8 +184,6 @@ inline uint32_t get_batch_size(const T& shape) {
     }
     return result;
 }
-
-DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
 
 }  // namespace tt_metal
 

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -137,6 +137,8 @@ struct AllGather {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
+namespace ccl{
+namespace all_gather_detail{
 AllGather create_all_gather_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
@@ -147,6 +149,8 @@ AllGather create_all_gather_struct(
     const std::vector<Device*>& devices,
     const ccl::Topology topology
 );
+} // namespace all_gather_detail
+} // namespace ccl
 
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_full_shard_grid(
@@ -196,7 +200,7 @@ namespace ccl {
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const uint32_t dim,
+    const int32_t dim,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
@@ -205,7 +209,7 @@ Tensor all_gather(
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const uint32_t dim,
+    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links = 1,

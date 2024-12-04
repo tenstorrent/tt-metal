@@ -53,7 +53,8 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                bool all_dimensions,
                int dim,
                const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, all_dimensions, dim, memory_config); },
+                return self(input_tensor, all_dimensions, dim, memory_config);
+            },
             py::arg("input_tensor"),
             py::arg("all_dimensions") = false,
             py::arg("dim") = 0,
@@ -64,15 +65,15 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
                const Tensor& output_tensor,
-               std::vector<int64_t> &dims,
+               ttnn::SmallVector<int64_t>& dims,
                const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, output_tensor, dims, memory_config); },
+                return self(input_tensor, output_tensor, dims, memory_config);
+            },
             py::arg("input_tensor"),
             py::arg("output_tensor"),
             py::kw_only(),
-            py::arg("dims") = std::vector<int64_t>(),
-            py::arg("memory_config") = std::nullopt}
-            );
+            py::arg("dims") = ttnn::SmallVector<int64_t>(),
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

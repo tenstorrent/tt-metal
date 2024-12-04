@@ -2,22 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "unsqueeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor UnsqueezeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int dim
-    ) {
-
+ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto tensor_shape = input_tensor.get_shape();
     const auto rank = tensor_shape.rank();
-    std::vector<uint32_t> output_shape_vector;
+    SmallVector<uint32_t> output_shape_vector;
 
-    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()), "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
+    TT_FATAL(
+        input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()),
+        "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
 
     int normal_dim = dim;
     // Handle negative dimension by converting it to positive
@@ -38,10 +35,7 @@ ttnn::Tensor UnsqueezeOperation::invoke(
         output_shape_vector.push_back(1);
     }
 
-    ttnn::Shape output_shape(output_shape_vector);
-    return ttnn::reshape(input_tensor, output_shape);
-
-
+    return ttnn::reshape(input_tensor, ttnn::SimpleShape(std::move(output_shape_vector)));
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

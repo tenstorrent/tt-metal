@@ -4,17 +4,17 @@
 
 #include "moreh_norm_backward_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
 void MorehNormBackwardOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    tt::operations::primary::check_tensor(tensor_args.input, "moreh_norm_backward", "input");
-    tt::operations::primary::check_tensor(tensor_args.output, "moreh_norm_backward", "output");
-    tt::operations::primary::check_tensor(tensor_args.output_grad, "moreh_norm_backward", "output_grad");
-    tt::operations::primary::check_tensor(tensor_args.input_grad, "moreh_norm_backward", "input_grad");
+    check_tensor(tensor_args.input, "moreh_norm_backward", "input");
+    check_tensor(tensor_args.output, "moreh_norm_backward", "output");
+    check_tensor(tensor_args.output_grad, "moreh_norm_backward", "output_grad");
+    check_tensor(tensor_args.input_grad, "moreh_norm_backward", "input_grad");
 }
 
 MorehNormBackwardOperation::program_factory_t MorehNormBackwardOperation::select_program_factory(
@@ -39,8 +39,9 @@ MorehNormBackwardOperation::shape_return_value_t MorehNormBackwardOperation::com
 
 MorehNormBackwardOperation::tensor_return_value_t MorehNormBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad.has_value())
+    if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
+    }
     const auto& input = tensor_args.input;
     return create_device_tensor(
         compute_output_shapes(operation_attributes, tensor_args),
@@ -56,12 +57,12 @@ MorehNormBackwardOperation::invoke(
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    std::vector<int64_t> dims = tt::operations::primary::get_dim(dim, input.get_legacy_shape().rank());
+    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());
     return {
         operation_attributes_t{

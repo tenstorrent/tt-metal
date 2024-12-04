@@ -7,6 +7,8 @@
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_adam {
 std::vector<std::optional<Tensor>> MorehAdam::invoke(
     const Tensor& param_in,
@@ -20,11 +22,11 @@ std::vector<std::optional<Tensor>> MorehAdam::invoke(
     const std::optional<float> weight_decay,
     const std::optional<uint32_t> step,
     const std::optional<bool> amsgrad,
-    const std::optional<const Tensor> max_exp_avg_sq_in,
-    const std::optional<const Tensor> param_out,
-    const std::optional<const Tensor> exp_avg_out,
-    const std::optional<const Tensor> exp_avg_sq_out,
-    const std::optional<const Tensor> max_exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_in,
+    const std::optional<const Tensor>& param_out,
+    const std::optional<const Tensor>& exp_avg_out,
+    const std::optional<const Tensor>& exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_adam(
@@ -48,24 +50,7 @@ std::vector<std::optional<Tensor>> MorehAdam::invoke(
         compute_kernel_config);
 }
 
-std::vector<Tensor> MorehAdam::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& param_in = input_tensors.at(0);
-    const auto& grad = input_tensors.at(1);
-    const auto& exp_avg_in = input_tensors.at(2);
-    const auto& exp_avg_sq_in = input_tensors.at(3);
-
-    const auto& max_exp_avg_sq_in = optional_inputs.at(0);
-
-    return {
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-    };
-}
-
-std::vector<bool> MorehAdam::create_async_return_flag(
+OptionalTensors MorehAdam::create_async_optional_output_tensors(
     const Tensor& param_in,
     const Tensor& grad,
     const Tensor& exp_avg_in,
@@ -77,14 +62,23 @@ std::vector<bool> MorehAdam::create_async_return_flag(
     const std::optional<float> weight_decay,
     const std::optional<uint32_t> step,
     const std::optional<bool> amsgrad,
-    const std::optional<const Tensor> max_exp_avg_sq_in,
-    const std::optional<const Tensor> param_out,
-    const std::optional<const Tensor> exp_avg_out,
-    const std::optional<const Tensor> exp_avg_sq_out,
-    const std::optional<const Tensor> max_exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_in,
+    const std::optional<const Tensor>& param_out,
+    const std::optional<const Tensor>& exp_avg_out,
+    const std::optional<const Tensor>& exp_avg_sq_out,
+    const std::optional<const Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     // First three are always true, last one depends on amsgrad
-    return {true, true, true, amsgrad.value_or(false)};
+    return {
+        std::optional<Tensor>(
+            operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        std::optional<Tensor>(
+            operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        std::optional<Tensor>(
+            operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        amsgrad.value_or(false) ? std::optional<Tensor>(operation::get_workers_for_op_output(
+                                      {param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in}))
+                                : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_adam

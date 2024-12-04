@@ -11,22 +11,17 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "host_mem_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "third_party/umd/device/device_api_metal.h"
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "umd/device/device_api_metal.h"
+#include "umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_xy_pair.h"
 
-// clang-format off
-#include "noc/noc_parameters.h"
-#include "eth_interface.h"
 #include "dev_msgs.h"
-// clang-format on
+
+#include "llrt/hal.hpp"
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
-using tt::TargetDevice;
 
 enum EthRouterMode : uint32_t {
     IDLE = 0,
@@ -68,19 +63,18 @@ class Cluster {
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
     uint32_t get_harvesting_mask(chip_id_t chip) const {
-        return this->get_driver(chip).get_harvesting_masks_for_soc_descriptors().at(chip);
+        return this->driver_->get_harvesting_masks_for_soc_descriptors().at(chip);
     }
 
     //! device driver and misc apis
-    void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
     void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
 
-    void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
+    void write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
-        vector<uint32_t> &vec,
+        std::vector<uint32_t> &vec,
         uint32_t size_in_bytes,
         tt_target_dram dram,
         uint64_t addr,
@@ -92,46 +86,35 @@ class Cluster {
     void read_core(
         void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
     void read_core(
-        vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+        std::vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);
-        tt_SiliconDevice *device =
-            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(target);
         return device->get_tlb_data_from_target(virtual_chip_coord);
     }
 
-    uint32_t get_m_dma_buf_size(chip_id_t chip_id) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice *device =
-            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
-        return 0;
-    }
-
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
         int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice *device =
-            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);
-        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
         return device->get_static_tlb_writer(virtual_target);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
-        uint32_t associated_mmio_device_id = this->get_associated_mmio_device(device_id);
-        tt_SiliconDevice* driver = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(associated_mmio_device_id).get());
-        return driver->get_numa_node_for_pcie_device(associated_mmio_device_id);
+        uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
+        tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
+        return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
@@ -237,12 +220,9 @@ class Cluster {
     void assert_risc_reset();
     void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
     void open_driver(
-        chip_id_t mmio_device_id,
-        const std::set<chip_id_t> &controlled_device_ids,
         const bool &skip_driver_allocs = false);
-    void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
+    void start_driver(tt_device_params &device_params) const;
 
-    tt_device &get_driver(chip_id_t device_id) const;
     void get_metal_desc_from_tt_desc(
         const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
         const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
@@ -261,14 +241,12 @@ class Cluster {
     ARCH arch_;
     TargetDevice target_type_;
 
-    // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device
-    // driver
-    std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
+    // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
+    std::unique_ptr<tt_device> driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::string cluster_desc_path_;
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
@@ -300,44 +278,7 @@ class Cluster {
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
-    tt_device_dram_address_params dram_address_params = {DRAM_BARRIER_BASE};
-
-    tt_device_l1_address_params l1_address_params = {
-        (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_BRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_TRISC0_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC1_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC2_FIRMWARE_SIZE,
-        (uint32_t)MEM_TRISC0_FIRMWARE_BASE,
-        (uint32_t)MEM_L1_BARRIER,
-        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
-        (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
-    };
-
-    tt_driver_host_address_params host_address_params = {
-        host_mem::address_map::ETH_ROUTING_BLOCK_SIZE, host_mem::address_map::ETH_ROUTING_BUFFERS_START};
-
-    tt_driver_eth_interface_params eth_interface_params = {
-        NOC_ADDR_LOCAL_BITS,
-        NOC_ADDR_NODE_ID_BITS,
-        ETH_RACK_COORD_WIDTH,
-        CMD_BUF_SIZE_MASK,
-        MAX_BLOCK_SIZE,
-        REQUEST_CMD_QUEUE_BASE,
-        RESPONSE_CMD_QUEUE_BASE,
-        CMD_COUNTERS_SIZE_BYTES,
-        REMOTE_UPDATE_PTR_SIZE_BYTES,
-        CMD_DATA_BLOCK,
-        CMD_WR_REQ,
-        CMD_WR_ACK,
-        CMD_RD_REQ,
-        CMD_RD_DATA,
-        CMD_BUF_SIZE,
-        CMD_DATA_BLOCK_DRAM,
-        ETH_ROUTING_DATA_BUFFER_ADDR,
-        REQUEST_ROUTING_CMD_QUEUE_BASE,
-        RESPONSE_ROUTING_CMD_QUEUE_BASE,
-        CMD_BUF_PTR_MASK};
+    tt_device_l1_address_params l1_address_params;
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };

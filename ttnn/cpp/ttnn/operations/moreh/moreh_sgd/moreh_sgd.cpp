@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/moreh/moreh_sgd/device/moreh_sgd_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_sgd {
 std::vector<std::optional<Tensor>> MorehSgd::invoke(
     const Tensor& param_in,
@@ -39,16 +41,7 @@ std::vector<std::optional<Tensor>> MorehSgd::invoke(
         compute_kernel_config);
 }
 
-std::vector<Tensor> MorehSgd::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& param_in = input_tensors.at(0);
-    const auto& grad = input_tensors.at(1);
-    return {
-        Tensor(operation::get_workers_for_op_output({param_in, grad})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad}))};
-}
-
-std::vector<bool> MorehSgd::create_async_return_flag(
+OptionalTensors MorehSgd::create_async_optional_output_tensors(
     const Tensor& param_in,
     const Tensor& grad,
     const std::optional<Tensor>& momentum_buffer_in,
@@ -63,9 +56,11 @@ std::vector<bool> MorehSgd::create_async_return_flag(
     const std::optional<MemoryConfig>& param_out_memory_config,
     const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    if (momentum != 0.0f)
-        return {true, true};
-    return {true, false};
+    return {
+        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad}, {momentum_buffer_in})),
+        (momentum != 0.0f)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad}, {momentum_buffer_in}))
+            : std::nullopt};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_sgd

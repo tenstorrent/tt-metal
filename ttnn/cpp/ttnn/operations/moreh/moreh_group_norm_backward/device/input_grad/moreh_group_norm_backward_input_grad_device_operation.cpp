@@ -4,7 +4,7 @@
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 void MorehGroupNormBackwardInputGradOperation::validate_tensors(
@@ -19,8 +19,6 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     auto& gamma = tensor_args.gamma;
 
     auto num_groups = operation_attributes.num_groups;
-
-    using namespace tt::operations::primary;
 
     check_tensor(output_grad, "moreh_group_norm_backward_input_grad", "output_grad");
     check_tensor(input, "moreh_group_norm_backward_input_grad", "input");
@@ -100,8 +98,8 @@ MorehGroupNormBackwardInputGradOperation::invoke(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t num_groups,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> input_grad,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& input_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{

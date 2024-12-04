@@ -8,20 +8,17 @@
 // export TT_METAL_DPRINT_CORES='(0,0)-(0,3)' in order to see DPRINT messages
 
 void kernel_main() {
-    const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
-    const uint32_t stick_size               = get_arg_val<uint32_t>(1);
-    const uint32_t shard_height             = get_arg_val<uint32_t>(2);
-    const uint32_t shard_width_bytes        = get_arg_val<uint32_t>(3);
-    const uint32_t padded_offset_bytes      = get_arg_val<uint32_t>(4);
-    const uint32_t start_id                 = get_arg_val<uint32_t>(5);
-    const uint32_t current_core             = get_arg_val<uint32_t>(6);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t stick_size = get_arg_val<uint32_t>(1);
+    const uint32_t shard_height = get_arg_val<uint32_t>(2);
+    const uint32_t shard_width_bytes = get_arg_val<uint32_t>(3);
+    const uint32_t padded_offset_bytes = get_arg_val<uint32_t>(4);
+    const uint32_t start_id = get_arg_val<uint32_t>(5);
+    const uint32_t current_core = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
-    const InterleavedAddrGen<src_is_dram> s0 = {
-        .bank_base_address = src_addr,
-        .page_size = stick_size
-    };
+    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, shard_height);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);

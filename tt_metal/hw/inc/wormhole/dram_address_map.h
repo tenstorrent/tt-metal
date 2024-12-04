@@ -17,8 +17,7 @@ struct address_map {
     // It is reduced below for faster dram perf dump.
     // This can be increased to maximum 39896 * 1024 if more space was needed.
     static constexpr std::int32_t DRAM_EACH_BANK_PERF_BUFFER_SIZE = 4800 * 1024;
-    static constexpr std::int32_t FW_DRAM_BLOCK_SIZE =
-        MEM_TRISC0_SIZE + MEM_TRISC1_SIZE + MEM_TRISC2_SIZE;
+    static constexpr std::int32_t FW_DRAM_BLOCK_SIZE = MEM_TRISC0_SIZE + MEM_TRISC1_SIZE + MEM_TRISC2_SIZE;
 
     // Ensure values are in sync until l1_mem::address_map::FW_DRAM_BLOCK_SIZE is retired
     static_assert(l1_mem::address_map::FW_DRAM_BLOCK_SIZE == FW_DRAM_BLOCK_SIZE);

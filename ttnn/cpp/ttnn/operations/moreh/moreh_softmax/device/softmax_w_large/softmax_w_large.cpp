@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
@@ -34,7 +34,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(core_range, num_kernel_rows);
+        split_work_to_cores_wt_core_range(core_range, num_kernel_rows);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -46,20 +46,20 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 2},                              // input
-            {tt::CB::c_in1, 1},                              // mask
-            {tt::CB::c_in2, 1},                              // scaler
-            {tt::CB::c_out0, 2},                             // output
-            {tt::CB::c_intermed0, 2, intermed_data_format},  // exp(x)
-            {tt::CB::c_intermed1, 1, intermed_data_format},  // reduce
-            {tt::CB::c_intermed2, 1, intermed_data_format},  // syn
-            {tt::CB::c_intermed3, 1, intermed_data_format},  // max
-            {tt::CB::c_intermed4, 1, intermed_data_format},  // tmp
+            {tt::CBIndex::c_0, 2},                         // input
+            {tt::CBIndex::c_1, 1},                         // mask
+            {tt::CBIndex::c_2, 1},                         // scaler
+            {tt::CBIndex::c_16, 2},                        // output
+            {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
+            {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce
+            {tt::CBIndex::c_26, 1, intermed_data_format},  // syn
+            {tt::CBIndex::c_27, 1, intermed_data_format},  // max
+            {tt::CBIndex::c_28, 1, intermed_data_format},  // tmp
         });
 
     // create read/wrtie kernel
@@ -69,13 +69,13 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w_large.cpp",
         all_cores,
         {src_is_dram},
         reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w_large.cpp",
         all_cores,
@@ -83,10 +83,11 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
         writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX)
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
@@ -97,7 +98,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     }
 
     // create compute kernel
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp",
         {
@@ -116,9 +117,9 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
@@ -126,9 +127,10 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
 
         float scaler = 1.0f;
         uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0)
+        if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
-        vector<uint32_t> reader_args = {
+        }
+        std::vector<uint32_t> reader_args = {
             input.buffer()->address(),
             num_tiles_per_core,
             tile_offset,
@@ -136,7 +138,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
             *reinterpret_cast<uint32_t*>(&scaler),
             mask_w};
 
-        vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
+        std::vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

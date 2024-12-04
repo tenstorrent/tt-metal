@@ -10,18 +10,27 @@
 
 #pragma once
 
+#include "hostdevcommon/profiler_common.h"
+#include "hostdevcommon/dprint_common.h"
+
+// TODO: move these to processor specific files
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
+// Several firmware/kernel files depend on this file for dev_mem_map.h and/or noc_parameters.h inclusion
+// We don't want to pollute host code with those
+// Including them here within the guard to make FW/KERNEL happy
+// The right thing to do, would be "include what you use" in the other header files
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
-#include "hostdevcommon/profiler_common.h"
 
-// TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
 #else
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
+#endif
 #endif
 
 // Messages for host to tell brisc to go
@@ -56,16 +65,18 @@ enum dispatch_core_processor_classes {
 
     // Ethernet processor classes
     DISPATCH_CLASS_ETH_DM0 = 0,
+    DISPATCH_CLASS_ETH_DM1 = 1,
 
     DISPATCH_CLASS_MAX = 3,
 };
 
 enum dispatch_core_processor_masks {
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0     = 1 << DISPATCH_CLASS_TENSIX_DM0,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1     = 1 << DISPATCH_CLASS_TENSIX_DM1,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 = 1 << DISPATCH_CLASS_TENSIX_DM0,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 = 1 << DISPATCH_CLASS_TENSIX_DM1,
     DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
 
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
+    DISPATCH_CLASS_MASK_ETH_DM1 = 1 << DISPATCH_CLASS_ETH_DM1,
 };
 
 enum noc_index {
@@ -81,36 +92,44 @@ enum noc_mode : uint8_t {
 
 // Address offsets to kernel runtime configuration components
 // struct to densely packs values used by each processor
-struct dyn_mem_map_t {
+struct rta_offset_t {
     volatile uint16_t rta_offset;
     volatile uint16_t crta_offset;
 };
+
+// Maximums across all archs
+constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
+constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
 
 struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
+    // Ring buffer of kernel configuration data
+    volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint16_t local_cb_offset;
+    volatile uint16_t remote_cb_offset;
+    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+
     volatile uint16_t host_assigned_id;
 
-    // Ring buffer of kernel configuration data
-    volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
-    volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
-    volatile uint16_t cb_offset;
-    dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
-
-    volatile uint8_t mode;                   // dispatch mode host/dev
+    volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
-    volatile uint8_t max_cb_index;
+    volatile uint8_t max_local_cb_end_index;
+    volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
+    volatile uint8_t pad2[9];
 } __attribute__((packed));
 
 struct go_msg_t {
-    volatile uint8_t pad;
+    volatile uint8_t dispatch_message_offset;
     volatile uint8_t master_x;
     volatile uint8_t master_y;
-    volatile uint8_t signal; // INIT, GO, DONE, RESET_RD_PTR
+    volatile uint8_t signal;  // INIT, GO, DONE, RESET_RD_PTR
 } __attribute__((packed));
 
 struct launch_msg_t {  // must be cacheline aligned
@@ -121,7 +140,7 @@ struct slave_sync_msg_t {
     union {
         volatile uint32_t all;
         struct {
-            volatile uint8_t ncrisc;  // ncrisc must come first, see ncrisc-halt.S
+            volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
             volatile uint8_t trisc0;
             volatile uint8_t trisc1;
             volatile uint8_t trisc2;
@@ -157,14 +176,14 @@ struct debug_insert_delays_msg_t {
 
 enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
-    DebugSanitizeNocOK                    = 2,
-    DebugSanitizeNocAddrUnderflow         = 3,
-    DebugSanitizeNocAddrOverflow          = 4,
-    DebugSanitizeNocAddrZeroLength        = 5,
-    DebugSanitizeNocTargetInvalidXY       = 6,
-    DebugSanitizeNocMulticastNonWorker    = 7,
+    DebugSanitizeNocOK = 2,
+    DebugSanitizeNocAddrUnderflow = 3,
+    DebugSanitizeNocAddrOverflow = 4,
+    DebugSanitizeNocAddrZeroLength = 5,
+    DebugSanitizeNocTargetInvalidXY = 6,
+    DebugSanitizeNocMulticastNonWorker = 7,
     DebugSanitizeNocMulticastInvalidRange = 8,
-    DebugSanitizeNocAlignment             = 9,
+    DebugSanitizeNocAlignment = 9,
 };
 
 struct debug_assert_msg_t {
@@ -187,6 +206,7 @@ typedef enum debug_sanitize_which_riscv {
     DebugTrisc2 = 4,
     DebugErisc = 5,
     DebugIErisc = 6,
+    DebugSlaveIErisc = 7,
     DebugNumUniqueRiscs
 } riscv_id_t;
 
@@ -216,15 +236,6 @@ struct debug_stack_usage_t {
     volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
 };
 
-constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
-// TODO: when device specific headers specify number of processors
-// (and hal abstracts them on host), get these from there
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
-constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
-#else
-constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
-#endif
-
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -232,11 +243,12 @@ enum watcher_enable_msg_t {
 
 // TODO: w/ the hal, this can come from core specific defines
 constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
+constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
     struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
-    struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
+    struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -245,28 +257,40 @@ struct watcher_msg_t {
 };
 
 struct dprint_buf_msg_t {
-    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
-    uint32_t pad; // to 1024 bytes
+    DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
+    uint32_t pad;  // to 1024 bytes
 };
-
 
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#ifdef ARCH_BLACKHOLE
 static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#endif
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
 
-static constexpr uint32_t LAUNCH_NOC_ALIGMENT_PAD_COUNT = 1;
-static constexpr uint32_t PROFILER_NOC_ALIGMENT_PAD_COUNT = 2;
+static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 2;
 
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
     uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};
+
+enum class AddressableCoreType : uint8_t {
+    TENSIX = 0,
+    ETH = 1,
+    PCIE = 2,
+    DRAM = 3,
+    HARVESTED = 4,
+    UNKNOWN = 5,
+    COUNT = 6,
 };
 
 struct addressable_core_t {
@@ -290,7 +314,6 @@ struct core_info_msg_t {
     volatile uint8_t pad[29];
 };
 
-
 constexpr uint32_t launch_msg_buffer_num_entries = 4;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
@@ -300,7 +323,7 @@ struct mailboxes_t {
     struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
-    uint32_t pads_2[PROFILER_NOC_ALIGMENT_PAD_COUNT];
+    uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
     struct profiler_msg_t profiler;
     struct core_info_msg_t core_info;
 };
@@ -309,36 +332,6 @@ struct mailboxes_t {
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
-
-// TODO: move these checks into the HAL?
-#ifndef TENSIX_FIRMWARE
-// Validate assumptions on mailbox layout on host compile
-// Constexpr definitions allow for printing of breaking values at compile time
-#ifdef NCRISC_HAS_IRAM
-// These are only used in ncrisc-halt.S
-static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.ncrisc) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
-static_assert(
-    MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
-#endif
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
-static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
-static_assert( MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
-static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static_assert( ETH_LAUNCH_CHECK == 0);
-static_assert( ETH_PROFILER_CHECK == 0);
-static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-static_assert(MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
-static_assert(MEM_IERISC_MAILBOX_END <= MEM_IERISC_RESERVED2);
-#else
-static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
-static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static constexpr uint32_t TENSIX_PROFILER_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
-static_assert( TENSIX_LAUNCH_CHECK == 0);
-static_assert( TENSIX_PROFILER_CHECK == 0);
-static_assert( sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-#endif
-#endif
 
 struct eth_word_t {
     volatile uint32_t bytes_sent;

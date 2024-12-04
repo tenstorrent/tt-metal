@@ -4,22 +4,21 @@
 
 #include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::cached_program_t
 MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &outputs) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& outputs) {
     using namespace tt;
     using namespace tt::constants;
-    using namespace tt::operations::primary;
 
-    const auto &output_grad = tensor_args.output_grad;
-    const auto &input = tensor_args.input;
-    const auto &mean = tensor_args.mean;
-    const auto &rstd = tensor_args.rstd;
+    const auto& output_grad = tensor_args.output_grad;
+    const auto& input = tensor_args.input;
+    const auto& mean = tensor_args.mean;
+    const auto& rstd = tensor_args.rstd;
 
     auto gamma_grad = outputs[0];
     auto beta_grad = outputs[1];
@@ -111,21 +110,21 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},        // output_grad(==dy)
-            {CB::c_in1, in1_t},        // input(==x)
-            {CB::c_in2, in2_t},        // mean
-            {CB::c_in3, in3_t},        // rstd
-            {CB::c_in4, in4_t},        // one
-            {CB::c_in5, in5_t},        // mask_h
-            {CB::c_in6, in6_t},        // mask_w
-            {CB::c_out0, out0_t},      // gamma_grad(==dgamma)
-            {CB::c_out1, out1_t},      // beta_grad(==dbeta)
-            {CB::c_intermed0, im0_t},  // output(==y)
-            {CB::c_intermed1, im1_t},  // y * dy
-            {CB::c_intermed2, im2_t},  // Add[dy]
-            {CB::c_intermed3, im3_t},  // Add[y * dy]
-            {CB::c_intermed4, im4_t},  // x - mean
-            {CB::c_intermed5, im5_t},  // dycopy
+            {CBIndex::c_0, in0_t},    // output_grad(==dy)
+            {CBIndex::c_1, in1_t},    // input(==x)
+            {CBIndex::c_2, in2_t},    // mean
+            {CBIndex::c_3, in3_t},    // rstd
+            {CBIndex::c_4, in4_t},    // one
+            {CBIndex::c_5, in5_t},    // mask_h
+            {CBIndex::c_6, in6_t},    // mask_w
+            {CBIndex::c_16, out0_t},  // gamma_grad(==dgamma)
+            {CBIndex::c_17, out1_t},  // beta_grad(==dbeta)
+            {CBIndex::c_24, im0_t},   // output(==y)
+            {CBIndex::c_25, im1_t},   // y * dy
+            {CBIndex::c_26, im2_t},   // Add[dy]
+            {CBIndex::c_27, im3_t},   // Add[y * dy]
+            {CBIndex::c_28, im4_t},   // x - mean
+            {CBIndex::c_29, im5_t},   // dycopy
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -203,9 +202,9 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_channels_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_channels_per_core = num_channels_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_channels_per_core = num_channels_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
@@ -255,10 +254,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
 
 void MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::
     override_runtime_arguments(
-        cached_program_t &cached_program,
-        const operation_attributes_t &operation_attributes,
-        const tensor_args_t &tensor_args,
-        tensor_return_value_t &outputs) {
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& outputs) {
     auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
     auto writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
@@ -276,7 +275,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBe
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
-            auto &runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
+            auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = output_grad_buffer->address();
             runtime_args[2] = input_buffer->address();
             runtime_args[4] = mean_buffer->address();
@@ -284,7 +283,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBe
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
+            auto& runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
             if (gamma_grad_buffer != nullptr) {
                 runtime_args[0] = gamma_grad_buffer->address();
             }

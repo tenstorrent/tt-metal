@@ -30,12 +30,12 @@ enum EDM_IO_BLOCKING_MODE {
 
 
 FORCE_INLINE void push_filler_pages_to_cb(const uint32_t& cb_id, uint32_t num_pages) {
-    ASSERT(num_pages < cb_interface[cb_id].fifo_num_pages);
+    ASSERT(num_pages < get_local_cb_interface(cb_id).fifo_num_pages);
     cb_reserve_back(cb_id, num_pages);
     cb_push_back(cb_id, num_pages);
 }
 FORCE_INLINE void pop_filler_pages_from_cb(const uint32_t& cb_id, uint32_t num_pages) {
-    ASSERT(num_pages < cb_interface[cb_id].fifo_num_pages);
+    ASSERT(num_pages < get_local_cb_interface(cb_id).fifo_num_pages);
     cb_wait_front(cb_id, num_pages);
     cb_pop_front(cb_id, num_pages);
 }
@@ -47,6 +47,15 @@ FORCE_INLINE void fetch_chunk(
     noc_async_read(remote_l1_read_addr, l1_write_addr, page_size * num_pages);
     noc_async_read_barrier();
     cb_push_back(cb_id, num_pages);
+}
+
+template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode = ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>
+FORCE_INLINE void send_chunk_from_address(
+    const uint32_t& local_l1_address, const uint32_t& num_pages, const uint32_t& page_size, uint64_t remote_l1_write_addr) {
+    noc_async_write(local_l1_address, remote_l1_write_addr, page_size * num_pages);
+    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
+        noc_async_write_barrier();
+    }
 }
 
 template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode = ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>

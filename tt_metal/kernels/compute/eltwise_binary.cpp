@@ -14,13 +14,13 @@ void MAIN {
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
     uint32_t acc_to_dst = get_arg_val<uint32_t>(2);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_inp0 = cb_in0;
     constexpr auto cb_inp1 = cb_in1;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
 
-    constexpr auto cb_in2 = tt::CB::c_in2;
+    constexpr auto cb_in2 = tt::CBIndex::c_2;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
@@ -37,7 +37,6 @@ void MAIN {
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-
         cb_wait_front(cb_inp0, per_core_block_size);
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
@@ -56,9 +55,9 @@ void MAIN {
 #ifdef DST_ACCUM_MODE
 // The following define is needed if mul_tiles/_init is used
 #ifdef MUL_TILES_WITH_DST_ACCUM
-    ELTWISE_OP_INIT(cb_inp0, cb_inp1);
+        ELTWISE_OP_INIT(cb_inp0, cb_inp1);
 #else
-    ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
+        ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
 #endif
 #endif
 

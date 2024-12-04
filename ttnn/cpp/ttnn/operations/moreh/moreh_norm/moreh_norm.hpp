@@ -12,7 +12,7 @@ struct MorehNorm {
     static Tensor invoke(
         const Tensor& input,
         float p,
-        std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+        std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
         bool keepdim,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,

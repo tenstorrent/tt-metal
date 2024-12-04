@@ -18,7 +18,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::Shape& shape) {
+bool is_input_batched(const ttnn::SimpleShape& shape) {
     auto is_batched = false;
     for (auto i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
@@ -58,7 +58,13 @@ ttnn::Tensor bound_matmul(
     const auto height_b = input_tensor_b_shape[-2];
 
     if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
+        TT_THROW(
+            "ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). "
+            "The shape of first tensor was {} and the shape of second tensor was {})",
+            width_a,
+            height_b,
+            input_tensor_a_shape,
+            input_tensor_b_shape);
     }
 
     const bool has_program_config = parameters.program_config.has_value();
@@ -98,18 +104,18 @@ Tensor MatmulOperation::invoke(
     const Tensor& input_tensor_b,
     const bool transpose_a,
     const bool transpose_b,
-    const std::optional<const MemoryConfig> memory_config,
+    const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
-    const std::optional<const MatmulProgramConfig> program_config,
+    const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool user_run_batched = detail::is_input_batched(input_tensor_b.get_shape());
+    bool user_run_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
     return bound_matmul(
         input_tensor_a,
         input_tensor_b,
@@ -136,18 +142,18 @@ Tensor LinearOperation::invoke(
     const std::optional<const Tensor>& bias,
     const bool transpose_a,
     const bool transpose_b,
-    const std::optional<const MemoryConfig> memory_config,
+    const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
-    const std::optional<const MatmulProgramConfig> program_config,
+    const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool b_is_batched = detail::is_input_batched(input_tensor_b.get_shape());
+    bool b_is_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
     TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
 
     return bound_matmul(

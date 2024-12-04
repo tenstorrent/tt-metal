@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -17,8 +19,8 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
     struct operation_attributes_t {
         const uint32_t num_groups;
         const std::vector<bool> are_required_outputs;
-        const MemoryConfig gamma_grad_mem_config;
-        const MemoryConfig beta_grad_mem_config;
+        const MemoryConfig gamma_grad_memory_config;
+        const MemoryConfig beta_grad_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
@@ -70,10 +72,10 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
         const Tensor& rstd,
         const uint32_t num_groups,
         const std::vector<bool>& are_required_outputs,
-        const std::optional<const Tensor> gamma_grad,
-        const std::optional<const Tensor> beta_grad,
-        const std::optional<MemoryConfig>& gamma_grad_mem_config,
-        const std::optional<MemoryConfig>& beta_grad_mem_config,
+        const std::optional<const Tensor>& gamma_grad,
+        const std::optional<const Tensor>& beta_grad,
+        const std::optional<MemoryConfig>& gamma_grad_memory_config,
+        const std::optional<MemoryConfig>& beta_grad_memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

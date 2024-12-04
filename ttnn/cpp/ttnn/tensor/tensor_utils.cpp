@@ -4,6 +4,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 
@@ -44,29 +45,21 @@ Tensor to_weight_special_padding_tile_layout(
             }
         }
         if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto output_float_data = output_buffer.get();
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+                auto tensor = Tensor(
+                                  std::move(OwnedStorage{std::move(output_buffer)}),
+                                  output_shape,
+                                  DataType::FLOAT32,
+                                  Layout::ROW_MAJOR)
+                                  .to(Layout::TILE);
+                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
                 auto output_packed_data =
-                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    output_dtype == DataType::BFLOAT8_B
+                        ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                        : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
                 auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
-            }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto output_float_data = output_buffer.get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
+                return Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
             }
         } else {
             TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
@@ -90,7 +83,8 @@ Tensor to_weight_special_padding_tile_layout(
             conv_weight_tensor.get_storage());
     };
 
-    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
+    return ttnn::distributed::is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
+                                                                         : convert_tensor(conv_weight_tensor);
 }
 
 template <typename T>
@@ -128,29 +122,21 @@ Tensor to_weight_tile_layout(
             }
         }
         if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto output_float_data = output_buffer.get();
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+                auto tensor = Tensor(
+                                  std::move(OwnedStorage{std::move(output_buffer)}),
+                                  output_shape,
+                                  DataType::FLOAT32,
+                                  Layout::ROW_MAJOR)
+                                  .to(Layout::TILE);
+                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
                 auto output_packed_data =
-                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    output_dtype == DataType::BFLOAT8_B
+                        ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                        : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
                 auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
-            }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto output_float_data = output_buffer.get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    output_shape,
-                    output_dtype,
-                    Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
+                return Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
             }
         } else {
             TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
@@ -174,13 +160,17 @@ Tensor to_weight_tile_layout(
             },
             conv_weight_tensor.get_storage());
     };
-    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
+    return ttnn::distributed::is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
+                                                                         : convert_tensor(conv_weight_tensor);
 }
 
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -210,7 +200,10 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -242,45 +235,61 @@ Helper function to aid in converting grouped weight tensor to ungrouped weight t
 */
 template <typename T>
 static Tensor conv_group_weight_zero_pad_helper(
-    Tensor& conv_weight_tensor,
+    const Tensor& weight,
     const ttnn::SimpleShape& original_weight_shape,
     const ttnn::SimpleShape& output_weight_shape,
     uint32_t num_groups,
     DataType output_dtype) {
-    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(output_weight_shape.volume());
-    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+    auto pad_weight = [&original_weight_shape, &output_weight_shape, &num_groups, &output_dtype](
+                          const auto& conv_weight_tensor_buffer) {
+        owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(output_weight_shape.volume());
+        for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
+            int new_batch_idx = curr_batch_idx;
 
-    for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
-        int new_batch_idx = curr_batch_idx;
+            // Find which group_id the filter belongs to - through this, we can compute the offset where the padding
+            // should be applied
+            auto group_size = original_weight_shape[0] / num_groups;
+            auto group_index = curr_batch_idx / group_size;
+            auto group_id = std::min(group_index, num_groups - 1);
+            int new_channel_start_idx = group_id * original_weight_shape[1];
 
-        // Find which group_id the filter belongs to - through this, we can compute the offset where the padding should
-        // be applied
-        auto group_size = original_weight_shape[0] / num_groups;
-        auto group_index = curr_batch_idx / group_size;
-        auto group_id = std::min(group_index, num_groups - 1);
-        int new_channel_start_idx = group_id * original_weight_shape[1];
+            for (int j = 0; j < original_weight_shape[1]; j++) {
+                for (int k = 0; k < original_weight_shape[2]; k++) {
+                    for (int m = 0; m < original_weight_shape[3]; m++) {
+                        // Get value from original weight tensor
+                        auto value_flat_input_index = compute_flat_indices(
+                            ttnn::SmallVector<int>{curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
+                        auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
-        for (int j = 0; j < original_weight_shape[1]; j++) {
-            for (int k = 0; k < original_weight_shape[2]; k++) {
-                for (int m = 0; m < original_weight_shape[3]; m++) {
-                    // Get value from original weight tensor
-                    auto value_flat_input_index =
-                        compute_flat_indices({curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
-                    auto value = conv_weight_tensor_buffer[value_flat_input_index];
-
-                    // Copy value to output tensor at the adjusted position
-                    auto new_channel_idx = new_channel_start_idx + j;
-                    auto output_flat_input_index = compute_flat_indices(
-                        {new_batch_idx, new_channel_idx, k, m}, compute_strides(output_weight_shape));
-                    output_buffer[output_flat_input_index] = value;
+                        // Copy value to output tensor at the adjusted position
+                        auto new_channel_idx = new_channel_start_idx + j;
+                        auto output_flat_input_index = compute_flat_indices(
+                            ttnn::SmallVector<int>{new_batch_idx, new_channel_idx, k, m},
+                            compute_strides(output_weight_shape));
+                        output_buffer[output_flat_input_index] = value;
+                    }
                 }
             }
         }
-    }
+        return Tensor(
+            std::move(OwnedStorage{std::move(output_buffer)}), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
+    };
 
-    auto output_tensor =
-        Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
-    return output_tensor;
+    auto f = [&](const auto& tensor) {
+        return std::visit(
+            [&](auto&& storage) -> Tensor {
+                using StorageType = std::decay_t<decltype(storage)>;
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    return pad_weight(owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                    return pad_weight(borrowed_buffer::get_as<T>(storage.buffer));
+                } else {
+                    TT_THROW("Unsupported storage type");
+                }
+            },
+            tensor.get_storage());
+    };
+    return ttnn::distributed::is_multi_device_tensor(weight) ? transform(weight, f) : f(weight);
 }
 
 /*
@@ -299,10 +308,11 @@ static Tensor conv_depthwise_weight_bcast_helper(
         for (int j = 0; j < output_weight_shape[1]; j++) {
             for (int k = 0; k < output_weight_shape[2]; k++) {
                 for (int l = 0; l < output_weight_shape[3]; l++) {
-                    auto value_flat_input_index =
-                        compute_flat_indices({i, 0, k, l}, compute_strides(original_weight_shape));
+                    auto value_flat_input_index = compute_flat_indices(
+                        ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
                     auto value = conv_weight_tensor_buffer[value_flat_input_index];
-                    auto output_flat_input_index = compute_flat_indices({i, j, k, l}, compute_strides(output_weight_shape));
+                    auto output_flat_input_index =
+                        compute_flat_indices(ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
                     output_buffer[output_flat_input_index] = value;
                 }
             }
@@ -322,7 +332,7 @@ allocated output tensor with shape [out_channels, in_channels, H, W] The extra c
 divided into num_groups for each groupped filter
 */
 Tensor convert_conv_weight_tensor_to_grouped_layout(
-    Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for adding the required padding");
@@ -416,81 +426,58 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
     // Create newly allocated buffer all initialized to 0 depending on the datatype of the weight tensor
     if (output_dtype == DataType::INT32) {
         return conv_depthwise_weight_bcast_helper<int32_t>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            output_dtype);
+            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
     } else if (output_dtype == DataType::FLOAT32) {
         return conv_depthwise_weight_bcast_helper<float>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            output_dtype);
+            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
     } else if (output_dtype == DataType::BFLOAT16) {
         return conv_depthwise_weight_bcast_helper<bfloat16>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            output_dtype);
+            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
     } else if (output_dtype == DataType::UINT16) {
         return conv_depthwise_weight_bcast_helper<uint16_t>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            output_dtype);
+            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
     } else if (output_dtype == DataType::BFLOAT8_B) {
         return conv_depthwise_weight_bcast_helper<float>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            DataType::FLOAT32);
+            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, DataType::FLOAT32);
     } else {
         return conv_depthwise_weight_bcast_helper<float>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            DataType::FLOAT32);
+            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, DataType::FLOAT32);
     }
 
     TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
 }
 
-const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
-    vector<int> ns{N, C, H, W};
-    int neg_idx = -1;
-    for (int i = 0; i < ns.size(); i++) {
-        if (ns[i] == -1) {
-            TT_ASSERT(neg_idx == -1, "Only one -1 is allowed in reshape");
-            neg_idx = i;
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
+    int64_t old_volume = tensor.get_logical_volume();
+    int64_t new_volume = 1;
+    int64_t index_of_negative_1 = -1;
+    for (auto index = 0; index < shape.size(); ++index) {
+        if (shape[index] == -1) {
+            if (index_of_negative_1 != -1) {
+                std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
+                for (auto& s : shape) {
+                    error_msg += std::to_string(s) + ",";
+                }
+                error_msg += ")";
+                TT_THROW("{}", error_msg);
+            }
+            index_of_negative_1 = index;
         } else {
-            TT_ASSERT(ns[i] > 0, "New shape entries can only have -1 or positive values");
+            TT_FATAL(shape[index] > 0, "New shape entries can only have -1 or positive values");
+            new_volume *= shape[index];
         }
     }
 
-    switch (neg_idx) {
-        case 0:
-            TT_ASSERT(old_volume % C * H * W == 0);
-            N = old_volume / (C * H * W);
-            break;
-        case 1:
-            TT_ASSERT(old_volume % N * H * W == 0);
-            C = old_volume / (N * H * W);
-            break;
-        case 2:
-            TT_ASSERT(old_volume % N * C * W == 0);
-            H = old_volume / (N * C * W);
-            break;
-        case 3:
-            TT_ASSERT(old_volume % N * C * H == 0);
-            W = old_volume / (N * C * H);
-            break;
-        case -1:  // In case where there is no negative value in ns
-            TT_ASSERT(N * C * H * W == old_volume);
-            break;
-        default: TT_ASSERT(false && "Unexpected neg_idx in reshape!");
+    ttnn::SmallVector<uint32_t> new_shape(shape.size());
+    std::copy(shape.begin(), shape.end(), new_shape.begin());
+    if (index_of_negative_1 == -1) {
+        TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
+    } else {
+        TT_FATAL(old_volume % new_volume == 0, "Invalid arguments to reshape");
+        new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
-    return {(uint32_t)N, (uint32_t)C, (uint32_t)H, (uint32_t)W};
+    return ttnn::SimpleShape(std::move(new_shape));
 }
 
 bool is_arch_gs(const tt::ARCH& arch) { return arch == tt::ARCH::GRAYSKULL; }
@@ -503,129 +490,18 @@ bool is_cpu_tensor(const Tensor& tensor) {
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id) {
-    if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(multi_device_tensor.get_storage())) {
-        const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-        if (tensor_storage.has_buffer_for_device_id(device_id)) {
-            return Tensor{
-                DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
-                multi_device_tensor.get_legacy_shape(),
-                multi_device_tensor.get_dtype(),
-                multi_device_tensor.get_layout()};
-        }
-    } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage())) {
-        return multi_device_tensor;
-    }
-
-    TT_THROW("User is trying to access a device tensor that is not on device.");
-}
-
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device) {
-    return get_device_tensor(multi_device_tensor, device->id());
-}
-
-bool is_multi_device_tensor(const Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE or
-           tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;
-}
-
-std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor) {
-    std::vector<ttnn::Tensor> tensors;
-    if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceStorage>(multi_device_tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()));
-        const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-        tensors = std::vector<ttnn::Tensor>(tensor_storage.num_buffers(), Tensor());
-        for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
-            auto device_id = tensor_storage.ordered_device_ids[i];
-            tensors[i] = Tensor{
-                DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
-                tensor_storage.shapes.at(device_id),
-                multi_device_tensor.get_dtype(),
-                multi_device_tensor.get_layout()};
-        }
-        return tensors;
-    } else if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceHostStorage>(multi_device_tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()));
-        const auto& tensor_storage = std::get<MultiDeviceHostStorage>(multi_device_tensor.get_storage());
-        for (int i = 0; i < tensor_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{
-                OwnedStorage{tensor_storage.get_buffer(i)},
-                tensor_storage.shapes[i],
-                multi_device_tensor.get_dtype(),
-                multi_device_tensor.get_layout()});
-        }
-    } else {
-        TT_THROW("get_tensors_from_multi_device_storage only support multi device tensors");
-    }
-    return tensors;
-}
-
-DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor) {
-    if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-        const auto& tensor_storage = std::get<MultiDeviceStorage>(tensor.get_storage());
-        return tensor_storage.strategy;
-    } else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-        const auto& tensor_storage = std::get<MultiDeviceHostStorage>(tensor.get_storage());
-        return tensor_storage.strategy;
-    }
-    TT_THROW("Tensor is not a multi-device tensor");
-}
-
-Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy) {
-    if (tensors.empty()) {
-        TT_THROW("Cannot create multi-device tensor with empty tensor list");
-    }
-
-    if (storage_type == StorageType::MULTI_DEVICE) {
-        std::vector<int> ordered_device_ids;
-        std::unordered_map<int, tt::tt_metal::LegacyShape> shapes;
-        std::unordered_map<int, DeviceBuffer> device_buffers;
-        for (const auto& tensor : tensors) {
-            TT_ASSERT(std::holds_alternative<DeviceStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-            Device* device = std::get<DeviceStorage>(tensor.get_storage()).buffer->device();
-            auto device_id = device->id();
-            ordered_device_ids.push_back(device_id);
-            device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
-            shapes.insert({device_id, tensor.get_legacy_shape()});
-        }
-        return Tensor{
-            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, shapes},
-            tensors.at(0).get_legacy_shape(),
-            tensors.at(0).get_dtype(),
-            tensors.at(0).get_layout()};
-    } else if (storage_type == StorageType::MULTI_DEVICE_HOST) {
-        std::vector<OwnedBuffer> owned_buffers;
-        std::vector<tt::tt_metal::LegacyShape> shapes;
-        for (const auto& tensor : tensors) {
-            TT_ASSERT(std::holds_alternative<OwnedStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-            owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-            shapes.push_back(tensor.get_legacy_shape());
-        }
-        return Tensor{
-            MultiDeviceHostStorage{strategy, owned_buffers, shapes},
-            tensors.at(0).get_legacy_shape(),
-            tensors.at(0).get_dtype(),
-            tensors.at(0).get_layout()};
-    } else {
-        TT_THROW("Invalid storage type for multi-device tensor");
-    }
-}
-
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func) {
-    auto input_tensors = get_tensors_from_multi_device_storage(tensor);
+    auto input_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
     std::vector<Tensor> output_tensors(input_tensors.size());
     std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(), [&](const auto& device_tensor) {
         return transform_func(device_tensor);
     });
-    return create_multi_device_tensor(
-        output_tensors, tensor.storage_type(), get_distributed_tensor_config_from_tensor(tensor));
+    return ttnn::distributed::create_multi_device_tensor(
+        output_tensors, tensor.storage_type(), ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
 }
 
-void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable) {
-    auto input_tensors = get_tensors_from_multi_device_storage(tensor);
+void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
+    auto input_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
     for (const auto& device_tensor : input_tensors) {
         callable(device_tensor);
     }
@@ -634,7 +510,10 @@ void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable) {
 std::vector<Device*> get_devices(const Tensor& tensor) {
     std::vector<Device*> devices;
     if (tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
-        TT_ASSERT(std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
+        TT_ASSERT(
+            std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage()),
+            "Unexpected type {}",
+            tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
         const auto& tensor_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
         for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
             auto device_id = tensor_storage.ordered_device_ids[i];
@@ -673,18 +552,21 @@ Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::op
             // Stalling reads for tensor data-type and layout are needed here
             // since some worker might have raced ahead to these lookups, while
             // another worker is populating this metadata.
+            const Tile tile = tensor.get_tensor_spec().tile();
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 shard = Tensor{
                     DeviceStorage{s.get_buffer_for_device(target_device)},
                     s.get_tensor_shape_for_device(target_device),
                     tensor.get_dtype(),
-                    tensor.get_layout()};
+                    tensor.get_layout(),
+                    tile};
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 shard = Tensor{
                     OwnedStorage{s.get_buffer(buffer_index.value())},
                     s.get_tensor_shape(buffer_index.value()),
                     tensor.get_dtype(),
-                    tensor.get_layout()};
+                    tensor.get_layout(),
+                    tile};
             } else if constexpr (
                 std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage> ||
                 std::is_same_v<T, DeviceStorage>) {
@@ -701,18 +583,18 @@ void insert_buffer_and_shape_for_device(
     Device* target_device, const Tensor& shard, Tensor& tensor_to_modify, std::optional<int> buffer_index) {
     ZoneScopedN("InsertBufferAndShapeForDevice");
     std::visit(
-        [target_device, &shard, &tensor_to_modify, buffer_index](auto&& s) {
+        [target_device, &shard, buffer_index](auto&& s) {
             using T = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
+                    shard.tensor_attributes->tensor_spec.shape());
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
+                    shard.tensor_attributes->tensor_spec.shape());
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
@@ -731,8 +613,9 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
     // Tensor has workers (on device) or runtime mode is synchronous or tensor has multiple buffers.
     // No need to check for borrowed storage.
     if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
-        tensor.tensor_attributes->num_shards_to_be_populated > 1)
+        tensor.tensor_attributes->num_shards_to_be_populated > 1) {
         return tensor;
+    }
 
     if (tensor.storage_type() == StorageType::BORROWED) {
         ZoneScopedN("CopyBorrowedStorage");
@@ -742,8 +625,7 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
             [&owned_tensor, &tensor](auto&& buffer) {
                 using BorrowedStorageType = std::vector<std::decay_t<decltype(*(buffer.begin()))>>;
                 auto owned_buf = owned_buffer::create(BorrowedStorageType(buffer.begin(), buffer.end()));
-                owned_tensor =
-                    Tensor(OwnedStorage{owned_buf}, tensor.get_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
+                owned_tensor = Tensor(OwnedStorage{owned_buf}, tensor.get_tensor_spec());
             },
             borrowed_buffer);
         return owned_tensor;

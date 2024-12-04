@@ -4,7 +4,7 @@
 
 #include "moreh_mean_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -20,14 +20,13 @@ void MorehMeanOperation::validate_tensors(
         operation_attributes.dim);
     TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
 
-    tt::operations::primary::check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
-    tt::operations::primary::check_tensor(output, "moreh_mean", "output", {DataType::BFLOAT16});
+    check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
+    check_tensor(output, "moreh_mean", "output", {DataType::BFLOAT16});
 
-    tt::operations::primary::validate_input_with_dim(input, operation_attributes.dim);
+    validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        tt::operations::primary::validate_output_with_keepdim(
-            input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
+        validate_output_with_keepdim(input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
 MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory(
@@ -77,8 +76,8 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
         return Shape(tt::tt_metal::LegacyShape(output_shape.value, padding));
     }
 
-    std::vector<uint32_t> shape;
-    std::vector<Padding::PadDimension> pad_dimensions;
+    ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
     const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
     auto input_padding = input_shape.value.padding();
@@ -87,8 +86,9 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
     // e.g. (2, 64, 64) with dim 0 to be (64, 64)
     for (int i = 0; i < input_rank; ++i) {
         bool is_reduced_dim = (i == dim);
-        if (is_reduced_dim && !is_tile_dim)
+        if (is_reduced_dim && !is_tile_dim) {
             continue;
+        }
 
         shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
         pad_dimensions.push_back((is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));

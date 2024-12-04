@@ -4,7 +4,7 @@
 
 #include "moreh_dot_device_operation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
@@ -18,8 +18,8 @@ void MorehDotOperation::validate(const operation_attributes_t& operation_attribu
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
 
-    TT_FATAL(tt::operations::primary::is_1d_tensor(input_a), "Invalid input tensor dimensions.");
-    TT_FATAL(tt::operations::primary::is_1d_tensor(input_b), "Invalid input tensor dimensions.");
+    TT_FATAL(is_1d_tensor(input_a), "Invalid input tensor dimensions.");
+    TT_FATAL(is_1d_tensor(input_b), "Invalid input tensor dimensions.");
 
     const auto& a_shape_wo_padding = input_a.get_legacy_shape().without_padding();
     const auto& b_shape_wo_padding = input_b.get_legacy_shape().without_padding();
@@ -67,8 +67,8 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     const auto& input_tensor = tensor_args.input_a;
     return create_device_tensor(
         output_shape,
-        input_tensor.tensor_attributes->dtype,
-        input_tensor.tensor_attributes->layout,
+        input_tensor.dtype(),
+        input_tensor.layout(),
         input_tensor.device(),
         operation_attributes.memory_config);
 }
@@ -84,8 +84,7 @@ std::tuple<MorehDotOperation::operation_attributes_t, MorehDotOperation::tensor_
         operation_attributes_t{
             dtype.value_or(input_a.dtype()),
             memory_config.value_or(input_a.memory_config()),
-            init_device_compute_kernel_config(
-                input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{input_a, input_b, output}};
 }
 

@@ -4,7 +4,7 @@
 
 #include "moreh_norm_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
@@ -13,8 +13,9 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     auto floored_p = std::floor(p);
     auto decimal = p - floored_p;
     bool p_is_negative = floored_p < 0.0f;
-    if (p_is_negative)
+    if (p_is_negative) {
         floored_p = -floored_p;
+    }
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
@@ -46,15 +47,15 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         adjusted_input_shape[dim] = (is_tile_dim) ? tt::constants::TILE_HEIGHT : 1;
         adjusted_input_shape_wo_padding[dim] = 1;
 
-        std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
 
-        tt::operations::primary::expand_to_max_dim(input_dim, adjusted_input_shape);
-        tt::operations::primary::expand_to_max_dim(output_dim, output_shape);
-        tt::operations::primary::expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
-        tt::operations::primary::expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
+        expand_to_max_dim(input_dim, adjusted_input_shape);
+        expand_to_max_dim(output_dim, output_shape);
+        expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
+        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
             TT_FATAL(input_dim[i] == output_dim[i], "Input and output dimensions do not match at index {}.", i);
@@ -66,8 +67,8 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
     } else {
         TT_FATAL(!is_tile_dim, "Dimension {} should not be a tile dimension when keepdim is false.", dim);
 
-        std::vector<uint32_t> expected_output_shape;
-        std::vector<uint32_t> expected_output_shape_wo_padding;
+        ttnn::SmallVector<uint32_t> expected_output_shape;
+        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_rank; ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
@@ -78,8 +79,9 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         }
 
         for (int i = 0; i < input_rank; ++i) {
-            if (i == dim)
+            if (i == dim) {
                 continue;
+            }
             TT_FATAL(
                 input_shape[i] == expected_output_shape[i],
                 "Input and expected output shapes do not match at index {}.",
@@ -97,23 +99,26 @@ void MorehNormOperation::validate_inputs(
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
     const auto dim = operation_attributes.dim;
-    tt::operations::primary::check_tensor(input, "moreh_norm", "input");
-    tt::operations::primary::check_tensor(output, "moreh_norm", "output");
+    check_tensor(input, "moreh_norm", "input");
+    check_tensor(output, "moreh_norm", "output");
     validate_input_tensor_with_dim(input, dim);
-    if (output.has_value())
+    if (output.has_value()) {
         validate_output_tensor_with_keepdim(input, output.value(), dim, operation_attributes.keepdim);
+    }
 }
 
 MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
     const auto input_rank = tensor_args.input.get_legacy_shape().rank();
-    if (dim == input_rank - 1)
-        return ProgramFactoryW{};
-    else if (dim == input_rank - 2)
-        return ProgramFactoryH{};
-    else
-        return ProgramFactoryOther{};
+    auto INF = std::numeric_limits<float>::infinity();
+    if (dim == input_rank - 1) {
+        return ProgramFactoryWOther{};
+    } else if (dim == input_rank - 2) {
+        return ProgramFactoryHOther{};
+    } else {
+        return ProgramFactoryNCOther{};
+    }
 }
 
 void MorehNormOperation::validate_on_program_cache_miss(
@@ -139,19 +144,21 @@ MorehNormOperation::shape_return_value_t MorehNormOperation::compute_output_shap
         if (is_tile_dim) {
             shape[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
-        } else
+        } else {
             shape[dim] = 1;
+        }
         return Shape{tt::tt_metal::LegacyShape(shape, padding)};
     }
 
-    std::vector<uint32_t> shape;
-    std::vector<Padding::PadDimension> pad_dimensions;
+    ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
     const std::size_t output_rank = is_tile_dim ? input_rank : input_rank - 1;
     auto input_padding = input_shape.padding();
     for (int i = 0; i < input_rank; ++i) {
         bool is_reduced_dim = (i == dim);
-        if (is_reduced_dim && !is_tile_dim)
+        if (is_reduced_dim && !is_tile_dim) {
             continue;
+        }
         shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape[i]));
         pad_dimensions.push_back((is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));
     }
@@ -161,8 +168,9 @@ MorehNormOperation::shape_return_value_t MorehNormOperation::compute_output_shap
 MorehNormOperation::tensor_return_value_t MorehNormOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output;
-    if (output.has_value())
+    if (output.has_value()) {
         return output.value();
+    }
     const auto& input = tensor_args.input;
     return create_device_tensor(
         compute_output_shapes(operation_attributes, tensor_args),

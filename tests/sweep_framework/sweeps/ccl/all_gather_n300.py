@@ -8,12 +8,10 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
-import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case_n300
-from ttnn import ShardTensorToMesh
+from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case_n300
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -47,6 +45,7 @@ parameters = {
         ],
         "enable_async": [True],
         "num_iters": [1],
+        "tile": [(32, 32)],
     },
 }
 
@@ -60,6 +59,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["num_links"],
         test_vector["input_dtype"],
         test_vector["layout"],
+        test_vector["tile"],
     )
     if is_known_failure:
         return True, f"Skipping unsupported case {message}."
@@ -92,6 +92,7 @@ def run(
     mem_config,
     enable_async,
     num_iters,
+    tile,
     *,
     device,
 ) -> list:
@@ -110,7 +111,9 @@ def run(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(all_devices[i], mem_config))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout).to(all_devices[i], mem_config)
+        )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):

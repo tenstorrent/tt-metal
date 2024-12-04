@@ -15,9 +15,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"  // For CoreType
+#include "umd/device/tt_soc_descriptor.h"  // For CoreType
 
 namespace tt {
 
@@ -107,6 +107,7 @@ class RunTimeOptions {
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
+    bool profiler_buffer_usage_enabled = false;
 
     bool null_kernels = false;
 
@@ -123,7 +124,7 @@ class RunTimeOptions {
 
     bool enable_dispatch_data_collection = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
    public:
     RunTimeOptions();
@@ -255,6 +256,7 @@ class RunTimeOptions {
     inline bool get_profiler_enabled() { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
+    inline bool get_profiler_buffer_usage_enabled() { return profiler_buffer_usage_enabled; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }
@@ -278,7 +280,7 @@ class RunTimeOptions {
     inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
-    inline tt_metal::DispatchCoreType get_dispatch_core_type() { return dispatch_core_type; }
+    inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
 
    private:
     // Helper functions to parse feature-specific environment vaiables.

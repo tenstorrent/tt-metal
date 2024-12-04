@@ -18,16 +18,16 @@ constexpr uint32_t num_mask_tiles = 3;
 constexpr uint32_t MASK_TILE_H_IDX = 0;
 constexpr uint32_t MASK_TILE_W_IDX = 1;
 constexpr uint32_t MASK_TILE_HW_IDX = 2;
-constexpr uint32_t cb_in0 = tt::CB::c_in0;
-constexpr uint32_t cb_in1 = tt::CB::c_in1;
-constexpr uint32_t cb_in2 = tt::CB::c_in2;
-constexpr uint32_t cb_in3 = tt::CB::c_in3;
-constexpr uint32_t bias_cb_id = tt::CB::c_in4;
-constexpr uint32_t cb_out0 = tt::CB::c_out0;
-constexpr uint32_t cb_intermed0 = tt::CB::c_intermed0;
-constexpr uint32_t cb_intermed1 = tt::CB::c_intermed1;
-constexpr uint32_t cb_intermed2 = tt::CB::c_intermed2;
-constexpr uint32_t cb_intermed3 = tt::CB::c_intermed3;
+constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+constexpr uint32_t cb_in2 = tt::CBIndex::c_2;
+constexpr uint32_t cb_in3 = tt::CBIndex::c_3;
+constexpr uint32_t bias_cb_id = tt::CBIndex::c_4;
+constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+constexpr uint32_t cb_intermed0 = tt::CBIndex::c_24;
+constexpr uint32_t cb_intermed1 = tt::CBIndex::c_25;
+constexpr uint32_t cb_intermed2 = tt::CBIndex::c_26;
+constexpr uint32_t cb_intermed3 = tt::CBIndex::c_27;
 
 ////////////////////
 // inline functions
@@ -43,7 +43,7 @@ FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idx
 // TODO: move it to moreh_common.hpp if more use cases.
 FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
 #if defined FP32_DEST_ACC_EN
-    unpack_reconfig_data_format_srca(icb);
+    reconfig_data_format_srca(icb);
 #endif
     transpose_wh_init_short(icb);
     tile_regs_acquire();
@@ -135,7 +135,7 @@ FORCE_INLINE void mask_tile_to_cb(
         // mul input tile with mask tile
         tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_in0, cb_mask);
+        reconfig_data_format(cb_in0, cb_mask);
 #endif
         mul_tiles_init(cb_in, cb_mask);
         mul_tiles(cb_in, cb_mask, 0, mask_tidx, 0);
@@ -163,13 +163,13 @@ FORCE_INLINE void bias_add(bool is_scalar_bias) {
     tile_regs_acquire();
     if (is_scalar_bias) {
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_intermed3, bias_cb_id);
+        reconfig_data_format(cb_intermed3, bias_cb_id);
 #endif
         add_bcast_scalar_init_short(cb_intermed3, bias_cb_id);
         add_tiles_bcast_scalar(cb_intermed3, bias_cb_id, 0, 0, 0);
     } else {
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_intermed3, bias_cb_id);
+        reconfig_data_format(cb_intermed3, bias_cb_id);
 #endif
         add_bcast_rows_init_short(cb_intermed3, bias_cb_id);
         add_tiles_bcast_rows(cb_intermed3, bias_cb_id, 0, 0, 0);
@@ -270,7 +270,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             if (enable_reload) {
                 cb_wait_front(cb_intermed0, onetile);
 #if defined FP32_DEST_ACC_EN
-                unpack_reconfig_data_format_srca(cb_intermed0);
+                reconfig_data_format_srca(cb_intermed0);
 #endif
                 copy_tile_to_dst_init_short(cb_intermed0);
                 copy_tile(cb_intermed0, 0, 0);
@@ -287,7 +287,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 
             mm_init_short(mm_src0, mm_src1);
 #if defined FP32_DEST_ACC_EN
-            unpack_reconfig_data_format(mm_src0, mm_src1);
+            reconfig_data_format(mm_src0, mm_src1);
 #endif
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0, false);
             tile_regs_commit();

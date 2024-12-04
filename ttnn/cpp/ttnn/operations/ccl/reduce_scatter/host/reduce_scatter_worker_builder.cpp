@@ -11,6 +11,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace ccl {
 namespace reduce_scatter_detail {
@@ -146,10 +148,10 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_receiver_kernel_ct
         // TODO: rangeify
         auto const& input_sharded_tensor_args = ShardedAddrGenArgBuilder::emit_ct_args(local_input_tensor);
         std::copy(input_sharded_tensor_args.begin(), input_sharded_tensor_args.end(), std::back_inserter(args));
+        ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(local_input_tensor, "input");
+
         auto const& output_sharded_tensor_args = ShardedAddrGenArgBuilder::emit_ct_args(local_output_tensor);
         std::copy(output_sharded_tensor_args.begin(), output_sharded_tensor_args.end(), std::back_inserter(args));
-
-        ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(local_input_tensor, "input");
         ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(local_output_tensor, "output");
     }
 
@@ -630,8 +632,12 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).buffer()->buffer_type()), // buffer type
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).layout()), // page layout
         static_cast<uint32_t>(this->edm_termination_mode), // (EDM) termination mode
-        static_cast<uint32_t>(tt::CB::c_in0) // cb_id
+        static_cast<uint32_t>(tt::CBIndex::c_0) // cb_id
     };
+
+    auto const& input_tensor = this->op_config.get_input_tensor(0);
+    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(input_tensor);
+    std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
 
     return args;
 }

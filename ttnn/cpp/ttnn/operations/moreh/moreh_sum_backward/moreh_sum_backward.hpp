@@ -10,7 +10,7 @@ struct MorehSumBackward {
     static Tensor invoke(
         const Tensor& output_grad,
         const std::optional<Tensor>& input,
-        std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+        const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
         bool keepdim,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,
@@ -22,4 +22,4 @@ namespace ttnn {
 constexpr auto moreh_sum_backward = ttnn::register_operation_with_auto_launch_op<
     "ttnn::moreh_sum_backward",
     ttnn::operations::moreh::moreh_sum_backward::MorehSumBackward>();
-}
+}  // namespace ttnn

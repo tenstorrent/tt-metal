@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 25
+        default: 35
   workflow_dispatch:
     inputs:
       arch:
@@ -33,7 +33,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 25
+        default: 35
 jobs:
   unit-tests-slow-dispatch:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
@@ -48,7 +48,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: ${{ inputs.arch }}
@@ -64,7 +64,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U0593J2RQRZ # Bill Teng
+          owner: U06CXU895AP # Michael Chiou
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
         if: ${{ failure() }}

@@ -8,11 +8,11 @@
 #include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
-void bind_moreh_group_norm_backward_operation(py::module &module) {
+void bind_moreh_group_norm_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_group_norm_backward,
-        "Moreh moreh_group_norm_backward Operation",
+        "Moreh Group Norm Backward Operation",
         ttnn::pybind_arguments_t{
             py::arg("output_grad"),
             py::arg("input"),

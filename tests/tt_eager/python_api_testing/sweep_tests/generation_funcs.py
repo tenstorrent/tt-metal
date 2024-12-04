@@ -716,6 +716,10 @@ def _gen_reshape_args_from_volume(volume, step, out_dims=4):
         for c in _get_factors(volume, 1):
             b = volume // c
             shapes.append({"reshape_dims": (b, c)})
+    elif out_dims == 1:
+        shapes.append({"reshape_dims": (volume,)})
+    else:
+        shapes.append({"reshape_dims": []})
 
     return shapes
 
@@ -806,7 +810,7 @@ def gen_tilize_with_val_padding_args(
             ]
             output_tensor_shape[-2] = nearest_32(output_tensor_shape[-2])
             output_tensor_shape[-1] = nearest_32(output_tensor_shape[-1])
-            pad_value = random.uniform(-100, 100)
+            pad_value = float(random.uniform(-100, 100))
             # Cast to bfloat16 then back to float for exact match
             pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
 

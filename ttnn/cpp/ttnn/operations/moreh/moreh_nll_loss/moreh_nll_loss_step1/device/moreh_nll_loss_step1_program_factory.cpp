@@ -4,7 +4,7 @@
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -75,37 +75,36 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        tt::operations::primary::CreateCircularBuffer(
+        CreateCircularBuffer(
             program,
             all_cores,
             data_format,
             {
-                {CB::c_in0, 1, tt::DataFormat::Int32},       // target
-                {CB::c_in1, 1},                              // weight
-                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
-                {CB::c_out0, 1},                             // output
+                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
+                {CBIndex::c_1, 1},                         // weight
+                {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
+                {CBIndex::c_16, 1},                        // output
             });
     } else {
-        tt::operations::primary::CreateCircularBuffer(
+        CreateCircularBuffer(
             program,
             all_cores,
             data_format,
             {
-                {CB::c_in0, 1, tt::DataFormat::Int32},       // target
-                {CB::c_in1, weight_num_tile},                // weight
-                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
-                {CB::c_out0, 1},                             // output
+                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
+                {CBIndex::c_1, weight_num_tile},           // weight
+                {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
+                {CBIndex::c_16, 1},                        // output
             });
     }
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
         static_cast<uint32_t>(weight_has_value)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -126,10 +125,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
@@ -139,16 +138,16 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_units_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_units_per_core = units_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_units_per_core = units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t element_size = weight_has_value ? weight.value().element_size() : 0;
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             target_addr,
             weight_addr,
             static_cast<uint32_t>(ignore_index),
@@ -161,7 +160,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             target.element_size(),
         };
 
-        vector<uint32_t> writer_args = {output_addr, num_units_per_core, tile_offset};
+        std::vector<uint32_t> writer_args = {output_addr, num_units_per_core, tile_offset};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

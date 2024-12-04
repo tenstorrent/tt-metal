@@ -7,8 +7,10 @@
 #include "device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/moreh_layer_norm_backward_input_grad_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_layer_norm_backward {
-std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
+std::vector<std::optional<Tensor>> moreh_layer_norm_backward_gamma_beta_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -62,7 +64,7 @@ std::vector<std::optional<Tensor>> MorehLayerNormBackward::invoke(
         outputs.push_back(std::nullopt);
     }
 
-    const auto& gamma_beta_grad = moreh_layernorm_backward_gamma_beta_grad(
+    const auto& gamma_beta_grad = moreh_layer_norm_backward_gamma_beta_grad(
         output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, memory_config, compute_kernel_config);
     outputs.push_back(gamma_beta_grad[0]);
     outputs.push_back(gamma_beta_grad[1]);
@@ -70,16 +72,7 @@ std::vector<std::optional<Tensor>> MorehLayerNormBackward::invoke(
     return outputs;
 }
 
-std::vector<Tensor> MorehLayerNormBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& output_grad = input_tensors.at(0);
-    return {
-        Tensor(operation::get_workers_for_op_output({output_grad})),
-        Tensor(operation::get_workers_for_op_output({output_grad})),
-        Tensor(operation::get_workers_for_op_output({output_grad}))};
-}
-
-std::vector<bool> MorehLayerNormBackward::create_async_return_flag(
+OptionalTensors MorehLayerNormBackward::create_async_optional_output_tensors(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -94,6 +87,15 @@ std::vector<bool> MorehLayerNormBackward::create_async_return_flag(
     const auto return_input_grad = input_grad.has_value();
     const auto return_gamma_grad = gamma_grad.has_value();
     const auto return_beta_grad = beta_grad.has_value();
-    return {return_input_grad, return_gamma_grad, return_beta_grad};
+    return {
+        return_input_grad
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
+            : std::nullopt,
+        return_gamma_grad
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
+            : std::nullopt,
+        return_beta_grad
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
+            : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward

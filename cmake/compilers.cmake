@@ -10,11 +10,20 @@ function(FIND_AND_SET_CLANG17)
     set(CMAKE_C_COMPILER "${CLANG_17}" PARENT_SCOPE)
 endfunction()
 
-
 function(CHECK_COMPILERS)
     message(STATUS "Checking compilers")
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        if(ENABLE_LIBCXX)
+            find_library(LIBC++ c++)
+            find_library(LIBC++ABI c++abi)
+            if(NOT LIBC++ OR NOT LIBC++ABI)
+                message(
+                    FATAL_ERROR
+                    "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
+                )
+            endif()
+        endif()
         if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17.0.0" OR CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL "18.0.0")
             message(WARNING "Only Clang-17 is tested right now")
         endif()
@@ -26,21 +35,5 @@ function(CHECK_COMPILERS)
         endif()
     else()
         message(FATAL_ERROR "Unsupported compiler: ${CMAKE_CXX_COMPILER_ID} ! Only Clang and GCC are supported")
-    endif()
-endfunction()
-
-
-function(ADJUST_COMPILER_WARNINGS)
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(compiler_warnings INTERFACE
-            -Wsometimes-uninitialized -Wno-c++11-narrowing -Wno-error=local-type-template-args
-            -Wno-delete-non-abstract-non-virtual-dtor -Wno-c99-designator -Wno-shift-op-parentheses -Wno-non-c-typedef-for-linkage
-            -Wno-deprecated-this-capture -Wno-deprecated-volatile -Wno-deprecated-builtins -Wno-deprecated-declarations
-        )
-    else() # GCC-12 or higher
-        target_compile_options(compiler_warnings INTERFACE
-            -Wno-deprecated -Wno-attributes -Wno-stringop-overread -Wno-stringop-overflow -Wno-maybe-uninitialized -Wno-missing-requires
-            -Wno-narrowing -Wno-non-template-friend -Wno-error=non-template-friend
-        )
     endif()
 endfunction()

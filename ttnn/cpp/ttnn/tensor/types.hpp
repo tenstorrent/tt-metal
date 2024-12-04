@@ -12,78 +12,16 @@
 #include <algorithm>
 
 #include "common/bfloat16.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
-namespace ttnn {
-    /**
-SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
-Context:
-    Both Shape and LegacyShape can carry padding information.
-    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
-    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
-Plan:
-    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
-    We will clearly see where full shape is used vs logical or physical shape is used.
-    Need to split .hpp and .cpp
-**/
-class SimpleShape {
-public:
-    template <typename T>
-    explicit SimpleShape(const std::vector<uint32_t>& shape) : value(shape) {}
-    explicit SimpleShape(std::vector<uint32_t>&& shape) : value(std::move(shape)) {}
-    explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}
-    template<std::size_t N>
-    explicit SimpleShape(const std::array<uint32_t, N>& arr) : value(arr.begin(), arr.end()) {}
-
-    template<std::size_t N>
-    bool operator==(const std::array<uint32_t, N> &other) const {
-        bool sameSize = value.size() == N;
-        return sameSize && std::equal(value.begin(), value.end(), other.begin());
-    }
-
-    bool operator==(const SimpleShape &other) const;
-    bool operator==(const std::vector<uint32_t> &other) const;
-
-    uint32_t operator[](int32_t index) const;
-    uint32_t &operator[](int32_t index);
-
-    size_t rank() const { return this->value.size(); }
-    uint64_t volume() const;
-
-    auto cbegin() const { return this->value.cbegin(); }
-    auto cend() const { return this->value.cend(); }
-
-    const std::vector<uint32_t>& as_vector() const { return this->value; }
-
-    // Needed for reflect / fmt
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->value); }
-
-private:
-    std::vector<uint32_t> value;
-};
-
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile = std::nullopt);
-
-} // namespace ttnn
-
-inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
-    os << "SimpleShape([";
-    for (size_t i = 0; i < shape.rank(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << shape[i];
-    }
-    os << "])";
-    return os;
-}
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace tt {
 
@@ -170,7 +108,7 @@ struct Padding {
 
     Padding(const std::size_t rank);
     Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value);
-    Padding(const std::vector<PadDimension> &pad_dimensions, PadValue pad_value);
+    Padding(tt::stl::Span<const PadDimension> pad_dimensions, PadValue pad_value);
 
     template <std::size_t Rank>
     Padding(const std::array<std::array<uint32_t, 2>, Rank> pad_dimensions, PadValue pad_value) :
@@ -242,9 +180,11 @@ class LegacyShape {
     ~LegacyShape() = default;
 
     LegacyShape(const std::initializer_list<uint32_t>);
-    LegacyShape(const std::vector<uint32_t> &);
+    LegacyShape(tt::stl::Span<const uint32_t>);
+    LegacyShape(const ttnn::SmallVector<uint32_t>& vec) : LegacyShape(tt::stl::Span(vec)) {};
     LegacyShape(const std::initializer_list<uint32_t>, const Padding &);
-    LegacyShape(const std::vector<uint32_t> &, const Padding &);
+    LegacyShape(tt::stl::Span<const uint32_t>, const Padding &);
+    LegacyShape(const ttnn::SmallVector<uint32_t>& vec, const Padding &padding) : LegacyShape(tt::stl::Span(vec), padding) {};
 
     explicit LegacyShape(const LegacyShape &, const Padding &);
 
@@ -270,7 +210,7 @@ class LegacyShape {
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
-    explicit LegacyShape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
+    explicit LegacyShape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
         rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
         TT_ASSERT(
             shape.size() == shape_with_tile_padding.size(),
@@ -281,6 +221,10 @@ class LegacyShape {
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
+    explicit LegacyShape(const ttnn::SmallVector<uint32_t>& shape, const ttnn::SmallVector<uint32_t>& shape_with_tile_padding)
+        : LegacyShape(tt::stl::Span<const uint32_t>(shape), tt::stl::Span<const uint32_t>(shape_with_tile_padding)) {}
+    explicit LegacyShape(const std::initializer_list<uint32_t> shape, const std::initializer_list<uint32_t> shape_with_tile_padding)
+        : LegacyShape(ttnn::SmallVector<uint32_t>(shape), ttnn::SmallVector<uint32_t>(shape_with_tile_padding)) {}
 
     std::size_t rank() const;
     std::size_t size() const;
@@ -304,14 +248,7 @@ class LegacyShape {
     }
     friend std::ostream &operator<<(std::ostream &os, const LegacyShape &shape);
 
-    Array4D to_array_4D() const {
-        TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
-        Array4D ret_array;
-        for (int i = 0; i < rank(); i++) {
-            ret_array[i] = this->operator[](i);
-        }
-        return ret_array;
-    }
+    Array4D to_array_4D() const;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const tt::tt_metal::LegacyShape &shape) {
@@ -342,6 +279,8 @@ struct MemoryConfig {
     bool is_l1() const;
     bool is_dram() const;
 };
+
+std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
@@ -408,7 +347,7 @@ struct DeviceStorage {
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
-    inline bool is_allocated() const { return buffer && buffer->size() > 0; }
+    inline bool is_allocated() const { return buffer && buffer->is_allocated(); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -473,10 +412,164 @@ struct BorrowedStorage {
     inline bool is_allocated() const { return true; }
 };
 
+} // namespace tt_metal
+} // namespace tt
+
+
+namespace ttnn {
+namespace types {
+
+namespace detail {
+template <std::size_t Rank>
+static tt::tt_metal::LegacyShape compute_ttl_shape(
+    const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &padding) {
+    auto ttl_shape = std::array<uint32_t, Rank>{};
+    for (auto index = 0; index < Rank; index++) {
+        ttl_shape[index] = shape[index] + padding[index][0] + padding[index][1];
+    }
+    return tt::tt_metal::LegacyShape{tt::stl::Span(ttl_shape), tt::tt_metal::Padding{padding, tt::tt_metal::Padding::PadValue::Any}};
+}
+
+}  // namespace detail
+
+
+struct Shape {
+    // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
+    // It is used to flip the default value of operator[] to return the shape without padding
+    tt::tt_metal::LegacyShape value;
+
+    Shape(const std::initializer_list<uint32_t> dimensions) : value{dimensions} {}
+
+    Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
+
+    template <std::size_t Rank>
+    Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
+
+    template <std::size_t Rank>
+    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
+        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
+
+    template <std::size_t Rank>
+    explicit Shape(
+        const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
+        value{detail::compute_ttl_shape(shape, tile_padding)} {}
+
+    Shape(tt::stl::Span<const uint32_t> shape) : value{tt::tt_metal::LegacyShape{shape}} {}
+
+    Shape(const SmallVector<uint32_t>& shape) : value{tt::tt_metal::LegacyShape{shape}} {}
+
+    explicit Shape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
+        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
+
+    explicit Shape(const std::initializer_list<uint32_t> shape, const std::initializer_list<uint32_t> shape_with_tile_padding) :
+        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
+
+    explicit Shape(tt::stl::Span<const uint32_t> shape, const tt::tt_metal::Padding &padding) :
+        value{tt::tt_metal::LegacyShape{shape, padding}} {}
+
+    explicit Shape(const Shape &shape, const tt::tt_metal::Padding &padding) :
+        value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
+
+    Shape(const SimpleShape& shape): value{shape.view()} {}
+
+    const auto rank() const { return this->value.rank(); }
+
+    const size_t size() const { return this->rank(); }
+
+    // Returns the padded shape, padding information is stripped
+    [[deprecated("Replaced by padded_shape()")]]
+    const tt::tt_metal::Padding &padding() const { return this->value.padding(); }
+
+    const uint32_t get_normalized_index(std::int64_t index) const { return this->value.get_normalized_index(index); }
+
+    Shape with_tile_padding() const {
+        return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
+    }
+
+    SimpleShape padded_shape() const {
+        SmallVector<uint32_t> values(rank());
+        for (size_t i = 0; i < values.size(); i++) {
+            values[i] = this->value[i]; // value stored LegacyShape, its operator[] returns padded value
+        }
+        return SimpleShape(std::move(values));
+    }
+
+    // Returns the shape without padding, padding information is stripped
+    SimpleShape logical_shape() const {
+        SmallVector<uint32_t> values(this->rank());
+        for (size_t i = 0; i < values.size(); i++) {
+            values[i] = this->operator[](i); // operator[] returns the shape without padding
+        }
+        return SimpleShape(std::move(values));
+    }
+
+    bool has_tile_padding() const {
+        auto rank = this->rank();
+        for (auto index = 0; index < rank; index++) {
+            if (this->has_tile_padding(index)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool has_tile_padding(int dim) const {
+        return this->value.padding()[dim].front > 0 or this->value.padding()[dim].back > 0;
+    }
+
+    bool operator==(const Shape &other) const {
+        const auto &shape_a = this->value;
+        const auto &shape_b = other.value;
+        // tt::tt_metal::LegacyShape comparison doesn't take padding into account
+        return (shape_a == shape_b and shape_a.without_padding() == shape_b.without_padding());
+    }
+
+    template <std::size_t Rank>
+    bool operator==(const std::array<std::uint32_t, Rank> &other) const {
+        return Shape{this->value.without_padding()} == Shape{other};
+    }
+
+    bool operator!=(const Shape &other) const { return not(*this == other); }
+
+    // Returns value without padding
+    uint32_t operator[](std::int64_t index) const;
+
+    const Shape to_rank(size_t new_rank) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("value");
+    const auto attribute_values() const { return std::forward_as_tuple(this->value); }
+};
+
+static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
+    const auto shape_with_tile_padding = shape.with_tile_padding();
+    const auto &padding = shape.value.padding();
+    os << "ttnn.Shape([";
+    for (auto i = 0; i < shape.rank(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << shape[i];
+        if (padding[i].back > 0) {
+            os << "[" << shape_with_tile_padding[i] << "]";
+        }
+    }
+    os << "])";
+    return os;
+}
+
+}  // namespace types
+
+using types::Shape;
+
+}  // namespace ttnn
+
+namespace tt {
+namespace tt_metal {
+
 struct MultiDeviceHostStorage {
     DistributedTensorConfig strategy;
     std::vector<OwnedBuffer> buffers;
-    std::vector<LegacyShape> shapes;
+    std::vector<ttnn::Shape> shapes;
     mutable std::mutex mtx;
 
     friend void swap(MultiDeviceHostStorage &first, MultiDeviceHostStorage &second) {
@@ -491,7 +584,7 @@ struct MultiDeviceHostStorage {
 
     MultiDeviceHostStorage() = default;
     MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<LegacyShape> shapes_) :
+        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<ttnn::Shape> shapes_) :
         strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
     MultiDeviceHostStorage(MultiDeviceHostStorage &&other) { swap(*this, other); }
     // unfotunately we need to have this code written manually.
@@ -522,7 +615,7 @@ struct MultiDeviceHostStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
-    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const LegacyShape shape) {
+    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const ttnn::Shape shape) {
         std::lock_guard<std::mutex> lock(mtx);
         buffers[buffer_index] = buffer;
         shapes[buffer_index] = shape;
@@ -540,7 +633,7 @@ struct MultiDeviceHostStorage {
         return buffers[buffer_index];
     }
 
-    LegacyShape get_tensor_shape(int shape_index) const {
+    ttnn::Shape get_tensor_shape(int shape_index) const {
         std::lock_guard<std::mutex> lock(mtx);
         TT_ASSERT(shape_index < shapes.size(), "Buffer not found for device {}", shape_index);
         return shapes[shape_index];
@@ -566,7 +659,7 @@ struct MultiDeviceStorage {
     DistributedTensorConfig strategy;
     std::vector<int> ordered_device_ids;
     std::unordered_map<int, DeviceBuffer> buffers;
-    std::unordered_map<int, LegacyShape> shapes;
+    std::unordered_map<int, ttnn::Shape> shapes;
     mutable std::mutex buffer_mtx;
     mutable std::mutex shape_mtx;
     MultiDeviceStorage() = default;
@@ -584,7 +677,7 @@ struct MultiDeviceStorage {
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
         std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, LegacyShape> shapes_) :
+        std::unordered_map<int, ttnn::Shape> shapes_) :
         strategy(std::move(strategy_)),
         ordered_device_ids(std::move(ordered_device_ids_)),
         buffers(std::move(buffers_)),
@@ -638,8 +731,9 @@ struct MultiDeviceStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
+    std::vector<DeviceBuffer> get_buffers() const;
 
-    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const LegacyShape shape) {
+    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const ttnn::Shape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
         TT_ASSERT(
             device == buffer->device(),
@@ -673,7 +767,7 @@ struct MultiDeviceStorage {
         return buffers.at(device_id);
     }
 
-    inline LegacyShape get_tensor_shape_for_device(Device *device) const {
+    inline ttnn::Shape get_tensor_shape_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
         TT_ASSERT(
             shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
@@ -701,7 +795,7 @@ struct MultiDeviceStorage {
         return std::all_of(
             ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto &&device_id) {
                 const auto &buffer = buffers.at(device_id);
-                return buffer && buffer->size() > 0;
+                return buffer && buffer->is_allocated();
             });
     }
 };
@@ -716,177 +810,3 @@ constexpr void raise_unsupported_storage() {
 }  // namespace tt_metal
 
 }  // namespace tt
-
-namespace ttnn {
-namespace types {
-
-namespace detail {
-template <std::size_t Rank>
-static tt::tt_metal::LegacyShape compute_ttl_shape(
-    const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &padding) {
-    auto ttl_shape = std::array<uint32_t, Rank>{};
-    for (auto index = 0; index < Rank; index++) {
-        ttl_shape[index] = shape[index] + padding[index][0] + padding[index][1];
-    }
-    return tt::tt_metal::LegacyShape{ttl_shape, tt::tt_metal::Padding{padding, tt::tt_metal::Padding::PadValue::Any}};
-}
-
-}  // namespace detail
-
-
-struct Shape {
-    // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
-    // It is used to flip the default value of operator[] to return the shape without padding
-    tt::tt_metal::LegacyShape value;
-
-    Shape(const std::initializer_list<uint32_t> dimensions) : value{dimensions} {}
-
-    Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
-
-    template <std::size_t Rank>
-    Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
-
-    template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
-        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
-
-    template <std::size_t Rank>
-    explicit Shape(
-        const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
-        value{detail::compute_ttl_shape(shape, tile_padding)} {}
-
-    Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
-
-    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
-        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
-
-    explicit Shape(const std::vector<uint32_t> &shape, const Padding &padding) :
-        value{tt::tt_metal::LegacyShape{shape, padding}} {}
-
-    explicit Shape(const Shape &shape, const Padding &padding) :
-        value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
-
-    const auto rank() const { return this->value.rank(); }
-
-    const size_t size() const { return this->rank(); }
-
-    // Returns the padded shape, padding information is stripped
-    [[deprecated("Replaced by padded_shape()")]]
-    const tt::tt_metal::Padding &padding() const { return this->value.padding(); }
-
-    const uint32_t get_normalized_index(std::int64_t index) const { return this->value.get_normalized_index(index); }
-
-    Shape with_tile_padding() const {
-        return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
-    }
-
-    SimpleShape padded_shape() const {
-        std::vector<uint32_t> values(rank());
-        for (size_t i = 0; i < values.size(); i++) {
-            values[i] = this->value[i]; // value stored LegacyShape, its operator[] returns padded value
-        }
-        return SimpleShape(std::move(values));
-    }
-
-    // Returns the shape without padding, padding information is stripped
-    SimpleShape logical_shape() const {
-        std::vector<uint32_t> values(this->rank());
-        for (size_t i = 0; i < values.size(); i++) {
-            values[i] = this->operator[](i); // operator[] returns the shape without padding
-        }
-        return SimpleShape(std::move(values));
-    }
-
-    bool has_tile_padding() const {
-        auto rank = this->rank();
-        for (auto index = 0; index < rank; index++) {
-            if (this->has_tile_padding(index)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool has_tile_padding(int dim) const {
-        return this->value.padding()[dim].front > 0 or this->value.padding()[dim].back > 0;
-    }
-
-    bool operator==(const Shape &other) const {
-        const auto &shape_a = this->value;
-        const auto &shape_b = other.value;
-        // tt::tt_metal::LegacyShape comparison doesn't take padding into account
-        return (shape_a == shape_b and shape_a.without_padding() == shape_b.without_padding());
-    }
-
-    template <std::size_t Rank>
-    bool operator==(const std::array<std::uint32_t, Rank> &other) const {
-        return Shape{this->value.without_padding()} == Shape{other};
-    }
-
-    bool operator!=(const Shape &other) const { return not(*this == other); }
-
-    // Returns value without padding
-    uint32_t operator[](std::int64_t index) const;
-
-    template <std::size_t NewRank>
-    const Shape to_rank() const {
-        auto rank = this->rank();
-        auto &shape = *this;
-        auto shape_with_tile_padding = shape.with_tile_padding();
-
-        std::array<uint32_t, NewRank> new_shape{};
-        std::array<uint32_t, NewRank> new_padded_shape{};
-        if (rank == NewRank) {
-            return Shape(shape);
-        } else if (rank > NewRank) {
-            auto num_extra_dims = rank - NewRank;
-
-            for (auto index = 0; index < num_extra_dims; index++) {
-                TT_ASSERT(shape[index] == 1);
-                TT_ASSERT(shape_with_tile_padding[index] == 1);
-            }
-
-            for (auto index = 0; index < NewRank; index++) {
-                new_shape[index] = shape[index + num_extra_dims];
-                new_padded_shape[index] = shape_with_tile_padding[index + num_extra_dims];
-            }
-        } else {
-            auto num_missing_dims = NewRank - rank;
-
-            new_shape.fill(1);
-            new_padded_shape.fill(1);
-
-            for (auto index = 0; index < rank; index++) {
-                new_shape[index + num_missing_dims] = shape[index];
-                new_padded_shape[index + num_missing_dims] = shape_with_tile_padding[index];
-            }
-        }
-        return Shape(new_shape, new_padded_shape);
-    }
-
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    const auto attribute_values() const { return std::forward_as_tuple(this->value); }
-};
-
-static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
-    const auto shape_with_tile_padding = shape.with_tile_padding();
-    const auto &padding = shape.value.padding();
-    os << "ttnn.Shape([";
-    for (auto i = 0; i < shape.rank(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << shape[i];
-        if (padding[i].back > 0) {
-            os << "[" << shape_with_tile_padding[i] << "]";
-        }
-    }
-    os << "])";
-    return os;
-}
-
-}  // namespace types
-
-using types::Shape;
-
-}  // namespace ttnn

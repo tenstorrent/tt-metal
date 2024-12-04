@@ -18,17 +18,17 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Trace {
-   private:
+private:
     static std::atomic<uint32_t> global_trace_id;
 
-   public:
+public:
     Trace() = delete;
 
     static uint32_t next_id();
 
     // Thread-safe accessors to manage trace instances
     static void validate_instance(const TraceBuffer& trace_buffer);
-    static void initialize_buffer(CommandQueue& cq, std::shared_ptr<TraceBuffer> trace_buffer);
+    static void initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer);
     static std::shared_ptr<TraceBuffer> create_empty_trace_buffer();
 };
 

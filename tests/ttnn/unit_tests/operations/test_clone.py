@@ -10,30 +10,11 @@ from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
-    to_cpu,
-    to_npu,
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+    get_lib_dtype,
 )
-
-
-def get_lib_dtype(lib, dtype):
-    """
-    Maps string-based data types to their corresponding library-specific dtypes.
-
-    Parameters:
-    lib: library module (e.g., torch, ttnn)
-        The library for which the dtype mapping is required.
-    dtype: str
-        The string representation of the data type (e.g., 'bfloat16', 'float32', 'int32').
-
-    Returns:
-    Corresponding library-specific dtype or None if not found.
-    """
-    dtype_map = {
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-        "int32": lib.int32,
-    }
-    return dtype_map.get(dtype, None)
 
 
 def run_clone(
@@ -43,6 +24,7 @@ def run_clone(
     input_dtype,
     output_dtype,
     tilized,
+    compute_kernel_options,
     device,
 ):
     """
@@ -62,6 +44,8 @@ def run_clone(
         Data type of the output tensor (must be None or match input_dtype when not tilized).
     tilized: bool
         Whether to use TILE_LAYOUT or ROW_MAJOR_LAYOUT for NPU tensor.
+    compute_kernel_options:
+        Configuration options for the compute kernel.
     device: ttnn.device
         Device where the operation is performed (e.g., NPU device).
 
@@ -69,9 +53,9 @@ def run_clone(
     pytest.skip: When certain conditions on dtype mismatch or layout are not met.
     """
     if input_dtype == "int32":
-        cpu_input = torch.randint(low=-10, high=11, size=shape, dtype=get_lib_dtype(torch, input_dtype))
+        torch_input = torch.randint(low=-10, high=11, size=shape, dtype=get_lib_dtype(torch, input_dtype))
     else:
-        cpu_input = 2 * torch.rand(size=shape, dtype=get_lib_dtype(torch, input_dtype)) - 1
+        torch_input = 2 * torch.rand(size=shape, dtype=get_lib_dtype(torch, input_dtype)) - 1
 
     if input_dtype == "int32":
         if output_dtype and output_dtype != "int32":
@@ -80,23 +64,26 @@ def run_clone(
         pytest.skip("For int32 output, input_dtype must also be int32.")
     if output_dtype != input_dtype and output_dtype and not tilized:
         pytest.skip("When not tilized, dtype conversion is not supported.")
+    if not tilized and shape and shape[-1] % 2 == 1:
+        pytest.skip("TTNN failed to create a ROW_MAJOR_LAYOUT tensor from a PyTorch tensor with an odd last dimension.")
 
-    npu_input = to_npu(
-        cpu_input,
-        device,
-        npu_dtype=get_lib_dtype(ttnn, input_dtype),
-        npu_layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=get_lib_dtype(ttnn, input_dtype),
+        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, input_memory_config)
 
-    npu_output = ttnn.clone(
-        npu_input,
+    ttnn_output = ttnn.clone(
+        ttnn_input,
         dtype=get_lib_dtype(ttnn, output_dtype),
         memory_config=output_memory_config,
+        compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
     )
 
-    cpu_output = to_cpu(npu_output, shape)
+    torch_output = ttnn.to_torch(ttnn_output).reshape(shape)
 
-    passing, out = comp_allclose_and_pcc(torch.ops.aten.clone(cpu_input), cpu_output, rtol=0.01, atol=0.01)
+    passing, out = comp_allclose_and_pcc(torch.ops.aten.clone(torch_input), torch_output, rtol=0.01, atol=0.01)
     logger.info(out)
     assert passing
 
@@ -144,6 +131,7 @@ def test_clone_shape(
         "bfloat16",
         None,
         tilized,
+        None,
         device,
     )
 
@@ -178,6 +166,7 @@ def test_clone_memory_config(
         "bfloat16",
         None,
         tilized,
+        None,
         device,
     )
 
@@ -203,14 +192,16 @@ def test_clone_memory_config(
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_clone_dtype_conversion(
     input_dtype,
     output_dtype,
     tilized,
+    compute_kernel_options,
     device,
 ):
     """
-    Test case to verify the clone operation with various input/output dtype combinations.
+    Test case to verify the clone operation with various input/output dtype combinations and compute kernel configs.
     """
     torch.manual_seed(2024)
     run_clone(
@@ -220,6 +211,7 @@ def test_clone_dtype_conversion(
         input_dtype,
         output_dtype,
         tilized,
+        compute_kernel_options,
         device,
     )
 
@@ -246,10 +238,11 @@ def test_clone_callback(
             "bfloat16",
             None,
             tilized,
+            None,
             device,
         )
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0

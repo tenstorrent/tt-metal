@@ -21,18 +21,15 @@ struct MorehAdam {
         const std::optional<float> weight_decay,
         const std::optional<uint32_t> step,
         const std::optional<bool> amsgrad,
-        const std::optional<const Tensor> max_exp_avg_sq_in,
-        const std::optional<const Tensor> param_out,
-        const std::optional<const Tensor> exp_avg_out,
-        const std::optional<const Tensor> exp_avg_sq_out,
-        const std::optional<const Tensor> max_exp_avg_sq_out,
+        const std::optional<const Tensor>& max_exp_avg_sq_in,
+        const std::optional<const Tensor>& param_out,
+        const std::optional<const Tensor>& exp_avg_out,
+        const std::optional<const Tensor>& exp_avg_sq_out,
+        const std::optional<const Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
-    static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
-
-    static std::vector<bool> create_async_return_flag(
+    static OptionalTensors create_async_optional_output_tensors(
         const Tensor& param_in,
         const Tensor& grad,
         const Tensor& exp_avg_in,
@@ -44,11 +41,11 @@ struct MorehAdam {
         const std::optional<float> weight_decay,
         const std::optional<uint32_t> step,
         const std::optional<bool> amsgrad,
-        const std::optional<const Tensor> max_exp_avg_sq_in,
-        const std::optional<const Tensor> param_out,
-        const std::optional<const Tensor> exp_avg_out,
-        const std::optional<const Tensor> exp_avg_sq_out,
-        const std::optional<const Tensor> max_exp_avg_sq_out,
+        const std::optional<const Tensor>& max_exp_avg_sq_in,
+        const std::optional<const Tensor>& param_out,
+        const std::optional<const Tensor>& exp_avg_out,
+        const std::optional<const Tensor>& exp_avg_sq_out,
+        const std::optional<const Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };

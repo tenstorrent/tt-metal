@@ -26,12 +26,11 @@ jobs:
       TT_METAL_DOCKER_IMAGE: ${{ inputs.os }}
       IMAGE: tt-metalium/ubuntu-20.04-amd64
       DOCKERFILE: ubuntu-20.04-amd64
-    environment: dev
     runs-on:
       - build-docker
       - in-service
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
         with:
           fetch-depth: 0
       - name: Login to GitHub Container Registry

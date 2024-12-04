@@ -8,11 +8,11 @@
 #include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm {
-void bind_moreh_group_norm_operation(py::module &module) {
+void bind_moreh_group_norm_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_group_norm,
-        "Moreh moreh_group_norm Operation",
+        "Moreh Group Norm Operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
             py::arg("num_groups"),

@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "common/base_types.hpp"
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -42,14 +42,13 @@ void validate_tensors(
     const auto& input = tensor_args.input;
     auto& output = tensor_args.output;
 
-    tt::operations::primary::check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
-    tt::operations::primary::check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
 
-    tt::operations::primary::validate_input_with_dim(input, operation_attributes.dim);
+    validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        tt::operations::primary::validate_output_with_keepdim(
-            input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
+        validate_output_with_keepdim(input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
 
@@ -93,8 +92,8 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
 
         output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
     } else {
-        std::vector<uint32_t> shape;
-        std::vector<Padding::PadDimension> pad_dimensions;
+        ttnn::SmallVector<uint32_t> shape;
+        ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
         auto input_padding = input_shape.value.padding();
 
@@ -102,8 +101,9 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
         for (int i = 0; i < input_rank; ++i) {
             bool is_reduced_dim = (i == operation_attributes.dim);
-            if (is_reduced_dim && !is_tile_dim)
+            if (is_reduced_dim && !is_tile_dim) {
                 continue;
+            }
 
             shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
             pad_dimensions.push_back(
@@ -131,7 +131,7 @@ MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensor
         tensor_args.input.get_dtype(),
         tensor_args.input.get_layout(),
         tensor_args.input.device(),
-        operation_attributes.output_mem_config);
+        operation_attributes.memory_config);
 }
 
 std::tuple<MorehSumOperation::operation_attributes_t, MorehSumOperation::tensor_args_t> MorehSumOperation::invoke(
@@ -139,13 +139,13 @@ std::tuple<MorehSumOperation::operation_attributes_t, MorehSumOperation::tensor_
     const int64_t dim,
     const bool keepdim,
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         {
             dim,
             keepdim,
-            output_mem_config.value_or(input.memory_config()),
+            memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
         },
         {input, output}};

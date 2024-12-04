@@ -12,6 +12,7 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 #include <type_traits>
 #include <optional>
 
@@ -30,15 +31,16 @@ template <class T>
 Tensor* get_tensor(T& maybe_tensor) {
     Tensor* output_tensor = nullptr;
     if constexpr (is_optional_v<T>) {
-        if (maybe_tensor.has_value())
+        if (maybe_tensor.has_value()) {
             output_tensor = &maybe_tensor.value();
+        }
     } else {
         output_tensor = &maybe_tensor;
     }
     return output_tensor;
 }
 
-void check_output(auto& output_tensors, const std::vector<Device *>& workers) {
+void check_output(auto& output_tensors, const std::vector<Device*>& workers) {
     for (auto& output_tensor_like : output_tensors) {
         auto output_tensor = get_tensor(output_tensor_like);
         if (!output_tensor) {
@@ -64,8 +66,7 @@ auto& get_workers(auto& output_tensors) {
     TT_THROW("Workers not found in output tensors.");
 }
 
-
-template<class Callable, class OutputType>
+template <class Callable, class OutputType>
 void launch_op(
     Callable&& op_func,
     const Tensors input_tensors,
@@ -118,7 +119,6 @@ void launch_op(
         if (output_tensor) {
             output_tensor_ref_count[i] = output_tensor->tensor_attributes->record_main_thread_ref_count();
         }
-
     }
     for (int i = 0; i < optional_output_tensors.size(); i++) {
         if (optional_output_tensors[i].has_value()) {
@@ -210,15 +210,13 @@ void launch_op(
                     for (int i = 0; i < local_tensors.size(); i++) {
                         auto output_tensor = get_tensor(outputs[i]);
                         auto local_tensor = get_tensor(local_tensors[i]);
+
                         // not sure if it the case but in my opinion it should not happen
                         // both output and local tensor should be presented or absent
-                        TT_ASSERT((output_tensor != nullptr && local_tensor != nullptr) || (local_tensor == nullptr && output_tensor == nullptr));
+                        TT_ASSERT(
+                            (output_tensor != nullptr && local_tensor != nullptr) ||
+                            (local_tensor == nullptr && output_tensor == nullptr));
                         if (!output_tensor || !local_tensor) {
-                            continue;
-                        }
-
-                        // The return type is vector<optional<Tensor>>, and this refers to the case where the i-th value is nullopt.
-                        if (output_tensor->tensor_attributes.use_count() != 0 && local_tensor->tensor_attributes.use_count() == 0) {
                             continue;
                         }
 
@@ -235,19 +233,14 @@ void launch_op(
                         insert_buffer_and_shape_for_device(target_device, *local_tensor, *output_tensor);
                         int num_workers_completed = (output_tensor->tensor_attributes->num_workers_completed)++;
                         if (not num_workers_completed) {
-                            output_tensor->tensor_attributes->shape = local_tensor->tensor_attributes->shape;
-                            output_tensor->tensor_attributes->dtype = local_tensor->tensor_attributes->dtype;
-                            output_tensor->tensor_attributes->layout = local_tensor->tensor_attributes->layout;
-                            output_tensor->tensor_attributes->tile = local_tensor->tensor_attributes->tile;
-                            output_tensor->tensor_attributes->metadata_populated = true;
+                            output_tensor->set_tensor_spec(local_tensor->tensor_spec());
                         }
                     }
                 }
             });
 
         for (auto target_device : workers) {
-            target_device->push_work(std::make_shared<std::function<void()>>(
-                [target_device, work_lambda]() mutable { (*work_lambda)(target_device); }));
+            target_device->push_work([target_device, work_lambda]() mutable { (*work_lambda)(target_device); });
         }
     }
 
@@ -276,4 +269,4 @@ void launch_op(
         }
     }
 }
-}
+}  // namespace tt::tt_metal::operation
