@@ -47,12 +47,12 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t read_cb_size = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t total_num_blocks_in_buffer = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(rt_args_idx++);
     tt_l1_ptr uint32_t* tensor_addrs = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     tt_l1_ptr uint32_t* page_sizes = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     tt_l1_ptr uint32_t* num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
-    tt_l1_ptr uint32_t* num_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     tt_l1_ptr uint32_t* block_num_tiles =
-        (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+        (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
 
     constexpr uint32_t cb_id = 0;
 
