@@ -3141,11 +3141,18 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
 std::vector<CoreCoord> Device::translated_worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        worker_cores[idx] = translated_worker_core_from_logical_core(logical_cores[idx]);
+        worker_cores[idx] = this->translated_worker_core_from_logical_core(logical_cores[idx]);
 
     return worker_cores;
 }
 
+std::vector<CoreCoord> Device::translated_ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
+    std::vector<CoreCoord> eth_cores(logical_cores.size());
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++) {
+        eth_cores[idx] = this->translated_ethernet_core_from_logical_core(logical_cores[idx]);
+    }
+    return eth_cores;
+}
 CoreCoord Device::translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const {
     return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }

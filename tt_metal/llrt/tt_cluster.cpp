@@ -182,6 +182,15 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_logical_to_virtual_coord_mapping();
+    const auto& sdesc_to_use = this->sdesc_per_chip_.at(0);
+    for (const auto& core_to_profiler_id : sdesc_to_use.physical_routing_to_profiler_flat_id) {
+        if (std::find(sdesc_to_use.physical_workers.begin(), sdesc_to_use.physical_workers.end(), core_to_profiler_id.first) != sdesc_to_use.physical_workers.end()) {
+            this->virtual_routing_to_profiler_flat_id_.insert({this->get_translated_coordinate_from_physical_coordinates(0, core_to_profiler_id.first, CoreType::WORKER), core_to_profiler_id.second});
+        } else {
+            this->virtual_routing_to_profiler_flat_id_.insert({this->get_translated_coordinate_from_physical_coordinates(0, core_to_profiler_id.first, CoreType::ETH), core_to_profiler_id.second});
+        }
+
+    }
 }
 
 void Cluster::assert_risc_reset() {
@@ -212,6 +221,10 @@ void Cluster::get_metal_desc_from_tt_desc(
         chip_id_t id = it.first;
         this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
     }
+}
+
+const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id() const {
+    return this->virtual_routing_to_profiler_flat_id_;
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {

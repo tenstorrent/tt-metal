@@ -120,6 +120,7 @@ class Device {
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
     std::vector<CoreCoord> translated_worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
+    std::vector<CoreCoord> translated_ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
     std::vector<CoreCoord> get_optimal_dram_bank_to_worker_core_assignment();
 
     CoreCoord translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const;

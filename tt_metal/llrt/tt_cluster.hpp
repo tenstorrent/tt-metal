@@ -220,7 +220,7 @@ class Cluster {
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
     const std::unordered_map<int, int>& get_worker_logical_to_virtual_x() const { return this->worker_logical_to_virtual_x_; };
     const std::unordered_map<int, int>& get_worker_logical_to_virtual_y() const { return this->worker_logical_to_virtual_y_; };
-
+    const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id() const;
    private:
     Cluster();
     ~Cluster();
@@ -275,7 +275,7 @@ class Cluster {
     std::unordered_map<int, int> worker_logical_to_virtual_x_;
     std::unordered_map<int, int> worker_logical_to_virtual_y_;
     std::unordered_map<CoreCoord, CoreCoord> eth_logical_to_virtual_;
-
+    std::unordered_map<CoreCoord, int32_t> virtual_routing_to_profiler_flat_id_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     bool is_tg_cluster_;
