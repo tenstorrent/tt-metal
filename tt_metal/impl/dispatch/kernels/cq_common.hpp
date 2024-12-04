@@ -125,9 +125,9 @@ template <enum CQNocFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSe
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (wait) {
-        WAYPOINT("NSSW");
+        WAYPOINT("CNSW");
         while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-        WAYPOINT("NSSD");
+        WAYPOINT("CNSD");
     }
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
@@ -184,12 +184,12 @@ uint32_t cq_noc_async_write_with_state_any_len(
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false>
 FORCE_INLINE void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
-    WAYPOINT("NSIW");
+    WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF)) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
-    WAYPOINT("NSID");
+    WAYPOINT("CNID");
 
     constexpr bool multicast_path_reserve = true;
     constexpr bool posted = false;
