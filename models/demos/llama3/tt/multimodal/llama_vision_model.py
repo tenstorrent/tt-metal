@@ -510,62 +510,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_out = tt_out[:, :, :B, :].reshape(B, S, -1)
         return tt_out
 
-    def forward(
-        self,
-        position_ids: torch.Tensor,
-        tokens: torch.Tensor,
-        cross_attention_masks: torch.Tensor,
-        full_text_row_masked_out_mask: torch.Tensor,
-        xattn_caches,  # list of ttnn tensors
-        text_only_inference: bool = False,
-        user_id=0,
-        vision_tokens=None,
-    ) -> torch.Tensor:
-        """
-        This method takes torch tensors in, returns torch tensors.
-        It also determines whether or not to run prefill or decode.
-        """
-        B = tokens.shape[0]
-        S = position_ids.shape[0]  # TODO: Get B, S from tokens when we don't pass full tokens around
-        mode = "decode" if S == 1 else "prefill"
-
-        # pos_arg is used in preparation in different ways based on mode
-        pos_arg = S if mode == "prefill" else position_ids.item()
-        prepare_fn = self.prepare_inputs_decode if mode == "decode" else self.prepare_inputs_prefill
-        (
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            tt_position_id,
-            rot_mats,
-            transformation_mats,
-        ) = prepare_fn(
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            pos_arg,
-        )
-
-        logits = self.text_model.forward(
-            tt_h,
-            xattn_mask=tt_xattn_mask,
-            full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
-            full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
-            xattn_caches=xattn_caches,
-            current_pos=tt_position_id,
-            rot_mat=rot_mats,
-            transformation_mats=transformation_mats,
-            user_id=user_id,
-            mode=mode,
-            text_only_inference=text_only_inference,
-            vision_tokens=vision_tokens,
-        )
-        tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
-
-        output_fn = self.process_output_decode if mode == "decode" else self.process_output_prefill
-        return output_fn(tt_out, B, S)
-
     def ttnn_prefill_forward(
         self,
         h,
@@ -589,7 +533,6 @@ class CrossAttentionTransformer(torch.nn.Module):
             xattn_caches=xattn_caches,
             current_pos=None,
             rot_mats=rot_mats,
-            transformation_mats=None,  # Attention holds its own trans mats
             user_id=user_id,
             mode="prefill",
             vision_tokens=vision_tokens,

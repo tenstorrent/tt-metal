@@ -120,8 +120,6 @@ def test_llama_multimodal_demo_text(
     max_gen_len: Optional[int] = 500,
     model_parallel_size: Optional[int] = None,
 ):
-    if max_batch_size != 32 and enable_trace:
-        pytest.skip("Trace is not supported for batch size 1")
     """
     Simple multimodal demo with limited dependence on reference code.
     """

@@ -268,7 +268,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         xattn_caches,
         current_pos,
         rot_mats=None,
-        transformation_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -296,7 +295,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 h,
                 current_pos,
                 rot_mats=rot_mats,
-                transformation_mats=transformation_mats,
                 user_id=user_id,
                 mode=mode,
             )
