@@ -29,7 +29,7 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
     export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1 # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE.
 
 To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
-And example with the different features available is shown below:
+An example with the different features available is shown below:
 
 .. code-block:: c++
 
@@ -120,3 +120,6 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
         ...
         cb_pop_front(CBIndex::c_25, 1);
     }
+
+.. note::
+    Note that the DPRINT buffer for a RISC is flushed when ``ENDL()`` is called, a ``\n`` character is read, or the device that the RISC belongs to is closed.
