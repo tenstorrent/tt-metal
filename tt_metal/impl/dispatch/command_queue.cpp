@@ -2902,6 +2902,7 @@ void EnqueueReadBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     bool blocking) {
+    TRACE_FUNCTION_CALL(captureEnqueueReadBuffer, cq, buffer, dst, blocking);
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_READ_BUFFER, .blocking = blocking, .buffer = buffer, .dst = dst});

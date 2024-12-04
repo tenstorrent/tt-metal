@@ -35,12 +35,20 @@ table EnqueueWriteBufferCommand {
     blocking: bool;
 }
 
+table EnqueueReadBufferCommand {
+    cq_global_id: uint32;       // reference to CommandQueue
+    buffer_global_id: uint32;   // Reference to Buffer used as source
+    // dst unsure what to do here.
+    blocking: bool;
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
     LoadTraceCommand,
     CreateBufferCommand,
-    EnqueueWriteBufferCommand
+    EnqueueWriteBufferCommand,
+    EnqueueReadBufferCommand
 }
 
 table Command {
