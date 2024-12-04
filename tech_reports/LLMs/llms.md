@@ -99,7 +99,14 @@ If during model bringup or optimization it is observed that the model outputs do
     - If the dataset evaluation or a human occular (qualitative) evaluation is failing while the unit tests are passing, some possible explanations are that 1) there has not been sufficient testing of consecutive token generations in the unit tests, or 2) the PCC targets in the unit tests are too low.
 2. Once the smallest failing test has been found, it may be required to step through individual operations in the model and compare their outputs against that of the reference model. This can be achieved by manually setting breakpoints in the TT model execution and CPU model execution and comparing the outputs, or by storing intermediate outputs to files or intermediate variables within the model itself to compare once both models have executed.
 
-Some common causes for accuracy degradations can include setting data formats for certain operations to be too low precision or using program and memory configs which trade off accuracy for performance.
+For the operations under suspicion, some possible things to try could be:
+- Use higher precision dataformats or math fidelities (e.g. HiFi vs LoFi)
+- Convert inputs and outputs to DRAM interleaved so that the problematic op(s) read/write to DRAM (as opposed to L1 or sharded)
+- Remove custom program configs and try the ttnn defaults
+- If using CCL operations, verify that the reduction dimensions are appropriately set (particularly for 2D weight sharding)
+- If loading cached weights which may have had their memory configurations modified, try disabling loading from caches (or regenerating them) to ensure the weights are generated from the torch tensors
+
+In some cases, it may be possible that the issue is not with the model and that there is a bug with a ttnn operation. If this is suspected, it should be verified using a unit test with the exact same input/output configurations and an issue should be filed to the tt-metal team.
 
 ### 4.6 Performance Analysis
   - Performance tooling, tracy
