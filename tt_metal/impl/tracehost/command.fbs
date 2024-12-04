@@ -1,4 +1,5 @@
 // Define schema for tracing host API calls, called Commands in this context.
+include "tracehost/types.fbs";
 
 namespace tt.target;
 
@@ -21,11 +22,17 @@ table LoadTraceCommand {
     cq_id: int;
 }
 
+table CreateBufferCommand {
+    global_id: uint32;
+    config: InterleavedBufferConfig; // Later grow to union for Sharded.
+    address: uint32; // Optional for pre-allocated buffers.
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
-    LoadTraceCommand
-    // EnqueueWriteBuffer
+    LoadTraceCommand,
+    CreateBufferCommand
 }
 
 table Command {

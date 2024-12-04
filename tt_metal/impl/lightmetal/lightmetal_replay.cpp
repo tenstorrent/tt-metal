@@ -58,6 +58,17 @@ detail::TraceDescriptor fromFlatBuffer(const tt::target::lightmetal::TraceDescri
     return traceDesc;
 }
 
+inline BufferType fromFlatbuffer(tt::target::BufferType type) {
+    switch (type) {
+        case tt::target::BufferType::DRAM: return BufferType::DRAM;
+        case tt::target::BufferType::L1: return BufferType::L1;
+        case tt::target::BufferType::SystemMemory: return BufferType::SYSTEM_MEMORY;
+        case tt::target::BufferType::L1Small: return BufferType::L1_SMALL;
+        case tt::target::BufferType::Trace: return BufferType::TRACE;
+        default: throw std::invalid_argument("Unknown tt::target::BufferType value");
+    }
+}
+
 //////////////////////////////////////
 // LightMetalReplay Class           //
 //////////////////////////////////////
@@ -105,6 +116,25 @@ std::optional<detail::TraceDescriptor> LightMetalReplay::getTraceByTraceId(uint3
 }
 
 
+// Object maps public accessors
+void LightMetalReplay::addBufferToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Buffer> buffer) {
+    if (bufferMap_.find(global_id) != bufferMap_.end()) {
+        log_warning(tt::LogMetalTrace, "Buffer with global_id: {} already exists in map.", global_id);
+    }
+    bufferMap_[global_id] = buffer; // Shared ownership
+}
+
+std::shared_ptr<::tt::tt_metal::Buffer> LightMetalReplay::getBufferFromMap(uint32_t global_id) const {
+    auto it = bufferMap_.find(global_id);
+    if (it != bufferMap_.end()) {
+        return it->second; // Return shared_ptr
+    }
+    return nullptr; // If not found
+}
+
+void LightMetalReplay::removeBufferFromMap(uint32_t global_id) {
+    bufferMap_.erase(global_id);
+}
 
 void LightMetalReplay::setupDevices() {
     log_info(tt::LogMetalTrace, "Setting up system now...");
@@ -144,6 +174,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_LoadTraceCommand());
     break;
   }
+  case ::tt::target::CommandType::CreateBufferCommand: {
+    execute(command->cmd_as_CreateBufferCommand());
+    break;
+  }
   default:
     throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
     break;
@@ -152,23 +186,46 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
 
 // Per API command handlers.
 void LightMetalReplay::execute(tt::target::EnqueueTraceCommand const *cmd) {
-    log_info(tt::LogMetalTrace, "KCM LightMetalReplay EnqueueTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
+    log_info(tt::LogMetalTrace, "LightMetalReplay EnqueueTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
     // FIXME - Needs some tweaking, since API takes CQ should binarize cq_id and device_id.
     CommandQueue &cq = this->device_->command_queue(cmd->cq_id());
     EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
 void LightMetalReplay::execute(tt::target::ReplayTraceCommand const *cmd) {
-    log_info(tt::LogMetalTrace, "KCM LightMetalReplay ReplayTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
+    log_info(tt::LogMetalTrace, "LightMetalReplay ReplayTrace(). cq_id: {} tid: {} blocking: {}", cmd->cq_id(), cmd->tid(), cmd->blocking());
     ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
 }
 
 void LightMetalReplay::execute(tt::target::LoadTraceCommand const *cmd) {
-    log_info(tt::LogMetalTrace, "KCM LightMetalReplay LoadTrace(). cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
+    log_info(tt::LogMetalTrace, "LightMetalReplay LoadTrace(). cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     // Get the trace descriptor from flatbuffer and load it to device.
     auto trace_desc = getTraceByTraceId(cmd->tid());
     LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
 }
+
+void LightMetalReplay::execute(tt::target::CreateBufferCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay CreateBufferCommand(). global_id: {} size: {} page_size: {} layout: {} buffer_type: {}",
+        cmd->global_id(), cmd->config()->size(), cmd->config()->page_size(),
+        EnumNameTensorMemoryLayout(cmd->config()->buffer_layout()), EnumNameBufferType(cmd->config()->buffer_type()));
+
+    switch (cmd->config()->buffer_layout()) {
+    case tt::target::TensorMemoryLayout::Interleaved: {
+        tt::tt_metal::InterleavedBufferConfig config{
+            .device = this->device_,
+            .size = cmd->config()->size(),
+            .page_size = cmd->config()->page_size(),
+            .buffer_type = fromFlatbuffer(cmd->config()->buffer_type())};
+
+        auto buffer = CreateBuffer(config);
+        addBufferToMap(cmd->global_id(), buffer);
+        break;
+    }
+    default:
+        throw std::runtime_error("Unsupported buffer_layout: " + std::string(EnumNameTensorMemoryLayout(cmd->config()->buffer_layout())));
+    }
+}
+
 
 // Main entry point to execute a light metal binary blob, return true if pass.
 bool LightMetalReplay::executeLightMetalBinary() {
