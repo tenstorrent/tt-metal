@@ -308,6 +308,10 @@ int main(int argc, char** argv) {
         Finish(cq);
         auto end = std::chrono::system_clock::now();
 
+        for (auto& p : program) {
+            tt_metal::DumpDeviceProfileResults(device, p);
+        }
+
         if (use_trace_g) {
             log_info(LogTest, "Running with trace enabled");
         }
