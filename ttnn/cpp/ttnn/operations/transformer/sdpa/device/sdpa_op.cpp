@@ -116,14 +116,11 @@ void ScaledDotProductAttention::validate(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttention::compute_output_shapes(
+std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
-}
-
-std::vector<Tensor> ScaledDotProductAttention::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
+    auto& input = input_tensors.at(0);
+    return {TensorSpec(
+        input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(

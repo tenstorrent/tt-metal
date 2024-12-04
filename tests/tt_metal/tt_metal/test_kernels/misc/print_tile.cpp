@@ -53,27 +53,28 @@ void MAIN {
 
     // Print the tile from each RISC, one after another
     DPRINT_DATA0(DPRINT << "Print tile from Data0:" << ENDL();
-                 DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false);
+                 DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false)
+                        << ENDL();
                  DPRINT << RAISE{1};);
     DPRINT_UNPACK(
         // Wait for previous core (DATA0) to finish printing.
         DPRINT << WAIT{1}; DPRINT << "Print tile from Unpack:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, false);
+        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, false) << ENDL();
         DPRINT << RAISE{2};);
     DPRINT_MATH(
         // Wait for previous core (DATA0) to finish printing.
         DPRINT << WAIT{2}; DPRINT << "Print tile from Math:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, false);
+        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, false) << ENDL();
         DPRINT << RAISE{3};);
     DPRINT_PACK(
         // Wait for previous core (DATA0) to finish printing.
         DPRINT << WAIT{3}; DPRINT << "Print tile from Pack:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, false);
+        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, false) << ENDL();
         DPRINT << RAISE{4};);
     DPRINT_DATA1(
         // Wait for previous core (UNPACK) to finish printing.
         DPRINT << WAIT{4}; DPRINT << "Print tile from Data1:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false););
+        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(););
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 }
