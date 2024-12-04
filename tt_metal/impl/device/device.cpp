@@ -2236,6 +2236,7 @@ void Device::compile_command_queue_programs_new() {
     if (this->is_mmio_capable()) {
         auto command_queue_program_ptr = create_mmio_cq_program(this);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->setup_tunnel_for_remote_devices();
     } else {
         auto command_queue_program_ptr = create_mmio_cq_program(this);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
