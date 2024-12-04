@@ -465,6 +465,13 @@ int main() {
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
             } else {
+#if defined(PROFILE_KERNEL)
+                // This was not initialized in the kernel
+                // Currently FW does not issue a barrier except when using profiler
+                if (noc_mode == DM_DEDICATED_NOC) {
+                    noc_local_state_init(noc_index);
+                }
+#endif
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
