@@ -15,6 +15,9 @@
 #include <optional>
 #include <stdexcept>
 #include <ttnn/tensor/tensor.hpp>
+#include <ttnn/tensor/types.hpp>
+
+#include "core/xtensor_utils.hpp"
 
 namespace {
 
@@ -182,12 +185,36 @@ tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevic
 }
 
 template <>
+[[nodiscard]] tt::tt_metal::Tensor from_xtensors_to_host<float, DataType::BFLOAT16>(
+    const std::vector<xt::xarray<float>>& buffers, const std::unordered_map<std::string, std::string>& config) {
+    std::vector<OwnedBuffer> host_owned_buffers;
+    std::vector<ttnn::Shape> host_owned_shapes;
+    host_owned_buffers.reserve(buffers.size());
+    host_owned_shapes.reserve(buffers.size());
+    for (const auto& buffer : buffers) {
+        auto shape = create_shape(get_shape_4d(buffer));
+        size_t volume = shape.logical_shape().volume();
+        if (buffer.size() != volume) {
+            throw std::logic_error(
+                fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
+        }
+        auto owned_buffer = create_owned_buffer_from_vector_of_floats(
+            std::vector<float>(buffer.begin(), buffer.end()), DataType::BFLOAT16);
+        host_owned_buffers.push_back(owned_buffer);
+        host_owned_shapes.push_back(shape);
+    }
+    auto distributed_tensor_config = get_distributed_tensor_config(config);
+    auto storage = tt::tt_metal::MultiDeviceHostStorage(
+        distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes);
+
+    // remove possible paddings from the shape (it conflicts with ROW MAJOR)
+    auto output = Tensor(std::move(storage), host_owned_shapes[0], DataType::BFLOAT16, Layout::ROW_MAJOR);
+    return output;
+}
+
+template <>
 tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
-    const std::vector<float>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    Layout layout,
-    const std::optional<MeshMapper> config = std::nullopt) {
+    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, Layout layout) {
     assert(device != nullptr);
     const DataType data_type = DataType::BFLOAT16;
     MemoryConfig output_mem_config{};
@@ -199,19 +226,11 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     }
     auto owned_buffer = create_owned_buffer_from_vector_of_floats(buffer, data_type);
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = tt::tt_metal::Tensor(device->num_devices(), config);
-    // auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
-
-    auto to_device_even_fast = [&]() {
-        output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == Layout::TILE) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-        }
-
-        return output;
-    };
-
-    output = to_device_even_fast();
+    auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
+    output = ttnn::to_device(output, device, output_mem_config);
+    if (layout == Layout::TILE) {
+        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+    }
 
     return output;
 }

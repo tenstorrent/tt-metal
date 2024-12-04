@@ -85,7 +85,7 @@ class ShardTensor2dMesh : public TensorToMesh<ShardTensor2dMesh<T>, T> {
 public:
     using Base = TensorToMesh<ShardTensor2dMesh<T>, T>;
     ShardTensor2dMesh(
-        const MeshDevice& mesh_device,
+        const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device,
         const std::pair<int, int>& mesh_shape,
         const std::pair<std::optional<int>, std::optional<int>>& dims) :
         Base(mesh_device), m_mesh_shape(mesh_shape), m_dims(dims) {
@@ -159,7 +159,9 @@ class ConcatMesh2dToTensor : public MeshToTensor<ConcatMesh2dToTensor<T>, T> {
 public:
     using Base = TensorToMesh<ConcatMesh2dToTensor<T>, T>;
     ConcatMesh2dToTensor(
-        const MeshDevice& mesh_device, const std::pair<int, int>& mesh_shape, const std::pair<int, int>& dims) :
+        const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device,
+        const std::pair<int, int>& mesh_shape,
+        const std::pair<int, int>& dims) :
         Base(mesh_device), m_mesh_shape(mesh_shape), m_dims(dims) {
         if (m_dims.first == m_dims.second) {
             throw std::invalid_argument("Both dimensions in 'dims' must be different");
@@ -205,7 +207,7 @@ template <typename T>
 class ReplicateTensorToMesh : public TensorToMesh<ReplicateTensorToMesh<T>, T> {
 public:
     using Base = TensorToMesh<ReplicateTensorToMesh<T>, T>;
-    ReplicateTensorToMesh(const MeshDevice& mesh_device) : Base(mesh_device) {
+    ReplicateTensorToMesh(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device) : Base(mesh_device) {
     }
 
     std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
@@ -226,7 +228,8 @@ template <typename T>
 class ConcatMeshToTensor : public MeshToTensor<ConcatMeshToTensor<T>, T> {
 public:
     using Base = MeshToTensor<ConcatMeshToTensor<T>, T>;
-    ConcatMeshToTensor(const MeshDevice& mesh_device, int dim) : Base(mesh_device), m_concat_dim(dim) {
+    ConcatMeshToTensor(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device, int dim) :
+        Base(mesh_device), m_concat_dim(dim) {
     }
 
     xt::xarray<T> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
@@ -242,12 +245,17 @@ template <typename T>
 class VectorMeshToTensor : public MeshToTensor<VectorMeshToTensor<T>, T> {
 public:
     using Base = MeshToTensor<VectorMeshToTensor<T>, T>;
-    VectorMeshToTensor(const MeshDevice& mesh_device) : Base(mesh_device) {
+    VectorMeshToTensor(const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device) : Base(mesh_device) {
     }
 
     std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) {
         return tensors;
     }
 };
+
+template <typename T>
+using TensorToMeshVariant = std::variant<ShardTensorToMesh<T>, ShardTensor2dMesh<T>, ReplicateTensorToMesh<T>>;
+template <typename T>
+using MeshToTensorVariant = std::variant<ConcatMeshToTensor<T>, ConcatMesh2dToTensor<T>, VectorMeshToTensor<T>>;
 
 }  // namespace ttml::core

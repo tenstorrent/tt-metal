@@ -22,8 +22,8 @@ template <class T>
 auto span_to_xtensor(std::span<T>& vec, const ttnn::SimpleShape& shape) {
     return xt::adapt(vec, {shape.cbegin(), shape.cend()});
 }
-template <class T, xt::layout_type layout_type = xt::layout_type::dynamic>
-auto xtensor_to_span(const xt::xarray<T, layout_type>& xtensor) {
+template <class T>
+auto xtensor_to_span(const xt::xarray<T>& xtensor) {
     return std::span(xtensor.template begin<T>(), xtensor.template end<T>());
 }
 
@@ -44,7 +44,7 @@ std::array<uint32_t, 4> get_shape_4d(const E& expr) {
     }
 
     // Copy the dimensions into the shape array
-    for (size_t i = dims; i < dims; ++i) {
+    for (size_t i = 0; i < dims; ++i) {
         shape4d[i] = static_cast<uint32_t>(expr_shape[i + max_dims - dims]);
     }
 
