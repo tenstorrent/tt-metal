@@ -27,45 +27,6 @@ using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::StorageType;
 using tt::tt_metal::Tensor;
 
-template <typename T>
-static Tensor arange(
-    const int64_t start,
-    const int64_t stop,
-    const int64_t step,
-    const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
-    // Current implementation restrictions
-    TT_ASSERT(step > 0, "Step must be greater than 0");
-    TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = tt::div_up((stop - start), step);
-    if (size % 2 != 0) {
-        size++;
-    }
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
-
-    auto index = 0;
-    for (auto value = start; value < stop; value += step) {
-        if constexpr (std::is_same_v<T, ::bfloat16>) {
-            owned_buffer[index++] = T(static_cast<float>(value));
-        } else {
-            owned_buffer[index++] = static_cast<T>(value);
-        }
-    }
-    auto output = Tensor(
-                      OwnedStorage{owned_buffer},
-                      ttnn::SimpleShape{1, 1, 1, static_cast<uint32_t>(size)},
-                      data_type,
-                      Layout::ROW_MAJOR)
-                      .to(layout);
-    if (device != nullptr) {
-        output = output.to(device, output_mem_config);
-    }
-    return output;
-}
-
 template <typename T, bool IS_UPPER>
 static Tensor index_trilu(
     const tt::tt_metal::LegacyShape& shape,

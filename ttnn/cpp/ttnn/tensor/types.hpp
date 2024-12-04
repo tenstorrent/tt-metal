@@ -56,7 +56,7 @@ consteval inline DataType convert_to_data_type() {
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
     } else {
-        static_assert(false, "Unsupported DataType!");
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
     }
 }
 

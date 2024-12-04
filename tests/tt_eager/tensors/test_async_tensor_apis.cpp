@@ -14,7 +14,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -37,7 +36,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
-    Tensor host_tensor = ttnn::numpy::arange<float>(0, 32 * 32 * 4, 1);
+    Tensor host_tensor = ttnn::arange(/*start=*/0, /*stop=*/32 * 32 * 4, /*step=*/1, DataType::FLOAT32);
     Tensor readback_tensor(1);
 
     auto func = [device, host_tensor, readback_tensor]() mutable {
@@ -259,7 +258,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
 
     {
         // host_tensor only lives in this scope
-        Tensor host_tensor = ttnn::numpy::arange<float>(tensor_start, tensor_stop, 1);
+        Tensor host_tensor = ttnn::arange(tensor_start, tensor_stop, /*step=*/1, DataType::FLOAT32);
         log_info(LogTest, "Spawning worker thread");
         worker = std::thread([tensor_stop, host_tensor, readback_tensor, device]() mutable {
             // Sleep for 3 seconds to ensure that main thread deallocates host_tensor

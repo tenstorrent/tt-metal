@@ -69,39 +69,47 @@ inline std::vector<Device*> get_workers_from_device(OptionalAnyDevice device) {
     return device.has_value() ? device->get_devices() : std::vector<Device*>{};
 }
 
-}  // namespace detail
-
-template <typename T, std::size_t rank = 4>
-Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device) {
-    using namespace tt::constants;
-    static_assert(rank >= 2, "Rank must be at least 2 when creating a tensor with TILE_LAYOUT");
-    std::array<std::uint32_t, rank> intended_shape = {};
-    intended_shape.fill(1);
-    std::array<std::uint32_t, rank> device_shape = {};
-    device_shape.fill(1);
-
-    if (layout == Layout::ROW_MAJOR) {
-        device_shape[device_shape.size() - 2] = 2;
-        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(2));
-        host_buffer[0] = scalar;
-        Tensor scalar_tensor_host =
-            Tensor(OwnedStorage{host_buffer}, ttnn::Shape(intended_shape, device_shape), data_type, Layout::ROW_MAJOR);
-        return scalar_tensor_host.to(device);
-    } else if (layout == Layout::TILE) {
-        device_shape[device_shape.size() - 2] = TILE_HEIGHT;
-        device_shape[device_shape.size() - 1] = TILE_WIDTH;
-        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
-        host_buffer[0] = scalar;
-        Tensor scalar_tensor_host =
-            Tensor(OwnedStorage{host_buffer}, ttnn::Shape(intended_shape, device_shape), data_type, Layout::TILE);
-        return scalar_tensor_host.to(device);
-    } else {
-        throw std::runtime_error("Unsupported layout");
+template <typename T>
+static Tensor arange_impl(
+    const int64_t start,
+    const int64_t stop,
+    const int64_t step,
+    const Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
+    // Current implementation restrictions
+    TT_ASSERT(step > 0, "Step must be greater than 0");
+    TT_ASSERT(start < stop, "Start must be less than step");
+    auto size = tt::div_up((stop - start), step);
+    if (size % 2 != 0) {
+        size++;
     }
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
+
+    auto index = 0;
+    for (auto value = start; value < stop; value += step) {
+        if constexpr (std::is_same_v<T, ::bfloat16>) {
+            owned_buffer[index++] = T(static_cast<float>(value));
+        } else {
+            owned_buffer[index++] = static_cast<T>(value);
+        }
+    }
+    auto output = Tensor(
+                      OwnedStorage{owned_buffer},
+                      ttnn::SimpleShape{1, 1, 1, static_cast<uint32_t>(size)},
+                      data_type,
+                      Layout::ROW_MAJOR)
+                      .to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
 }
 
 template <typename T>
-static Tensor full(
+static Tensor full_impl(
     uint8_t queue_id,
     const tt::tt_metal::LegacyShape& shape,
     T value,
@@ -144,6 +152,37 @@ static Tensor full(
     }
 }
 
+}  // namespace detail
+
+template <typename T, std::size_t rank = 4>
+Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device) {
+    using namespace tt::constants;
+    static_assert(rank >= 2, "Rank must be at least 2 when creating a tensor with TILE_LAYOUT");
+    std::array<std::uint32_t, rank> intended_shape = {};
+    intended_shape.fill(1);
+    std::array<std::uint32_t, rank> device_shape = {};
+    device_shape.fill(1);
+
+    if (layout == Layout::ROW_MAJOR) {
+        device_shape[device_shape.size() - 2] = 2;
+        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(2));
+        host_buffer[0] = scalar;
+        Tensor scalar_tensor_host =
+            Tensor(OwnedStorage{host_buffer}, ttnn::Shape(intended_shape, device_shape), data_type, Layout::ROW_MAJOR);
+        return scalar_tensor_host.to(device);
+    } else if (layout == Layout::TILE) {
+        device_shape[device_shape.size() - 2] = TILE_HEIGHT;
+        device_shape[device_shape.size() - 1] = TILE_WIDTH;
+        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
+        host_buffer[0] = scalar;
+        Tensor scalar_tensor_host =
+            Tensor(OwnedStorage{host_buffer}, ttnn::Shape(intended_shape, device_shape), data_type, Layout::TILE);
+        return scalar_tensor_host.to(device);
+    } else {
+        throw std::runtime_error("Unsupported layout");
+    }
+}
+
 template <typename T>
 inline ttnn::Tensor full_impl(
     uint8_t queue_id,
@@ -166,17 +205,17 @@ inline ttnn::Tensor full_impl(
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
-    auto concrete_full = [&]<typename FillValueType>(FillValueType concrete_fill_value) {
-        return full<FillValueType>(
-            queue_id, shape_value, concrete_fill_value, layout_value, workers, mem_cfg, optional_output_tensor);
+    auto concrete_full = [&]<typename BufferType>(BufferType fill_value) {
+        return detail::full_impl<BufferType>(
+            queue_id, shape_value, fill_value, layout_value, workers, mem_cfg, optional_output_tensor);
     };
 
     switch (dtype_value) {
-        case DataType::UINT8: return concrete_full(static_cast<uint8_t>(fill_value));
-        case DataType::UINT16: return concrete_full(static_cast<uint16_t>(fill_value));
-        case DataType::UINT32: return concrete_full(static_cast<uint32_t>(fill_value));
-        case DataType::FLOAT32: return concrete_full(static_cast<float>(fill_value));
-        case DataType::BFLOAT16: return concrete_full(static_cast<::bfloat16>(static_cast<float>(fill_value)));
+        case DataType::UINT8: return concrete_full.template operator()<uint8_t>(fill_value);
+        case DataType::UINT16: return concrete_full.template operator()<uint16_t>(fill_value);
+        case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
+        case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
+        case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
         default: TT_THROW("Unsupported DataType!");
     }
 }
@@ -491,17 +530,17 @@ struct Arange {
         const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
         const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
         Device* device = device_arg.has_value() ? &(device_arg.value().get()) : nullptr;
+
+        auto concrete_arange = [&]<typename BufferType>() {
+            return detail::arange_impl<BufferType>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+        };
+
         switch (dtype) {
-            case DataType::BFLOAT16:
-                return numpy::arange<::bfloat16>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case DataType::FLOAT32:
-                return numpy::arange<float>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case DataType::UINT16:
-                return numpy::arange<uint16_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case DataType::UINT32:
-                return numpy::arange<uint32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
-            case DataType::INT32:
-                return numpy::arange<int32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+            case DataType::BFLOAT16: return concrete_arange.template operator()<::bfloat16>();
+            case DataType::FLOAT32: return concrete_arange.template operator()<float>();
+            case DataType::UINT16: return concrete_arange.template operator()<uint16_t>();
+            case DataType::UINT32: return concrete_arange.template operator()<uint32_t>();
+            case DataType::INT32: return concrete_arange.template operator()<int32_t>();
             default: TT_THROW("Unsupported dtype");
         }
     }
