@@ -35,7 +35,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, 4),
+        "input_spec": gen_sharded_spec_unary(16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
