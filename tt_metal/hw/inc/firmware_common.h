@@ -37,8 +37,7 @@ inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
 }
 
-void noc_bank_table_init(uint64_t mem_bank_to_noc_addr)
-{
+inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);
     l1_to_local_mem_copy((uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)mem_bank_to_noc_addr, dram_to_noc_size_bytes >> 2);
     int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
