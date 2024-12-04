@@ -17,7 +17,6 @@ int main(int argc, char* argv[]) {
     std::vector<uint8_t> binary_blob;
     tt::tt_metal::readBinaryBlobFromFile(filename, binary_blob);
     tt::tt_metal::LightMetalReplay lm_replay(binary_blob); // FIXME Take reference.
-    lm_replay.printLightMetalBinaryContents(); // Debug
 
     if (!lm_replay.executeLightMetalBinary()) {
         log_fatal("Binary {} failed to execute or encountered errors.", filename);

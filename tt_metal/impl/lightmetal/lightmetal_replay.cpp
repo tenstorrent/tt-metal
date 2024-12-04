@@ -17,11 +17,6 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-// There are a bunch of things to do in this file and figure out
-// 1. Executor: Open Flatbuffer binary, loop over contents, execute contents.
-// 2. In order to do that, need deserialize/convert from flatbuffer representation
-// 3. And have handlers to call Host API functions.
-
 //////////////////////////////////////
 // Helper Functions                 //
 //////////////////////////////////////
@@ -111,116 +106,6 @@ std::optional<detail::TraceDescriptor> LightMetalReplay::getTraceByTraceId(uint3
 
 
 
-//////////////////////////////////////
-// Debug Code                       //
-//////////////////////////////////////
-
-bool example_code() {
-    int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000);
-    tt_metal::CommandQueue& cq = device->command_queue();
-    tt_metal::Program program = tt_metal::CreateProgram();
-    bool pass = tt_metal::CloseDevice(device);
-    return pass;
-}
-
-// Temporary debug function to print the contents of the FlatBuffer binary.
-void LightMetalReplay::printLightMetalBinaryContents() {
-
-    if (!lm_binary_) {
-        std::cerr << "FlatBuffer binary not initialized." << std::endl;
-        return;
-    }
-
-    const auto* trace_descriptors = lm_binary_->trace_descriptors();
-    if (!trace_descriptors) {
-        std::cout << "No trace descriptors found in the binary." << std::endl;
-    } else {
-        // Print all trace descriptors.
-        std::cout << "Number of trace descriptors: " << trace_descriptors->size() << std::endl;
-        for (const auto* descriptor_by_id : *trace_descriptors) {
-            if (!descriptor_by_id) continue;
-
-            uint32_t trace_id = descriptor_by_id->trace_id();
-            const auto* trace_desc = descriptor_by_id->desc();
-
-            if (!trace_desc) {
-                std::cerr << "Descriptor is null for trace_id: " << trace_id << std::endl;
-                continue;
-            }
-
-            // Print trace descriptor details.
-            std::cout << "Trace ID: " << trace_id << std::endl;
-            std::cout << "  Number of completion worker cores: "
-                      << trace_desc->num_completion_worker_cores() << std::endl;
-            std::cout << "  Number of programs needing multicast: "
-                      << trace_desc->num_traced_programs_needing_go_signal_multicast() << std::endl;
-            std::cout << "  Number of programs needing unicast: "
-                      << trace_desc->num_traced_programs_needing_go_signal_unicast() << std::endl;
-
-            // Print trace data.
-            const auto* trace_data = trace_desc->trace_data();
-            if (trace_data && trace_data->size() > 0) {
-                std::cout << "  Trace Data (size: " << trace_data->size() << "): ";
-                for (uint32_t value : *trace_data) {
-                    std::cout << value << " ";
-                }
-                std::cout << std::endl;
-            } else {
-                std::cout << "  Trace Data: None" << std::endl;
-            }
-        }
-    }
-
-    // Print all commands.
-    const auto* commands = lm_binary_->commands();
-    if (!commands || commands->size() == 0) {
-        std::cout << "No commands found in the binary." << std::endl;
-    } else {
-        std::cout << "Number of commands: " << commands->size() << std::endl;
-        for (const auto* command : *commands) {
-            if (!command) continue;
-
-            auto cmd_type = command->cmd_type();
-            switch (cmd_type) {
-                case tt::target::CommandType::ReplayTraceCommand: {
-                    const auto* cmd_variant = command->cmd_as_ReplayTraceCommand();
-                    if (cmd_variant) {
-                        std::cout << "ReplayTrace Command:" << std::endl;
-                        std::cout << "  cq_id: " << cmd_variant->cq_id() << std::endl;
-                        std::cout << "  tid: " << cmd_variant->tid() << std::endl;
-                        std::cout << "  blocking: " << (cmd_variant->blocking() ? "true" : "false") << std::endl;
-                    }
-                    break;
-                }
-                case tt::target::CommandType::EnqueueTraceCommand: {
-                    const auto* cmd_variant = command->cmd_as_EnqueueTraceCommand();
-                    if (cmd_variant) {
-                        std::cout << "EnqueueTrace Command:" << std::endl;
-                        std::cout << "  cq_id: " << cmd_variant->cq_id() << std::endl;
-                        std::cout << "  tid: " << cmd_variant->tid() << std::endl;
-                        std::cout << "  blocking: " << (cmd_variant->blocking() ? "true" : "false") << std::endl;
-                    }
-                    break;
-                }
-                case tt::target::CommandType::LoadTraceCommand: {
-                    const auto* cmd_variant = command->cmd_as_LoadTraceCommand();
-                    if (cmd_variant) {
-                        std::cout << "LoadTrace Command:" << std::endl;
-                        std::cout << "  tid: " << cmd_variant->tid() << std::endl;
-                        std::cout << "  cq_id: " << cmd_variant->cq_id() << std::endl;
-                    }
-                    break;
-                }
-                default:
-                    std::cout << "Unsupported Command type: " << EnumNameCommandType(cmd_type) << std::endl;
-                    break;
-            }
-        }
-    }
-}
-
-
 void LightMetalReplay::setupDevices() {
     log_info(tt::LogMetalTrace, "Setting up system now...");
 
@@ -294,8 +179,6 @@ bool LightMetalReplay::executeLightMetalBinary() {
     }
 
     try {
-        // example_code(); // Debug
-
         const auto* trace_descriptors = lm_binary_->trace_descriptors();
         const auto* commands = lm_binary_->commands();
         if (!commands) {
@@ -304,11 +187,13 @@ bool LightMetalReplay::executeLightMetalBinary() {
         }
 
         setupDevices();
-        log_info(tt::LogMetalTrace, "KCM Executing Binary w/ cmds: {} traces: {}", commands->size(), trace_descriptors->size());
+        log_info(tt::LogMetalTrace, "Executing Binary w/ cmds: {} traces: {}", commands->size(), trace_descriptors->size());
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0,
         // should expand to cover multiple program, devices, cqs, etc. FIXME
+        uint32_t cmd_idx = 1; // Debug
         for (const auto* cmd : *commands) {
+            log_info(tt::LogMetalTrace, "Executing Binary CMD {}/{} (Type: {})", cmd_idx++, commands->size(), std::string(EnumNameCommandType(cmd->cmd_type())));
             execute(cmd);
         }
 
