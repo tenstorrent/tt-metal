@@ -31,7 +31,6 @@ tt_metal/llrt/rtoptions.hpp
 tt_metal/llrt/tt_cluster.cpp
 tt_metal/llrt/tt_cluster.hpp
 tt_metal/llrt/tt_memory.h
-tt_metal/tt_metal.cpp
 ttnn/cpp/pybind11/tensor.cpp
 ttnn/cpp/ttnn/device_operation.hpp
 ttnn/cpp/ttnn/graph/graph_processor.cpp
