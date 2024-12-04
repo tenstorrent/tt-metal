@@ -666,10 +666,9 @@ void Device::initialize_and_launch_firmware() {
     TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
     for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
         core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
+        core_info->virtual_harvested_y[idx] = (idx < harvested_rows.size()) ? (26 + idx) : CORE_COORD_INVALID;
     }
 
-    core_info->virtual_harvested_y[0] = 27;
-    core_info->virtual_harvested_y[1] = 26;
     core_info->noc_size_x = soc_d.grid_size.x;
     core_info->noc_size_y = soc_d.grid_size.y;
 
