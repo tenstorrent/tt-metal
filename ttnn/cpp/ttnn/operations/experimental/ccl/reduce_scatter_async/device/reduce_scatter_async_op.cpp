@@ -4,24 +4,28 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 
 namespace ttnn {
 namespace ccl{
 namespace reduce_scatter_detail{
 
-ReduceScatterAsync create_reduce_scatter_struct (
+ReduceScatterAsync create_reduce_scatter_struct(
     const Tensor& input_tensor,
     const ttnn::operations::binary::BinaryOpType binary_op_type,
     const uint32_t scatter_dim,
-    const MemoryConfig output_mem_config,
+    const MemoryConfig& output_mem_config,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology topology,
-    std::optional<std::vector<Tensor>> foreward_output_tensors,
+    std::optional<std::vector<Tensor>> forward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
-    std::optional<size_t> num_links_preferred
-){
+    std::optional<size_t> num_links_preferred,
+    std::vector<GlobalSemaphore> const& from_remote_sems,
+    std::vector<GlobalSemaphore> const& to_remote_sems) {
     uint32_t num_devices = devices.size();
 
     auto [device_index, sender_device_id, receiver_device_id] =
@@ -30,17 +34,19 @@ ReduceScatterAsync create_reduce_scatter_struct (
     TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be incorrect");
 
     return ttnn::ReduceScatterAsync{
-                    binary_op_type,
-                    scatter_dim,
-                    num_devices,
-                    device_index,
-                    receiver_device_id.has_value() ? devices.at(receiver_device_id.value()) : std::optional<Device*>(std::nullopt),
-                    sender_device_id.has_value() ? devices.at(sender_device_id.value()) : std::optional<Device*>(std::nullopt),
-                    output_mem_config,
-                    topology,
-                    foreward_output_tensors,
-                    backward_output_tensors,
-                    num_links_preferred};
+        binary_op_type,
+        scatter_dim,
+        num_devices,
+        device_index,
+        receiver_device_id.has_value() ? devices.at(receiver_device_id.value()) : std::optional<Device*>(std::nullopt),
+        sender_device_id.has_value() ? devices.at(sender_device_id.value()) : std::optional<Device*>(std::nullopt),
+        output_mem_config,
+        topology,
+        forward_output_tensors,
+        backward_output_tensors,
+        num_links_preferred,
+        from_remote_sems.at(device_index),
+        to_remote_sems.at(device_index)};
 }
 } // namespace reduce_scatter_detail
 } // namespace ccl
@@ -77,69 +83,70 @@ std::vector<Tensor> ReduceScatterAsync::create_output_tensors(const std::vector<
     bool is_tile_layout = input_tensor.get_layout() == Layout::TILE;
     std::optional<tt::tt_metal::Tile> tile =
         is_tile_layout ? input_tensor.get_tensor_spec().tile() : std::optional<tt::tt_metal::Tile>(std::nullopt);
-    Tensor real_output_tensor = create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            this->output_mem_config,
-            tile
-            );
-    Tensor temporary_input_from_remote_tensor_for_forward_direction = create_device_tensor(
-        input_tensor.shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        input_tensor.memory_config(),
-        tile
-    );
-    Tensor temporary_input_from_remote_tensor_for_backward_direction = create_device_tensor(
-        input_tensor.shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        input_tensor.memory_config(),
-        tile
-    );
-    Tensor temporary_partial_output_tensor_for_forward_direction = create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile
-    );
-    Tensor temporary_partial_output_tensor_for_backward_direction = create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile
-    );
 
-    return {
-        real_output_tensor,
-        temporary_input_from_remote_tensor_for_forward_direction,
-        temporary_input_from_remote_tensor_for_backward_direction,
-        temporary_partial_output_tensor_for_forward_direction,
-        temporary_partial_output_tensor_for_backward_direction};
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(5);
+    // real_output_tensor
+    output_tensors.emplace_back(create_device_tensor(
+        this->compute_output_shapes(input_tensors).at(0),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
+        input_tensor.device(),
+        this->output_mem_config,
+        tile));
+    // temporary_input_from_remote_tensor_for_forward_direction
+    output_tensors.emplace_back(create_device_tensor(
+        input_tensor.shape(),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
+        input_tensor.device(),
+        input_tensor.memory_config(),
+        tile));
+    // temporary_input_from_remote_tensor_for_backward_direction
+    output_tensors.emplace_back(create_device_tensor(
+        input_tensor.shape(),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
+        input_tensor.device(),
+        input_tensor.memory_config(),
+        tile));
+    // temporary_partial_output_tensor_for_forward_direction
+    output_tensors.emplace_back(create_device_tensor(
+        this->compute_output_shapes(input_tensors).at(0),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
+        input_tensor.device(),
+        this->output_mem_config,
+        tile));
+    // temporary_partial_output_tensor_for_backward_direction
+    output_tensors.emplace_back(create_device_tensor(
+        this->compute_output_shapes(input_tensors).at(0),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
+        input_tensor.device(),
+        this->output_mem_config,
+        tile));
+
+    return output_tensors;
 }
 
 operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    for (Buffer* b : output_tensors.at(0).buffers()) {
+        log_info(tt::LogOp, "Output tensor buffer->address: {}. Device: {}", b->address(), b->device()->id());
+    }
 
     std::optional<Tensor> foreward_direction_remote_output_tensor = std::nullopt;
     std::optional<Tensor> backward_direction_remote_output_tensor = std::nullopt;
     return ccl::reduce_scatter_detail::build_reduce_scatter_async_program(
-        input_tensors.at(0), // true input_tensor
-        output_tensors.at(0), // final output_tensor
-        output_tensors.at(1), // input_tensor_from_remote_forward_direction
-        output_tensors.at(2), // input_tensor_from_remote_backward_direction
-        output_tensors.at(3), // partial_output_tensor_forward_direction
-        output_tensors.at(4), // partial_output_tensor_backward_direction
+        input_tensors.at(0),   // true input_tensor
+        output_tensors.at(0),  // final output_tensor
+        output_tensors.at(1),  // input_tensor_from_remote_forward_direction
+        output_tensors.at(2),  // input_tensor_from_remote_backward_direction
+        output_tensors.at(3),  // partial_output_tensor_forward_direction
+        output_tensors.at(4),  // partial_output_tensor_backward_direction
         foreward_direction_remote_output_tensor,
-        backward_direction_remote_output_tensor,// this->remote_tensors_container,
+        backward_direction_remote_output_tensor,  // this->remote_tensors_container,
         this->forward_device,
         this->backward_device,
         // std::optional<Tensor> &foreward_direction_remote_output_tensor,
@@ -149,23 +156,23 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
         this->ring_size,
         this->ring_index,
         this->topology,
-        this->num_links_preferred);
+        this->num_links_preferred,
+        this->from_remote_sem,
+        this->to_remote_sem);
+}
 
-    // return ccl::reduce_scatter_detail::build_reduce_scatter_async_program(
-    //     input_tensors.at(0),
-    //     output_tensors.at(0),
-    //     output_tensors.at(1),
-    //     output_tensors.at(2),
-    //     this->foreward_output_tensors.has_value() ? this->foreward_output_tensors.value().at(1) : std::optional<Tensor>(std::nullopt),
-    //     this->backward_output_tensors.has_value() ? this->backward_output_tensors.value().at(1) : std::optional<Tensor>(std::nullopt),
-    //     this->binary_op_type,
-    //     this->scatter_dim,
-    //     this->ring_size,
-    //     this->ring_index,
-    //     this->topology,
-    //     this->num_links_preferred);
-
-
+operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    return operation::hash_operation<ReduceScatterAsync>(
+        // this->forward_device,
+        // this->backward_device,
+        this->binary_op_type,
+        this->scatter_dim,
+        this->ring_size,
+        this->ring_index,
+        this->topology,
+        // this->num_links_preferred,
+        this->from_remote_sem.address(),
+        this->to_remote_sem.address());
 }
 
 namespace {
@@ -181,6 +188,47 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn:
     }
 }
 }
+}
+
+std::vector<tt::tt_metal::GlobalSemaphore> create_global_semaphores(const std::vector<Device*>& devices) {
+    std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+    auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
+    for (Device* d : devices) {
+        auto sem = CreateGlobalSemaphore(d, worker_cores, 0, BufferType::L1);
+        semaphores.push_back(*sem);
+    }
+
+    auto first_addr = semaphores.front().address();
+    bool all_same = std::all_of(
+        semaphores.begin(), semaphores.end(), [first_addr](const auto& sem) { return sem.address() == first_addr; });
+
+    if (!all_same) {
+        DeviceAddr highest_addr = semaphores.front().address();
+        for (auto i = 1; i < semaphores.size(); i++) {
+            if (semaphores[i].address() > highest_addr) {
+                highest_addr = semaphores[i].address();
+            }
+        };
+        for (auto i = 0; i < semaphores.size(); i++) {
+            size_t attempts = 1000;
+            size_t attempt = 0;
+            std::vector<std::unique_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
+            while (semaphores[i].address() != highest_addr) {
+                auto sem = CreateGlobalSemaphore(devices[i], worker_cores, 0, BufferType::L1);
+                if (sem->address() == highest_addr) {
+                    semaphores[i] = *sem;
+                } else {
+                    garbage.push_back(std::move(sem));
+                    attempt++;
+                }
+
+                if (attempt > attempts) {
+                    TT_THROW("Failed to create global semaphores with the same address");
+                }
+            }
+        }
+    }
+    return semaphores;
 }
 
 namespace operations{
@@ -211,9 +259,28 @@ Tensor reduce_scatter(
 
     TT_FATAL(scatter_dim >= -rank && scatter_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<tt::tt_metal::GlobalSemaphore> from_remote_inputs_semaphores = create_global_semaphores(devices);
+    std::vector<tt::tt_metal::GlobalSemaphore> teardown_worker_semaphores = create_global_semaphores(devices);
+
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    TT_FATAL(
+        output_tensors.size() == 5,
+        "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
     operation::launch_op(
-        [binary_op_type, scatter_dim, output_mem_config, ccl_topology, devices, num_links_preferred, output_tensors](
+        [binary_op_type,
+         from_remote_inputs_semaphores,
+         teardown_worker_semaphores,
+         scatter_dim,
+         output_mem_config,
+         ccl_topology,
+         devices,
+         num_links_preferred,
+         output_tensors](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -228,13 +295,15 @@ Tensor reduce_scatter(
                     output_mem_config,
                     devices,
                     ccl_topology,
-                    std::nullopt, // TODO: populate properly forward_output_tensors,
-                    std::nullopt, // TODO: populate properly backward_output_tensors,
-                    num_links_preferred),
+                    std::nullopt,  // TODO: populate properly forward_output_tensors,
+                    std::nullopt,  // TODO: populate properly backward_output_tensors,
+                    num_links_preferred,
+                    from_remote_inputs_semaphores,
+                    teardown_worker_semaphores),
                 {input_tensor});
         },
-     {input_tensor},
-     output_tensors);
+        {input_tensor},
+        output_tensors);
     return output_tensors.at(0);
 }
 
@@ -261,52 +330,59 @@ Tensor reduce_scatter(
     TT_FATAL(scatter_dim >= -rank && scatter_dim <= rank - 1 , "Dimension input should be in between -{} and {}, but has {}", rank, rank - 1, dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    TT_FATAL(output_tensors.size() == 3, "Reduce scatter requires 3 output tensors");
+    TT_FATAL(
+        output_tensors.size() == 5,
+        "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
 
-    operation::launch_op(
-        [scatter_dim, &mesh_device, binary_op_type, num_links_preferred, output_mem_config, mesh_view, cluster_axis, num_devices, topology](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+    // operation::launch_op(
+    //     [scatter_dim, &mesh_device, binary_op_type, num_links_preferred, output_mem_config, mesh_view, cluster_axis,
+    //     num_devices, topology](
+    //         const std::vector<Tensor>& input_tensors,
+    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    //         const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            const auto& input_device_tensor = input_tensors.at(0);
+    //         const auto& input_device_tensor = input_tensors.at(0);
 
-            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
-            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
-            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+    //         const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+    //         const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
+    //         const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
 
-            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-                auto new_coord = coordinate;
-                if (cluster_axis == 0) {
-                    new_coord.row = line_index % num_devices;
-                } else {
-                    new_coord.col = line_index % num_devices;
-                }
-                return mesh_view->find_device_id(new_coord);
-            };
-            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
-            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
-            auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
-            auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_devices - 1);
-            std::optional<Device*> forward_device = receiver_device_id.has_value() ? mesh_device.get_device(receiver_device_id.value()) : std::optional<Device*>(std::nullopt);
-            std::optional<Device*> backward_device = sender_device_id.has_value() ? mesh_device.get_device(sender_device_id.value()) : std::optional<Device*>(std::nullopt);
-            return operation::run(
-                ttnn::ReduceScatterAsync{
-                    binary_op_type,
-                    scatter_dim,
-                    num_devices,
-                    device_index,
-                    forward_device,
-                    backward_device,
-                    output_mem_config.value_or(input_device_tensor.memory_config()),
-                    topology,
-                    std::nullopt, // TODO: populate properly foreward_output_tensors,
-                    std::nullopt, // TODO: populate properly backward_output_tensors,
-                    num_links_preferred},
-                {input_device_tensor});
-        },
-        {input_tensor},
-        output_tensors);
+    //         auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+    //             auto new_coord = coordinate;
+    //             if (cluster_axis == 0) {
+    //                 new_coord.row = line_index % num_devices;
+    //             } else {
+    //                 new_coord.col = line_index % num_devices;
+    //             }
+    //             return mesh_view->find_device_id(new_coord);
+    //         };
+    //         bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
+    //         bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+    //         auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index +
+    //         1); auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt :
+    //         get_chip_id(device_index + num_devices - 1); std::optional<Device*> forward_device =
+    //         receiver_device_id.has_value() ? mesh_device.get_device(receiver_device_id.value()) :
+    //         std::optional<Device*>(std::nullopt); std::optional<Device*> backward_device =
+    //         sender_device_id.has_value() ? mesh_device.get_device(sender_device_id.value()) :
+    //         std::optional<Device*>(std::nullopt); TT_THROW("Unsupported code path"); return operation::run(
+    //             ttnn::ReduceScatterAsync{
+    //                 binary_op_type,
+    //                 scatter_dim,
+    //                 num_devices,
+    //                 device_index,
+    //                 forward_device,
+    //                 backward_device,
+    //                 output_mem_config.value_or(input_device_tensor.memory_config()),
+    //                 topology,
+    //                 std::nullopt, // TODO: populate properly foreward_output_tensors,
+    //                 std::nullopt, // TODO: populate properly backward_output_tensors,
+    //                 num_links_preferred},
+    //                 // std::nullopt,
+    //                 // std::nullopt},
+    //             {input_device_tensor});
+    //     },
+    //     {input_tensor},
+    //     output_tensors);
     return output_tensors.at(0);
 
 }

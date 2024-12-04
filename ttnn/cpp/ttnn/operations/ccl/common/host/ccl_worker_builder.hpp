@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 
 namespace tt {
 namespace tt_metal {
@@ -57,7 +58,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections
+    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<std::unordered_map<const Tensor*,Device*>> const& tensor_device_override = std::nullopt
 );
 // Helper functions for building command processing datamovement kernels
 // TODO: Bundle into command bundle per command stream to cut down
@@ -65,7 +67,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
 void generate_multi_command_stream_kernel_rt_args(
     Program& program,
     KernelHandle kernel_id,
-    std::vector<size_t> const& cb_ids,
+    std::vector<uint32_t> const& cb_ids,
     std::vector<const Tensor*> const& tensors,
     Device* device,
     uint32_t page_size,                // TODO: get from tensors
@@ -80,7 +82,7 @@ void generate_multi_command_stream_kernel_rt_args(
 );
 KernelHandle generate_multi_command_stream_kernel_ct_args(
     Program& program,
-    std::vector<size_t> const& cb_indices,
+    std::vector<uint32_t> const& cb_indices,
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     DataMovementConfig datamovement_kernel_config,
@@ -94,6 +96,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
 // to avoid races because, generally speaking, async mode for CCLs requires the consumer ops to support
 // async tensors.
 //
+
 // Async tensor mode doesn't require that the producer of a tensor wait for the tensor to be fully populated
 // before terminating; instead that responsibility is left to the consumer. This can be advantageous because it
 // a) Allows dispatch overheads to be partly or fully hidden

@@ -18,6 +18,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
+#include <optional>
+
 namespace ttnn {
 namespace ccl {
 namespace worker_detail {
@@ -666,12 +668,13 @@ void generate_ccl_cb_to_tensor_slice_sequence_commands(std::vector<v2::TensorSli
 
 KernelHandle generate_multi_command_stream_kernel_ct_args(
     Program& program,
-    std::vector<size_t> const& cb_indices, // TODO: move to RT arg
+    std::vector<uint32_t> const& cb_indices, // TODO: move to RT arg
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams
 ) {
+    TT_FATAL(cb_indices.size() == tensors.size(), "Number of CB indices must match number of tensors");
     TT_FATAL(num_command_streams > 0 && num_command_streams <= 2, "Invalid number of command streams: {}. Must be 1 or 2", num_command_streams);
     std::ranges::for_each(tensors, [](auto const& t) { TT_FATAL(t != nullptr, "Null tensor passed to generate_multi_command_stream_kernel_ct_args"); });
     if (tensors.size() > 0 && tensors[0]->is_sharded()) {
@@ -681,9 +684,6 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
         datamovement_kernel_config.defines["TENSOR1_SHARDED_MEM_LAYOUT"] = "1";
     }
     if (num_command_streams == 1) {
-        // TT_FATAL(tensors.size() == 1, "Single command stream kernel must have exactly one tensor");
-        // TT_FATAL(cb_indices.size() == 1, "Single command stream kernel must have exactly one cb index");
-
         // single input so we need to disable the second one
         datamovement_kernel_config.defines["SINGLE_INPUT_MODE"] = "1";
     }
@@ -735,10 +735,14 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
         }
 
         datamovement_kernel_config.compile_args = ct_args;
-        log_trace(tt::LogTest, "\tSenderReader CT Args");
+        log_trace(tt::LogOp, "\tSenderReader Kernel Defines");
+        for (auto const&[k,v] : datamovement_kernel_config.defines) {
+            log_trace(tt::LogOp, "\t\t{}: {}", k, v);
+        }
+        log_trace(tt::LogOp, "\tSenderReader CT Args");
         for (size_t i = 0; i < ct_args.size(); i++) {
             auto const& arg = ct_args[i];
-            log_trace(tt::LogTest, "\t\t{}: {}", i, arg);
+            log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
         }
     }
     auto sender_worker_reader_kernel = tt::tt_metal::CreateKernel(
@@ -766,7 +770,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections
+    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<std::unordered_map<const Tensor*,Device*>> const& tensor_device_override
 ) {
     // TODO: see if we can pull the kernel defines to understand if we built the kernel in single command stream mode
 
@@ -774,7 +779,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
         TT_FATAL(tensors[i] != nullptr, "Tensor at index {} is nullptr", i);
     }
 
-    TT_FATAL(tensors.size() > 0 && tensors.size() <= 2, "Size mismatch between tensors and cb_ids");
+    // TT_FATAL(tensors.size() > 0 && tensors.size() <= 2, "Size mismatch between tensors and cb_ids");
     std::vector<const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>*> command_streams = {
         &ccl_command_stream0};
     if (ccl_command_stream1.has_value()) {
@@ -791,21 +796,26 @@ void generate_multi_input_command_stream_kernel_rt_args(
     auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
     std::vector<uint32_t> rt_args;
     rt_args.reserve(100);
-    for (size_t i = 0; i < num_command_streams; i++) {
+    for (size_t i = 0; i < tensors.size(); i++) {
         rt_args.push_back(tensors[i]->buffer()->address());
     }
     for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(command_streams[i]->size()); // input_tensor_0_read_command_slices
+        rt_args.push_back(command_streams[i]->size()); // in0_read_command_slices
         command_stream_start_arg_indices[i] = rt_args.size();
         rt_args.push_back(0); // in0_command_start_offset
     }
     rt_args.push_back(num_pages_per_edm_buffer);
-    for (size_t i = 0; i < num_command_streams; i++) {
+    TT_FATAL(tensors.size() == page_sizes.size(), "Number of pages must match with the number of tensors");
+    for (size_t i = 0; i < tensors.size(); i++) {
         rt_args.push_back(page_sizes[i]); // in0
     }
 
     for (Tensor const* t : tensors) {
-        std::ranges::copy(ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t), std::back_inserter(rt_args));
+        if (tensor_device_override.has_value() and tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
+            std::ranges::copy(ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t), std::back_inserter(rt_args));
+        } else {
+            std::ranges::copy(ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t), std::back_inserter(rt_args));
+        }
     }
 
     // TODO: Handle teardown signalling
@@ -821,11 +831,6 @@ void generate_multi_input_command_stream_kernel_rt_args(
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         append_worker_to_fabric_edm_sender_rt_args(backward_fabric_connections.value(), sender_worker_flow_control_semaphore_id, sender_worker_buffer_index_semaphore_id, rt_args);
     }
-    // size_t fabric_teardown_arg_idx = 0;
-    // if (edm_termination_infos.has_value()) {
-    //     fabric_teardown_arg_idx = rt_args.size();
-    //     rt_args.push_back(0);
-    // }
 
     for (size_t i = 0; i < num_command_streams; i++) {
         // Update the command stream start arg index argument to point to here (i.e. where
@@ -834,16 +839,10 @@ void generate_multi_input_command_stream_kernel_rt_args(
         generate_ccl_command_stream_to_kernel_args((*command_streams[i]), rt_args);
     }
 
-
-    // if (edm_termination_infos.has_value()) {
-    //     rt_args[fabric_teardown_arg_idx] = rt_args.size();
-    //     get_runtime_args_for_edm_termination_infos(edm_termination_infos.value(), rt_args);
-    // }
-
-    log_trace(tt::LogTest, "\tMulti-input command processor RT Args");
+    log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
     for (size_t i = 0; i < rt_args.size(); i++) {
         auto const& arg = rt_args[i];
-        log_trace(tt::LogTest, "\t\t{}: {}", i, arg);
+        log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
 }
@@ -852,7 +851,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
 void generate_multi_command_stream_kernel_rt_args(
     Program& program,
     KernelHandle kernel_id,
-    std::vector<size_t> const& cb_ids,
+    std::vector<uint32_t> const& cb_ids,
     std::vector<const Tensor*> const& tensors,
     Device* device,
     uint32_t page_size,                // TODO: get from tensors
@@ -939,10 +938,10 @@ void generate_multi_command_stream_kernel_rt_args(
         get_runtime_args_for_edm_termination_infos(edm_termination_infos.value(), rt_args);
     }
 
-    log_trace(tt::LogTest, "\tMulti-input command processor RT Args");
+    log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
     for (size_t i = 0; i < rt_args.size(); i++) {
         auto const& arg = rt_args[i];
-        log_trace(tt::LogTest, "\t\t{}: {}", i, arg);
+        log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
 
@@ -958,15 +957,6 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     ccl::SyncModeSpec const& sync_details,
     ccl::EdmLineFabricOpInterface& fabric_interface
 ) {
-    // auto teardown_kernel_id = generate_multi_command_stream_kernel_ct_args(
-    //     program,
-    //     {}, // unused
-    //     {},
-    //     {sync_details.core},
-    //     WriterDataMovementConfig{},
-    //     1
-    // );
-
     TT_FATAL(sync_details.num_signals == 1, "Only one signal is supported for CCL command processor teardown");
     TT_FATAL(sync_details.sem_ids.size() == 1, "Only one signal is supported for CCL command processor teardown");
     TT_FATAL(sync_details.wait_counts.size() == 1, "Only one signal is supported for CCL command processor teardown");
@@ -985,7 +975,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
         auto remote_worker_noc0_core = forward_device->worker_core_from_logical_core(sync_details.core);
         teardown_cmd_stream.push_back(
             cmd::uops::fabric_unicast_semaphore_inc(
-                ttnn::ccl::cmd::CclCommandAddrSemaphoreId{remote_sem_id},
+                remote_sem_id,
                 ttnn::ccl::cmd::CclCommandAtomicInc{1},
                 remote_worker_noc0_core.x,
                 remote_worker_noc0_core.y,
@@ -1053,19 +1043,6 @@ void build_sync_kernels(
     }
 
     tt::tt_metal::SetRuntimeArgs(program, sync_kernel_id, sync_details.core, rt_args);
-    // generate_multi_input_command_stream_kernel_rt_args(
-    //     program,
-    //     sync_kernel_id,
-    //     {},
-    //     {},
-    //     device,
-    //     uint32_t num_pages_per_edm_buffer, // TODO: get from fabric
-    //     CoreRangeSet const& worker_core_range,
-    //     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
-    //     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
-    //     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    //     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections
-    // )
 }
 
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args(
