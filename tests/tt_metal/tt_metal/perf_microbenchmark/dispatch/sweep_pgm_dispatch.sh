@@ -10,8 +10,8 @@ elif [ "$ARCH_NAME" = "wormhole_b0" ]; then
     max_y="6"
 elif [ "$ARCH_NAME" = "blackhole" ]; then
     echo "Configured core range for blackhole"
-    max_x="12"
-    max_y="9"
+    max_x="7"
+    max_y="6"
 else
     echo "Unknown arch: $ARCH_NAME"
     exit

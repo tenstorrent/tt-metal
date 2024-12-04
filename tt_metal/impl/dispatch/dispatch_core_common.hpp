@@ -44,7 +44,7 @@ private:
     DispatchCoreAxis axis_;
 
     static DispatchCoreAxis get_default_axis() {
-        return (tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::COL
+        return (tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::ROW
                                                                                   : DispatchCoreAxis::ROW;
     }
 
