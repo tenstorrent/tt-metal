@@ -5,6 +5,7 @@
 import math
 import ttnn
 import torch
+from tqdm import tqdm
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
@@ -43,6 +44,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         weight_cache_path,
         dtype,
         configuration,
+        use_paged_kv_cache=False,
     ):
         super().__init__()
         self.vocab_size = configuration.vocab_size
@@ -131,7 +133,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         # transformer blocks
         self.layers = []
         self.cross_attention_layers = []
-        for i in range(configuration.n_layers):
+        for i in tqdm(range(configuration.n_layers), desc="Loading text transformer layers"):
             layer_id = i
             block = TtTransformerBlock(
                 configuration,
@@ -141,6 +143,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 layer_id,
                 weight_cache_path,
                 transformation_mats=self.trans_mats_dict,
+                use_paged_kv_cache=use_paged_kv_cache,
             )
             self.layers.append(block)
             if layer_id in self.fusion_schedule:
@@ -271,6 +274,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
+        kv_cache=None,
         text_only_inference=False,
         vision_tokens=None,
         get_last_token=-1,
@@ -297,6 +301,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 rot_mats=rot_mats,
                 user_id=user_id,
                 mode=mode,
+                page_table=page_table,
+                kv_cache=kv_cache,
             )
 
         if get_last_token != -1:

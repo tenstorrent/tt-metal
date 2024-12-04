@@ -128,6 +128,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         weight_cache_path,
         dtype,
         configuration,
+        use_paged_kv_cache=False,
     ) -> None:
         super().__init__()
 
@@ -159,6 +160,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             weight_cache_path=configuration.weight_cache_path(ttnn.bfloat8_b),
             dtype=ttnn.bfloat8_b,
             configuration=configuration,
+            use_paged_kv_cache=use_paged_kv_cache,
         )
         self.image_res = configuration.vision_chunk_size
         self.max_num_chunks = configuration.vision_max_num_chunks
@@ -278,7 +280,9 @@ class CrossAttentionTransformer(torch.nn.Module):
         h = self.text_model.get_partially_trainable_embedding(tokens)
         return h
 
-    def prepare_inputs_prefill(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len):
+    def prepare_inputs_prefill(
+        self, tokens, cross_attention_masks, full_text_row_masked_out_mask, prefill_len, page_table=None
+    ):
         B = tokens.shape[0]
         assert B == 1, f"Only batch 1 is supported, got {B}"
         S = tokens.shape[1]
@@ -341,22 +345,39 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
         )
 
+        if isinstance(page_table, torch.Tensor):
+            # Support vLLM tensor page_table input
+            page_table = ttnn.as_tensor(
+                page_table,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
         return (
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_full_text_mask_expand_11SD,
             rot_mats,
+            page_table,
         )
 
-    def prepare_inputs_decode(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id):
+    def prepare_inputs_decode(
+        self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id, page_table=None
+    ):
         (
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
-        ) = self.prepare_decode_inputs_host(tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id)
+            tt_page_table,
+        ) = self.prepare_decode_inputs_host(
+            tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id, page_table=page_table
+        )
 
         (
             tt_h,
@@ -364,7 +385,10 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
-        ) = self.copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id))
+            tt_page_table,
+        ) = self.copy_host_to_device(
+            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id, tt_page_table)
+        )
 
         tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
             tt_h,
@@ -380,9 +404,12 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rot_mats,
+            tt_page_table,
         )
 
-    def prepare_decode_inputs_host(self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id):
+    def prepare_decode_inputs_host(
+        self, tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id, page_table=None
+    ):
         B = tokens.shape[0]
         assert (
             B == self.configuration.max_batch_size
@@ -430,12 +457,22 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        if isinstance(page_table, torch.Tensor):
+            # Support vLLM tensor page_table input
+            page_table = ttnn.as_tensor(
+                page_table,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
         return (
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
+            page_table,
         )
 
     def copy_host_to_device(self, host_tensors, device_tensors=None):
@@ -445,7 +482,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         if device_tensors is None:
             ret = []
             for i in range(len(host_tensors)):
-                on_device = ttnn.to_device(host_tensors[i], device=self.mesh_device)
+                on_device = ttnn.to_device(host_tensors[i], device=self.mesh_device) if host_tensors[i] else None
                 ret.append(on_device)
             return ret
         else:
@@ -510,6 +547,66 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_out = tt_out[:, :, :B, :].reshape(B, S, -1)
         return tt_out
 
+    def forward(
+        self,
+        position_ids: torch.Tensor,
+        tokens: torch.Tensor,
+        cross_attention_masks: torch.Tensor,
+        full_text_row_masked_out_mask: torch.Tensor,
+        xattn_caches,  # list of ttnn tensors
+        text_only_inference: bool = False,
+        user_id=0,
+        vision_tokens=None,
+        page_table=None,
+        kv_cache=None,
+    ) -> torch.Tensor:
+        """
+        This method takes torch tensors in, returns torch tensors.
+        It also determines whether or not to run prefill or decode.
+        """
+        B = tokens.shape[0]
+        S = position_ids.shape[0]  # TODO: Get B, S from tokens when we don't pass full tokens around
+        mode = "decode" if S == 1 else "prefill"
+
+        # pos_arg is used in preparation in different ways based on mode
+        pos_arg = S if mode == "prefill" else position_ids.item()
+        prepare_fn = self.prepare_inputs_decode if mode == "decode" else self.prepare_inputs_prefill
+        (
+            tt_h,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
+            tt_position_id,
+            rot_mats,
+            tt_page_table,
+        ) = prepare_fn(
+            tokens,
+            cross_attention_masks,
+            full_text_row_masked_out_mask,
+            pos_arg,
+            page_table=page_table,
+        )
+
+        logits = self.text_model.forward(
+            tt_h,
+            xattn_mask=tt_xattn_mask,
+            full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
+            full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
+            xattn_caches=xattn_caches,
+            current_pos=tt_position_id,
+            rot_mats=rot_mats,
+            user_id=user_id,
+            mode=mode,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
+            text_only_inference=text_only_inference,
+            vision_tokens=vision_tokens,
+        )
+        tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+
+        output_fn = self.process_output_decode if mode == "decode" else self.process_output_prefill
+        return output_fn(tt_out, B, S)
+
     def ttnn_prefill_forward(
         self,
         h,
@@ -520,6 +617,8 @@ class CrossAttentionTransformer(torch.nn.Module):
         rot_mats,
         user_id,
         vision_tokens,
+        page_table=None,
+        kv_cache=None,
         get_last_token=-1,
     ):
         """
@@ -535,6 +634,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             rot_mats=rot_mats,
             user_id=user_id,
             mode="prefill",
+            page_table=page_table,
+            kv_cache=kv_cache,
             vision_tokens=vision_tokens,
             get_last_token=get_last_token,
         )
@@ -549,6 +650,8 @@ class CrossAttentionTransformer(torch.nn.Module):
         xattn_caches,
         position_id,
         rot_mats,
+        page_table=None,
+        kv_cache=None,
     ):
         """
         This method runs decode forward. It takes ttnn tensors in, returns ttnn tensors.
@@ -562,6 +665,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             current_pos=position_id,
             rot_mats=rot_mats,
             mode="decode",
+            page_table=page_table,
+            kv_cache=kv_cache,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         return tt_out
