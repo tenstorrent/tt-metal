@@ -211,7 +211,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CompilerInterface,     // Prefix for the instantiated test suite
+    QueryOpConstraints,    // Prefix for the instantiated test suite
     EltwiseUnaryOpIfTest,  // Test suite name
     ::testing::Values(
         std::make_tuple(
@@ -289,8 +289,8 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CompilerInterface,  // Prefix for the instantiated test suite
-    SoftmaxOpIfTest,    // Test suite name
+    QueryOpConstraints,  // Prefix for the instantiated test suite
+    SoftmaxOpIfTest,     // Test suite name
     ::testing::Values(
         std::make_tuple(
             g_height_shard_3_1_1024_1024_tiled_to_16_cores,
@@ -377,7 +377,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CompilerInterface,      // Prefix for the instantiated test suite
+    QueryOpConstraints,     // Prefix for the instantiated test suite
     EltwiseBinaryOpIfTest,  // Test suite name
     ::testing::Values(
         std::make_tuple(  // sharded
@@ -529,8 +529,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CompilerInterface,  // Prefix for the instantiated test suite
-    MatmulOpIfTest,     // Test suite name
+    QueryOpConstraints,  // Prefix for the instantiated test suite
+    MatmulOpIfTest,      // Test suite name
     ::testing::Values(
         std::make_tuple(  // default
             g_height_shard_1_1_1024_32_tiled_to_32_cores,
