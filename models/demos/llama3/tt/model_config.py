@@ -48,17 +48,6 @@ class LlamaOptimizations:
 
 
 class TtModelArgs:
-    paged_attention_config = None
-
-    # TODO Update these params. In init we update the max_seq_len to 32k if it's a single device
-    max_batch_size = 1
-    # Context length for Llama models (if single device, reduce to 32k in init)
-    max_seq_len = 8192 * 16  # 128k
-    kv_seq_len = 8192 * 16  # 128k
-    sliding_window = 8192 * 16  # 128k
-
-    tile_size = 32
-
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -98,12 +87,16 @@ class TtModelArgs:
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
+        max_seq_len=1024 * 128,
         optimizations=LlamaOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
+        self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
+        self.tile_size = 32
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -169,24 +162,6 @@ class TtModelArgs:
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
-        # Reduce full 128k context length for combinations with memory constraints
-        # Currently: n150 8b and t3k 70b with 8b/8b/8b MLPs
-        # Default folder location for weights and cached files
-        # FIXME: Setup the max cache size accordingly depending on the target model, architecture and test type.
-        if (
-            0 < self.num_devices <= 2
-        ):  # for 1-chip or 2-chip devices limit the seqlen to 4K (to avoid OoO on N150/N300 CI tests)
-            self.max_seq_len = 1024 * 4
-            self.kv_seq_len = 1024 * 4
-            self.sliding_window = 1024 * 4
-
-        if (
-            self.n_layers == 1
-        ):  # When running a single layer just reduce the seq len to 128, since we won't be decoding that many iterations
-            self.max_seq_len = 128
-            self.kv_seq_len = 128
-            self.sliding_window = 128
-
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
@@ -200,7 +175,6 @@ class TtModelArgs:
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
         self.dummy_weights = dummy_weights
-        self.max_batch_size = max_batch_size
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -283,6 +257,7 @@ class TtModelArgs:
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
                 k_chunk_size=256 if seqlen >= 2048 else 64,
             )
@@ -406,6 +381,7 @@ class TtModelArgs:
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
                 q_chunk_size=32,
                 k_chunk_size=32,
             )
@@ -448,14 +424,6 @@ class TtModelArgs:
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )
-            self.model_config["ROT_MAT_BMM_PROGCFG"] = lambda m, k, n: ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=grid_by_batch,
-                in0_block_w=math.ceil(k / 32),
-                out_subblock_h=1,
-                out_subblock_w=1,  # TODO How to choose this subblock size?
-                per_core_M=math.ceil(m / 32),
-                per_core_N=math.ceil(n / 32),
             )
             self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
