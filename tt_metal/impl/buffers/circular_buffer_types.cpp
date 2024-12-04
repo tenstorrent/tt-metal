@@ -100,13 +100,13 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     this->max_size_ = buffer.aligned_size_per_bank();
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
-    // if (total_size > this->max_size_) {
-    //     TT_ASSERT(
-    //         false,
-    //         "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer bank "
-    //         "size of {} B",
-    //         total_size,
-    //         this->max_size_);
+    if (total_size > this->max_size_) {
+        TT_ASSERT(
+            false,
+            "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer bank "
+            "size of {} B",
+            total_size,
+            this->max_size_);
 #ifndef DEBUG
         log_warning(
             "Circular buffer size {} B exceeds allocated L1 buffer bank size of {} B. This may allow this circular "
@@ -121,7 +121,7 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
                 this->buffer_size_);
         }
 #endif
-    // }
+    }
     if (total_size == 0) {
         TT_THROW("Total size for circular buffer must be non-zero!");
     }

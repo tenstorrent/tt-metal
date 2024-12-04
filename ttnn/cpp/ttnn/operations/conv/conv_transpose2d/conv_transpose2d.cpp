@@ -226,8 +226,6 @@ Result conv_transpose2d(
             log_debug(tt::LogOp, "Reallocate Halo Output");
         }
 
-
-
         //Call Conv2d u_op with Stride = 1, Padding = 0.
         auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
             ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
