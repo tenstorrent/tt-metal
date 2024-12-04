@@ -49,8 +49,6 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     tt_model_args = TtModelArgs(mesh_device, max_batch_size=max_batch_size)
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
-    tt_model_args.kv_seq_len = max_seq_len
-    tt_model_args.sliding_window = max_seq_len
     checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
     model = CrossAttentionTransformer(
         mesh_device,

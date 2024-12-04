@@ -8,7 +8,6 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
-    get_single_rot_mat,
 )
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
@@ -50,14 +49,6 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     generation_start_pos = 0
     generation_length = 10
     all_tests_pass = True
-
-    # pre-compute the rotational embedding matrix and send to device
-    current_rot_mat, rot_matrix = get_single_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        model_args.num_devices,
-        start_pos=0,
-    )
 
     # Initialize TT model
     tt_model = TtTransformerBlock(

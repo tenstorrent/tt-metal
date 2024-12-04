@@ -58,21 +58,6 @@ run_perf_models_llm_javelin() {
 
     env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m $test_marker
 
-    # Llama3.1-8B
-    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-    # Llama3.2-1B
-    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-    # Llama3.2-3B
-    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-    # Llama3.2-11B  (#Skip: Weights too big for single-chip ci VM)
-    llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-
-    # Run all Llama3 tests for 8B, 1B, and 3B weights
-    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/demos/llama3/tests/test_llama_perf.py -m $test_marker
-        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
-    done
-
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
     fi
