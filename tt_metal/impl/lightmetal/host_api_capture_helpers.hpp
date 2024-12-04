@@ -178,3 +178,12 @@ inline void captureEnqueueReadBuffer(CommandQueue& cq, std::variant<std::referen
     auto cmd_variant = tt::target::CreateEnqueueReadBufferCommand(ctx.getBuilder(), cq_global_id, buffer_global_id, blocking);
     captureCommand(tt::target::CommandType::EnqueueReadBufferCommand, cmd_variant.Union());
 }
+
+inline void captureFinish(CommandQueue& cq) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+    uint32_t cq_global_id = cq.id(); // FIXME - Maybe not correct, probably should handle same way as Buffers.
+    log_info(tt::LogMetalTrace, "{} for cq_global_id: {}", __FUNCTION__, cq_global_id);
+    auto cmd_variant = tt::target::CreateFinishCommand(ctx.getBuilder(), cq_global_id);
+    captureCommand(tt::target::CommandType::FinishCommand, cmd_variant.Union());
+}
