@@ -159,6 +159,7 @@ jobs:
     secrets: inherit
     with:
       os: ubuntu-22.04-amd64
+    if: github.event_name == 'push'
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
