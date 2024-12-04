@@ -108,6 +108,7 @@ class RunTimeOptions {
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_buffer_usage_enabled = false;
+    bool profiler_noc_events_enabled = false;
 
     bool null_kernels = false;
 
@@ -257,6 +258,7 @@ class RunTimeOptions {
     inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
     inline bool get_profiler_buffer_usage_enabled() { return profiler_buffer_usage_enabled; }
+    inline bool get_profiler_noc_events_enabled() { return profiler_noc_events_enabled; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }

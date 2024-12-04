@@ -141,7 +141,6 @@ uint32_t get_bank_offset(uint32_t bank_index) {
 
 // if PROFILE_NOC_EVENTS is defined, enables RECORD* macros to tracking noc events via kernel profiler 
 // otherwise this just defines empty RECORD_* macros with no other effects
-#define PROFILE_NOC_EVENTS 1 
 #include "tools/profiler/noc_event_profiler.hpp"
 
 /**

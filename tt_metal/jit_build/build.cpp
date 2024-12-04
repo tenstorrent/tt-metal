@@ -98,6 +98,13 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch, const std::map<std::st
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
     }
+    if (tt::llrt::OptionsG.get_profiler_noc_events_enabled()) {
+        // force profiler on if noc events are being profiled
+        if (not tt::tt_metal::getDeviceProfilerState()) {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
+        this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
