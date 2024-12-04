@@ -105,7 +105,6 @@ jobs:
       - in-service
     steps:
       - name: Tag latest if this is a major version release
-        if: ${{ inputs.is_major_version }}
         run: |
           set -eu # basic shell hygiene
           LATEST_TAG=latest
