@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::dram_prefetcher {
 
 struct ExecuteDramPrefetcher {
-    static ttnn::Tensor invoke(const std::vector<ttnn::Tensor>& tensors);
+    static ttnn::Tensor invoke(std::vector<ttnn::Tensor>& tensors);
 };
 
 }  // namespace operations::dram_prefetcher
