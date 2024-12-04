@@ -58,7 +58,7 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     return sample
 
 
-def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16):
+def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False):
     from models.demos.llama3.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.demos.llama3.tt.model_config import TtModelArgs
 
@@ -72,6 +72,7 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=tt_model_args,
+        use_paged_kv_cache=use_paged_kv_cache,
     )
     return tt_model_args, model
 
@@ -201,8 +202,6 @@ def test_llama_multimodal_demo_text(
             )
 
             prefill_end = time.perf_counter()
-            # Get logits for last prefill token
-            batch_logits = batch_logits.view(max_batch_size, 1, -1)
             next_tokens, next_texts = sampler(batch_logits)
             for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
                 tokens[i, prefill_lens[i]] = next_token
