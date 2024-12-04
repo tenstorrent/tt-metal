@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize("n", [16])
@@ -354,6 +355,7 @@ def test_reshape_host(input_shape, output_shape, device):
 
 
 # required for Embedding
+@skip_for_grayskull("avoid this test while issue 15702 is resolved")
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
