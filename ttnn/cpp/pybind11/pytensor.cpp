@@ -69,7 +69,7 @@ template <typename T>
 Tensor create_owned_tensor(
     T* data_ptr,
     size_t num_elements,
-    tt::stl::Span<const uint32_t> shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const std::optional<Tile>& optional_tile = std::nullopt) {
@@ -148,12 +148,17 @@ Tensor convert_float_vector_to_tt_tensor(
 Tensor create_tt_tensor_from_py_data(
     std::size_t num_elements,
     std::size_t py_data_ptr,
-    const ttnn::SmallVector<uint32_t>& shape,
-    const DataType data_type,
-    const std::optional<Tile>& optional_tile,
+    const TensorSpec& tensor_spec,
+    Device* device,
     bool enable_borrow,
     const std::function<void()>& on_creation_callback = [] {},
     const std::function<void()>& on_destruction_callback = [] {}) {
+    auto shape = tensor_spec.logical_shape();
+    auto data_type = tensor_spec.data_type();
+    auto optional_tile = tensor_spec.tensor_layout().get_page_config().get_tile();
+    auto memory_config = tensor_spec.tensor_layout().get_memory_config();
+    auto layout = tensor_spec.layout();
+
     switch (data_type) {
         case DataType::UINT8: {
             auto data_ptr = reinterpret_cast<uint8_t*>(py_data_ptr);
@@ -221,7 +226,7 @@ Tensor create_tt_tensor_from_py_data(
             auto data_ptr = reinterpret_cast<float*>(py_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
             auto buffer = owned_buffer::create<float>(std::move(data));
-            auto tile = optional_tile.value_or(Tile());
+            auto tile = optional_tile;
             auto tensor = Tensor(OwnedStorage{buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, optional_tile)
                               .to(Layout::TILE);
             auto output_float_data = owned_buffer::get_as<float>(tensor).get();
@@ -261,7 +266,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     py::object np = py::module_::import("numpy");
 
     auto py_dtype = py_tensor.attr("dtype");
-    auto shape = py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape"));
+    auto shape = ttnn::SimpleShape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     DataType data_type;
 
@@ -409,17 +414,11 @@ Tensor convert_python_tensor_to_tt_tensor(
         layout = optional_layout.value_or(Layout::ROW_MAJOR);
     }
 
+    auto tensor_spec = TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, optional_tile), memory_config));
     auto on_creation_callback = [tensor = contiguous_py_tensor] { tensor.inc_ref(); };
     auto on_destruction_callback = [tensor = contiguous_py_tensor] { tensor.dec_ref(); };
     auto output = create_tt_tensor_from_py_data(
-        num_elements,
-        py_data_ptr,
-        shape,
-        data_type,
-        optional_tile,
-        enable_borrow,
-        on_creation_callback,
-        on_destruction_callback);
+        num_elements, py_data_ptr, tensor_spec, device, enable_borrow, on_creation_callback, on_destruction_callback);
 
     output = output.to(layout);
     if (device) {
