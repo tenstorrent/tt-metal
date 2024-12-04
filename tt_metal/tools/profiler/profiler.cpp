@@ -396,7 +396,7 @@ void DeviceProfiler::dumpJsonReport(
     Device* device, const std::vector<std::uint32_t>& profile_buffer, const std::vector<CoreCoord>& worker_cores) {
     auto device_id = device->id();
 
-    std::string prefix = "noc_events_";
+    std::string prefix = "noc_trace";
     std::string basename = prefix + "_dev" + std::to_string(device_id) + ".json";
 
     std::filesystem::path log_path = output_dir / basename;
