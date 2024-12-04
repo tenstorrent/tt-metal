@@ -14,22 +14,21 @@ All the above llama models (with the exception of 70B due to its large size) are
 - N300 (2-chips)
 - T3000 (8-chips)
 
-Below is an updated table with max context length support in our demo test. These were tested with accuracy mode enabled.
+Below is an updated table with max prefill context-length support for our demo. These were tested on both accuracy and performance mode.
 
 The main reason for a long context length not fitting on device is lack of memory memory. Any exceptions are marked in the table.
 
-|              | N150          | N300     | T3K |
----------------|---------------|----------|-----|
-| Llama3.2-1B  | 64k tokens     | 64k tokens     | 64k tokens [1]  |
-| Llama3.2-3B  | 32k tokens     | 32k tokens [1] | 64k tokens [1]  |
-| Llama3.1-8B  | 16k tokens     | 64k tokens     | 128k tokens [2] |
-| Llama3.2-11B | 16k tokens     | 64k tokens     | 128k tokens [2] |
-| Llama3.1-70B | Not supported  | Not supported  | 128k tokens [2] |
+|              |      N150     |       N300      |      T3K       | TG
+---------------|---------------|-----------------|----------------|-------------|
+| Llama3.2-1B  | 64k tokens     | 64k tokens     | 64k tokens [1] | TBD         |
+| Llama3.2-3B  | 32k tokens     | 32k tokens [1] | 64k tokens [1] | TBD         |
+| Llama3.1-8B  | 16k tokens     | 64k tokens     | 128k tokens    | TBD         |
+| Llama3.2-11B | 16k tokens     | 64k tokens     | 128k tokens    | TBD         |
+| Llama3.1-70B | Not supported  | Not supported  | 32k tokens [2] | 128k tokens |
 
 [1] For these configurations, running context lengths greater than those specified on the table will generate a bad repetitive output.
 
-[2] 128k token context-length requires sampling. If run with argmax, the output will be considerably worse.
-At the moment, sampling is run on host, so expect a decrease in performance when using these configurations.
+[2] Although longer prefill context-lengths are not supported due to model size and available memory, you can still decode (generate) tokens up to a maximum of 128k tokens.
 
 
 ## How to Run
@@ -104,7 +103,7 @@ If you want to provide your own demo configuration, please take a look at the py
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `optimization (LlamaOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
 
-Please note that using `argmax` with `batch_size > 1` or `top-p` with any batch size will be make these ops run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
+Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 
 When running the demo, do not forget to setup the `$LLAMA_DIR` environment variable to the corresponding Llama3 model weights.
 

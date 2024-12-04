@@ -238,10 +238,10 @@ def run_llama3_demo(
             max_seq_len <= 64 * 1024
         ), "Llama3.2-1B only supports a max context length of 64k tokens across all architectures"
     if llama_model_name == "3.2-3B":
-        if tt_device_name in ["N150", "N300"]:
-            assert (
-                max_seq_len <= 32 * 1024
-            ), "N150 and N300 only support a max context length of 32k tokens for Llama3.2-3B"
+        if tt_device_name == "N150":
+            assert max_seq_len <= 32 * 1024, "N150 only supports a max context length of 32k tokens for Llama3.2-3B"
+        elif tt_device_name == "N300":
+            assert max_seq_len <= 64 * 1024, "N300 only supports a max context length of 64k tokens for Llama3.2-3B"
         else:  # T3K and TG
             assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.2-3B"
     if llama_model_name in ["3.1-8B", "3.2-11B"]:
@@ -881,7 +881,7 @@ def run_llama3_demo(
             200,  # max_generated_tokens
             False,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0.6, "top_p": 0.08},  # sampling_params (top-p)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
     ],
     ids=[
