@@ -29,24 +29,11 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors, uint32_t global_cb_addr, uint32_t global_cb_size, uint32_t num_receivers) {
     Program program{};
 
+    // In validate we make sure that all tensors are on the same device
     tt::tt_metal::Device* device = tensors[0].device();
 
     uint32_t num_tensors = tensors.size();
     uint32_t start_tile_id = 0;
-
-    // TODO: handle multiple tensors
-
-    uint32_t kt = tensors[0].get_legacy_shape()[0] / 32;
-    uint32_t nt = tensors[0].get_legacy_shape()[1] / 32;
-
-    uint32_t num_blocks = 24;  // number of receiver cores
-    uint32_t in1_block_h = kt / num_blocks;
-    uint32_t in1_block_w = nt;
-    uint32_t in1_block_num_tiles = in1_block_h * in1_block_w;
-    uint32_t in1_num_tile_rows_write = in1_block_h;
-
-    tt::DataFormat input_tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensors[0].get_dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(input_tensor_data_format);
 
     // DRAM reader cores
     CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
@@ -63,32 +50,55 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     // DRAM reader CB
     uint32_t in1_reader_cb_index = 0;
-    uint32_t in1_reader_cb_size =
-        in1_block_h * in1_block_w * single_tile_size * 3;  // TODO: how big should reader CB be?
-
-    uint32_t in1_reader_page_sizes[num_tensors], in1_reader_num_pages[num_tensors];
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        get_max_page_size_and_num_pages(
-            in1_block_num_tiles, single_tile_size, in1_reader_page_sizes[i], in1_reader_num_pages[i]);
-    }
-
-    log_info("in1_reader_page_sizes[0]: {}", in1_reader_page_sizes[0]);
-    log_info("in1_reader_num_pages[0]: {}", in1_reader_num_pages[0]);
+    uint32_t in1_reader_cb_size = 750000;  // Total available L1 per core: 1.5 MB; we take half the L1, so 750000 bytes
+    tt::DataFormat in1_reader_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t in1_reader_cb_single_tile_size = 2048;
 
     tt_metal::CircularBufferConfig in1_reader_cb_config =
-        tt_metal::CircularBufferConfig(in1_reader_cb_size, {{in1_reader_cb_index, input_tensor_data_format}})
-            .set_page_size(in1_reader_cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig(in1_reader_cb_size, {{in1_reader_cb_index, in1_reader_data_format}})
+            .set_page_size(in1_reader_cb_index, in1_reader_cb_single_tile_size);
     auto in1_reader_cb = tt_metal::CreateCircularBuffer(program, dram_reader_core, in1_reader_cb_config);
 
-    uint32_t in1_receiver_block_num_tile = in1_block_h * in1_block_w / num_receivers;
+    // Global CB TODO: replace with actual global CB
+    uint32_t in1_writer_cb_index = 0;
+    uint32_t in1_writer_cb_size = 750000;
+    tt_metal::CircularBufferConfig in1_writer_cb_config =
+        tt_metal::CircularBufferConfig(in1_writer_cb_size, {{in1_writer_cb_index, input_tensor_data_format}})
+            .set_page_size(in1_writer_cb_index, single_tile_size);
+    auto in1_writer_cb = tt_metal::CreateCircularBuffer(program, dram_reader_core, in1_writer_cb_config);
+    auto global_cb_addr = in1_writer_cb.address();
+    auto global_cb_size = in1_writer_cb.size();
+
+    // Set up per tensor
     uint32_t in1_writer_page_sizes[num_tensors], in1_writer_num_pages[num_tensors];
+    uint32_t in1_reader_page_sizes[num_tensors], in1_reader_num_pages[num_tensors], single_tile_sizes[num_tensors];
+    uint32_t in1_block_num_tiles[num_tensors], in1_num_tile_rows_write[num_tensors];
+    uint32_t num_blocks = 24;  // number of receiver cores
     for (uint32_t i = 0; i < num_tensors; ++i) {
+        uint32_t kt = tensors[i].get_legacy_shape()[0] / 32;
+        uint32_t nt = tensors[i].get_legacy_shape()[1] / 32;
+
+        uint32_t in1_block_h = kt / num_blocks;
+        uint32_t in1_block_w = nt;
+        in1_block_num_tiles[i] = in1_block_h * in1_block_w;
+        in1_num_tile_rows_write[i] = in1_block_h;
+
+        tt::DataFormat input_tensor_data_format =
+            tt::tt_metal::datatype_to_dataformat_converter(tensors[i].get_dtype());
+        single_tile_sizes[i] = tt::tt_metal::detail::TileSize(input_tensor_data_format);
+
+        get_max_page_size_and_num_pages(
+            in1_block_num_tiles[i], single_tile_size, in1_reader_page_sizes[i], in1_reader_num_pages[i]);
+
+        log_info("in1_reader_page_sizes[{}]: {}", i, in1_reader_page_sizes[i]);
+        log_info("in1_reader_num_pages[{}]: {}", i, in1_reader_num_pages[i]);
+
         get_max_page_size_and_num_pages(
             in1_block_w / num_receivers, single_tile_size, in1_writer_page_sizes[i], in1_writer_num_pages[i]);
-    }
 
-    log_info("in1_writer_page_sizes[0]: {}", in1_writer_page_sizes[0]);
-    log_info("in1_writer_num_pages[0]: {}", in1_writer_num_pages[0]);
+        log_info("in1_writer_page_sizes[{}]: {}", i, in1_writer_page_sizes[i]);
+        log_info("in1_writer_num_pages[{}]: {}", i, in1_writer_num_pages[i]);
+    }
 
     // in1 reader
     std::vector<uint32_t> in1_reader_compile_time_args = {
@@ -130,7 +140,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t vc = bank_id & 0x1;
     uint32_t read_cb_size = in1_reader_cb_size;
     uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
-    std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc, (std::uint32_t)read_cb_size};
+    std::vector<uint32_t> reader_rt_args = {
+        (std::uint32_t)bank_id,
+        (std::uint32_t)vc,
+        (std::uint32_t)read_cb_size,
+        (std::uint32_t)total_num_blocks_in_buffer,
+        (std::uint32_t)num_blocks};
     // tensor addresses
     for (uint32_t i = 0; i < num_tensors; ++i) {
         reader_rt_args.push_back(tensors[i]->address());
@@ -143,13 +158,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (uint32_t i = 0; i < num_tensors; ++i) {
         reader_rt_args.push_back(in1_reader_num_pages[i]);
     }
-    // num blocks
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        reader_rt_args.push_back(num_blocks);
-    }
     // num tiles in block
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        reader_rt_args.push_back(in1_block_num_tiles);
+        reader_rt_args.push_back(in1_block_num_tiles[i]);
     }
     tt_metal::SetRuntimeArgs(program, in1_reader_kernel, dram_reader_core_coord, reader_rt_args);
 
@@ -158,7 +169,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (auto l1_receiver_core_coord : *l1_receiver_cores.ranges().begin()) {
         l1_receiver_core_coords.push_back(l1_receiver_core_coord);
     }
-    std::vector<uint32_t> writer_rt_args;
+    std::vector<uint32_t> writer_rt_args = {(std::uint32_t)num_blocks};
     // receiver core coords x
     for (uint32_t i = 0; i < num_receivers; ++i) {
         auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
@@ -171,27 +182,23 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
     // page size
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_writer_page_size);
+        writer_rt_args.push_back(in1_writer_page_sizes[i]);
     }
     // num pages
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_writer_num_pages);
+        writer_rt_args.push_back(in1_writer_num_pages[i]);
     }
-    // num blocks
+    // block num tiles
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(num_blocks);
-    }
-    // num tiles
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_block_num_tiles);
+        writer_rt_args.push_back(in1_block_num_tiles[i]);
     }
     // single tile size
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(single_tile_size);
+        writer_rt_args.push_back(single_tile_size[i]);
     }
     // num tile rows write
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_num_tile_rows_write);
+        writer_rt_args.push_back(in1_num_tile_rows_write[i]);
     }
     tt_metal::SetRuntimeArgs(program, in1_writer_kernel, dram_reader_core_coord, writer_rt_args);
 
