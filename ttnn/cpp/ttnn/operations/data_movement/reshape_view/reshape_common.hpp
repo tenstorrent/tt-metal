@@ -2,4 +2,4 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-typedef std::variant<uint32_t, float> PadValue;
+using PadValue = std::variant<uint32_t, float>;

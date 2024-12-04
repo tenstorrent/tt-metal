@@ -313,7 +313,7 @@ def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
 
 
 # issue 15048
-def test_broken_reshape(device):
+def test_previously_failing_test(device):
     src_shape = (1, 56, 56, 64)
     target_shape = (1, 1, 56 * 56, 64)
     torch_input_tensor = torch.randn(src_shape, dtype=torch.bfloat16)

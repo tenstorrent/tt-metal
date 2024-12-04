@@ -312,7 +312,7 @@ ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape
     uint32_t output_volume = 1;
     uint32_t inferred_dim = -1;
     for (uint32_t i=0; i< shape.rank(); i++) {
-        if (((int)(shape[i])) == -1) {
+        if ((static_cast<int>(shape[i])) == -1) {
             if (inferred_dim != -1) {
                 TT_FATAL(false, "Only one dimension can be inferred in reshape");
             }
