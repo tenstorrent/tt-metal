@@ -65,53 +65,53 @@ def generate_reference_outputs(total_length, output_file):
     all_top5_tokens = []
     segment_accuracies = []
     chunk_size = 1024
-    
+
     with torch.no_grad():
         for chunk_start in range(0, total_length - 1, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total_length)
             # Get input and target chunks, ensuring they have matching lengths
             chunk_tokens = encoded_tokens_tensor[:, chunk_start:chunk_end]
-            chunk_next_tokens = encoded_tokens[chunk_start + 1:chunk_end + 1]
+            chunk_next_tokens = encoded_tokens[chunk_start + 1 : chunk_end + 1]
             actual_chunk_size = min(len(chunk_tokens[0]), len(chunk_next_tokens))
-            
+
             # Trim input chunk if needed
             chunk_tokens = chunk_tokens[:, :actual_chunk_size]
-            
+
             # Process chunk
             pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
             ref_output = reference_model(pt_decode_input, start_pos=chunk_start)
-            
+
             # Compute top-5 predictions
             probs = torch.softmax(ref_output, dim=-1)
             _, chunk_top5_tokens = torch.topk(probs, k=5, dim=-1)  # Shape: [1, chunk_size, 5]
             chunk_top5_tokens = chunk_top5_tokens.squeeze(0)  # Shape: [chunk_size, 5]
-            
+
             # Get next tokens tensor, ensuring same length as predictions
             chunk_next_tokens_tensor = torch.tensor(chunk_next_tokens[:actual_chunk_size])
-            
+
             # Calculate correctness
-            chunk_top1_correct = (chunk_top5_tokens[:, 0] == chunk_next_tokens_tensor)
+            chunk_top1_correct = chunk_top5_tokens[:, 0] == chunk_next_tokens_tensor
             chunk_top5_correct = torch.any(chunk_top5_tokens == chunk_next_tokens_tensor.unsqueeze(1), dim=1)
-            
+
             # Store results
             all_top1_correct.extend(chunk_top1_correct.tolist())
             all_top5_correct.extend(chunk_top5_correct.tolist())
             all_top5_tokens.append(chunk_top5_tokens)
-            
+
             # Print predictions for this chunk
             for i in range(len(chunk_next_tokens)):
                 global_pos = chunk_start + i
                 next_token = chunk_next_tokens[i]
-                
+
                 sanitize = lambda x: x.replace("\n", "").replace("\r", "").replace("\x0c", "")
                 actual_token = sanitize(tokenizer.decode([next_token]))
                 top5_tokens = [sanitize(tokenizer.decode([t.item()])) for t in chunk_top5_tokens[i]]
                 correct = "x" if chunk_top1_correct[i] else ("-" if chunk_top5_correct[i] else " ")
                 top5_str = " ".join(f"{t:<14}" for t in top5_tokens)
-                
+
                 progress_str = f"{global_pos+1}/{total_length-1}"
                 print(f"{progress_str:<15}{correct:<8}{actual_token:<15}{top5_str}")
-                
+
                 # Calculate and store segment accuracies every 100 tokens
                 if (global_pos + 1) % 100 == 0 or global_pos == total_length - 2:
                     start_idx = (global_pos // 100) * 100
