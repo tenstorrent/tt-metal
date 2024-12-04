@@ -57,11 +57,6 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                     input_shape[-1] *= 2
                     input_shape[-2] //= 2
 
-                # if shard_orientation == "COL_MAJOR":
-                #     tmp = input_shape[-2]
-                #     input_shape[-2] = input_shape[-1]
-                #     input_shape[-1] = tmp
-
             elif sharding_strategy == "BLOCK":
                 min_shard_size_y = 32 * y
                 min_shard_size_x = 32 * x
