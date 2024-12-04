@@ -121,4 +121,5 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
         cb_pop_front(CBIndex::c_25, 1);
     }
 
-Note that the DPRINT buffer for a RISC is flushed when ``ENDL()`` is called, a ``\n`` character is read, or the device that the RISC belongs to is closed.
+.. note::
+    Note that the DPRINT buffer for a RISC is flushed when ``ENDL()`` is called, a ``\n`` character is read, or the device that the RISC belongs to is closed.
