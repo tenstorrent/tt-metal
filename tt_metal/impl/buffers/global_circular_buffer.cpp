@@ -161,6 +161,10 @@ DeviceAddr GlobalCircularBuffer::config_address() const { return this->cb_config
 
 uint32_t GlobalCircularBuffer::size() const { return this->size_; }
 
+const std::unordered_map<CoreCoord, CoreRangeSet>& GlobalCircularBuffer::sender_receiver_core_mapping() const {
+    return this->sender_receiver_core_mapping_;
+}
+
 }  // namespace experimental
 
 }  // namespace v1
