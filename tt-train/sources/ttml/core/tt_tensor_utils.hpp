@@ -50,14 +50,15 @@ template <class T = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& buffer, ttnn::distributed::MeshDevice* device, Layout layout = Layout::TILE) {
     auto shape = create_shape(get_shape_4d(buffer));
-    return from_vector<T, TensorType>(xtensor_to_span(buffer), shape, device, layout);
+    auto buffer_view = xtensor_to_span(buffer);
+    return from_vector<T, TensorType>(std::vector<T>(buffer_view.begin(), buffer_view.end()), shape, device, layout);
 }
 
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = to_vector<T>(tensor);
     auto shape = tensor.get_shape().logical_shape();  // TODO: check if this is correct shape
-    return span_to_xtensor(vec, shape);
+    return span_to_xtensor(std::span<T>(vec.data(), vec.size()), shape);
 }
 
 template <class T = float, template <class> class MeshToTensor = ConcatMeshToTensor>

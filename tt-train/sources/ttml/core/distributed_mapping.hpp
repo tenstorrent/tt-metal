@@ -266,11 +266,7 @@ public:
     using Base = MeshToTensor<VectorMeshToTensor<T>, T>;
     VectorMeshToTensor(tt::tt_metal::distributed::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
     }
-
-    // Not overriding compose_impl because we return a vector instead of a single tensor.
-    // If needed, we can provide a compose_impl that returns xt::xarray<T>. For now,
-    // consider this class as a special case.
-    std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) {
+    std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
         return tensors;
     }
 };
