@@ -32,10 +32,12 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.
     // FIXME: Perhaps we can relax that?
+    uint32_t total_size = 0;
     auto emit_segment = [&](ElfFile::Segment const& segment) {
         TT_ASSERT(segment.relocs.empty(), "Unexpected dynamic relocations");
         link_spans_.emplace_back(segment.address, segment.contents.size());
         data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
+        total_size += segment.contents.size();
     };
     auto* text = &elf.GetSegments()[0];
     for (auto& segment : std::span(elf.GetSegments()).subspan(1)) {
@@ -50,7 +52,7 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
     }
 
     set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
-    set_packed_size(data_.size() * sizeof(uint32_t));
+    set_packed_size(total_size * sizeof(uint32_t));
 }
 
 bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
@@ -98,31 +100,51 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     }
 
     TT_ASSERT(this->link_spans_.size() != 0);
-    TT_ASSERT(link_spans_.size() <= 2);
 
     std::vector<word_t> new_data;
+    new_data.resize(this->data_.size());
+    struct span new_span;
+    size_t new_len = 0;
 
-    bool text_is_second =
-        link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
-    auto const& text = link_spans_[text_is_second];
-    TT_ASSERT(text.addr >= text_start && text.addr < text_end);
+    bool first_text = true;
+    size_t offset = 0;
+    // Copy text spans.  May start after data span (ncrisc)
+    // TODO: Ideally would be just 1, sometimes init doesn't merge w/ text and we get 2
+    // TODO: (and init is just a jump to text and should be removed)
+    for (const auto& span : this->link_spans_) {
+        if (span.addr >= text_start && span.addr < text_end) {
+            if (first_text) {
+                new_span.addr = span.addr;
+                first_text = false;
+            } else if (span.addr > new_span.addr + new_len * sizeof(uint32_t)) {
+                uint64_t delta = span.addr - (new_span.addr + new_len * sizeof(uint32_t));
+                delta /= sizeof(uint32_t);
+                // Pad the prior span
+                new_data.resize(new_data.size() + delta);
+                new_len += delta;
+            }
+            memcpy(&new_data[new_len], &this->data_[offset], span.len * sizeof(uint32_t));
+            new_len += span.len;
+        }
 
-    span new_span{text.addr, text.len};
+        offset += span.len;
+    }
+    TT_ASSERT(!first_text);
 
-    size_t offset = text_is_second ? link_spans_[0].len : 0;
-    new_data.insert(new_data.end(), &data_[offset], &data_[offset] + text.len);
-
-    if (link_spans_.size() == 2) {
-        offset = text_is_second ? 0 : text.len;
-        auto const& data = link_spans_[!text_is_second];
-        TT_ASSERT(data.addr >= data_start && data.addr < data_end);
-        new_span.len += data.len;
-        new_data.insert(new_data.end(), &data_[offset], &data_[offset] + data.len);
+    // Copy data spans.  Should be just 1.  May start before text span (ncrisc)
+    offset = 0;
+    for (const auto& span : this->link_spans_) {
+        if (span.addr >= data_start && span.addr < data_end) {
+            memcpy(&new_data[new_len], &this->data_[offset], span.len * sizeof(uint32_t));
+            new_len += span.len;
+        }
+        offset += span.len;
     }
 
+    new_span.len = new_len;
     this->link_spans_.resize(1);
     this->link_spans_[0] = new_span;
-    this->data_ = std::move(new_data);
+    this->data_ = new_data;
     this->text_addr_ = new_span.addr;
 }
 
