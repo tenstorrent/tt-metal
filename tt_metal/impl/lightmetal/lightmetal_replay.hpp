@@ -22,6 +22,7 @@ namespace tt::target {
     struct ReplayTraceCommand;
     struct EnqueueTraceCommand;
     struct LoadTraceCommand;
+    struct CreateBufferCommand;
 
     // Forward decl for binary_generated.h
     namespace lightmetal {
@@ -56,9 +57,12 @@ public:
     void execute(tt::target::EnqueueTraceCommand const *command);
     void execute(tt::target::ReplayTraceCommand const *command);
     void execute(tt::target::LoadTraceCommand const *command);
+    void execute(tt::target::CreateBufferCommand const *command);
 
-    // Temporary debug
-    void printLightMetalBinaryContents();
+    // Object maps public accessors
+    void addBufferToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Buffer> buffer);
+    std::shared_ptr<::tt::tt_metal::Buffer> getBufferFromMap(uint32_t global_id) const;
+    void removeBufferFromMap(uint32_t global_id);
 
 private:
 
@@ -74,6 +78,8 @@ private:
     tt::tt_metal::Device* device_;
     tt::ARCH arch_;
 
+    // Object maps for storing objects by global_id
+    std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> bufferMap_;
 };
 
 }  // namespace v0

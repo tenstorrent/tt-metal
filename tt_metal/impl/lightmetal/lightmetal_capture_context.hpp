@@ -17,6 +17,8 @@ namespace tt::target::lightmetal {
 namespace tt::tt_metal { // KCM Consider adding lightmetal namespace.
 inline namespace v0 {
 
+class Buffer;
+
 class LightMetalCaptureContext {
 public:
     static LightMetalCaptureContext& getInstance();
@@ -29,6 +31,9 @@ public:
     std::vector<flatbuffers::Offset<tt::target::lightmetal::TraceDescriptorByTraceId>>& getTraceDescsVector();
     std::vector<uint8_t> createLightMetalBinary();
 
+    // Object maps public accessors
+    uint32_t getBufferGlobalId(Buffer* buffer);
+
     void reset();
 
 private:
@@ -38,6 +43,11 @@ private:
     flatbuffers::FlatBufferBuilder builder_;
     std::vector<flatbuffers::Offset<tt::target::Command>> cmdsVector_;
     std::vector<flatbuffers::Offset<tt::target::lightmetal::TraceDescriptorByTraceId>> traceDescsVector_;
+
+    // Object maps for associating each object with a global_id
+    uint32_t nextGlobalId_ = 0; // Shared across all object types.
+    std::unordered_map<Buffer*, uint32_t> bufferToGlobalIdMap_;
+    // FIXME - Add one for CommandQueue object.
 
     // Delete copy constructor and assignment operator
     LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;

@@ -3,6 +3,7 @@
 #include "flatbuffers/flatbuffers.h"
 #include "command_generated.h"
 #include "binary_generated.h"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -54,6 +55,17 @@ std::vector<uint8_t> LightMetalCaptureContext::createLightMetalBinary() {
 void LightMetalCaptureContext::reset() {
     builder_.Clear();
     cmdsVector_.clear();
+}
+
+uint32_t LightMetalCaptureContext::getBufferGlobalId(Buffer* buffer) {
+    auto it = bufferToGlobalIdMap_.find(buffer);
+    if (it != bufferToGlobalIdMap_.end()) {
+        return it->second;
+    }
+
+    uint32_t global_id = nextGlobalId_++;
+    bufferToGlobalIdMap_[buffer] = global_id;
+    return global_id;
 }
 
 ////////////////////////////////////////////
