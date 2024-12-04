@@ -28,12 +28,13 @@ void bind_sharded_to_interleaved(
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType>& output_dtype,
                uint8_t queue_id,
-               const bool is_l1_aligned) -> ttnn::Tensor {
+               const std::optional<bool>& is_l1_aligned) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor,
                     memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                    output_dtype);
+                    output_dtype,
+                    is_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("memory_config") = std::nullopt,
