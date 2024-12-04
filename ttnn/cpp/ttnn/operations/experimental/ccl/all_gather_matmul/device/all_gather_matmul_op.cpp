@@ -20,8 +20,7 @@ namespace experimental {
 
 void AllGatherMatmul::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-    const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) const {
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
     TT_ASSERT(
         input_tensors.size() == 4,
         "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
@@ -34,7 +33,7 @@ void AllGatherMatmul::validate(
     this->all_gather_struct.validate({input_tensor});
 
     // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, optional_output_tensors);
+    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
 
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
