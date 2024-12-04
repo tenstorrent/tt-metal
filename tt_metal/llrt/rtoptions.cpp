@@ -115,7 +115,9 @@ RunTimeOptions::RunTimeOptions() {
         enable_dispatch_data_collection = true;
     }
 
-    if (getenv("TT_METAL_NEW")) {
+    if (getenv("TT_METAL_OLD_FD_INIT")) {
+        this->use_new_fd_init = false;
+    } else {
         this->use_new_fd_init = true;
     }
 
