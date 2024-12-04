@@ -2981,6 +2981,7 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 }
 
 void Finish(CommandQueue& cq) {
+    TRACE_FUNCTION_CALL(captureFinish, cq);
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{.type = EnqueueCommandType::FINISH, .blocking = true});
     TT_ASSERT(
