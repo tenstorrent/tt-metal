@@ -112,6 +112,12 @@ class DeviceProfiler {
 
         //Traverse all cores on the device and dump the device profile results
         void dumpResults(Device *device, const std::vector<CoreCoord> &worker_cores, bool lastDump);
+
+        // Traverse all cores, producing json report with noc events
+        void dumpJsonReport(
+            Device* device,
+            const std::vector<std::uint32_t>& profile_buffer,
+            const std::vector<CoreCoord>& worker_cores);
 };
 
 }  // namespace tt_metal

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -391,12 +392,170 @@ void DeviceProfiler::generateZoneSourceLocationsHashes()
     }
 }
 
+void DeviceProfiler::dumpJsonReport(
+    Device* device, const std::vector<std::uint32_t>& profile_buffer, const std::vector<CoreCoord>& worker_cores) {
+    auto device_id = device->id();
+
+    std::string prefix = "noc_events_";
+    std::string basename = prefix + "_dev" + std::to_string(device_id) + ".json";
+
+    std::filesystem::path log_path = output_dir / basename;
+    std::ofstream json_rpt_os(log_path.string());
+    log_info("Dumping noc event trace to '{}'", log_path.string());
+
+    uint64_t starting_timestamp = 0;
+    bool first_record = true;
+    json_rpt_os << "[" << std::endl;
+
+    // log_info(" reporting for {} worker cores",worker_cores.size());
+    for (const auto& worker_core : worker_cores) {
+        HalProgrammableCoreType CoreType;
+        int riscCount;
+        profiler_msg_t* profiler_msg;
+
+        const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+        auto ethCores = soc_d.get_physical_ethernet_cores();
+        if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end()) {
+            profiler_msg =
+                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+            CoreType = HalProgrammableCoreType::TENSIX;
+            riscCount = 5;
+        } else {
+            profiler_msg =
+                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+            CoreType = HalProgrammableCoreType::ACTIVE_ETH;
+            riscCount = 1;
+        }
+
+        uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
+        uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+
+        std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+            device_id,
+            worker_core,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+
+        if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+            (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+            // log_info("worker core {},{} control buffer is done", worker_core.x, worker_core.y);
+            continue;
+        }
+
+        int riscNum = 0;
+        for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
+            // log_info("worker core {},{} RISC {}", worker_core.x, worker_core.y, riscEndIndex);
+            uint32_t bufferEndIndex = control_buffer[riscEndIndex];
+            uint32_t riscType;
+            if (CoreType == HalProgrammableCoreType::TENSIX) {
+                riscType = riscEndIndex;
+            } else {
+                riscType = 5;
+            }
+            if (bufferEndIndex > 0) {
+                uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
+                if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1) {
+                    std::string warningMsg = fmt::format(
+                        "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
+                        "{},  bufferEndIndex = {}",
+                        device_id,
+                        worker_core.x,
+                        worker_core.y,
+                        tracy::riscName[riscEndIndex],
+                        bufferEndIndex);
+                    TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
+                    log_warning(warningMsg.c_str());
+                }
+
+                uint32_t riscNumRead = 0;
+                uint32_t coreFlatIDRead = 0;
+                uint32_t runCounterRead = 0;
+                uint32_t runHostCounterRead = 0;
+
+                bool newRunStart = false;
+
+                uint32_t opTime_H = 0;
+                uint32_t opTime_L = 0;
+                // log_info("worker core {},{} has {} entries",worker_core.x,worker_core.y,bufferEndIndex);
+                for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
+                     index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
+                    if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0) {
+                        newRunStart = true;
+                        opTime_H = 0;
+                        opTime_L = 0;
+                    } else if (newRunStart) {
+                        newRunStart = false;
+
+                        // TODO(MO): Cleanup magic numbers
+                        riscNumRead = profile_buffer[index] & 0x7;
+                        coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
+                        runCounterRead = profile_buffer[index + 1] & 0xFFFF;
+                        runHostCounterRead = (profile_buffer[index + 1] >> 16) & 0xFFFF;
+
+                    } else {
+                        uint32_t timer_id = (profile_buffer[index] >> 12) & 0x7FFFF;
+                        kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
+
+                        switch (packet_type) {
+                            case kernel_profiler::TS_DATA: {
+                                uint32_t time_H = profile_buffer[index] & 0xFFF;
+                                uint32_t time_L = profile_buffer[index + 1];
+                                uint64_t timestamp = (uint64_t(time_H) << 32) | time_L;
+                                index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                                uint32_t data_H = profile_buffer[index];
+                                uint32_t data_L = profile_buffer[index + 1];
+                                uint64_t event_metadata = (uint64_t(data_H) << 32) | data_L;
+
+                                if (starting_timestamp == 0) {
+                                    starting_timestamp = timestamp;
+                                } else {
+                                    starting_timestamp = std::min(starting_timestamp, timestamp);
+                                }
+
+                                KernelProfilerNocEventMetadata ev_md(event_metadata);
+                                int64_t rel_timestamp = int64_t(timestamp) - int64_t(starting_timestamp);
+
+                                std::string prefix(first_record ? " " : ",");
+                                first_record = false;
+
+                                auto dquote = [](std::string_view str) { return fmt::format(R"("{}")", str); };
+
+                                json_rpt_os
+                                    << fmt::format(
+                                           R"({}{{ "proc":{:<6},  "sx":{:<2},  "sy":{:<2},  "dx":{:<2},  "dy":{:<2},  "num_bytes":{:<6},  "type":{:<16}, "timestamp":{:<16} }})",
+                                           prefix,
+                                           dquote(tracy::riscName[riscType]),
+                                           worker_core.x,
+                                           worker_core.y,
+                                           ev_md.dst_x,
+                                           ev_md.dst_y,
+                                           ev_md.num_bytes,
+                                           dquote(magic_enum::enum_name(ev_md.noc_xfer_type)),
+                                           rel_timestamp,
+                                           starting_timestamp) +
+                                           "\n";
+
+                                break;
+                            }
+                            default: {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            riscNum++;
+        }
+    }
+
+    json_rpt_os << "]" << std::endl;
+    json_rpt_os.close();
+}
 
 void DeviceProfiler::dumpResults (
         Device *device,
         const std::vector<CoreCoord> &worker_cores,
         bool lastDump){
-#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     auto device_id = device->id();
@@ -431,13 +590,15 @@ void DeviceProfiler::dumpResults (
             }
         }
 
+        if (not lastDump) {
+            dumpJsonReport(device, profile_buffer, worker_cores);
+        }
 
         for (const auto &worker_core : worker_cores) {
             readRiscProfilerResults(
                 device_id,
                 profile_buffer,
                 worker_core);
-
         }
 
     }
@@ -445,7 +606,6 @@ void DeviceProfiler::dumpResults (
     {
         log_warning("DRAM profiler buffer is not initialized");
     }
-#endif
 }
 
 void DeviceProfiler::pushTracyDeviceResults()
