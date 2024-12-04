@@ -64,7 +64,7 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
-    void validate_dispatch_mode() {
+    virtual void validate_dispatch_mode() {
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
@@ -99,5 +99,16 @@ protected:
             GTEST_SKIP();
         }
         this->create_devices();
+    }
+};
+
+class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
+   protected:
+    void validate_dispatch_mode() override {
+        this->slow_dispatch_ = true;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            this->slow_dispatch_ = false;
+        }
     }
 };
