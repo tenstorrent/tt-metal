@@ -11,6 +11,8 @@
 #include "dataflow_api.h"
 #endif
 
+#include "debug/dprint.h"
+
 namespace experimental {
 
 namespace detail {
