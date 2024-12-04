@@ -22,9 +22,9 @@ set to N at compile time. xtensor_fixed<T, xshape<I, J, K> : tensor whose shape 
 
 namespace ttml::core {
 template <class T>
-auto span_to_xtensor(std::span<T> vec, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor(std::span<T> vec, const ttnn::SimpleShape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
-    return xt::adapt(vec.data(), vec.size(), xt::acquire_ownership(), shape_vec);
+    return xt::adapt(vec.data(), vec.size(), xt::no_ownership(), shape_vec);
 }
 template <class T>
 auto xtensor_to_span(const xt::xarray<T>& xtensor) {
@@ -76,8 +76,9 @@ bool ShapeIndex<S>::increment() {
             continue;
 
         ++index[dim];
-        for (size_t lsd = dim + 1; lsd < index.size(); ++lsd)  // lsd = less significant dimension
+        for (size_t lsd = dim + 1; lsd < index.size(); ++lsd) {  // lsd = less significant dimension
             index[lsd] = 0;
+        }
         return true;
     }
 
@@ -98,8 +99,9 @@ xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, const size_t axis
             throw std::logic_error("shapes have different dimensionalities");
         }
         for (size_t dim = 0; dim < res_shape.size(); ++dim) {
-            if (dim == axis)
+            if (dim == axis) {
                 continue;
+            }
             if (v[i].shape(dim) != res_shape[dim]) {
                 throw std::logic_error("incompatible shapes");
             }
