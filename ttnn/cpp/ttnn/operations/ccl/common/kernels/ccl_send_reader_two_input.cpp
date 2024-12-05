@@ -318,7 +318,9 @@ struct command_context_t final {
         page_size(page_size),
         cb_id(cb_id),
         packet_size_in_pages(packet_size_in_pages)
-        {}
+        {
+            ASSERT(num_commands == 0 || arg_idx > 4);
+        }
     FabricConnectionManager &fabric_connection;
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
     ttnn::ccl::cmd::CclCommandHeader current_cmd_header;
@@ -370,7 +372,7 @@ struct command_context_t final {
         // TODO: based on command category/class, some of this setup could be shared
         #ifdef DEBUG_PRINT_ENABLED
         DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx-1) <<"\n";
-        DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
+        // DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
         #endif
         update_ccl_command(
             arg_idx,
@@ -505,6 +507,7 @@ void update_ccl_command(
                         cmd_ctx.cb_id = command_arg_header.inline_value2;
                         break;
                     case ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS:
+                    case ttnn::ccl::cmd::CclCommandAddrType::RELATIVE_ADDRESS:
                         addr_info.address = get_arg_val<uint32_t>(arg_idx++);
                         break;
                     case ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID:
@@ -513,7 +516,7 @@ void update_ccl_command(
                     case ttnn::ccl::cmd::CclCommandAddrType::NONE:
                         break;
                     default:
-                        addr_info.address = get_arg_val<uint32_t>(arg_idx++);
+                        ASSERT(false);
                         break;
                 };
             } break;
@@ -533,6 +536,7 @@ void update_ccl_command(
                     case ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE:
                         cmd_ctx.core_desc_info.core_desc_args.noc_multicast = ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast::from_uint32(
                             get_arg_val<uint32_t>(arg_idx++));
+                        break;
                     default:
                         ASSERT(false);
                 };
@@ -640,6 +644,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
     //
 
     if (!cb_pages_reservable_at_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
+        DPRINT << "CB !rsrvbl\n";
         return;
     }
     // Hack for now - we will eventually move to
@@ -669,7 +674,10 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
         {
             contig_pages_advanced = std::min<uint16_t>(max_pages_readable, contig_pages_);
             contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
-            // DPRINT << "\tnoc_read( " << (uint64_t)noc_addr << ", " << (uint32_t)l1_write_addr << ", " << (uint32_t)(cmd_ctx.page_size * contig_pages_advanced) << " )\n";
+            ASSERT(contig_pages_advanced > 0);
+            ASSERT(contig_pages_advanced <= cmd_ctx.packet_size_in_pages);
+            ASSERT(cmd_ctx.page_size != 0xD3AD);
+            DPRINT << "\tnoc_read( " << (uint64_t)noc_addr << ", " << (uint32_t)l1_write_addr << ", " << (uint32_t)(cmd_ctx.page_size) << "*" << (uint32_t)contig_pages_advanced << " )\n";
             // DPRINT << "nar to " << (uint32_t)l1_write_addr << "\n";
             noc_async_read(noc_addr, l1_write_addr, cmd_ctx.page_size * contig_pages_advanced);
         }
@@ -910,14 +918,14 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
         case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM: // STREAM TENSOR TO CB
         case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             if (cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx.offset_into_worker_slice >= cmd_ctx.command_tensor.worker_pages_per_slice) {
-                DPRINT << "Completing tensor_stream command\n";
+                DPRINT << "t_stream cmd cmpl\n";
                 // DPRINT << "Completing tensor_stream command\n";
                 cmd_ctx.complete_current_command();
             }
             break;
 
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-                DPRINT << "Completing atomic_inc command\n";
+                DPRINT << "at_inc cmd cmpl\n";
                 cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
@@ -956,6 +964,8 @@ void kernel_main() {
     uint8_t num_commands1 = get_arg_val<address_t>(arg_idx++);
     arg_idx_t command1_start_offset = get_arg_val<address_t>(arg_idx++);
     #endif
+
+    DPRINT << "ncmds: " << (uint32_t)((num_commands0 << 16) | num_commands1) << "\n";
 
     // Assuming whole page transmissions (which is the only mode we support at the moment)
     // -> however, wanted to call it out here to make it clear that we need to pull this
@@ -1032,7 +1042,6 @@ void kernel_main() {
         tensor1_page_size,
         packet_size_in_pages,
         packet_header_buffer_addr1);
-
     #else
     const uint8_t finish_value = 0x1;
     #endif
@@ -1045,7 +1054,7 @@ void kernel_main() {
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {
             if (!operand_0_cmd_ctx.current_command_active()) {
-                DPRINT << "fetch_command0\n";
+                DPRINT << "get_cmd0\n";
                 operand_0_cmd_ctx.fetch_next_command();
             };
             try_advance<tensor0_layout, tensor0_page_layout>(operand_0_cmd_ctx);
@@ -1054,7 +1063,7 @@ void kernel_main() {
         #ifndef SINGLE_INPUT_MODE
         if ((stream_done_mask & 0x2) == 0) {
             if (!operand_1_cmd_ctx.current_command_active()) {
-                DPRINT << "fetch_command1\n";
+                DPRINT << "get_cmd1\n";
                 operand_1_cmd_ctx.fetch_next_command();
             }
             try_advance<tensor1_layout, tensor1_page_layout>(operand_1_cmd_ctx);

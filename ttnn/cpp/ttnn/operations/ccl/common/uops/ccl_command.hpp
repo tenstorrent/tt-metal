@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <variant>
+#include <limits>
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
