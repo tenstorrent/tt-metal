@@ -298,7 +298,7 @@ Result conv_transpose2d(
                 /*bcast_batch=*/std::nullopt,
                 conv_out_memory_config,
                 conv_config.dtype,
-                compute_kernel_config});
+                compute_config});
             if (conv_config.deallocate_activation) {
                 ttnn::operations::core::deallocate(matmul_input);
             }
