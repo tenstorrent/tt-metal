@@ -228,6 +228,8 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    ttnn.SetDefaultDevice(mesh_device.get_device(0))
+
     yield mesh_device
 
     for device in mesh_device.get_devices():
