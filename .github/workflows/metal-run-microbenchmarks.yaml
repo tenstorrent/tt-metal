@@ -42,6 +42,8 @@ jobs:
           PIPELINE_TYPE="microbenchmarks"
           if [ "${{ matrix.runner-info.ccl }}" == "true" ]; then
             PIPELINE_TYPE="ccl_microbenchmarks"
+          else
+            TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_tunneler_tests.sh --machine-type ${{ matrix.runner-info.runs-on[0] }}
           fi
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type "$PIPELINE_TYPE"
       - name: Upload microbenchmark report csvs
