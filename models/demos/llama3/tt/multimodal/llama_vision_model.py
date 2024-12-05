@@ -29,6 +29,7 @@ from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
     get_single_rot_mat,
+    copy_host_to_device,
 )
 from models.utility_functions import (
     nearest_32,
@@ -386,7 +387,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_position_id,
             tt_rope_id,
             tt_page_table,
-        ) = self.copy_host_to_device(
+        ) = copy_host_to_device(
             (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id, tt_page_table)
         )
 
@@ -474,21 +475,6 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_rope_id,
             page_table,
         )
-
-    def copy_host_to_device(self, host_tensors, device_tensors=None):
-        """
-        Helper function which copies host tensors to device tensors
-        """
-        if device_tensors is None:
-            ret = []
-            for i in range(len(host_tensors)):
-                on_device = ttnn.to_device(host_tensors[i], device=self.mesh_device) if host_tensors[i] else None
-                ret.append(on_device)
-            return ret
-        else:
-            for i in range(len(host_tensors)):
-                ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
-            return device_tensors
 
     def transform_decode_inputs_device(self, tt_h, tt_rope_id, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
         """

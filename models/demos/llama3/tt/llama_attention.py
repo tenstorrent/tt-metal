@@ -570,7 +570,6 @@ class TtLlamaAttention(LightweightModule):
         else:
             return output_11SH
 
-    # TODO Miguel: Remove transformation_mats input (send at initialization instead)
     def forward(
         self,
         x,
