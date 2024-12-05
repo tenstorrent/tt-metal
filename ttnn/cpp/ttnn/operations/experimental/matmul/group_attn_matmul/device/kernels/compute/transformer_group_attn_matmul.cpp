@@ -160,12 +160,12 @@ void MAIN {
             cb_reserve_back(out_cb_id, out_num_tiles);
 
             // tilize CB::intermed1 and write to CBIndex::c_16
-            tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles);
+            tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles, out_cb_id);
             tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
             cb_push_back(out_cb_id, out_num_tiles);
 
             cb_pop_front(cb_intermed1, out_num_tiles);
-            tilize_uninit(cb_intermed1);
+            tilize_uninit(cb_intermed1, out_cb_id);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop
