@@ -9,8 +9,7 @@
 
 namespace ttnn::distributed::api {
 
-namespace tensor_composers {
-
+// Mapper interface that distributes a host tensor onto a multi-device configuration.
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
@@ -18,18 +17,42 @@ public:
     virtual DistributedTensorConfig config() const = 0;
 };
 
+// Composer interface that aggregates a multi-device tensor into a host tensor.
 class MeshToTensor {
 public:
     virtual ~MeshToTensor() = default;
-    virtual Tensor compose(std::vector<Tensor>& tensors) = 0;
+    virtual Tensor compose(const std::vector<Tensor>& tensors) = 0;
 };
 
-}  // namespace tensor_composers
+// Creates a mapper that replicates a tensor across all devices.
+std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device);
 
-// Distributes a host tensor onto multi-device configuration according to the distributed_tensor_config.
-Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, tensor_composers::TensorToMesh& mapper);
+// Creates a mapper that shards a tensor along a single dimension.
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int shard_dim);
+
+// Creates a mapper that shards a tensor along two dimensions, which will be intepreted as rows and columns.
+// If either dimension is not specified, the tensor is replicated along that dimension.
+struct Shard2dConfig {
+    std::optional<int> row_dim;
+    std::optional<int> col_dim;
+};
+std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
+    MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config);
+
+// Creates a composer that concatenates a tensor across a single dimension.
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int concat_dim);
+
+// Creates a composer that concatenates a tensor across two dimensions.
+struct Concat2dConfig {
+    int row_dim = -1;
+    int col_dim = -1;
+};
+std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(const Concat2dConfig& config);
+
+// Distributes a host tensor onto multi-device configuration according to the `mapper`.
+Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper);
 
 // Aggregates a multi-device tensor into a host tensor.
-Tensor aggregate_tensor(const Tensor& tensor, tensor_composers::MeshToTensor& composer);
+Tensor aggregate_tensor(const Tensor& tensor, MeshToTensor& composer);
 
 }  // namespace ttnn::distributed::api
