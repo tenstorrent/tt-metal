@@ -184,30 +184,9 @@ class TtGenBoxes:
         ####
         ## Grid tensor derivation
         ####
-        """
-        #any = ttnn.zeros(shape=(1,40), dtype=ttnn.bfloat16, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.ROW_MAJOR_LAYOUT)
-        g_x_1 = ttnn.moreh_arange(0,H, 1, bx_a) #, ttnn.bfloat16, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        g_x_1 = ttnn.to_layout(g_x_1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        g_x_1 = ttnn.reshape(g_x_1, (1,1,1,H))
-        g_x_1 = ttnn.repeat(g_x_1, ttnn.Shape([1,1,W,1])) #, device, ttnn.L1_MEMORY_CONFIG, ttnn.TILE_LAYOUT)
-
-        #g_x_1 = ttnn.reshape(g_x_1, (1,1,H,W))
-
-        #g_y_1 = ttnn.permute(g_x_1, (0,1,3,2))
-        #g_y_1 = ttnn.permute(g_x_1, (1, 0))
-        g_y_1 = g_x_1
-
-        g_x_1 = ttnn.reshape(g_x_1, (1,1,1,HW))
-        g_y_1 = ttnn.reshape(g_y_1, (1,1,1,HW))
-        g_x_1 = ttnn.to_layout(g_x_1, ttnn.TILE_LAYOUT)
-        g_y_1 = ttnn.to_layout(g_y_1, ttnn.TILE_LAYOUT)
-        """
-        ####
 
         grid_x = self.grid_x[group]  # .to(device, mem_config=ttnn.L1_MEMORY_CONFIG)
         grid_y = self.grid_y[group]  # .to(device, mem_config=ttnn.L1_MEMORY_CONFIG)
-
-        # print(bx_a.shape, grid_x.shape)
 
         bx_a = ttnn.add(bx_a, grid_x)
         by_a = ttnn.add(by_a, grid_y)
@@ -276,6 +255,5 @@ class TtGenBoxes:
 
         # Shape: [batch, num_anchors * h * w, 4] -> [batch, num_anchors * h * w, 1, 4]
         boxes = ttnn.concat((bx1, by1, bx2, by2), dim=1)
-        #####boxes = ttnn.reshape(boxes, (B, 4, 1, AHW))
 
         return boxes, confs
