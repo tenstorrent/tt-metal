@@ -1,0 +1,114 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "dataflow_api.h"
+#include "debug/dprint.h"
+
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+    DPRINT << ENDL();
+}
+
+void kernel_main() {
+    constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(0);
+    constexpr uint32_t N = get_compile_time_arg_val(1);
+    constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(3);
+    constexpr uint32_t x_dim = get_compile_time_arg_val(4);
+    constexpr uint32_t num_blocks_total = get_compile_time_arg_val(5);
+    constexpr uint32_t x_blocks = get_compile_time_arg_val(6);
+    constexpr uint32_t w_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t x_block_size = get_compile_time_arg_val(8);
+    constexpr uint32_t w_block_size = get_compile_time_arg_val(9);
+    constexpr uint32_t element_size = get_compile_time_arg_val(10);
+    constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(11);
+
+    constexpr uint32_t w_block_size_bytes = w_block_size * element_size;
+
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+
+    uint32_t start_block = get_arg_val<uint32_t>(1);
+    uint32_t end_block = get_arg_val<uint32_t>(2);
+
+    uint32_t input_shape[N], src_strides[N];
+    for (uint32_t i = 3; i < N + 3; i++) {
+        input_shape[i - 3] = get_arg_val<uint32_t>(i);
+        src_strides[i - 3] = get_arg_val<uint32_t>(i + N);
+    }
+
+    /**
+     * num_blocks_total blocks in the tensor which are rows_before X, X blocks, rows after X and W blocks
+     * collapse rows_before and rows_after into a single rows variable
+     * rows * X blocks * W blocks = num_blocks_total
+     */
+
+    uint32_t X = input_shape[x_dim];
+    uint32_t X_stride = src_strides[x_dim];
+
+    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = input_tensor_page_size};
+
+    uint32_t curr_addr = src_addr;
+    uint32_t idxs[N];
+    idxs[N - 1] = 0;
+    for (uint32_t block = start_block; block < end_block; ++block) {
+        uint32_t w_block = block % w_blocks;
+        uint32_t rem = block / w_blocks;
+        uint32_t x_block = rem % x_blocks;
+        rem = rem / x_blocks;
+        uint32_t xw_block = rem % (num_rows / X);
+        uint32_t remainder = xw_block;
+
+        uint32_t x_start = x_block * x_block_size;
+        uint32_t x_end = min(x_start + x_block_size, X);
+
+        uint32_t w_start = w_block * w_block_size;
+        uint32_t w_end = min(w_start + w_block_size, input_shape[N - 1]);
+        uint32_t w_offset = w_start * element_size;
+
+        uint32_t w_read_size_bytes = (w_end - w_start) * element_size;
+
+        // Map linear index i to multidimensional indices idxs[]
+        for (int32_t d = N - 2; d >= 0; --d) {  // Exclude W dimension
+            if (d == (int32_t)x_dim) {
+                idxs[d] = 0;  // Initialize x_dim to zero (will be set in inner loop)
+                continue;     // Skip x_dim during mapping
+            }
+            idxs[d] = remainder % input_shape[d];
+            remainder /= input_shape[d];
+        }
+        idxs[N - 1] = 0;  // Initialize W dimension index to zero if not already set
+
+        // Precompute the base address offset (excluding x_dim)
+        uint64_t base_addr_offset = 0;
+        for (uint32_t d = 0; d < N; ++d) {
+            if (d != x_dim) {
+                base_addr_offset += idxs[d] * src_strides[d];
+            }
+        }
+
+        cb_reserve_back(tt::CBIndex::c_0, x_block_size);
+        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        uint32_t page_offset = 0;
+        // Read along the X dimension
+        for (uint32_t x = x_start; x < x_end; ++x) {
+            // Set the index for the X dimension
+            uint32_t idx_x = x;
+            // Compute the address offset for this index
+            uint64_t addr_offset = base_addr_offset + idx_x * X_stride;
+            uint64_t src_noc_addr = get_noc_addr(addr_offset, s0, w_offset);
+            noc_async_read(src_noc_addr, src_buffer_l1_addr + page_offset, w_read_size_bytes);
+            page_offset += input_cb_page_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(tt::CBIndex::c_0, x_block_size);
+    }
+}

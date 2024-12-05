@@ -15,7 +15,7 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
     if (operation_attributes.dims.back() == tensor_args.input_tensor.get_logical_shape().rank() - 1) {
         return SingleCore{};
     }
-    return SingleCoreWidthPermute{};
+    return MultiCoreBlockedGeneric{};
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(

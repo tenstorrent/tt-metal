@@ -202,3 +202,24 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
+@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
+    torch.manual_seed(520)
+    torch.set_printoptions(threshold=10000, precision=2, linewidth=1000)
+    input_a = torch.randn(shape)
+
+    torch_output = torch.permute(input_a, perm)
+
+    tt_input = ttnn.from_torch(
+        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
+    )
+
+    tt_output = ttnn.permute(tt_input, perm)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)
