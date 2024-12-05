@@ -15,6 +15,13 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
 
 @pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
     "tt_dtype",
     [
         ttnn.uint8,
@@ -28,7 +35,7 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
     ],
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_tensor_creation(shape, tt_dtype, device):
+def test_tensor_creation(shape, tt_dtype, layout, device):
     torch.manual_seed(0)
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
@@ -38,7 +45,7 @@ def test_tensor_creation(shape, tt_dtype, device):
     else:
         py_tensor = torch.rand(shape, dtype=dtype)
 
-    tt_tensor = ttnn.Tensor(py_tensor, tt_dtype, device)
+    tt_tensor = ttnn.Tensor(py_tensor, tt_dtype, device, layout)
 
     tt_tensor = tt_tensor.cpu()
 
