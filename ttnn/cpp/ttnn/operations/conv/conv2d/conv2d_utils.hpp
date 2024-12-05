@@ -106,7 +106,8 @@ sliding_window::ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled=true);
+    bool is_out_tiled = true,
+    uint32_t act_block_h_override = 0);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
@@ -129,7 +130,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const sliding_window::ParallelConfig& parallel_config,
     const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
-    uint32_t padded_input_height_ntiles,
+    uint32_t padded_output_height_ntiles_per_core,
     uint32_t act_block_h_override,
     uint32_t act_block_w_div,
     uint32_t window_h,
