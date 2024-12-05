@@ -745,13 +745,10 @@ bool ConfigureDeviceWithProgram(Device* device, Program& program, bool fd_bootlo
                             uint32_t size_in_bytes = circular_buffer->size();
                             uint32_t num_pages = circular_buffer->num_pages(buffer_index);
                             uint32_t page_size = size_in_bytes / num_pages;
-                            circular_buffer_config_vec[base_index] =
-                                addr_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
-                            circular_buffer_config_vec[base_index + 1] =
-                                size_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
+                            circular_buffer_config_vec[base_index] = addr_in_bytes;      // convert to addr in 16B words
+                            circular_buffer_config_vec[base_index + 1] = size_in_bytes;  // convert to addr in 16B words
                             circular_buffer_config_vec[base_index + 2] = num_pages;
-                            circular_buffer_config_vec[base_index + 3] =
-                                page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                            circular_buffer_config_vec[base_index + 3] = page_size;
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
