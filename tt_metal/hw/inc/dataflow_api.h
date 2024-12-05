@@ -418,7 +418,7 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
 FORCE_INLINE
 uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
-    uint32_t wr_ptr_bytes = get_local_cb_interface(operand).fifo_wr_ptr << 4;
+    uint32_t wr_ptr_bytes = get_local_cb_interface(operand).fifo_wr_ptr;
     return wr_ptr_bytes;
 }
 
@@ -437,7 +437,7 @@ uint32_t get_write_ptr(uint32_t operand) {
 FORCE_INLINE
 uint32_t get_read_ptr(uint32_t operand) {
     // return byte address (fifo_rd_ptr is 16B address)
-    uint32_t rd_ptr_bytes = get_local_cb_interface(operand).fifo_rd_ptr << 4;
+    uint32_t rd_ptr_bytes = get_local_cb_interface(operand).fifo_rd_ptr;
     return rd_ptr_bytes;
 }
 

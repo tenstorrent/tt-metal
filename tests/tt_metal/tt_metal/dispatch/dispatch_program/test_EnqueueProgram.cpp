@@ -101,7 +101,7 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device,
                 core_coord,
-                program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
+                program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
 
@@ -110,8 +110,8 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
                 const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
                 const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
                 const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-                const bool addr_match = cb_config_vector.at(index) == ((cb_addr) >> 4);
-                const bool size_match = cb_config_vector.at(index + 1) == (cb_size >> 4);
+                const bool addr_match = cb_config_vector.at(index) == cb_addr;
+                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
                 pass &= (addr_match and size_match and num_pages_match);
 
@@ -860,15 +860,15 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
         uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
-        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == (cb_addr);
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size);
         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
         EXPECT_TRUE(pass_intermediate);
 
         uint32_t out_index = out_cb * sizeof(uint32_t);
-        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
-        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
+        bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);

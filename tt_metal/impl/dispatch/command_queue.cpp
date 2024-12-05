@@ -901,8 +901,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                 circular_buffers_on_corerange.size());
             for (const std::shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
                 program_command_sequence.circular_buffers_on_core_ranges[i].emplace_back(cb);
-                const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-                const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                const uint32_t cb_address = cb->address();
+                const uint32_t cb_size = cb->size();
                 for (const auto& buffer_index : cb->local_buffer_indices()) {
                     // 1 cmd for all 32 buffer indices, populate with real data for specified indices
                     // cb config payload
@@ -910,7 +910,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                     cb_config_payload[base_index] = cb_address;
                     cb_config_payload[base_index + 1] = cb_size;
                     cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
                     max_index = std::max(max_index, base_index + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG);
                 }
                 for (const auto& buffer_index : cb->remote_buffer_indices()) {
@@ -1363,8 +1363,8 @@ void EnqueueProgramCommand::update_device_commands(
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
-            const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-            const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+            const uint32_t cb_address = cb->address();
+            const uint32_t cb_size = cb->size();
             for (const auto& buffer_index : cb->local_buffer_indices()) {
                 // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
@@ -1373,7 +1373,7 @@ void EnqueueProgramCommand::update_device_commands(
                 cb_config_payload[base_index] = cb_address;
                 cb_config_payload[base_index + 1] = cb_size;
                 cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
                 const uint32_t base_index = remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
