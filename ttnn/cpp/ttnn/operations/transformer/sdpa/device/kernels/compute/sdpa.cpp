@@ -221,11 +221,11 @@ void mul_block_accumulate(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
     // Postcondition: out_cb has num_tiles produced
 
     mul_tiles_init();
+    cb_pop_front(out_cb, num_tiles);
+    PACK((llk_pack_reconfig_l1_acc(1)));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     // Free up output so we can accumulate into it
-    cb_pop_front(out_cb, num_tiles);
-    PACK((llk_pack_reconfig_l1_acc(1)));
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
@@ -283,12 +283,12 @@ void matmul_blocks(
     // postcondition: out_cb has M*N produced
     mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
-    reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
+
+    reconfig_data_format(in1_cb, in0_cb);
+    cb_wait_front(in1_cb, K * N);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
