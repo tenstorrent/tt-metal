@@ -278,7 +278,7 @@ Tensor to_weight_tile_layout_block_sharded(
 // Converts convolution weights to tilized 2d matrix layout for block sharded conv.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    Tensor conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
@@ -370,7 +370,7 @@ Tensor to_bias_tile_layout_block_sharded(
 // Converts convolution bias to tilized 2d matrix layout for block sharded conv.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
-    Tensor conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
+    const Tensor& conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
     TT_ASSERT(
         conv_bias_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
