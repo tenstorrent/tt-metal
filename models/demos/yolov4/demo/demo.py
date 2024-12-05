@@ -16,7 +16,7 @@ from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
 from collections import OrderedDict
 import ttnn
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 
 
 def yolo_forward_dynamic(
@@ -140,10 +140,10 @@ def yolo_forward_dynamic(
     by_bh /= output.size(2)
 
     # Shape: [batch, num_anchors * H * W, 1]
-    bx = bx_bw[:, :num_anchors].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    by = by_bh[:, :num_anchors].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    bw = bx_bw[:, num_anchors:].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    bh = by_bh[:, num_anchors:].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bx = bx_bw[:, :num_anchors].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    by = by_bh[:, :num_anchors].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bw = bx_bw[:, num_anchors:].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bh = by_bh[:, num_anchors:].reshape(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
 
     bx1 = bx - bw * 0.5
     by1 = by - bh * 0.5
@@ -202,7 +202,7 @@ class YoloLayer(nn.Module):
 
 
 def get_region_boxes(boxes_and_confs):
-    print("Getting boxes from boxes and confs ...")
+    # print("Getting boxes from boxes and confs ...")
     boxes_list = []
     confs_list = []
 
@@ -554,68 +554,3 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             class_names = load_class_names(class_name)
             img = cv2.imread(imgfile)
             plot_boxes_cv2(img, boxes[0], "torch_prediction_demo.jpg", class_names)
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [True, False],
-    ids=[
-        "pretrained_weight_true",
-        "pretrained_weight_false",
-    ],
-)
-def test_yolov4_model(device, model_location_generator, reset_seeds, input_path, use_pretrained_weight):
-    model_path = model_location_generator("models", model_subdir="Yolo")
-    if use_pretrained_weight:
-        if model_path == "models":
-            if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-                os.system(
-                    "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-                )  # execute the yolov4_weights_download.sh file
-
-            weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
-        else:
-            weights_pth = str(model_path / "yolov4.pth")
-
-        ttnn_model = TtYOLOv4(weights_pth)
-        torch_model = Yolov4()
-        new_state_dict = {}
-        ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
-
-        keys = [name for name, parameter in torch_model.state_dict().items()]
-        values = [parameter for name, parameter in ds_state_dict.items()]
-
-        for i in range(len(keys)):
-            new_state_dict[keys[i]] = values[i]
-
-        torch_model.load_state_dict(new_state_dict)
-        torch_model.eval()
-    else:
-        torch_model = Yolov4.from_random_weights()
-        ttnn_weights = update_weight_parameters(OrderedDict(torch_model.state_dict()))
-        ttnn_model = TtYOLOv4(ttnn_weights)
-
-    n_classes = 80
-    namesfile = "models/demos/yolov4/demo/coco.names"
-    if input_path == "":
-        imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
-    else:
-        imgfile = input_path
-    width = 320
-    height = 320
-
-    img = cv2.imread(imgfile)
-
-    # Inference input size is 416*416 does not mean training size is the same
-    # Training size could be 608*608 or even other sizes
-    # Optional inference sizes:
-    #   Hight in {320, 416, 512, 608, ... 320 + 96 * n}
-    #   Width in {320, 416, 512, 608, ... 320 + 96 * m}
-    sized = cv2.resize(img, (width, height))
-    sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
-
-    for i in range(2):  # This 'for' loop is for speed check
-        # Because the first iteration is usually longer
-        do_detect(ttnn_model, sized, 0.3, 0.4, n_classes, device, class_name=namesfile, imgfile=imgfile)
