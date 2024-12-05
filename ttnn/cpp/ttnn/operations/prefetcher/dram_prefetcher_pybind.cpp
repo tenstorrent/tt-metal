@@ -23,8 +23,7 @@ void bind_dram_prefetcher_operation(py::module& module) {
         )doc",
 
         ttnn::pybind_arguments_t{
-            py::arg("tensors"),
-            // py::arg("global_cb"),
+            py::arg("tensors"), py::arg("global_cb"),
             // py::kw_only(),
         });
 }

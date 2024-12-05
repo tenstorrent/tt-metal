@@ -16,13 +16,12 @@
 namespace ttnn::operations::dram_prefetcher {
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors
-    // , std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
-);
+    const std::vector<Tensor>& tensors,
+    std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb);
 
 struct DramPrefetcher {
     const std::vector<Tensor> tensors;
-    // std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
+    std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

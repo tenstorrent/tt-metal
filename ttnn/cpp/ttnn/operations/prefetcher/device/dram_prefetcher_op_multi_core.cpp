@@ -30,35 +30,41 @@ void get_max_page_size_and_num_pages(
 }
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors
-    // , std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
-) {
+    const std::vector<Tensor>& tensors,
+    std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb) {
     Program program{};
 
-    // WORKAROUND
     // In validate we make sure that all tensors are on the same device
     tt::tt_metal::Device* device = tensors[0].device();
     uint32_t num_tensors = tensors.size();
 
-    uint32_t global_cb_size = 750000;
-    uint32_t num_receivers_tmp = 2;
-    CoreCoord dram_reader_core_coord_tmp = CoreCoord{0, 0};
-    CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord_tmp}}};
+    // // WORKAROUND
+    //
+    //
+    //
 
-    // L1 receiver cores
-    CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
-    if (device->arch() == tt::ARCH::GRAYSKULL) {
-        l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers_tmp}};
-    } else {
-        l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers_tmp, 0}};
-    }
-    CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
+    // uint32_t global_cb_size = 750000;
+    // uint32_t num_receivers_tmp = 2;
+    // CoreCoord dram_reader_core_coord_tmp = CoreCoord{0, 0};
+    // CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord_tmp}}};
 
-    std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-    sender_receiver_core_mapping[dram_reader_core_coord_tmp] = l1_receiver_core;
+    // // L1 receiver cores
+    // CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
+    // if (device->arch() == tt::ARCH::GRAYSKULL) {
+    //     l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers_tmp}};
+    // } else {
+    //     l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers_tmp, 0}};
+    // }
+    // CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
 
-    auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, global_cb_size, tt::tt_metal::BufferType::L1);
+    // std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
+    // sender_receiver_core_mapping[dram_reader_core_coord_tmp] = l1_receiver_core;
+
+    // auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    //     device, sender_receiver_core_mapping, global_cb_size, tt::tt_metal::BufferType::L1);
+    //
+    //
+    //
 
     auto dram_reader_cores = global_cb->sender_cores();
     uint32_t num_receivers = global_cb->sender_receiver_core_mapping().begin()->second.size();
