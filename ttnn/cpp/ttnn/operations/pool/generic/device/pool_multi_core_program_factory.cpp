@@ -21,6 +21,7 @@ ReduceOpMath get_reduce_op(Pool2DType pool_type) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: return tt::tt_metal::ReduceOpMath::MAX;
         case Pool2DType::AVG_POOL2D: return tt::tt_metal::ReduceOpMath::SUM;
+        default: TT_FATAL(false, "Unexpected pool type");
     }
 }
 
@@ -30,6 +31,7 @@ uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = 1.; break;
         case Pool2DType::AVG_POOL2D: value = 1. / (float)kernel_size_hw; break;
+        default: TT_FATAL(false, "Unexpected pool type");
     }
     return bfloat16(value).to_packed();
 }
@@ -41,6 +43,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
         case Pool2DType::AVG_POOL2D: value = 0.; break;
+        default: TT_FATAL(false, "Unexpected pool type");
     }
     return bfloat16(value).to_packed();
 }
