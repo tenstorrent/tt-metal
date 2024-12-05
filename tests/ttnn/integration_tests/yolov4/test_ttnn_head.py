@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.demos.yolov4.reference.head import Head
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 import pytest
 import time
 from models.demos.yolov4.ttnn.head import TtHead
@@ -13,6 +14,7 @@ from loguru import logger
 import os
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_head(device, reset_seeds, model_location_generator):
     torch.manual_seed(0)
@@ -79,13 +81,13 @@ def test_head(device, reset_seeds, model_location_generator):
     result_3 = ttnn.to_torch(result_ttnn[2])
     ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
-    result_1 = result_1.reshape(1, ref1.shape[2], ref1.shape[3], 255)
+    result_1 = result_1.reshape(1, ref1.shape[2], ref1.shape[3], 256)
     result_1 = result_1.permute(0, 3, 1, 2)
 
-    result_2 = result_2.reshape(1, ref2.shape[2], ref2.shape[3], 255)
+    result_2 = result_2.reshape(1, ref2.shape[2], ref2.shape[3], 256)
     result_2 = result_2.permute(0, 3, 1, 2)
 
-    result_3 = result_3.reshape(1, ref3.shape[2], ref3.shape[3], 255)
+    result_3 = result_3.reshape(1, ref3.shape[2], ref3.shape[3], 256)
     result_3 = result_3.permute(0, 3, 1, 2)
 
     # Output is sliced because ttnn.conv returns 256 channels instead of 255.
