@@ -40,15 +40,17 @@ ttnn::Tensor convert_tile_to_rm(
     //Convert the 3D->3D reshaping to row major and back to tile
     const bool illegal = ((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0)) &&
                          (tensor.get_dtype() == DataType::BFLOAT8_B);
-    TT_FATAL(illegal, "illegal dimensions for a bfloat8 tensor");
+    TT_FATAL(
+        ((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0)) &&
+            (tensor.get_dtype() == DataType::BFLOAT8_B),
+        "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
     new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, tensor.get_dtype(), std::nullopt, (Device*)nullptr);
     new_tensor = ReshapeViewOperation::invoke(new_tensor, shape, memory_config, queue_id, pad_value);
     new_tensor =
         ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.get_dtype(), memory_config, (Device*)nullptr);
-    new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B)
-                     ? ttnn::typecast(new_tensor, tensor.get_dtype())
-                     : new_tensor;
+    new_tensor =
+        (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.get_dtype()) : new_tensor;
     return new_tensor;
 }
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -352,8 +354,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         return tensor;
     }
     PadValue default_pad_value;
-    if (tensor.get_dtype() == DataType::BFLOAT8_B or tensor.get_dtype() == DataType::BFLOAT4_B or
-        tensor.get_dtype() == DataType::BFLOAT16 or tensor.get_dtype() == DataType::FLOAT32) {
+    if (tensor.get_dtype() == DataType::BFLOAT8_B or tensor.get_dtype() == DataType::BFLOAT16 or
+        tensor.get_dtype() == DataType::FLOAT32) {
         default_pad_value = 0.0f;
     } else {
         default_pad_value = (uint32_t)0;
