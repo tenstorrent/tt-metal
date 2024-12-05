@@ -314,6 +314,12 @@ void wait_until_cores_done(
     }
 }
 
+std::string concat(std::string a) {
+
+	return a + a;
+
+}
+
 }  // namespace internal_
 
 }  // namespace llrt
