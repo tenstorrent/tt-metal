@@ -51,9 +51,14 @@ class Conv:
         else:
             weight = model[path + ".conv.0.weight"]
             bias = model[path + ".conv.0.bias"]
+            if weight.shape[0] == 255:
+                weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, 0, 0, 1))
             self.weights = ttnn.from_torch(weight)
             bias = bias.reshape(1, 1, 1, -1)
+            if bias.shape[-1] == 255:
+                bias = torch.nn.functional.pad(bias, (0, 1, 0, 0, 0, 0, 0, 0))
             self.bias = ttnn.from_torch(bias)
+
         self.input_params = input_params
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.conv_params = conv_params
