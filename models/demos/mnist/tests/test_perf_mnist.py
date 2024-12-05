@@ -112,7 +112,7 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     num_iterations = 1
     margin = 0.03
     if is_grayskull():
-        expected_perf = 390000.0
+        expected_perf = 402500.0
     elif is_wormhole_b0():
         expected_perf = 900000.0
 
