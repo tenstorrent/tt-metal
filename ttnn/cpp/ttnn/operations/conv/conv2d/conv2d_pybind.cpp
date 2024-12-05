@@ -60,8 +60,8 @@ void py_bind_conv2d(py::module& module) {
                 std::array<uint32_t, 2> dilation,
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
-                std::optional<const Conv2dConfig> conv_config,
-                std::optional<const DeviceComputeKernelConfig> compute_config,
+                const std::optional<const Conv2dConfig>& conv_config,
+                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                 const std::optional<const MemoryConfig>& memory_config,
                 const uint8_t& queue_id) -> Result {
                 return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config);
@@ -101,8 +101,8 @@ void py_bind_conv2d(py::module& module) {
                 std::array<uint32_t, 2> dilation,
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
-                std::optional<const Conv2dConfig> conv_config,
-                std::optional<const DeviceComputeKernelConfig> compute_config,
+                const std::optional<const Conv2dConfig>& conv_config,
+                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                 const std::optional<const MemoryConfig>& memory_config,
                 const uint8_t& queue_id) -> Result {
                 return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config);
@@ -147,7 +147,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
 
 
     module.def(
@@ -169,7 +170,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
 
     module.def(
         "prepare_conv_bias",
@@ -189,7 +191,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
 
     module.def(
         "prepare_conv_bias",
@@ -209,7 +212,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
