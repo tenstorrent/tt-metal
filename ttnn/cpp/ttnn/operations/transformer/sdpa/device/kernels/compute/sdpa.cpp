@@ -208,23 +208,29 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_pop_front(in1_cb, num_tiles);
 }
 
-void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+void mul_block_accumulate(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
+    // Precondition: out_cb has num_tiles produced
+    // Postcondition: in0_cb has num_tiles free
     // Postcondition: in1_cb has num_tiles produced
+    // Postcondition: out_cb has num_tiles produced
 
     mul_tiles_init();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
+    // Free up output so we can accumulate into it
+    cb_pop_front(out_cb, num_tiles);
+    PACK((llk_pack_reconfig_l1_acc(1)));
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
+        cb_reserve_back(out_cb, 1);
+        pack_tile(0, out_cb);
+        cb_push_back(out_cb, 1);
         release_dst();
     }
+    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -528,11 +534,7 @@ void MAIN {
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */
-                    if (k_chunk == 0) {
-                        DeviceZoneScopedN("copy_block");
-                        // Instead of copy, swap.
-                        std::swap(alias_cur_sum, alias_prev_sum);
-                    } else {
+                    if (k_chunk > 0) {
                         DeviceZoneScopedN("stats");
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                         {
@@ -544,16 +546,8 @@ void MAIN {
                         /* cb_prev_sum *= cb_exp_max_diff */
                         {
                             DeviceZoneScopedN("mul_block_inplace");
-                            mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                            mul_block_accumulate(alias_prev_sum, cb_exp_max_diff, alias_cur_sum, Sq_chunk_t);
                         }
-                        /* cb_cur_sum += cb_prev_sum */
-                        {
-                            DeviceZoneScopedN("add_block_inplace");
-                            add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-                        }
-
-                        // Swap alias_prev_sum and alias_cur_sum
-                        std::swap(alias_prev_sum, alias_cur_sum);
 
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
                         {
@@ -567,6 +561,8 @@ void MAIN {
                         }
                     }
 
+                    // Swap alias_prev_sum and alias_cur_sum
+                    std::swap(alias_prev_sum, alias_cur_sum);
                     // Set cb_prev_sum and cb_prev_max
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                 }
