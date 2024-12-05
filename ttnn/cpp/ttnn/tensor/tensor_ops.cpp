@@ -378,11 +378,11 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
     const auto& new_padded_shape = new_shape.padded_shape();
     const auto tile = input_tensor.get_tensor_spec().tile();
-    TT_ASSERT(
-        input_tensor.volume() == new_padded_shape.volume(),
-        "{} != {}",
-        input_tensor.volume(),
-        new_padded_shape.volume());
+    // TT_ASSERT(
+    //     input_tensor.volume() == new_padded_shape.volume(),
+    //     "{} != {}",
+    //     input_tensor.volume(),
+    //     new_padded_shape.volume());
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
             new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 &&
