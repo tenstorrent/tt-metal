@@ -255,7 +255,7 @@ def test_llama_model_inference(
     for i in range(generation_length):
         logger.info(f"[Llama3 Model] Generating token {i}")
 
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )

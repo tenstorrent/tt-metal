@@ -201,7 +201,7 @@ def test_tt_model_accuracy(
             model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_lens[0]
         )
 
-        prefill_input = model_args.prepare_inputs_ttnn_prefill(
+        prefill_input = model_args.prepare_residual_tensor_prefill(
             pt_prefill_input[batch_id],
         )
 
@@ -251,7 +251,7 @@ def test_tt_model_accuracy(
         # Get embedding
         pt_decode_input = embd(ref_token).view(1, 1, -1)
         # Prepare input for TT model
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             pt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )

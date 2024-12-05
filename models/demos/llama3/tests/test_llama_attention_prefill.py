@@ -141,7 +141,7 @@ def test_llama_attention_inference(
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    attention_input = model_args.prepare_inputs_ttnn_prefill(
+    attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,
         force_replicated=True,
     )

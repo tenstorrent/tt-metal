@@ -158,7 +158,7 @@ def test_llama_attention_inference(
 
         tt_attention_input = pt_attention_input.clone()
 
-        attention_input = model_args.prepare_inputs_ttnn_decode(
+        attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
             model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             force_replicated=True,

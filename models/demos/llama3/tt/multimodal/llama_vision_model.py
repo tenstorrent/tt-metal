@@ -328,7 +328,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_full_text_mask_expand_1NSH = ttnn.typecast(tt_full_text_mask_expand_1NSH, ttnn.bfloat4_b)
 
         h = torch.nn.functional.pad(h, (0, 0, 0, padded_seq_len - h.shape[1]), "constant", 0)
-        tt_h = self.configuration.prepare_inputs_ttnn_prefill(
+        tt_h = self.configuration.prepare_residual_tensor_prefill(
             h,
         )
         rot_mats = get_prefill_rot_mat(
@@ -415,7 +415,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         h = self.prepare_inputs_common(position_id, tokens)
-        tt_h = self.configuration.prepare_inputs_ttnn_decode(
+        tt_h = self.configuration.prepare_residual_tensor_decode(
             h,
             None,
             on_host=True,
