@@ -112,6 +112,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
 #pragma GCC unroll 0
                 for (std::uint32_t n = 0; n < 2; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
                         // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
                         if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, 1/*clear fp32*/, 0, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 +       n*2)); // Clear lower half of faces 0 & 1 (offsets 0, 2)
@@ -119,6 +120,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                         } else {
                             TT_ZEROACC(ZERO_ACC_MODE, 0/*clear fp32*/, 0, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (0 +         n)); // Clear faces 0 & 1
                         }
+                    }
                     ckernel_template::run(instrn_buffer);
                 }
             } else {
