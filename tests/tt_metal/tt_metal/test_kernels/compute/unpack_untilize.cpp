@@ -12,7 +12,7 @@ void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 #ifndef SHORT_INIT
-    untilize_init(tt::CBIndex::c_0);
+    untilize_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
     untilize_init_short(tt::CBIndex::c_0);
