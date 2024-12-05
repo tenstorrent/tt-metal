@@ -46,6 +46,7 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
         input_tensor.volume(),
         new_padded_shape.volume());
     if (input_tensor.get_layout() == Layout::TILE) {
+        const auto tile = input_tensor.get_tensor_spec().tile();
         TT_ASSERT(
             new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 &&
             new_padded_shape[-1] % tile.get_tile_shape()[1] == 0 &&
@@ -61,10 +62,10 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
                     updated_storage.shapes[i] = new_shape;
                 }
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
+                } else {
                     const auto tile = input_tensor.get_tensor_spec().tile();
                     return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
-                } else {
-                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
                 }
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
@@ -76,10 +77,10 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
                 }
                 updated_storage.shapes = new_shapes;
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
+                } else {
                     const auto tile = input_tensor.get_tensor_spec().tile();
                     return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
-                } else {
-                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
                 }
             }
             if constexpr (std::is_same_v<T, DeviceStorage>) {
