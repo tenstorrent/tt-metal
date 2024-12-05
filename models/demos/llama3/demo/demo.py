@@ -955,6 +955,10 @@ def test_llama_demo(
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
+    # TODO: Remove this once batch>1 is supported on TG
+    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size > 1:
+        pytest.skip("Skip batch>1 demo on TG")
+
     mesh_device.enable_async(True)
 
     if paged_attention:
