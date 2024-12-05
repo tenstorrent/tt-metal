@@ -60,18 +60,20 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     TT_THROW("Expected tensor to be on MultiDeviceHostStorage type!");
 }
 
-Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
+Tensor aggregate_as_tensor(
+    const std::vector<Tensor>& tensor_shards, const tt::tt_metal::DistributedTensorConfig& config) {
     TT_ASSERT(tensor_shards.size() > 0, "At least one tensor shard must be provided");
+    const auto& representative_shard = tensor_shards.at(0);
     for (const auto& shard : tensor_shards) {
-        if (shard.storage_type() != tensor_shards.at(0).storage_type()) {
+        if (shard.storage_type() != representative_shard.storage_type()) {
             TT_THROW("All tensor shards must have the same storage type");
         }
     }
 
     // Based whether the first tensor shard has OwnedBuffer or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
-    StorageType storage_type = tensor_shards.at(0).storage_type();
-    Tile tile = tensor_shards.at(0).get_tensor_spec().tile();
+    StorageType storage_type = representative_shard.storage_type();
+    Tile tile = representative_shard.get_tensor_spec().tile();
     if (storage_type == StorageType::OWNED) {
         std::vector<ttnn::Shape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
@@ -83,7 +85,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                 TT_THROW(
                     "Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling "
                     "configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}.",
-                    tensor_shards.at(0).device()->id(),
+                    representative_shard.device()->id(),
                     tile.get_height(),
                     tile.get_width(),
                     shard.device()->id(),
@@ -91,12 +93,12 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                     shard_tile.get_width());
             }
         }
-        auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
+        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), shapes};
         return Tensor(
             std::move(storage),
-            tensor_shards.at(0).get_legacy_shape(),
-            tensor_shards.at(0).get_dtype(),
-            tensor_shards.at(0).get_layout(),
+            representative_shard.get_legacy_shape(),
+            representative_shard.get_dtype(),
+            representative_shard.get_layout(),
             tile);
     } else {
         std::vector<int> ordered_device_ids;
@@ -113,7 +115,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                 TT_THROW(
                     "Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling "
                     "configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}.",
-                    tensor_shards.at(0).device()->id(),
+                    representative_shard.device()->id(),
                     tile.get_height(),
                     tile.get_width(),
                     shard.device()->id(),
@@ -121,12 +123,12 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                     shard_tile.get_width());
             }
         }
-        auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
+        auto storage = MultiDeviceStorage{config, ordered_device_ids, std::move(device_buffers), shapes};
         return Tensor(
             std::move(storage),
-            tensor_shards.at(0).get_legacy_shape(),
-            tensor_shards.at(0).get_dtype(),
-            tensor_shards.at(0).get_layout(),
+            representative_shard.get_legacy_shape(),
+            representative_shard.get_dtype(),
+            representative_shard.get_layout(),
             tile);
     }
 }

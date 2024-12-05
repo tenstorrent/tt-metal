@@ -28,7 +28,8 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor);
 
 // Given a list of per-device shards, return a multi-device tensor.
-Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards);
+Tensor aggregate_as_tensor(
+    const std::vector<Tensor>& tensor_shards, const tt::tt_metal::DistributedTensorConfig& config);
 
 std::vector<int> get_t3k_physical_device_ids_ring();
 

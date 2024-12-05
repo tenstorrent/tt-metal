@@ -17,6 +17,8 @@ namespace tt::tt_metal::distributed {
 
 // Forward declaration of MeshDevice
 class MeshDevice;
+
+// TODO: update this to a `struct` with named members.
 using MeshShape = std::pair<size_t, size_t>;
 
 struct Coordinate {
