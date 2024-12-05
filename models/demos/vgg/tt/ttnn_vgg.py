@@ -50,7 +50,7 @@ conv_ttnn_params = [
 ]
 conv_feature_ids = [0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28]
 classifier_ids = [0, 3, 6]
-h_override = [None, None, None, None, None, 256, 256, None, None, None, None, None, None]
+h_override = [None, None, None, None, None, 7 * 32, 7 * 32, None, None, None, None, None, None]
 
 
 def ttnn_vgg16(
@@ -181,7 +181,7 @@ conv_ttnn_params_2 = [
     [512, 512, 14, 14],
     [512, 512, 14, 14],
 ]
-height_override_11 = [None, None, None, 256, None, None, None, None]
+height_override_11 = [None, None, None, 7 * 32, None, None, None, None]
 
 
 def ttnn_vgg11(
