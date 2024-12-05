@@ -41,15 +41,8 @@ void max_block_inplace() {
     }
 }
 
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_cb,
-    uint32_t scale_cb,
-    uint32_t out_cb,
-    uint32_t rows,
-    uint32_t cols>
-void reduce_c() {
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
+void reduce_c(uint32_t out_cb) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -395,9 +388,13 @@ void MAIN {
     constexpr uint32_t cb_out_accumulate_im = tt::CBIndex::c_26;
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_27;
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_28;
-    constexpr uint32_t cb_cur_sum = tt::CBIndex::c_29;
-    constexpr uint32_t cb_prev_sum = tt::CBIndex::c_30;
+    constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
+    constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
+
+    // Set up ping pong buffers for sum
+    uint32_t alias_prev_sum = cb_sum_A;
+    uint32_t alias_cur_sum = cb_sum_B;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
@@ -474,7 +471,13 @@ void MAIN {
                     {
                         DeviceZoneScopedN("reduce_max");
                         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                        reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+                        reduce_c<
+                            PoolType::MAX,
+                            ReduceDim::REDUCE_ROW,
+                            cb_qk_im,
+                            cb_identity_scale_in,
+                            Sq_chunk_t,
+                            Sk_chunk_t>(cb_cur_max);
                     }
 
                     if (k_chunk > 0) {
@@ -492,7 +495,13 @@ void MAIN {
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
                     {
                         DeviceZoneScopedN("reduce_sum");
-                        reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
+                        reduce_c<
+                            PoolType::SUM,
+                            ReduceDim::REDUCE_ROW,
+                            cb_qk_im,
+                            cb_identity_scale_in,
+                            Sq_chunk_t,
+                            Sk_chunk_t>(alias_cur_sum);
                     }
 
                     /* OUT_IM = QK @ V_CHUNK */
@@ -521,7 +530,8 @@ void MAIN {
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk == 0) {
                         DeviceZoneScopedN("copy_block");
-                        copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                        // Instead of copy, swap.
+                        std::swap(alias_cur_sum, alias_prev_sum);
                     } else {
                         DeviceZoneScopedN("stats");
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
@@ -534,19 +544,21 @@ void MAIN {
                         /* cb_prev_sum *= cb_exp_max_diff */
                         {
                             DeviceZoneScopedN("mul_block_inplace");
-                            mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                            mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         }
+                        /* cb_cur_sum += cb_prev_sum */
+                        {
+                            DeviceZoneScopedN("add_block_inplace");
+                            add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                        }
+
+                        // Swap alias_prev_sum and alias_cur_sum
+                        std::swap(alias_prev_sum, alias_cur_sum);
 
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
                         {
                             DeviceZoneScopedN("mul_block_bcast_cols_inplace");
                             mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, cb_exp_max_diff);
-                        }
-
-                        /* cb_cur_sum += cb_prev_sum */
-                        {
-                            DeviceZoneScopedN("add_block_inplace");
-                            add_block_inplace(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
                         }
 
                         {
@@ -560,10 +572,10 @@ void MAIN {
                 }
 
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
-                recip_block_inplace(cb_prev_sum, Sq_chunk_t);
+                recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, cb_prev_sum);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, alias_prev_sum);
                 pack_reconfig_data_format(cb_out);
                 copy_block(cb_out_accumulate_im, cb_out, out_chunk_tiles);
 
