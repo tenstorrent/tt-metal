@@ -261,12 +261,11 @@ private:
 };
 
 template <typename T>
-class VectorMeshToTensor : public MeshToTensor<VectorMeshToTensor<T>, T> {
+class VectorMeshToTensor {
 public:
-    using Base = MeshToTensor<VectorMeshToTensor<T>, T>;
-    VectorMeshToTensor(tt::tt_metal::distributed::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
+    VectorMeshToTensor([[maybe_unused]] tt::tt_metal::distributed::MeshShape mesh_shape) {
     }
-    std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
+    std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) {
         return tensors;
     }
 };

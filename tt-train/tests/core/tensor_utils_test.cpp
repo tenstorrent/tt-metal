@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <memory>
+#include <ttnn/tensor/types.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -236,7 +237,7 @@ TEST(TensorUtilsTest, TestUint32XTensor) {
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
     xt::xarray<uint32_t> xtensor =
         ttml::core::span_to_xtensor(std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
-    auto tensor = ttml::core::from_xtensor(xtensor, device);
+    auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device);
 
     auto xtensor_back = ttml::core::to_xtensor(tensor);
 
