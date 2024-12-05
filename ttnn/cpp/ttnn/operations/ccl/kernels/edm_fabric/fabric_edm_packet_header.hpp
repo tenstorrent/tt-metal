@@ -29,7 +29,7 @@ enum CommandType : uint8_t {
 // 1 bit
 enum ChipSendType : uint8_t {
     CHIP_UNICAST = 0,
-    CHIP_MULTICAST = 1
+    CHIP_MULTICAST = 1,
 };
 enum NocSendType : uint8_t {
     NOC_UNICAST = 0,
@@ -53,6 +53,7 @@ union RoutingFields {
 static_assert(sizeof(RoutingFields) == sizeof(UnicastRoutingCommandHeader), "RoutingFields size is not 1 bytes");
 
 struct NocUnicastCommandHeader {
+    // TODO: just encode the noc_addr as uint64_t directly
     uint32_t address;
     uint32_t size;
     uint8_t noc_x;
