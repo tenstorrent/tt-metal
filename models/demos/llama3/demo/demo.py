@@ -226,6 +226,10 @@ def run_llama3_demo(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+
+    if model_args.model_name == "3.1-70B" and max_seq_len >= 64 * 1024:
+        pytest.skip("Llama3.1-70B will run out of memory for max_seq_len >= 64k tokens")
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
