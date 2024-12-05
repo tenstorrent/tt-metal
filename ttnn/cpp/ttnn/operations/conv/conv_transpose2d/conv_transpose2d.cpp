@@ -287,7 +287,7 @@ Result conv_transpose2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 num_cores_c);
             Tensor matmul_input = ttnn::to_layout(
-                input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device
+                halo_output, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device
             );
             auto matmul_output = ttnn::operations::matmul::matmul(
                 matmul_input,
