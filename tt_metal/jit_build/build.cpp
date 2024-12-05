@@ -415,14 +415,15 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     finish_init();
 }
 
-JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
+JitBuildActiveEthernet::JitBuildActiveEthernet(
+    const JitBuildEnv& env, const JitBuiltStateConfig& build_config, bool is_cooperative) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
                       "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/llk_io ";
+                      "/metal/llk_io " + "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
@@ -431,8 +432,42 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
 
-    switch (this->core_id_) {
+    // 0: core_id = 0 and not cooperative
+    // 1: core_id = 0 and cooperative
+    uint32_t build_class = (this->core_id_ << 1) | uint32_t(is_cooperative);
+
+    switch (build_class) {
         case 0: {
+            std::cout << "Building aerisc!" << std::endl;
+            this->target_name_ = "active_erisc";
+            this->cflags_ =
+                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+
+            this->defines_ +=
+                "-DCOMPILE_FOR_ERISC "
+                "-DERISC "
+                "-DRISC_B0_HW ";
+
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
+            if (this->is_fw_) {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisc.cc");
+            } else {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
+            }
+            this->lflags_ = env_.lflags_ + "-Os ";
+
+            if (this->is_fw_) {
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_aerisc.ld ";
+            } else {
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_aerisc.ld ";
+            }
+
+            break;
+        }
+        case 1: {
             this->target_name_ = "erisc";
             this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
 
@@ -444,15 +479,12 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 this->defines_ += "-DLOADING_NOC=0 ";
             }
 
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
-
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-crt0.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
             }
-
             string linker_str;
             if (this->is_fw_) {
                 linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
@@ -468,7 +500,11 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                             env_.root_ + linker_str;
             break;
         }
-        default: TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+        default:
+            TT_THROW(
+                "Invalid processor ID {} and cooperative scheme {} for Active Ethernet core.",
+                this->core_id_,
+                is_cooperative);
     }
     this->process_defines_at_compile = true;
 

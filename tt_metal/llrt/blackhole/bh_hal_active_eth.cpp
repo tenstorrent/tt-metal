@@ -85,14 +85,15 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
+    std::cout << "MEM_AERISC_FIRMWARE_BASE " << std::hex << MEM_AERISC_FIRMWARE_BASE << " FW BASE "
+              << eth_l1_mem::address_map::FIRMWARE_BASE << std::dec << std::endl;
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
         // BH active ethernet runs idle erisc FW on the second ethernet
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
-            .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,  // this will be uplifted in subsequent commits
-                                                                        // enabling active erisc
+            .local_init_addr = eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH,
             .fw_launch_addr = SLAVE_IERISC_RESET_PC,
             .fw_launch_addr_value = (uint32_t)eth_l1_mem::address_map::FIRMWARE_BASE,
         };
