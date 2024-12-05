@@ -378,7 +378,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return tensor.reshape(shape);
+            return ttnn::experimental::unsafe_view(tensor, shape);
         }
         //This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
