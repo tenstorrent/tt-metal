@@ -100,12 +100,11 @@ void MAIN {
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
     constexpr bool tilize_in0 = get_compile_time_arg_val(14);
     constexpr bool untilize_out = get_compile_time_arg_val(15);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
-    uint32_t output_rows_h = get_compile_time_arg_val(18);
-    constexpr bool is_non_tile_height = get_compile_time_arg_val(19);
+    uint32_t output_rows_h = get_compile_time_arg_val(17);
+    constexpr bool is_non_tile_height = get_compile_time_arg_val(18);
 
 #ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(19);
 #endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
@@ -120,6 +119,7 @@ void MAIN {
     constexpr uint32_t matmul_partials_cb = tt::CBIndex::c_24;
     constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
     // constexpr uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_26;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 

@@ -171,8 +171,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width=false);
+    bool is_mm_conv);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
@@ -201,8 +200,7 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::Paralle
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width=false);
+    bool is_mm_conv);
 
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile

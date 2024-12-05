@@ -168,10 +168,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
-    auto aligned_input_nstick_nbytes = out_stick_nbytes;
-    if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
-    }
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
         0,  // padding_config_cb_id
@@ -187,8 +183,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_block_sharded,
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded,
-        aligned_input_nstick_nbytes};
+        is_width_sharded};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
