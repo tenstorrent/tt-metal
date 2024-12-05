@@ -84,9 +84,6 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator):
     result_2_bb = ttnn.to_torch(result_2[0])
     result_3_bb = ttnn.to_torch(result_3[0])
 
-    print(ref1[0].shape)
-    print(result_1_bb.shape)
-
     result_1_bb = result_1_bb.permute(0, 2, 3, 1)
     result_2_bb = result_2_bb.permute(0, 2, 3, 1)
     result_3_bb = result_3_bb.permute(0, 2, 3, 1)
@@ -98,10 +95,6 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator):
     result_1_conf = ttnn.to_torch(result_1[1])
     result_2_conf = ttnn.to_torch(result_2[1])
     result_3_conf = ttnn.to_torch(result_3[1])
-
-    print("---")
-    print(ref1[1].shape)
-    print(result_1_conf.shape)
 
     # result_1_conf = result_1_conf.permute(0, 1, 3, 2)
     # result_2_conf = result_2_conf.permute(0, 1, 3, 2)
