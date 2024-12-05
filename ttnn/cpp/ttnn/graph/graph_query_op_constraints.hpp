@@ -8,6 +8,7 @@
 #include <string>
 
 #include "third_party/json/json.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 
 namespace ttnn::graph {
