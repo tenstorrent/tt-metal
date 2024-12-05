@@ -44,7 +44,6 @@ from models.utility_functions import skip_for_grayskull
     (1,),
     ids=[
         "batch_1",
-        # "batch_2",
     ],
 )
 @torch.no_grad()
