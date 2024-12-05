@@ -49,7 +49,6 @@ class RMSNorm(LightweightModule):
         eps: float = 1e-05,
         sharded_program_config=None,
         sharded_output_config=None,
-        TG=False,
     ):
         super().__init__()
         self.eps = eps

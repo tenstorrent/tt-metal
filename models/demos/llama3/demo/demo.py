@@ -409,6 +409,9 @@ def run_llama3_demo(
             # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
             if batch_size == 1:
                 ttnn.deallocate(tt_out)
+                prefill_input = model_args.prepare_inputs_ttnn_prefill(
+                    pt_prefill_input[batch_id],
+                )
                 tt_out = tt_model(
                     prefill_input,
                     current_pos=None,

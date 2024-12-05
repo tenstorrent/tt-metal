@@ -68,7 +68,6 @@ def test_llama_rms_norm_inference(
         is_distributed=model_args.is_distributed_norm,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
-        TG=model_args.is_galaxy,
     )
 
     # Wrap it in DistributedNorm
