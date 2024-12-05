@@ -44,6 +44,7 @@ def run_once(device, input_shape, kernel_size, stride, padding, dilation, shard_
 @pytest.mark.parametrize(
     "input_shape, kernel_size, stride, padding, dilation",
     [
+        ((1, 16, 56, 56), (2, 2), (2, 2), (0, 0), (1, 1)),
         ((1, 128, 56, 56), (2, 2), (2, 2), (0, 0), (1, 1)),
         ((1, 256, 28, 28), (2, 2), (2, 2), (0, 0), (1, 1)),
         ((1, 192, 56, 56), (2, 2), (2, 2), (0, 0), (1, 1)),
