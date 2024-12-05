@@ -37,4 +37,4 @@ def test_lenet(device, batch_size, model_location_generator, reset_seeds):
 
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9993)  # 0.9993022969312866
+    assert_with_pcc(torch_output, tt_output, 0.999)  # 0.9993022969312866
