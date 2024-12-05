@@ -446,4 +446,8 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 #define DeviceZoneSetCounter(counter)
 
+#define DeviceTimestampedData(data_id, data)
+
+#define DeviceRecordEvent(event_id)
+
 #endif
