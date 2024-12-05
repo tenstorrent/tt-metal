@@ -30,7 +30,10 @@ void get_max_page_size_and_num_pages(
 }
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors, const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb) {
+    const std::vector<Tensor>& tensors,
+    const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    TT_FATAL(global_cb != std::nullopt, "Global circular buffer must be provided");
+
     Program program{};
 
     // In validate we make sure that all tensors are on the same device
@@ -65,14 +68,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     //
     //
 
-    auto dram_reader_cores = global_cb.sender_cores();
-    uint32_t num_receivers = global_cb.sender_receiver_core_mapping().begin()->second.size();
+    auto dram_reader_cores = global_cb->sender_cores();
+    uint32_t num_receivers = global_cb->sender_receiver_core_mapping().begin()->second.size();
 
     // DRAM reader CB
     uint32_t in1_reader_cb_index = 0;
     // uint32_t in1_reader_cb_size = 750000;  // Total available L1 per core: 1.5 MB; we take half the L1, so 750000
     // bytes
-    uint32_t in1_reader_cb_size = global_cb.size();
+    uint32_t in1_reader_cb_size = global_cb->size();
     tt::DataFormat in1_reader_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t in1_reader_cb_single_tile_size = 2048;
 
@@ -83,7 +86,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     // Writer CB maps inplace with global CB
     uint32_t in1_writer_cb_index = 31;
-    uint32_t in1_writer_cb_size = global_cb.size();
+    uint32_t in1_writer_cb_size = global_cb->size();
     tt::DataFormat in1_writer_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t in1_writer_cb_single_tile_size = 2048;
 
@@ -92,7 +95,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         .set_page_size(in1_writer_cb_single_tile_size)
         .set_data_format(in1_writer_cb_data_format);
     auto in1_writer_cb =
-        tt_metal::v1::experimental::CreateCircularBuffer(program, dram_reader_cores, in1_writer_cb_config, global_cb);
+        tt_metal::v1::experimental::CreateCircularBuffer(program, dram_reader_cores, in1_writer_cb_config, *global_cb);
 
     // Set up per tensor
     uint32_t in1_writer_page_sizes[num_tensors], in1_writer_num_pages[num_tensors];
