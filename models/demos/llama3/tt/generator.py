@@ -178,6 +178,7 @@ class LlamaGenerator:
         prefill_len,
         page_table=None,
         kv_cache=None,
+        cross_page_table=None,
     ):
         """
         Performs vision encode step then text prefill.
@@ -194,6 +195,10 @@ class LlamaGenerator:
         if page_table is not None:
             page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
 
+        if cross_page_table is not None:
+            num_vision_tokens = vision_tokens.shape[2]
+            cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
+
         (
             tt_h,
             tt_xattn_mask,
@@ -201,12 +206,14 @@ class LlamaGenerator:
             tt_full_text_mask_expand_11SD,
             rot_mats,
             tt_page_table,
+            tt_cross_page_table,
         ) = self.model.prepare_inputs_prefill(
             tokens,
             cross_attention_masks,
             full_text_row_masked_out_mask,
             prefill_len=prefill_len,
             page_table=page_table,
+            cross_page_table=cross_page_table,
         )
 
         tt_logits = self.model.ttnn_prefill_forward(
@@ -221,9 +228,11 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
+            cross_page_table=tt_cross_page_table,
         )
 
         del tt_page_table
+        del tt_cross_page_table
 
         logits = self.model.process_output_prefill(tt_logits, B, last_token_idx=(last_token_idx % 32))
 
@@ -239,6 +248,7 @@ class LlamaGenerator:
         prompt_lens,
         page_table=None,
         kv_cache=None,
+        cross_page_table=None,
     ):
         """
         Batched version of prefill_forward_single_user for vision model.
@@ -247,6 +257,11 @@ class LlamaGenerator:
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         output_xattn_masks = []
         output_full_text_row_masked_out_masks = []
+
+        if cross_page_table is not None:
+            assert (
+                xattn_caches is None and kv_cache is not None
+            ), "no separate xattn_caches should be allocated when using cross_page_table with paged kv cache"
 
         for user_id in range(batch):
             print(f"Prefilling User {user_id}")
@@ -266,6 +281,7 @@ class LlamaGenerator:
                 prefill_len=seq_len,
                 page_table=page_table,
                 kv_cache=kv_cache,
+                cross_page_table=cross_page_table,
             )
             output_logits[user_id] = logits
             output_xattn_masks.append(cross_attention_masks)
@@ -281,15 +297,21 @@ class LlamaGenerator:
         tokens,
         cross_attention_masks,
         full_text_row_masked_out_mask,
-        xattn_caches,
+        xattn_caches=None,
         page_table=None,
         kv_cache=None,
         prompt_lens=None,
+        cross_page_table=None,
     ):
         """
         Performs text decode step.
         Returns logits
         """
+
+        if cross_page_table is not None:
+            assert (
+                xattn_caches is None and kv_cache is not None
+            ), "no separate xattn_caches should be allocated when using cross_page_table with paged kv cache"
 
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
@@ -303,8 +325,14 @@ class LlamaGenerator:
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
+            tt_cross_page_table,
         ) = self.model.prepare_inputs_decode(
-            tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=start_pos, page_table=page_table
+            tokens,
+            cross_attention_masks,
+            full_text_row_masked_out_mask,
+            position_id=start_pos,
+            page_table=page_table,
+            cross_page_table=cross_page_table,
         )
 
         tt_logits = self.model.ttnn_decode_forward(
@@ -316,6 +344,7 @@ class LlamaGenerator:
             tt_rot_mats,
             page_table=tt_page_table,
             kv_cache=kv_cache,
+            cross_page_table=tt_cross_page_table,
         )
 
         logits = self.model.process_output_decode(tt_logits, B, S)
@@ -339,6 +368,7 @@ class LlamaGenerator:
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
+            tt_cross_page_table,
         ) = self.model.prepare_inputs_decode(
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
