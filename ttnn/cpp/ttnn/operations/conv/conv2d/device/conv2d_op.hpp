@@ -16,19 +16,20 @@ namespace conv2d {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const uint32_t act_cb = tt::CBIndex::c_0;
-const uint32_t weight_cb = tt::CBIndex::c_1;
-const uint32_t bias_cb = tt::CBIndex::c_2;
-const uint32_t sharded_act_cb = tt::CBIndex::c_3;
-const uint32_t cb_for_reader_indices = tt::CBIndex::c_4;
-const uint32_t cb_for_l1_array = tt::CBIndex::c_5;
-const uint32_t act_cb_row_major_bfloat16 = tt::CBIndex::c_6;
-const uint32_t act_cb_second_reader = tt::CBIndex::c_7;
-const uint32_t matmul_partials_cb = tt::CBIndex::c_24;
-const uint32_t tilize_mode_tilized_act_cb = tt::CBIndex::c_25;
-const uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_26;
-const uint32_t out0_cb = tt::CBIndex::c_16;
-const uint32_t temp_sum_cb = tt::CBIndex::c_27;
+    const uint32_t act_cb = tt::CBIndex::c_0;
+    const uint32_t weight_cb = tt::CBIndex::c_1;
+    const uint32_t bias_cb = tt::CBIndex::c_2;
+    const uint32_t sharded_act_cb = tt::CBIndex::c_3;
+    const uint32_t cb_for_reader_indices = tt::CBIndex::c_4;
+    const uint32_t cb_for_l1_array = tt::CBIndex::c_5;
+    const uint32_t act_cb_row_major_bfloat16 = tt::CBIndex::c_6;
+    const uint32_t act_cb_second_reader = tt::CBIndex::c_7;
+    const uint32_t matmul_partials_cb = tt::CBIndex::c_24;
+    const uint32_t tilize_mode_tilized_act_cb = tt::CBIndex::c_25;
+    const uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_26;
+    const uint32_t out0_cb = tt::CBIndex::c_16;
+    const uint32_t temp_sum_cb = tt::CBIndex::c_27;
+    const uint32_t untilized_padded_out_cb = tt::CBIndex::c_28;
 }
 }
 

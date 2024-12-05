@@ -18,29 +18,6 @@ namespace conv2d {
 
 using namespace tt;
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
-    tt_metal::Program& program,
-    const Tensor& a,
-    const Tensor& b,
-    const ttnn::Shape& ashape,
-    std::optional<const Tensor> bias,
-    const std::optional<const Tensor>& conv_reader_indices,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    bool has_bias,
-    bool fuse_relu,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
-    bool transpose_mcast,
-    Tensor& output,
-    DeviceComputeKernelConfig compute_kernel_config,
-    bool enable_act_double_buffer,
-    bool enable_split_reader,
-    bool enable_subblock_padding);
-
 // TODO: Add namespace for utilities?
 std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     tt_metal::Program& program,

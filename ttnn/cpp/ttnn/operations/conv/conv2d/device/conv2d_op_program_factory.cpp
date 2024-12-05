@@ -17,16 +17,14 @@ using namespace tt::constants;
 namespace ttnn::operations::conv {
 namespace conv2d {
 
-
-
 operation::ProgramWithCallbacks multi_core_width_sharded_conv2d(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const std::optional<const Tensor>& conv_reader_indices,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -48,8 +46,8 @@ operation::ProgramWithCallbacks multi_core_block_sharded_conv2d(
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const std::optional<const Tensor>& conv_reader_indices,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -73,8 +71,8 @@ operation::ProgramWithCallbacks multi_core_height_sharded_conv2d(
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const std::optional<const Tensor>& conv_reader_indices,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -91,7 +89,6 @@ operation::ProgramWithCallbacks multi_core_height_sharded_conv2d(
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height);
-
 
 operation::ProgramWithCallbacks multi_core_conv2d_impl(
     const Tensor& a,
