@@ -10,14 +10,19 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
+#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+
 namespace ttnn::operations::dram_prefetcher {
 
-operation::ProgramWithCallbacks dram_prefetcher_multi_core(const std::vector<Tensor>& tensors, uint32_t num_receivers);
+operation::ProgramWithCallbacks dram_prefetcher_multi_core(
+    const std::vector<Tensor>& tensors
+    // , std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
+);
 
 struct DramPrefetcher {
     const std::vector<Tensor> tensors;
-    // std::shared_ptr<tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
-    uint32_t num_receivers;
+    // std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
