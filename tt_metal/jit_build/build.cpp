@@ -438,7 +438,6 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(
 
     switch (build_class) {
         case 0: {
-            std::cout << "Building aerisc!" << std::endl;
             this->target_name_ = "active_erisc";
             this->cflags_ =
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops

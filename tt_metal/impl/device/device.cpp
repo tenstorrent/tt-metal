@@ -501,16 +501,17 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
             if (not is_idle_eth) {
-                std::cout << "Active eth fw_launch_addr_value " << std::hex << jit_build_config.fw_launch_addr_value
-                          << " jit_build_config.fw_launch_addr " << jit_build_config.fw_launch_addr << std::endl;
+                // std::cout << "Active eth fw_launch_addr_value " << std::hex << jit_build_config.fw_launch_addr_value
+                //           << " jit_build_config.fw_launch_addr " << jit_build_config.fw_launch_addr << std::endl;
                 reset_val =
                     reset_val & static_cast<TensixSoftResetOptions>(
                                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             } else {
-                std::cout << "Idle eth fw_launch_addr_value " << std::hex << jit_build_config.fw_launch_addr_value
-                          << " jit_build_config.fw_launch_addr " << jit_build_config.fw_launch_addr << std::endl;
+                // std::cout << "Idle eth fw_launch_addr_value " << std::hex << jit_build_config.fw_launch_addr_value
+                //           << " jit_build_config.fw_launch_addr " << jit_build_config.fw_launch_addr << std::endl;
             }
-            std::cout << "Assert risc reset val for eth " << std::hex << (uint32_t)reset_val << std::dec << std::endl;
+            // std::cout << "Assert risc reset val for eth " << std::hex << (uint32_t)reset_val << std::dec <<
+            // std::endl;
             if (is_idle_eth or this->arch() == ARCH::BLACKHOLE) {
                 tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core), reset_val);
             }
@@ -580,20 +581,20 @@ void Device::reset_cores() {
 
         uint32_t reset_val;
         tt::Cluster::instance().read_reg(&reset_val, tt_cxy_pair(this->id_, physical_core), 0xFFB121B0);
-        std::cout << "Active eth core " << eth_core.str() << " in reset_cores reset val " << std::hex << reset_val
-                  << std::dec << std::endl;
+        // std::cout << "Active eth core " << eth_core.str() << " in reset_cores reset val " << std::hex << reset_val
+        //           << std::dec << std::endl;
 
         TensixSoftResetOptions assert_reset_val = TENSIX_ASSERT_SOFT_RESET;
         assert_reset_val =
             assert_reset_val & static_cast<TensixSoftResetOptions>(
                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
-        std::cout << "\tAssert reset val " << std::hex << (uint32_t)assert_reset_val << std::dec << std::endl;
+        // std::cout << "\tAssert reset val " << std::hex << (uint32_t)assert_reset_val << std::dec << std::endl;
 
         TensixSoftResetOptions deassert_reset_val =
             TENSIX_DEASSERT_SOFT_RESET &
             static_cast<TensixSoftResetOptions>(
                 ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
-        std::cout << "\tDeassert reset val " << std::hex << (uint32_t)deassert_reset_val << std::dec << std::endl;
+        // std::cout << "\tDeassert reset val " << std::hex << (uint32_t)deassert_reset_val << std::dec << std::endl;
 
         data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
         go_signal_data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, go_signal_addr, sizeof(go_msg_t));
@@ -836,9 +837,9 @@ void Device::initialize_and_launch_firmware() {
                         static_cast<TensixSoftResetOptions>(
                             ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
         }
-        if (worker_core.y == 1) {
-            std::cout << "standard eth deassert val " << std::hex << (uint32_t)reset_val << std::dec << std::endl;
-        }
+        // if (worker_core.y == 1) {
+        //     std::cout << "standard eth deassert val " << std::hex << (uint32_t)reset_val << std::dec << std::endl;
+        // }
         tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core), reset_val);
     }
 
