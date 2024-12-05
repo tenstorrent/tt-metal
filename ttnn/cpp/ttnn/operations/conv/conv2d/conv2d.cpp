@@ -131,14 +131,13 @@ Result conv2d(
         in_channels_padded = tt::round_up(in_channels, conv_config.input_channels_alignment);
     }
 
-    uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-                                    conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t nhw_out_padded_ntile_per_core = conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
 
     OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
         in_channels_padded,
-        nhw_out_padded_ntile,
+        nhw_out_padded_ntile_per_core,
         conv_config.act_block_h_override,
         conv_config.act_block_w_div,
         kernel_size[0],
