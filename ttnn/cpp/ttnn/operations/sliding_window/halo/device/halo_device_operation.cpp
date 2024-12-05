@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 
 namespace ttnn::operations::sliding_window::halo {
@@ -57,7 +58,7 @@ std::vector<Tensor> HaloDeviceOperation::create_output_tensors(const std::vector
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
-    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+    auto output_shape = ttnn::SimpleShape(this->compute_output_shapes(input_tensors).at(0).to_array_4D());
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout == output_memory_config_.memory_layout,
