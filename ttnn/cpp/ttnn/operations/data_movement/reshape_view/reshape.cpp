@@ -396,6 +396,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             return tensor.reshape(shape);
         }
         //This is a completely incorrect test but it is due to issue 15558
+        TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
         return detail::host_reshape(tensor, shape);
     }
     // Catch-all
