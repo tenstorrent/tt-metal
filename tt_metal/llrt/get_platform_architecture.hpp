@@ -43,7 +43,7 @@ namespace tt::tt_metal {
  * if (arch == tt::ARCH::Invalid) {
  *     std::cerr << "Failed to detect architecture!" << std::endl;
  * } else {
- *     std::cout << "Detected architecture: " << tt::get_arch_str(arch) << std::endl;
+ *     std::cout << "Detected architecture: " << tt::arch_to_str(arch) << std::endl;
  * }
  * @endcode
  *
@@ -68,9 +68,9 @@ inline tt::ARCH get_platform_architecture() {
                 TT_FATAL(
                     arch == detected_arch,
                     "Expected all devices to be {} but device {} is {}",
-                    get_arch_str(arch),
+                    tt::arch_to_str(arch),
                     device_id,
-                    get_arch_str(detected_arch));
+                    tt::arch_to_str(detected_arch));
             }
         }
     }

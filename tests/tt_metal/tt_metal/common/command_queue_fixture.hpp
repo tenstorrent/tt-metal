@@ -8,7 +8,7 @@
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/device/device.hpp"
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
