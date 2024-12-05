@@ -288,8 +288,8 @@ class TtLlamaAttention(LightweightModule):
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
 
-        # ttnn.deallocate(k_heads_1BKD)
-        # ttnn.deallocate(v_heads_1BKD)
+        ttnn.deallocate(k_heads_1BKD)
+        ttnn.deallocate(v_heads_1BKD)
 
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
