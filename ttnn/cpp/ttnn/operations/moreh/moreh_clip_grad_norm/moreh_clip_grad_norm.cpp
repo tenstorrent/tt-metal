@@ -90,31 +90,31 @@ Tensor MorehClipGradNorm::invoke(
             norm_type);
     }
 
-    // max_norm / (total_norm + 1e-6)
-    auto clip_coef = ttnn::multiply(ttnn::add(output_total_norm, 1e-6f), (1 / max_norm));
-    // min(clip_coef, 1.0f)
-    Tensor scalar = creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
-    auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
-    scalar.deallocate();
+    // // max_norm / (total_norm + 1e-6)
+    // auto clip_coef = ttnn::multiply(ttnn::add(output_total_norm, 1e-6f), (1 / max_norm));
+    // // min(clip_coef, 1.0f)
+    // Tensor scalar = creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
+    // auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
+    // scalar.deallocate();
 
-    // Run Step 3
-    // Inplace update inputs(inputs *= clip_coef_clamped)
-    uint32_t start_input_idx{0};
-    num_inputs = total_num_inputs;
-    for (uint32_t i = 0; i < num_iter; ++i) {
-        const auto num_inputs_at_this_iter = std::min(num_inputs, max_num_inputs);
+    // // Run Step 3
+    // // Inplace update inputs(inputs *= clip_coef_clamped)
+    // uint32_t start_input_idx{0};
+    // num_inputs = total_num_inputs;
+    // for (uint32_t i = 0; i < num_iter; ++i) {
+    //     const auto num_inputs_at_this_iter = std::min(num_inputs, max_num_inputs);
 
-        auto input_tensors = std::vector<Tensor>(
-            inputs.begin() + start_input_idx, inputs.begin() + start_input_idx + num_inputs_at_this_iter);
+    //     auto input_tensors = std::vector<Tensor>(
+    //         inputs.begin() + start_input_idx, inputs.begin() + start_input_idx + num_inputs_at_this_iter);
 
-        ttnn::prim::moreh_clip_grad_norm_step3(
-            input_tensors, clip_coef_clamped, memory_config, compute_kernel_config_val);
+    //     ttnn::prim::moreh_clip_grad_norm_step3(
+    //         input_tensors, clip_coef_clamped, memory_config, compute_kernel_config_val);
 
-        if (i < (num_iter - 1)) {
-            start_input_idx += num_inputs_at_this_iter;
-            num_inputs -= num_inputs_at_this_iter;
-        }
-    }
+    //     if (i < (num_iter - 1)) {
+    //         start_input_idx += num_inputs_at_this_iter;
+    //         num_inputs -= num_inputs_at_this_iter;
+    //     }
+    // }
 
     return output_total_norm;
 }

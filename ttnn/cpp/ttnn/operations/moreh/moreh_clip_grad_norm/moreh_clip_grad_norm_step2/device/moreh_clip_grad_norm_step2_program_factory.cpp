@@ -41,6 +41,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     const auto num_tiles = tmp_pow_sum.volume() / tt::constants::TILE_HW;
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
+    std::cout << "step2: p: " << p << " ;decimal: " << decimal << " ;p_is_negative: " << p_is_negative << std::endl;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup

@@ -40,38 +40,39 @@ void MAIN {
     // Compute cb_x
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         if (tile_idx == 0) {
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_input, onetile);  // comes from the reader
-            cb_reserve_back(cb_x, onetile);
 
             copy_tile_init();
             copy_tile(cb_input, 0, dst0);
-
-            pack_tile(dst0, cb_x);
-
             cb_pop_front(cb_input, onetile);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            cb_reserve_back(cb_x, onetile);
+            pack_tile(dst0, cb_x);
             cb_push_back(cb_x, onetile);
-            REL();
+            tile_regs_release();
         } else {
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_input, onetile);  // comes from the reader
             cb_wait_front(cb_x, onetile);
-            cb_reserve_back(cb_x, onetile);
-
             add_tiles_init();
             add_tiles(cb_input, cb_x, 0, 0, dst0);
-
-            pack_tile(dst0, cb_x);
-
-            cb_pop_front(cb_input, onetile);
             cb_pop_front(cb_x, onetile);
+            cb_pop_front(cb_input, onetile);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            cb_reserve_back(cb_x, onetile);
+            pack_tile(dst0, cb_x);
             cb_push_back(cb_x, onetile);
-            REL();
+            tile_regs_release();
         }
     }
 
+    // Maybe bug here. Produce very incorrect result
     // x^p
     power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
-
 }  // void MAIN
 }  // namespace NAMESPACE
