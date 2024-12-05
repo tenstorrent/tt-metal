@@ -47,6 +47,9 @@ def gen_func_with_cast(gen_func, dtype, tilize_input=False):
 def gen_func_with_cast_tt(gen_func, dtype):
     def tensor_to_dtype(x):
         if dtype == ttnn.bfloat16:
+            tt_tensor = ttnn.from_torch(
+                x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+            )
             x = x.to(torch.bfloat16)
 
         elif dtype == ttnn.bfloat8_b:
@@ -73,7 +76,10 @@ def gen_func_with_cast_tt(gen_func, dtype):
             x = x.to(torch.int32)
 
         elif dtype == ttnn.float32:
-            pass
+            tt_tensor = ttnn.from_torch(
+                x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+            )
+            x = x.to(torch.float32)
 
         else:
             logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")

@@ -163,8 +163,9 @@ def test_cos_neg_range_fp32(input_shapes, device):
 def test_cos_pos_range_bf16(input_shapes, device):
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=0, high=4, dtype=torch.float32),
-        ttnn.float32,
+        ttnn.bfloat16,
     )(input_shapes)
+
     golden_function = ttnn.get_golden_function(ttnn.cos)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
@@ -172,7 +173,7 @@ def test_cos_pos_range_bf16(input_shapes, device):
 
     output_tensor = ttnn.cos(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor.to(torch.float32)
+    output_tensor = output_tensor.to(torch.bfloat16)
 
     violating_values = output_tensor[torch.abs(output_tensor) > 1]
     assert (
@@ -181,8 +182,14 @@ def test_cos_pos_range_bf16(input_shapes, device):
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
+    input_tensor = ttnn.to_torch(input_tensor, dtype=torch.bfloat16)
+    max_abs_diff = torch.max(torch.abs(torch_input_tensor - input_tensor))
+    assert (
+        max_abs_diff <= 0.00001
+    ), f"Maximum absolute difference in input {max_abs_diff.item()} is greater than 0.00001"
+
     max_abs_diff = torch.max(torch.abs(torch_output_tensor - output_tensor))
-    assert max_abs_diff <= 0.01, f"Maximum absolute difference {max_abs_diff.item()} is greater than 0.01"
+    assert max_abs_diff <= 0.01, f"Maximum absolute difference in output{max_abs_diff.item()} is greater than 0.01"
 
     status = torch.allclose(torch_output_tensor, output_tensor, atol=1e-2, rtol=1e-3, equal_nan=False)
     assert status
@@ -195,7 +202,7 @@ def test_cos_pos_range_bf16(input_shapes, device):
 def test_cos_neg_range_bf16(input_shapes, device):
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-4, high=0, dtype=torch.float32),
-        ttnn.float32,
+        ttnn.bfloat16,
     )(input_shapes)
     golden_function = ttnn.get_golden_function(ttnn.cos)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
@@ -204,7 +211,7 @@ def test_cos_neg_range_bf16(input_shapes, device):
 
     output_tensor = ttnn.cos(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor.to(torch.float32)
+    output_tensor = output_tensor.to(torch.bfloat16)
 
     violating_values = output_tensor[torch.abs(output_tensor) > 1]
     assert (
