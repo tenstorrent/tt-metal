@@ -36,13 +36,17 @@ from models.utility_functions import skip_for_grayskull
         32,
     ),
 )
-def test_llama_mlp_inference(seq_len, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=1, max_seq_len=128)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -77,7 +81,7 @@ def test_llama_mlp_inference(seq_len, mesh_device, use_program_cache, reset_seed
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),
+        ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
         memory_config=(
             tt_model.model_config["MLP_ACT_MEMCFG"]

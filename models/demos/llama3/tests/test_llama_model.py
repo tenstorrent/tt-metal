@@ -271,7 +271,7 @@ def test_llama_model_inference(
 
         decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            ttnn.L1_MEMORY_CONFIG if model_args.is_galaxy else model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
         # Get cos/sin matrices for the current position of each user
