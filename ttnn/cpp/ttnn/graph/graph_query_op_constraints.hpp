@@ -43,9 +43,11 @@ struct QueryResponse {
  */
 template <typename Op, typename... Args>
 auto query_op_constraints(Op op, Device* device, Args&&... args) {
+    uint32_t num_of_active_graph_captures = 0;
     try {
         // outer graph capture is to avoid dispatching/allocating dummy input tensors
         GraphProcessor::begin_graph_capture(GraphProcessor::RunMode::NO_DISPATCH);
+        num_of_active_graph_captures++;
 
         // helper lambda to transform TensorSpec to DeviceTensor
         auto transform_arg = [device](auto&& arg) {
@@ -59,9 +61,12 @@ auto query_op_constraints(Op op, Device* device, Args&&... args) {
 
         // inner graph capture is to capture the actual op graph trace
         GraphProcessor::begin_graph_capture(GraphProcessor::RunMode::NO_DISPATCH);
+        num_of_active_graph_captures++;
         std::apply(op, transformed_args);
         const nlohmann::json op_trace = GraphProcessor::end_graph_capture();  // end of inner graph capture
-        GraphProcessor::end_graph_capture();                                  // end of outer graph capture
+        num_of_active_graph_captures--;
+        GraphProcessor::end_graph_capture();  // end of outer graph capture
+        num_of_active_graph_captures--;
 
         // extract memory footprint from the trace
         auto interleaved_storage_cores = device->num_banks(tt::tt_metal::BufferType::L1);
@@ -75,7 +80,11 @@ auto query_op_constraints(Op op, Device* device, Args&&... args) {
             ExecutionStatus::Success, {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core}};
 
     } catch (const std::exception& e) {
-        tt::log_debug(tt::LogOp, "compiler_interface - error: {}", e.what());
+        // end all active graph captures
+        for (uint32_t i = 0; i < num_of_active_graph_captures; i++) {
+            GraphProcessor::end_graph_capture();
+        }
+        tt::log_debug(tt::LogOp, "op_constraints - error: {}", e.what());
         return QueryResponse{ExecutionStatus::Error, {0, 0, 0}, e.what()};
     }
 }
