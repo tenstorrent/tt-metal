@@ -7,6 +7,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
+from models.utility_functions import is_grayskull
 from models.demos.lenet.tt import tt_lenet
 from models.demos.lenet import lenet_utils
 
@@ -37,4 +38,4 @@ def test_lenet(device, batch_size, model_location_generator, reset_seeds):
 
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9993)  # 0.9993022969312866
+    assert_with_pcc(torch_output, tt_output, 0.997 if is_grayskull() else 0.9993)

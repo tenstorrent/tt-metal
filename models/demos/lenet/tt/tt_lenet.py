@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
 
 
 def conv(device, input_tensor, batch_size, parameters):
@@ -48,20 +47,26 @@ def conv(device, input_tensor, batch_size, parameters):
 def lenet(input_tensor, batch_size, device, parameters):
     conv_1, out_height, out_width = conv(device, input_tensor, batch_size, parameters.layer1)
     conv_1 = ttnn.sharded_to_interleaved(conv_1, ttnn.L1_MEMORY_CONFIG)
-    conv_1 = ttnn.reshape(conv_1, (batch_size, out_height, out_width, conv_1.shape[-1]))
-    conv_1 = ttnn.permute(conv_1, (0, 3, 1, 2))
-    conv_1 = ttnn.to_torch(conv_1)
+    conv_1 = ttnn.to_layout(conv_1, layout=ttnn.ROW_MAJOR_LAYOUT)
+    conv_1 = ttnn.pad(conv_1, [(0, 10)], value=0.0)
 
-    max = nn.MaxPool2d(kernel_size=2, stride=2)
-    maxpool_1 = max(conv_1)
-    maxpool_1 = ttnn.from_torch(
-        maxpool_1, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    maxpool_1 = ttnn.max_pool2d(
+        input_tensor=conv_1,
+        batch_size=batch_size,
+        input_h=out_height,
+        input_w=out_width,
+        channels=conv_1.shape[3],
+        kernel_size=[2, 2],
+        stride=[2, 2],
+        padding=[0, 0],
+        dilation=[1, 1],
     )
-    maxpool_1 = ttnn.permute(maxpool_1, (0, 2, 3, 1))
 
+    maxpool_1 = ttnn.sharded_to_interleaved(maxpool_1, ttnn.L1_MEMORY_CONFIG)
+    maxpool_1 = ttnn.reshape(maxpool_1, (batch_size, 14, 14, maxpool_1.shape[3]))
     conv_2, out_height, out_width = conv(device, maxpool_1, batch_size, parameters.layer2)
-
     conv_2 = ttnn.to_layout(conv_2, layout=ttnn.ROW_MAJOR_LAYOUT)
+
     maxpool_2 = ttnn.max_pool2d(
         input_tensor=conv_2,
         batch_size=batch_size,
@@ -73,7 +78,6 @@ def lenet(input_tensor, batch_size, device, parameters):
         padding=[0, 0],
         dilation=[1, 1],
     )
-
     maxpool_2 = ttnn.sharded_to_interleaved(maxpool_2, ttnn.L1_MEMORY_CONFIG)
     maxpool_2 = ttnn.to_layout(maxpool_2, layout=ttnn.TILE_LAYOUT)
     maxpool_2 = ttnn.reshape(maxpool_2, (batch_size, 5, 5, maxpool_2.shape[3]))
