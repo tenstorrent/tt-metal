@@ -35,7 +35,8 @@ FORCE_INLINE void enhanced_noc_async_write(
     if constexpr (only_writes) {
         noc_async_write_one_packet(src_l1_addr, dst_noc_addr, bytes);
     } else {
-        noc_async_write<NOC_MAX_BURST_SIZE>(src_l1_addr, dst_noc_addr, bytes);
+        noc_async_write<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
+            src_l1_addr, dst_noc_addr, bytes);
     }
 }
 
