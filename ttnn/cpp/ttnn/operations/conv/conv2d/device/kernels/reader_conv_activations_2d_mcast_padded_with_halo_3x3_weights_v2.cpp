@@ -81,6 +81,7 @@ void kernel_main() {
     constexpr uint32_t window_inner = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(10);
     constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(13);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(14);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(16);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(17);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(18);
@@ -131,7 +132,6 @@ void kernel_main() {
     act_mcast_sender_semaphore_valid_addr_ptr[0] =
         1;  // Load const 1 to be used as semaphore valid value sent from sender to receivers
     uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(&l1_array[0]);
-
     // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
@@ -178,6 +178,9 @@ void kernel_main() {
                 conv_act_c_read_bytes,
                 coalesced_read_bytes,
                 stride_h_bytes);
+            if constexpr (act_block_w_extra_align_bytes) {
+                l1_write_addr_act += act_block_w_extra_align_bytes;
+            }
             read_channels(
                 l1_write_addr_act,
                 act_l1_read_addr,
@@ -185,6 +188,9 @@ void kernel_main() {
                 conv_act_c_read_bytes,
                 coalesced_read_bytes,
                 stride_h_bytes);
+            if constexpr (act_block_w_extra_align_bytes) {
+                l1_write_addr_act += act_block_w_extra_align_bytes;
+            }
 #else
             read_dilated_channels<weight_size_h, weight_size_w>(
                 l1_write_addr_act,
