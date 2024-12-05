@@ -83,7 +83,7 @@ MeshDeviceView::DeviceView MeshDeviceView::get_devices(const Coordinate& start, 
 }
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshShape& shape) {
-    return get_devices({0, 0}, {shape.first - 1, shape.second - 1});
+    return get_devices({0, 0}, {shape.num_rows - 1, shape.num_cols - 1});
 }
 
 std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_devices_on_row(size_t row) const {
@@ -128,7 +128,7 @@ bool MeshDeviceView::empty() const noexcept { return devices_.empty(); }
 
 size_t MeshDeviceView::size() const noexcept { return devices_.size(); }
 
-std::pair<size_t, size_t> MeshDeviceView::shape() const noexcept { return {num_rows(), num_cols()}; }
+MeshShape MeshDeviceView::shape() const noexcept { return {num_rows(), num_cols()}; }
 
 bool MeshDeviceView::contains(const Coordinate& coord) const noexcept {
     return coord.row >= top_left_.row && coord.row <= bottom_right_.row && coord.col >= top_left_.col &&

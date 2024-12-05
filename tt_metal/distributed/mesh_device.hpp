@@ -18,7 +18,10 @@ namespace tt::tt_metal::distributed {
 
 using DeviceIds = std::vector<int>;
 using MeshDeviceID = size_t;
-using MeshOffset = std::pair<size_t, size_t>;
+struct MeshOffset {
+    size_t row = 0;
+    size_t col = 0;
+};
 class MeshDeviceView;
 
 struct MeshSubDeviceManagerId;

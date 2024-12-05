@@ -25,7 +25,14 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     MeshType mesh_type,
     const std::pair<size_t, size_t>& offset,
     const std::vector<int>& physical_device_ids) {
-    auto config = MeshDeviceConfig(mesh_shape, offset, physical_device_ids, mesh_type);
+    auto config = MeshDeviceConfig(
+        mesh_shape,
+        MeshOffset{
+            .row = offset.first,
+            .col = offset.second,
+        },
+        physical_device_ids,
+        mesh_type);
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
