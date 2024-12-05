@@ -9,14 +9,17 @@ from llama_models.llama3.api.chat_format import create_vision_mask
 
 from models.demos.llama3.tt.generator import LlamaGenerator
 from models.demos.llama3.demo.simple_vision_demo import create_multimodal_model
+from models.utility_functions import nearest_32
 
 from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
 
 
 def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
     """
     Based on vllm.model_executor.models.mllama.py::input_processor_for_mllama().
-    Note that vLLM's input_processor_for_mllama performs additional processing to handle chunking which we do not yet support.
+    Note that vLLM's input_processor_for_mllama performs additional processing to compute num_tiles while here it is fixed.
     """
 
     # Move encoder_prompt to prompt. If the user does not explicitly provide separate
@@ -27,11 +30,32 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
         inputs["prompt"] = inputs["encoder_prompt"]
         inputs["prompt_token_ids"] = inputs["encoder_prompt_token_ids"]
 
+    multi_modal_data = inputs.get("encoder_multi_modal_data")
+    if multi_modal_data is None or "image" not in multi_modal_data or multi_modal_data["image"] is None:
+        # text-only
+        inputs["encoder_prompt"] = ""
+        inputs["encoder_prompt_token_ids"] = []
+        inputs["encoder_multi_modal_data"] = {}
+        return inputs
+
+    # Set encoder prompt length based on the number of vision tokens so block manager allocates enable blocks (cross block tables).
+    hf_config = ctx.model_config.hf_config
+    assert hf_config.vision_config.image_size % 14 == 0, "chunk size should be multiple of 14"
+    token_per_chunk = nearest_32(
+        (hf_config.vision_config.image_size // 14) ** 2 + 1
+    )  # Note: we use nearest 32 while vLLM does not by default
+    num_vision_tokens = (
+        hf_config.vision_config.max_num_tiles * token_per_chunk
+    )  # Note: we use max_num_tiles while vLLM uses num_tiles by default
+    inputs["encoder_prompt"] = MLLAMA_IMAGE_TOKEN * num_vision_tokens
+    inputs["encoder_prompt_token_ids"] = [MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens
+
     return inputs
 
 
+# @MULTIMODAL_REGISTRY.register_image_input_mapper()  # TODO: Add once model can accept inputs from multi_modal_input_mapper (raw pixel values)
 @INPUT_REGISTRY.register_input_processor(input_processor_for_mllama)
-class TtMllamaForConditionalGeneration(LlamaGenerator):
+class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -52,11 +76,11 @@ class TtMllamaForConditionalGeneration(LlamaGenerator):
         self,
         tokens: torch.Tensor,
         images: List[PIL.Image.Image],
-        xattn_caches,
         start_pos,
-        page_table: torch.Tensor = None,
-        kv_cache=None,
-        prompt_lens=None,
+        page_table: torch.Tensor,
+        kv_cache,
+        prompt_lens,
+        cross_page_table: torch.Tensor,
     ):
         """
         Replaces prefill_forward from LlamaGenerator with a version that supports mask creation.
@@ -73,5 +97,13 @@ class TtMllamaForConditionalGeneration(LlamaGenerator):
             total_lens.append(prompt_lens[user_id] + self.max_gen_len)
 
         return super().prefill_forward(
-            vision_images, vision_masks, tokens, xattn_caches, total_lens, prompt_lens, page_table, kv_cache
+            vision_images,
+            vision_masks,
+            tokens,
+            None,
+            total_lens,
+            prompt_lens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            cross_page_table=cross_page_table,
         )
