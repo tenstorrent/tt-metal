@@ -14,7 +14,7 @@ public:
     // Create (or retrieve) the single indestructible instance of T.
     // This constructs T only once and returns a reference.
     template <typename... Args>
-    static T& getInstance(Args&&... args) {
+    static T& get_instance(Args&&... args) {
         static bool constructed = false;
         static typename std::aligned_storage<sizeof(T), alignof(T)>::type storage;
         if (!constructed) {

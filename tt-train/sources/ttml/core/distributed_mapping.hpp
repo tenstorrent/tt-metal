@@ -24,16 +24,22 @@ std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& tensor, int num_chunks, in
         throw std::invalid_argument("num_chunks cannot exceed the size of the tensor along the given dimension.");
     }
 
-    int chunk_size = size_along_dim / num_chunks;
-    int remainder = size_along_dim % num_chunks;
+    if (num_chunks == 1) {
+        return {tensor};
+    }
+
+    int chunk_size = (size_along_dim + num_chunks - 1) / num_chunks;
+    int remaining_size = size_along_dim;
 
     std::vector<xt::xarray<T>> chunks;
     chunks.reserve(static_cast<std::size_t>(num_chunks));
 
     int start = 0;
-    for (int i = 0; i < num_chunks; ++i) {
-        int current_chunk_size = chunk_size + ((i < remainder) ? 1 : 0);
-        int end = start + current_chunk_size;
+    int end = 0;
+    for (int i = 0; i < num_chunks && end < size_along_dim; ++i) {
+        int current_chunk_size = std::min(chunk_size, remaining_size);
+        remaining_size -= current_chunk_size;
+        end = start + current_chunk_size;
 
         // Build indices for slicing
         xt::xstrided_slice_vector indices(tensor.dimension(), xt::all());
@@ -252,8 +258,7 @@ public:
     }
 
     xt::xarray<T> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
-        auto result = core::concatenate(tensors, m_concat_dim);
-        return result;
+        return core::concatenate(tensors, m_concat_dim);
     }
 
 private:

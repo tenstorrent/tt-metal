@@ -11,6 +11,7 @@
 #include <ttnn/tensor/shape/shape.hpp>
 
 #include "xtensor/xbuffer_adaptor.hpp"
+#include "xtensor/xbuilder.hpp"
 
 // TODO: decide if we want to use xarray everwhere or xtensor is ok
 /*
@@ -56,76 +57,7 @@ std::array<uint32_t, 4> get_shape_4d(const E& expr) {
     return shape4d;
 }
 
-namespace detail {
-template <typename S>
-struct ShapeIndex {
-    const S& shape;
-    std::vector<size_t> index;
-
-    explicit ShapeIndex(const S& shape);
-    bool increment();
-};
-
-template <typename S>
-ShapeIndex<S>::ShapeIndex(const S& shape) : shape(shape), index(shape.size(), 0) {
-}
-template <typename S>
-bool ShapeIndex<S>::increment() {
-    for (int dim = shape.size() - 1; dim >= 0; --dim) {
-        if (index[dim] >= shape[dim] - 1)
-            continue;
-
-        ++index[dim];
-        for (size_t lsd = dim + 1; lsd < index.size(); ++lsd) {  // lsd = less significant dimension
-            index[lsd] = 0;
-        }
-        return true;
-    }
-
-    return false;
-}
-}  // namespace detail
 template <typename T>
-xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, const size_t axis = 0) {
-    if (v.empty())
-        return {};
-
-    auto res_shape = v.front().shape();
-    if (axis >= res_shape.size()) {
-        throw std::out_of_range("axis is not a dimension of shape");
-    }
-    for (size_t i = 1; i < v.size(); ++i) {
-        if (v[i].shape().size() != res_shape.size()) {
-            throw std::logic_error("shapes have different dimensionalities");
-        }
-        for (size_t dim = 0; dim < res_shape.size(); ++dim) {
-            if (dim == axis) {
-                continue;
-            }
-            if (v[i].shape(dim) != res_shape[dim]) {
-                throw std::logic_error("incompatible shapes");
-            }
-        }
-        res_shape[axis] += v[i].shape(axis);
-    }
-
-    xt::xarray<T> result(res_shape);
-    std::vector<size_t> dst_index(res_shape.size(), 0);
-    for (size_t i = 0; i < v.size(); ++i) {
-        const size_t axis_index_offset = dst_index[axis];
-        detail::ShapeIndex src_index(v[i].shape());
-        do {
-            for (size_t dim = 0; dim < res_shape.size(); ++dim) {
-                if (dim == axis)
-                    dst_index[dim] = axis_index_offset + src_index.index[dim];
-                else
-                    dst_index[dim] = src_index.index[dim];
-            }
-            result[dst_index] = v[i][src_index.index];
-        } while (src_index.increment());
-        dst_index[axis] += v[i].shape(axis);
-    }
-    return result;
-}
+xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, size_t axis = 0);
 
 }  // namespace ttml::core

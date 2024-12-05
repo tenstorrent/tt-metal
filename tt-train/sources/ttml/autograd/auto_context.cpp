@@ -22,7 +22,7 @@ uint32_t AutoContext::get_seed() const {
 }
 
 AutoContext& AutoContext::get_instance() {
-    static AutoContext& instance = core::Indestructible<AutoContext>::getInstance();
+    static AutoContext& instance = core::Indestructible<AutoContext>::get_instance();
     return instance;
 }
 std::optional<NodeId> AutoContext::add_backward_node(GradFunction&& grad_function, std::span<NodeId> links) {
