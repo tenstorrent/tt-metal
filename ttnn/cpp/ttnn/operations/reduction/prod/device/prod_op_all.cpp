@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks Prod_op::create_program(
 Tensor prod_all(const Tensor& input, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::tiled_prod(
         operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0), output_mem_config);
-    auto arch_env = detect_arch();
+    auto arch_env = tt_ClusterDescriptor::detect_arch((chip_id_t)0);
     if (arch_env == tt::ARCH::WORMHOLE_B0) {
         return ttnn::numpy::prod_result_computation_WH_B0<bfloat16>(
             result, result.get_dtype(), result.get_layout(), result.device(), output_mem_config);
