@@ -55,10 +55,6 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
-)
-@pytest.mark.parametrize(
     "seq_len",
     (4096,),
 )
@@ -71,7 +67,6 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_model_inference(
     seq_len,
-    batch_size,
     paged_attention,
     page_params,
     optimizations,
@@ -88,6 +83,8 @@ def test_llama_model_inference(
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
+    batch_size = 1  # For prefill we only support batch_size = 1
+
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
         pcc = 0.91  # TODO Look on improving PCC
