@@ -110,7 +110,7 @@ jobs:
           LATEST_TAG=latest
           if [ "${{  inputs.is_major_version }}" = "true" ]; then
             LATEST_TAG=latest
-          else then
+          else
             LATEST_TAG=latest-rc
           fi
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
