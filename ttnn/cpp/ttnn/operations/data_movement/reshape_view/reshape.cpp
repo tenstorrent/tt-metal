@@ -39,8 +39,9 @@ ttnn::Tensor convert_tile_to_rm(
 ) {
     // Convert the 3D->3D reshaping to row major and back to tile
     TT_FATAL(
-        ((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0)) &&
-            (tensor.get_dtype() == DataType::BFLOAT8_B),
+        !(((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0) ||
+           (tensor.get_shape()[-1] % tile_first_dim != 0) || (tensor.get_shape()[-2] % tile_second_dim != 0)) &&
+          (tensor.get_dtype() == DataType::BFLOAT8_B)),
         "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
     new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, tensor.get_dtype(), std::nullopt, (Device*)nullptr);
