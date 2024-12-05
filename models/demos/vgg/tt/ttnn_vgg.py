@@ -228,7 +228,6 @@ def ttnn_vgg11(
                 ),
                 enable_weights_double_buffer=True,
             )
-            
             if height_override_11[iter_conv_id] is not None:
                 conv_config.act_block_h_override = height_override_11[iter_conv_id]
 
