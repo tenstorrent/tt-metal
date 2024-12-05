@@ -155,7 +155,7 @@ def test_llama_decoder_inference(
         pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
 
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             # ttnn.DRAM_MEMORY_CONFIG,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],

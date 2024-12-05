@@ -188,7 +188,7 @@ def test_llama_model_inference(
 
     tt_prefill_input = pt_prefill_input
 
-    tt_prefill_input = model_args.prepare_inputs_ttnn_prefill(
+    tt_prefill_input = model_args.prepare_residual_tensor_prefill(
         pt_prefill_input,
     )
     for i in range(1):

@@ -646,7 +646,7 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
+    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
@@ -696,7 +696,7 @@ class TtModelArgs:
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
 
-    def prepare_inputs_ttnn_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)

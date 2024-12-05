@@ -182,11 +182,11 @@ def test_llama_cross_attention_transformer_text_inference(
         if mode == "prefill":
             outputs = []
             for b in range(batch):
-                tt_tensor_vision_tokens = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_vision_tokens = model_args.prepare_residual_tensor_prefill(
                     tt_vision_tokens[b : b + 1],
                     force_replicated=True,
                 )
-                tt_h = model_args.prepare_inputs_ttnn_prefill(
+                tt_h = model_args.prepare_residual_tensor_prefill(
                     h[b : b + 1],
                 )
                 tt_xattn_mask = ttnn.from_torch(
@@ -239,7 +239,7 @@ def test_llama_cross_attention_transformer_text_inference(
             pcc_required = prefill_pcc_required
 
         else:
-            tt_h = model_args.prepare_inputs_ttnn_decode(
+            tt_h = model_args.prepare_residual_tensor_decode(
                 h,
                 model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )

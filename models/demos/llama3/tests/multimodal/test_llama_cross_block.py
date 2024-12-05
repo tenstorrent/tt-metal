@@ -149,11 +149,11 @@ def test_llama_cross_attention_transformer_block_inference(
         if mode == "prefill":
             outputs = []
             for b in range(batch):
-                tt_tensor_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
                     tt_xattn_tokens[b : b + 1],
                     force_replicated=True,
                 )
-                tt_tensor_x = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_x = model_args.prepare_residual_tensor_prefill(
                     tt_x[b : b + 1],
                 )
                 tt_xattn_mask = ttnn.from_torch(
@@ -197,7 +197,7 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_output_torch = torch.cat(outputs, dim=0).view(batch, seq_len, dim)
 
         else:
-            tt_x = model_args.prepare_inputs_ttnn_decode(
+            tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
                 model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )

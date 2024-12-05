@@ -360,7 +360,7 @@ def run_llama3_demo(
                     :, decoding_pos[batch_id] :, :
                 ] = 0  # Zero out the tokens after the prefill length
 
-            prefill_input = model_args.prepare_inputs_ttnn_prefill(
+            prefill_input = model_args.prepare_residual_tensor_prefill(
                 pt_prefill_input[batch_id],
             )
 

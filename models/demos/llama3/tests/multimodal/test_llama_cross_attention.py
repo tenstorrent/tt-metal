@@ -156,11 +156,11 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
         if mode == "prefill":
             outputs = []
             for b in range(batch):
-                tt_tensor_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
                     tt_xattn_tokens[b : b + 1],
                     force_replicated=True,
                 )
-                tt_tensor_x = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_x = model_args.prepare_residual_tensor_prefill(
                     tt_x[b : b + 1],
                     force_replicated=True,
                 )
@@ -196,7 +196,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             tt_output_torch = torch.cat(outputs, dim=0).view(batch, seq_len, dim)
 
         else:
-            tt_x = model_args.prepare_inputs_ttnn_decode(
+            tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
                 model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 force_replicated=True,
