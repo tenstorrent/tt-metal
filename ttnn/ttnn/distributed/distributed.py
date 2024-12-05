@@ -455,6 +455,8 @@ class ConcatMeshToTensor(MeshToTensor):
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
 
+# TODO: #15061 - Remove this function, as it does not abide to the MeshToTensor interface.
+# Instead, lift this implementation to the caller.
 class ListMeshToTensor(MeshToTensor):
     def __init__(self, mesh_device: MeshDevice):
         self.mesh_device = mesh_device

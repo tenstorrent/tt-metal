@@ -233,7 +233,11 @@ void py_module(py::module& module) {
             Tensor: The shard of the tensor corresponding to the device.
     )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
-    module.def("aggregate_as_tensor", &aggregate_as_tensor, py::arg("tensors"), py::kw_only());
+    module.def(
+        "aggregate_as_tensor",
+        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        py::arg("tensors"),
+        py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 

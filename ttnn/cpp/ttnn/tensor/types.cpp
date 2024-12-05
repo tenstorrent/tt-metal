@@ -6,9 +6,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
-namespace ttnn {
-
-namespace types {
+namespace ttnn::types {
 
 const Shape Shape::to_rank(size_t new_rank) const {
     auto padded_shape = value;
@@ -31,41 +29,9 @@ const Shape Shape::to_rank(size_t new_rank) const {
     return Shape(std::move(new_shape), std::move(new_padded_shape));
 }
 
-}  // namespace types
-
-}  // namespace ttnn
+}  // namespace ttnn::types
 
 namespace tt::tt_metal {
-
-static DistributedTensorConfig create_shard_distributed_tensor_config(
-    const std::unordered_map<std::string, std::string>& metadata) {
-    return ShardTensor(std::stoi(metadata.at("shard_dim")));
-}
-static DistributedTensorConfig create_shard_2d_distributed_tensor_config(
-    const std::unordered_map<std::string, std::string>& metadata) {
-    return ShardTensor2D(ShardMesh(std::stoi(metadata.at("mesh_shape_y")), std::stoi(metadata.at("mesh_shape_x"))));
-}
-static DistributedTensorConfig create_replicate_distributed_tensor_config(
-    const std::unordered_map<std::string, std::string>& metadata) {
-    if (auto it = metadata.find("replication_factor"); it != metadata.end()) {
-        return ReplicateTensor(std::stoi(it->second));
-    }
-    TT_THROW("Unsupported Replication strategy:");
-}
-
-DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    if (auto it = metadata.find("strategy"); it != metadata.end()) {
-        const std::string& strategy = it->second;
-        if (strategy == "shard") {
-            return create_shard_distributed_tensor_config(metadata);
-        } else if (strategy == "shard_2d") {
-            return create_shard_2d_distributed_tensor_config(metadata);
-        } else if (strategy == "replicate") {
-            return create_replicate_distributed_tensor_config(metadata);
-        }
-    }
-    TT_THROW("Unsupported DistributedTensorConfig strategy:");
-}
 
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
@@ -216,20 +182,6 @@ Array4D LegacyShape::to_array_4D() const {
         ret_array[i] = this->operator[](i);
     }
     return ret_array;
-}
-
-bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
-    return a.replication_factor ==
-           b.replication_factor;  // All instances are considered equal because there are no data members.
-}
-bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
-    return true;  // All instances are considered equal because there are no data members.
-}
-bool operator==(const ShardTensor& lhs, const ShardTensor& rhs) {
-    return lhs.shard_dimension == rhs.shard_dimension;  // Equal if they have the same shard_dimension.
-}
-bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
-    return lhs.shard_mesh == rhs.shard_mesh;  // Equal if they have the same shard_mesh.
 }
 
 bool operator==(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) {
