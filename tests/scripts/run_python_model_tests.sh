@@ -40,6 +40,9 @@ run_python_model_tests_wormhole_b0() {
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
+    # Stable Diffusion
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/single_card/stable_diffusion/test_unet_2d_condition_model.py
+
     # Mamba
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
 
