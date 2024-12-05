@@ -26,6 +26,11 @@ struct address_map {
     static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
     static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
     static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
+    // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
+    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+    static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
+
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
@@ -64,6 +69,9 @@ struct address_map {
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
+
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31; //Same as ERISC_L1_UNRESERVED_BASE
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
 
