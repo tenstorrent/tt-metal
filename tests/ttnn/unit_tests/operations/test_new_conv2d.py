@@ -2622,6 +2622,92 @@ def test_non_tile_multiple_height_conv_wh(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    (
+        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 384, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 448, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 512, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 576, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 384, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 448, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 512, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 576, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 320, 320, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("enable_auto_formatting", [False])
+def test_non_tile_multiple_width_conv_wh(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    enable_auto_formatting,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=(input_channels == 16),
+        transpose_mcast=use_1d_systolic_array,
+        enable_auto_formatting=enable_auto_formatting,
+        padded_input_channels=16 if input_channels == 16 else None,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_shallow_conv_with_tiled_input(device):
     out_channels, in_channels, kernel_h, kernel_w = 7, 3, 3, 3
     kernel_shape = (out_channels, in_channels, kernel_h, kernel_w)
