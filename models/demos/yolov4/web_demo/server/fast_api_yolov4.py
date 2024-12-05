@@ -52,7 +52,7 @@ async def startup():
             device_id,
             dispatch_core_type=get_dispatch_core_type(),
             l1_small_size=24576,
-            trace_region_size=3205120,
+            trace_region_size=3211264,
             num_command_queues=2,
         )
         ttnn.enable_program_cache(device)
@@ -60,7 +60,7 @@ async def startup():
         model.initialize_yolov4_trace_2cqs_inference(device)
     else:
         device_id = 0
-        device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3205120, num_command_queues=2)
+        device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         ttnn.enable_program_cache(device)
         model = Yolov4Trace2CQ()
         model.initialize_yolov4_trace_2cqs_inference(device)
