@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -31,6 +32,7 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
     assert comp_pass
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [128])
@@ -49,6 +51,7 @@ def test_binary_sfpu_pow_4D(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (

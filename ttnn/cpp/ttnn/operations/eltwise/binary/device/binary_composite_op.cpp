@@ -596,4 +596,184 @@ Tensor ExecuteRsub::invoke(
         std::move(optional_output_tensor));
 }
 
+// Bitwise AND
+Tensor ExecuteBitwiseAnd::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ttnn::bitwise_and_binary(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseAnd::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ExecuteBitwiseAnd::invoke(
+        ttnn::DefaultQueueId,
+        input_tensor_a,
+        input_tensor_b,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseAnd::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ttnn::bitwise_and_unary(
+        queue_id,
+        input_tensor_a,
+        input_b,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseAnd::invoke(
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ExecuteBitwiseAnd::invoke(
+        ttnn::DefaultQueueId,
+        input_tensor_a,
+        input_b,
+        memory_config,
+        std::move(optional_output_tensor));
+}
+
+// Bitwise OR
+Tensor ExecuteBitwiseOr::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ttnn::bitwise_or_binary(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseOr::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ExecuteBitwiseOr::invoke(
+        ttnn::DefaultQueueId,
+        input_tensor_a,
+        input_tensor_b,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseOr::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ttnn::bitwise_or_unary(
+        queue_id,
+        input_tensor_a,
+        input_b,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseOr::invoke(
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ExecuteBitwiseOr::invoke(
+        ttnn::DefaultQueueId,
+        input_tensor_a,
+        input_b,
+        memory_config,
+        std::move(optional_output_tensor));
+}
+
+// Bitwise XOR
+Tensor ExecuteBitwiseXor::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ttnn::bitwise_xor_binary(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseXor::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ExecuteBitwiseXor::invoke(
+        ttnn::DefaultQueueId,
+        input_tensor_a,
+        input_tensor_b,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseXor::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ttnn::bitwise_xor_unary(
+        queue_id,
+        input_tensor_a,
+        input_b,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseXor::invoke(
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+
+    return ExecuteBitwiseXor::invoke(
+        ttnn::DefaultQueueId,
+        input_tensor_a,
+        input_b,
+        memory_config,
+        std::move(optional_output_tensor));
+}
+
 }  // namespace ttnn::operations::binary

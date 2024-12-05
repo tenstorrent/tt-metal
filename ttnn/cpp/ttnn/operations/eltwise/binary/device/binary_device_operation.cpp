@@ -19,7 +19,7 @@ namespace utils {
         case BinaryOpType::ADD:
         case BinaryOpType::SUB:
         case BinaryOpType::MUL:
-        case BinaryOpType::DIV_FAST:
+        // case BinaryOpType::DIV_FAST: will be enabled after #15780 is resolved
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
@@ -29,6 +29,9 @@ namespace utils {
         case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BITWISE_XOR:
+        case BinaryOpType::BITWISE_AND:
+        case BinaryOpType::BITWISE_OR:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
         case BinaryOpType::GTE:
@@ -62,9 +65,12 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     if (height_a == height_b and width_a == width_b) {
         bool device_check = tensor_args.input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
         bool dtype_check = (tensor_args.input_tensor_a.get_dtype() == DataType::FLOAT32 && tensor_args.input_tensor_b->get_dtype() == DataType::FLOAT32);
-        bool sfpu_op_check = utils::is_binary_sfpu_op(operation_attributes.binary_op_type);
-        if((dtype_check && device_check) && sfpu_op_check ){
-            // tt::log_debug(tt::LogOp, "********BinaryDeviceOperation sfpu pgm:");
+        bool dtype_check2 = (tensor_args.input_tensor_a.get_dtype() == DataType::INT32 && tensor_args.input_tensor_b->get_dtype() == DataType::INT32);
+        BinaryOpType op = operation_attributes.binary_op_type;
+        bool sfpu_op_check = utils::is_binary_sfpu_op(op);
+        bool sfpu_op_check2 = (op == BinaryOpType::BITWISE_AND || op == BinaryOpType::BITWISE_XOR || op == BinaryOpType::BITWISE_OR);
+        if(((dtype_check && device_check) && sfpu_op_check) || (dtype_check2 && device_check && sfpu_op_check2)){
+            // tt::log_info(tt::LogOp, "********BinaryDeviceOperation sfpu pgm: {}", op);
             return ElementWiseMultiCoreSfpu{};
         } else {
             return ElementWiseMultiCore{};
