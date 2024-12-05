@@ -103,85 +103,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
-    ZoneScoped;
-
-    auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
-    auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
-    auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
-    auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
-    auto tile_HW = tile_H * tile_W;
-    auto face_HW = face_H * face_W;
-    auto subtiles_in_tile_row = tile_H / face_H;
-    auto subtiles_in_tile_col = tile_W / face_W;
-    auto subtile_rows = face_H;
-    auto subtile_cols = face_W;
-
-    uint32_t single_bfp8_tile_size =
-        tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp8_b) : tile_size(tt::DataFormat::Bfp8_b);
-    int num_float_in_tile = tile_HW;
-    TT_ASSERT(fp32_vec.size() % num_float_in_tile == 0);
-    uint32_t num_tiles = fp32_vec.size() / num_float_in_tile;
-
-    std::vector<uint32_t> packed_result;
-
-    std::vector<uint8_t> exponents;
-    std::vector<uint32_t> data;
-
-    int num_elements_in_dword = 4;
-    int fp32_element_index = 0;
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<uint32_t> packed_data;
-        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
-            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                for (int i = 0; i < subtile_rows; ++i) {
-                    std::vector<uint32_t> single_row;
-                    // populate a single row
-                    for (int j = 0; j < subtile_cols; ++j) {
-                        int data_index;
-                        if (row_major_input) {
-                            data_index =
-                                (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
-                        } else {
-                            data_index = fp32_element_index++;
-                        }
-                        float float_num = fp32_vec.at(data_index);
-                        uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
-                        single_row.push_back(uint32_num);
-                    }
-
-                    uint8_t exp = get_max_exp(single_row, is_exp_a);
-                    exponents.push_back(exp);
-
-                    if (exponents.size() % num_elements_in_dword == 0) {
-                        packed_result.push_back(get_exp_dword(exponents));
-                        exponents.clear();
-                    }
-
-                    for (uint32_t u32_datum : single_row) {
-                        data.push_back(u32_datum);
-                        if (data.size() % num_elements_in_dword == 0) {
-                            uint32_t datum = create_packed_bfp8_packed_as_u32(data, exp, is_exp_a);
-                            packed_data.push_back(datum);
-                            data.clear();
-                        }
-                    }
-                }
-            }
-        }
-        // prepend exponents to follow data packing order:
-        //  16 exponents for sub-tile 0​
-        //      exp_row0, exp_row1, … exp_row15​
-        //  16 exponents for sub-tile 1​
-        //  16 exponents for sub-tile 2​
-        //  16 exponents for sub-tile 3​
-        //  entire sub-tile 0 (RM layout)​
-        //  entire sub-tile 1 (RM layout)​
-        //  entire sub-tile 2 (RM layout)​
-        //  entire sub-tile 3 (RM layout)
-        packed_result.insert(packed_result.end(), packed_data.begin(), packed_data.end());
-    }
-
-    return packed_result;
+    return pack_fp32_vec_as_bfp_tiles<tt::DataFormat::Bfp8_b>(fp32_vec, row_major_input, is_exp_a, tile);
 }
 
 inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
@@ -190,6 +112,8 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
+
+    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
@@ -202,9 +126,12 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
     auto subtiles_in_tile_col = tile_W / face_W;
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
-    uint32_t num_exp_words = num_faces * face_H / 4;
+    uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / 4;
     uint32_t num_tile_words = tile_HW / 4;
     uint32_t num_bfp8_in_tile = num_tile_words + num_exp_words;
+
+    // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
+    uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
 
     int num_elements_in_dword = 4;
     uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword;  // each uint32_t contains 4 BFP8 values
@@ -250,8 +177,8 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) &
-                                         0x3;  // Extract the byte in which the shared exponent is stored. Each byte is
-                                               // shared amongst 16 datums.
+                                         exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
+                                                        // byte is shared amongst 16 datums.
                         __m256i exp_vector =
                             _mm256_set1_epi32(get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values

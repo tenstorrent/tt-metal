@@ -230,3 +230,41 @@ def test_profiler_host_device_sync():
 
         assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
         assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+
+
+def test_timestamped_events():
+    OP_COUNT = 2
+    RISC_COUNT = 5
+    ZONE_COUNT = 100
+    ERISC_COUNTS = [0, 1, 5]
+    TENSIX_COUNTS = [72, 64, 56]
+
+    COMBO_COUNTS = []
+    for T in TENSIX_COUNTS:
+        for E in ERISC_COUNTS:
+            COMBO_COUNTS.append((T, E))
+
+    REF_COUNT_DICT = {
+        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
+        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in COMBO_COUNTS],
+    }
+    REF_ERISC_COUNT = {
+        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setup=True)
+
+    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
+        )
+        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
+
+    if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
+        )
+        assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"

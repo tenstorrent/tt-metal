@@ -43,15 +43,22 @@ class Conv:
         fused_op=True,
         width_sharding=False,
         output_layout=ttnn.TILE_LAYOUT,
+        enable_split_reader=False,
+        enable_act_double_buffer=False,
     ) -> None:
         if fused_op:
             self.weights, self.bias = fold_bn_to_conv_weights_bias(model, path)
         else:
             weight = model[path + ".conv.0.weight"]
             bias = model[path + ".conv.0.bias"]
+            if weight.shape[0] == 255:
+                weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, 0, 0, 1))
             self.weights = ttnn.from_torch(weight)
             bias = bias.reshape(1, 1, 1, -1)
+            if bias.shape[-1] == 255:
+                bias = torch.nn.functional.pad(bias, (0, 1, 0, 0, 0, 0, 0, 0))
             self.bias = ttnn.from_torch(bias)
+
         self.input_params = input_params
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.conv_params = conv_params
@@ -59,6 +66,8 @@ class Conv:
         self.act_block_h = act_block_h
         self.reshard = reshard
         self.output_layout = output_layout
+        self.enable_split_reader = enable_split_reader
+        self.enable_act_double_buffer = enable_act_double_buffer
 
         if width_sharding:
             self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -88,6 +97,8 @@ class Conv:
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             reallocate_halo_output=False,
+            enable_split_reader=self.enable_split_reader,
+            enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
         )
         if self.act_block_h is not None:

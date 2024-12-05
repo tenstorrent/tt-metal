@@ -46,8 +46,6 @@ def test_llama_cross_attention_transformer_block_inference(
     model_args = TtModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096
-    model_args.kv_seq_len = model_args.max_seq_len
-    model_args.sliding_window = model_args.max_seq_len
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

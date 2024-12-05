@@ -7,7 +7,6 @@
 #include "tt_metal/device.hpp"
 #include "common/core_coord.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
@@ -19,7 +18,6 @@
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
-#include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -29,6 +27,10 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
+#include "noc/noc_parameters.h"
+
+// FIXME: ARCH_NAME specific
+#include "eth_l1_address_map.h"
 
 namespace tt {
 
@@ -321,10 +323,16 @@ void Device::initialize_device_kernel_defines()
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
     auto pcie_cores = soc_d.get_pcie_cores();
     auto grid_size = this->grid_size();
-    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
-    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+
+    // Workaround for Simulator integration as they use a 2x2 grid which would underflow PCIE_NOC1*
+    CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
+    auto pcie_noc1_x = pcie_cores.empty() ? 14 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x);
+    auto pcie_noc1_y = pcie_cores.empty() ? 11 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y);
+
+    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
+    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(pcie_noc1_x));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(pcie_noc1_x));
 }
 
 void Device::initialize_build() {
@@ -404,13 +412,36 @@ void Device::build_firmware() {
     log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
     ZoneScoped;
 
-    this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
     jit_build_set(this->firmware_build_states_, nullptr);
+}
+
+void Device::initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord phys_core)
+{
+    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_.size() * sizeof(int32_t);
+    const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_.size() * sizeof(int32_t);
+
+    const uint64_t mem_bank_to_noc_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint32_t mem_bank_to_noc_size = hal.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+
+    TT_ASSERT((dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <= mem_bank_to_noc_size,
+        "Size of bank_to_noc table is greater than available space");
+
+    tt::Cluster::instance().write_core(&dram_bank_to_noc_xy_[0], dram_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), mem_bank_to_noc_addr);
+    uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_to_noc_xy_[0], l1_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), l1_noc_addr);
+
+    uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&dram_bank_offset_map_[0], dram_offset_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), dram_offset_addr);
+    uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_offset_map_[0], l1_offset_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), l1_offset_addr);
 }
 
 void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
     ZoneScoped;
 
+    this->initialize_device_bank_to_noc_tables(core_type, phys_core);
     uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
 
@@ -1281,7 +1312,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[13] = 0; // unused: remote ds semaphore
                         compile_args[14] = 0; // preamble size
                         compile_args[15] = true,    // split_prefetcher
-                        compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                        compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                         compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                         compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
                         compile_args[19] = settings.num_compute_cores;
@@ -1336,7 +1367,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[13] = 0; // unused: remote ds semaphore
                             compile_args[14] = 0; // preamble size
                             compile_args[15] = true,    // split_prefetcher
-                            compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                            compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                             compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                             compile_args[18] = mux_settings.cb_pages,
                             compile_args[19] = settings.num_compute_cores;
@@ -2945,6 +2976,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
+    this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
@@ -3137,7 +3169,7 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
     const auto& grid_size = this->grid_size();
-    return NOC_XY_ENCODING(
+    return tt::tt_metal::hal.noc_xy_encoding(
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
     );
@@ -3148,14 +3180,14 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
         );
     } else {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
@@ -3550,37 +3582,48 @@ void Device::MarkAllocationsSafe() {
     tt::tt_metal::allocator::mark_allocations_safe(*this->get_initialized_allocator());
 }
 
-void Device::generate_device_headers(const std::string &path) const
+void Device::generate_device_bank_to_noc_tables()
 {
     const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
-    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
     std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
-    std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
+    dram_bank_offset_map_.clear();
+    dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
-        dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+        dram_bank_offset_map_[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = this->num_banks(BufferType::L1);
-    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
+    l1_bank_offset_map_.clear();
+    l1_bank_offset_map_.resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
-        l1_offset_per_bank[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+        l1_bank_offset_map_[bank_id] = this->bank_offset(BufferType::L1, bank_id);
     }
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
-    // Generate header file in proper location
-    jit_build_genfiles_bank_to_noc_coord_descriptor (
-        path,
-        soc_d.grid_size,
-        dram_noc_coord_per_bank,
-        dram_offsets_per_bank,
-        l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        this->get_allocator_alignment()
-    );
+    dram_bank_to_noc_xy_.clear();
+    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            dram_bank_to_noc_xy_.push_back(xy);
+        }
+    }
+
+    l1_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, l1_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, l1_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            l1_bank_to_noc_xy_.push_back(xy);
+        }
+    }
 }
 
 size_t Device::get_device_kernel_defines_hash() {

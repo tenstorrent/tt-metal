@@ -11,6 +11,24 @@
 #include "debug/ring_buffer.h"
 #include "cq_helpers.hpp"
 
+// The command queue read interface controls reads from the issue region, host owns the issue region write interface
+// Commands and data to send to device are pushed into the issue region
+struct CQReadInterface {
+    uint32_t issue_fifo_size;
+    uint32_t issue_fifo_limit;  // range is inclusive of the limit
+    uint32_t issue_fifo_rd_ptr;
+    uint32_t issue_fifo_rd_toggle;
+};
+
+// The command queue write interface controls writes to the completion region, host owns the completion region read
+// interface Data requests from device and event states are written to the completion region
+struct CQWriteInterface {
+    uint32_t completion_fifo_size;
+    uint32_t completion_fifo_limit;  // range is inclusive of the limit
+    uint32_t completion_fifo_wr_ptr;
+    uint32_t completion_fifo_wr_toggle;
+};
+
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
 FORCE_INLINE
@@ -107,9 +125,9 @@ template <enum CQNocFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSe
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (wait) {
-        WAYPOINT("NSSW");
+        WAYPOINT("CNSW");
         while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-        WAYPOINT("NSSD");
+        WAYPOINT("CNSD");
     }
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
@@ -166,12 +184,12 @@ uint32_t cq_noc_async_write_with_state_any_len(
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false>
 FORCE_INLINE void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
-    WAYPOINT("NSIW");
+    WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF)) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
-    WAYPOINT("NSID");
+    WAYPOINT("CNID");
 
     constexpr bool multicast_path_reserve = true;
     constexpr bool posted = false;

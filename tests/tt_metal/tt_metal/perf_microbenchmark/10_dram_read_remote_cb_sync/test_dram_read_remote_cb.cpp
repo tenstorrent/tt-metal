@@ -17,7 +17,10 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include "tt_metal/include/tt_metal/program.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
@@ -77,15 +80,12 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-std::tuple<
-    std::vector<tt_metal::Program>,
-    tt_metal::KernelHandle,
-    uint32_t,
-    std::vector<std::unique_ptr<tt_metal::GlobalSemaphore>>>
+std::tuple<std::vector<tt_metal::Program>,std::shared_ptr<tt_metal::v1::experimental::GlobalCircularBuffer>>
 create_programs(
     tt_metal::Device* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
+    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     uint32_t k,
@@ -96,7 +96,6 @@ create_programs(
     uint32_t num_mixed_df_layers,
     uint32_t cb_padding,
     const std::shared_ptr<tt::tt_metal::Buffer>& input_buffer,
-    const std::shared_ptr<tt::tt_metal::Buffer>& output_buffer,
     bool use_sub_devices) {
     log_info("created program");
     std::vector<tt_metal::Program> programs;
@@ -118,9 +117,13 @@ create_programs(
     uint32_t block_w = nt;
     uint32_t block_num_tiles = block_h * block_w;
 
+    uint32_t receiver_cb_size = block_h * block_w * single_tile_size * cb_num_blocks / num_receivers;
+    uint32_t padded_global_cb_size = receiver_cb_size + cb_padding;
+
     // DRAM reader CB
     uint32_t reader_cb_index = 0;
     uint32_t reader_cb_size = block_h * block_w * single_tile_size * 3;
+    uint32_t writer_cb_index = 31;
     // For debug purpose
     // uint32_t reader_cb_size = block_h * block_w * single_tile_size;
     uint32_t reader_page_size, reader_num_pages;
@@ -133,11 +136,17 @@ create_programs(
     log_info("writer_page_size: {}", writer_page_size);
     log_info("writer_num_pages: {}", writer_num_pages);
 
-    uint32_t reader_cb_addr = device->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
             .set_page_size(reader_cb_index, single_tile_size);
     auto reader_cb = tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, reader_cb_config);
+
+    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+        device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
+    tt_metal::CircularBufferConfig writer_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
+    writer_cb_config.remote_index(writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
+    auto writer_cb =
+        tt_metal::v1::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, *global_cb);
 
     // mixed cb dataformat
     uint32_t next_layer_num_blocks = num_blocks * 2;
@@ -164,38 +173,15 @@ create_programs(
         block_w / num_receivers, next_layer_single_tile_size, next_layer_writer_page_size, next_layer_writer_num_pages);
 
     // L1 receiver CB
-    uint32_t receiver_cb_index = 0;
-    uint32_t receiver_cb_size = block_h * block_w * single_tile_size * cb_num_blocks / num_receivers + cb_padding;
+    uint32_t receiver_cb_index = 31;
     uint32_t receiver_page_size = 32;
-    uint32_t receiver_cb_addr = output_buffer->address();
-    tt_metal::CircularBufferConfig receiver_cb_config =
-        tt_metal::CircularBufferConfig(receiver_cb_size, {{receiver_cb_index, tile_format}})
-            .set_page_size(receiver_cb_index, receiver_page_size)
-            .set_globally_allocated_address(*output_buffer);
-    auto receiver_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, receiver_cb_config);
+    tt_metal::CircularBufferConfig receiver_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
+    receiver_cb_config.remote_index(receiver_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
+    auto receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+        receiver_program, l1_receiver_cores, receiver_cb_config, *global_cb);
 
     log_info("reader_cb_size: {}", reader_cb_size);
     log_info("receiver_cb_size: {}", receiver_cb_size);
-
-    // semaphore
-    std::vector<uint32_t> pages_acked_semaphore_ids(num_receivers);
-    std::vector<uint32_t> pages_sent_semaphore_ids(num_receivers);
-    std::vector<std::unique_ptr<GlobalSemaphore>> global_sems;
-    // Global semaphores use an actual address instead of an index
-    if (use_sub_devices) {
-        global_sems.reserve(num_receivers * 2);
-        for (uint32_t i = 0; i < num_receivers; ++i) {
-            global_sems.push_back(tt_metal::CreateGlobalSemaphore(device, all_cores, INVALID));
-            pages_acked_semaphore_ids[i] = global_sems.back()->address();
-            global_sems.push_back(tt_metal::CreateGlobalSemaphore(device, all_cores, INVALID));
-            pages_sent_semaphore_ids[i] = global_sems.back()->address();
-        }
-    } else {
-        for (uint32_t i = 0; i < num_receivers; ++i) {
-            pages_acked_semaphore_ids[i] = tt_metal::CreateSemaphore(sender_program, all_cores, INVALID);
-            pages_sent_semaphore_ids[i] = tt_metal::CreateSemaphore(sender_program, all_cores, INVALID);
-        }
-    }
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_buffer->address(),
@@ -215,11 +201,9 @@ create_programs(
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t)receiver_cb_addr,
-        (std::uint32_t)receiver_cb_size,
         (std::uint32_t)num_receivers,
         (std::uint32_t)num_mixed_df_layers,
-        (std::uint32_t)use_sub_devices};
+        (std::uint32_t)writer_cb_index};
 
     auto writer_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -232,10 +216,7 @@ create_programs(
             .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> receiver_compile_time_args = {
-        (std::uint32_t)reader_cb_addr,
-        (std::uint32_t)receiver_cb_size,
-        (std::uint32_t)num_mixed_df_layers,
-        (std::uint32_t)use_sub_devices};
+        (std::uint32_t)num_mixed_df_layers, (std::uint32_t)receiver_cb_index};
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -281,12 +262,6 @@ create_programs(
         auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
         writer_rt_args.push_back(l1_receiver_core_coord_physical.y);
     }
-    for (uint32_t i = 0; i < num_receivers; ++i) {
-        writer_rt_args.push_back(pages_acked_semaphore_ids[i]);
-    }
-    for (uint32_t i = 0; i < num_receivers; ++i) {
-        writer_rt_args.push_back(pages_sent_semaphore_ids[i]);
-    }
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
         writer_rt_args.push_back(i % 2 == 0 ? writer_page_size : next_layer_writer_page_size);
     }
@@ -312,11 +287,9 @@ create_programs(
         std::vector<uint32_t> receiver_rt_args = {
             (std::uint32_t)vc & 0x3,
             (std::uint32_t)dram_reader_core_coord_physical.x,
-            (std::uint32_t)dram_reader_core_coord_physical.y};
+            (std::uint32_t)dram_reader_core_coord_physical.y,
+            (std::uint32_t)i};
         vc++;
-
-        receiver_rt_args.push_back(pages_acked_semaphore_ids[i]);
-        receiver_rt_args.push_back(pages_sent_semaphore_ids[i]);
 
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
             receiver_rt_args.push_back(i % 2 == 0 ? single_tile_size : next_layer_single_tile_size);
@@ -333,7 +306,7 @@ create_programs(
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, l1_receiver_core_coords[i], receiver_rt_args);
     }
 
-    return {std::move(programs), reader_kernel, reader_cb_addr, std::move(global_sems)};
+    return {std::move(programs), std::move(global_cb)};
 }
 
 float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
@@ -583,7 +556,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     BufferType buffer_type,
     tt::DataFormat data_format,
     CoreRangeSet cores,
-    uint32_t num_receivers) {
+    uint32_t num_receivers,
+    std::optional<DeviceAddr> address = std::nullopt) {
     uint32_t size_bytes;
     uint32_t page_size_bytes;
     if (data_format == tt::DataFormat::Bfp8_b) {
@@ -606,14 +580,22 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     log_info("size_bytes: {}", size_bytes);
     log_info("page_size_bytes: {}", page_size_bytes);
 
-    auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+    auto config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = size_bytes,
         .page_size = page_size_bytes,
         .buffer_type = buffer_type,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = shard_spec});
+        .shard_parameters = shard_spec};
+
+    std::shared_ptr<Buffer> input_buffer;
+    if (address.has_value()) {
+        input_buffer = CreateBuffer(config, address.value());
+    } else {
+        input_buffer = CreateBuffer(config);
+    }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
+    tt::Cluster::instance().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 
@@ -674,15 +656,10 @@ int main(int argc, char** argv) {
 
         log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
         log_info("num_receivers: {} ", num_receivers);
-        // TODO: Re-enable usage of cb_padding once Global CBs are supported
-        log_warning(
-            "Setting cb padding to 0B for now due to how buffers are constructed. Can be non-zero once Global CBs are "
-            "supported.");
-        cb_padding = 0;
 
         TT_FATAL(
             num_mixed_df_layers % 2 == 1,
-            "currently only support odd number of layers testing, due to issue with validatoin");
+            "currently only support odd number of layers testing, due to issue with validation");
         if (num_mixed_df_layers > 1) {
             TT_FATAL(df == 1, "must start with bfloat16 format for mix_df test");
         }
@@ -744,6 +721,8 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
+        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
+        sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});
@@ -799,19 +778,6 @@ int main(int argc, char** argv) {
                         num_banks);
                 }
             }
-
-            // output
-            vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
-            output_buffer = create_and_transfer_data_sharded_cb(
-                device,
-                outputs,
-                kt / num_blocks * cb_num_blocks,
-                nt,
-                tt_metal::BufferType::L1,
-                tt::DataFormat::Bfp8_b,
-                l1_receiver_core,
-                num_receivers);
-
         } else {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i % 2 == 0) {  // even layers
@@ -843,18 +809,6 @@ int main(int argc, char** argv) {
                         num_banks);
                 }
             }
-
-            // output
-            vector<uint32_t> outputs = create_constant_vector_of_bfloat16(output_size, 0);
-            output_buffer = create_and_transfer_data_sharded_cb(
-                device,
-                outputs,
-                kt / num_blocks * cb_num_blocks,
-                nt,
-                tt_metal::BufferType::L1,
-                tt::DataFormat::Float16_b,
-                l1_receiver_core,
-                num_receivers);
         }
 
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
@@ -864,10 +818,11 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [programs, kernel, output_cb_addr, global_sems] = create_programs(
+        auto [programs, global_cb] = create_programs(
             device,
             dram_reader_core,
             l1_receiver_core,
+            sender_receiver_core_mapping,
             single_tile_size,
             tile_format,
             k,
@@ -878,8 +833,35 @@ int main(int argc, char** argv) {
             num_mixed_df_layers,
             cb_padding,
             input_buffers[0],
-            output_buffer,
             use_sub_devices);
+        if (tile_format == tt::DataFormat::Bfp8_b) {
+            // output
+            vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
+            output_buffer = create_and_transfer_data_sharded_cb(
+                device,
+                outputs,
+                kt / num_blocks * cb_num_blocks,
+                nt,
+                tt_metal::BufferType::L1,
+                tt::DataFormat::Bfp8_b,
+                l1_receiver_core,
+                num_receivers,
+                global_cb->buffer_address());
+
+        } else {
+            // output
+            vector<uint32_t> outputs = create_constant_vector_of_bfloat16(output_size, 0);
+            output_buffer = create_and_transfer_data_sharded_cb(
+                device,
+                outputs,
+                kt / num_blocks * cb_num_blocks,
+                nt,
+                tt_metal::BufferType::L1,
+                tt::DataFormat::Float16_b,
+                l1_receiver_core,
+                num_receivers,
+                global_cb->buffer_address());
+        }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application

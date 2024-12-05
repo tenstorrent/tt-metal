@@ -6,6 +6,9 @@
 
 #include "dispatch_fixture.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "noc/noc_parameters.h"
+
 using std::vector;
 
 // Test sync w/ semaphores betweeen eth/tensix cores
@@ -186,7 +189,8 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
