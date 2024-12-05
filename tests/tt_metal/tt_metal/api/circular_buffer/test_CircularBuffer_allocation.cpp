@@ -415,8 +415,7 @@ TEST_F(DeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         core,
         {
             (uint32_t)src_dram_buffer->address(),
-            (uint32_t)src_dram_buffer->noc_coordinates().x,
-            (uint32_t)src_dram_buffer->noc_coordinates().y,
+            0,
             (uint32_t)num_tiles,
         });
     SetRuntimeArgs(
@@ -425,8 +424,7 @@ TEST_F(DeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         core,
         {
             (uint32_t)dst_dram_buffer->address(),
-            (uint32_t)dst_dram_buffer->noc_coordinates().x,
-            (uint32_t)dst_dram_buffer->noc_coordinates().y,
+            0,
             (uint32_t)num_tiles,
         });
 

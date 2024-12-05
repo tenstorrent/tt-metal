@@ -40,7 +40,7 @@ void kernel_main() {
     std::uint32_t l1_addr2 = l1_buffer_addr + rd_wr_l1_buffer_size_bytes;
 
     // DRAM NOC src address
-    dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+    dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_src_bank_id, dram_buffer_src_addr);
 
     // Copy data from DRAM into destination L1 buffer
     noc_async_read(
@@ -88,7 +88,7 @@ void kernel_main() {
     }
 
     // DRAM NOC dst address
-    dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+    dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
     noc_async_write(
         l1_addr2,
         dram_buffer_dst_noc_addr,

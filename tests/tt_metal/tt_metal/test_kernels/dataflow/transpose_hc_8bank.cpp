@@ -16,14 +16,13 @@ inline uint32_t TADDR(uint32_t ti) {
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src_noc_x = get_arg_val<uint32_t>(1);
-    uint32_t src_noc_y = get_arg_val<uint32_t>(2);
-    uint32_t W         = get_arg_val<uint32_t>(3);
-    uint32_t H         = get_arg_val<uint32_t>(4);
-    uint32_t C         = get_arg_val<uint32_t>(5);
-    uint32_t HW        = get_arg_val<uint32_t>(6);
-    uint32_t N         = get_arg_val<uint32_t>(7);
-    uint32_t CHW       = get_arg_val<uint32_t>(8);
+    uint32_t src_bank_id = get_arg_val<uint32_t>(1);
+    uint32_t W = get_arg_val<uint32_t>(2);
+    uint32_t H = get_arg_val<uint32_t>(3);
+    uint32_t C = get_arg_val<uint32_t>(4);
+    uint32_t HW = get_arg_val<uint32_t>(5);
+    uint32_t N = get_arg_val<uint32_t>(6);
+    uint32_t CHW = get_arg_val<uint32_t>(7);
 
     auto WT = (W >> 5); // number of tiles in W
     auto HT = (H >> 5); // number of tiles in H

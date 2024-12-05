@@ -95,8 +95,7 @@ bool reader_kernel_no_send(
         eth_reader_core,
         {
             (uint32_t)dram_byte_address,
-            (uint32_t)dram_noc_xy.x,
-            (uint32_t)dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_l1_byte_address,
         });
@@ -168,8 +167,7 @@ bool writer_kernel_no_receive(
         eth_writer_core,
         {
             (uint32_t)dram_byte_address,
-            (uint32_t)dram_noc_xy.x,
-            (uint32_t)dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_l1_byte_address,
         });
@@ -242,8 +240,7 @@ bool noc_reader_and_writer_kernels(
         logical_eth_core,
         {
             (uint32_t)reader_dram_buffer->address(),
-            (uint32_t)reader_dram_noc_xy.x,
-            (uint32_t)reader_dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_dst_l1_address,
         });
@@ -260,8 +257,7 @@ bool noc_reader_and_writer_kernels(
         logical_eth_core,
         {
             (uint32_t)writer_dram_buffer->address(),
-            (uint32_t)writer_dram_noc_xy.x,
-            (uint32_t)writer_dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_src_l1_address,
         });

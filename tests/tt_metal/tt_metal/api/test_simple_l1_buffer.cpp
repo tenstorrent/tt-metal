@@ -83,8 +83,7 @@ namespace tt::test::buffer::detail {
             core,
             {
                 (uint32_t)input_local_address,
-                (uint32_t)phys_core.x,
-                (uint32_t)phys_core.y,
+                0,
                 (uint32_t)num_tiles,
             });
         tt_metal::SetRuntimeArgs(
@@ -93,11 +92,9 @@ namespace tt::test::buffer::detail {
             core,
             {
                 (uint32_t)output_local_address,
-                (uint32_t)phys_core.x,
-                (uint32_t)phys_core.y,
+                0,
                 (uint32_t)num_tiles,
             });
-
 
         writeL1Backdoor(device, core, input_local_address, inputs);
         tt_metal::detail::LaunchProgram(device, program);
