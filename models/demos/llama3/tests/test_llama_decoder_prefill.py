@@ -48,10 +48,6 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
-)
-@pytest.mark.parametrize(
     "max_seq_len",
     (
         4096,
@@ -60,7 +56,6 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_decoder_inference(
     max_seq_len,
-    batch_size,
     paged_attention,
     page_params,
     mesh_device,
@@ -69,6 +64,8 @@ def test_llama_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
+    batch_size = 1  # For prefill we only support batch_size = 1
+
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
