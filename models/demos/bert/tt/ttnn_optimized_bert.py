@@ -18,14 +18,13 @@ def bert_attention(
     num_heads = config.num_attention_heads
     batch_size, _, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
-
     query_key_value_output = ttnn.linear(
         hidden_states,
         parameters.self.query_key_value.weight,
         bias=parameters.self.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+        # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
 
     (
@@ -42,7 +41,7 @@ def bert_attention(
     attention_scores = ttnn.matmul(
         query,
         key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if getattr(config, "use_dram", False) else ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
@@ -74,7 +73,7 @@ def bert_attention(
         bias=parameters.output.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+        # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(context_layer)
 
@@ -83,7 +82,7 @@ def bert_attention(
         weight=parameters.output.LayerNorm.weight,
         bias=parameters.output.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        # memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(hidden_states)
     ttnn.deallocate(self_output)
@@ -103,9 +102,9 @@ def bert_intermediate(
         hidden_states,
         parameters.dense.weight,
         bias=parameters.dense.bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        # memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+        # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         activation="gelu",
     )
     return output
