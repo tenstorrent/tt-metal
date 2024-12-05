@@ -21,7 +21,7 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     cb_wait_front(cb_in1, onetile);
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {

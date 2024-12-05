@@ -79,12 +79,12 @@ void MAIN {
                 cb_reserve_back(out_cb_id, onetile);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
-                tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile);
+                tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
                 tilize_block(cb_intermed2, onetile, out_cb_id);
                 cb_push_back(out_cb_id, onetile);
 
                 cb_pop_front(cb_intermed2, onetile);
-                tilize_uninit(cb_intermed2);
+                tilize_uninit(cb_intermed2, out_cb_id);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
