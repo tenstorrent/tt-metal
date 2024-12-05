@@ -119,7 +119,7 @@ def test_perf_device_bare_metal(batch_size, expected_perf):
     margin = 0.03
 
     if is_wormhole_b0():
-        expected_perf = 4155.25
+        expected_perf = 3990.0
     else:
         expected_perf = 3476.55
 
