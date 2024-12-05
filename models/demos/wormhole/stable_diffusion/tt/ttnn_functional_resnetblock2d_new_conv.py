@@ -416,6 +416,8 @@ class resnetBlock2D:
         hidden_states = ttnn.reshape(
             hidden_states, (self.batch_size, 1, self.conv2_input_height * self.conv2_input_width, in_channels)
         )
+        hidden_states = ttnn.reallocate(hidden_states)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=groups,
