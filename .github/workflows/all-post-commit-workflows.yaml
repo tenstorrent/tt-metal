@@ -157,6 +157,14 @@ jobs:
     needs: build-docker-image-2204
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
+    if: github.event_name == 'push'
+    with:
+      os: ubuntu-22.04-amd64
+  code-diff-analysis:
+    needs: build-docker-image-2204
+    uses: ./.github/workflows/code-diff-analysis.yaml
+    secrets: inherit
+    if: github.event_name == 'workflow_dispatch'
     with:
       os: ubuntu-22.04-amd64
   tt-train-cpp-unit-tests:

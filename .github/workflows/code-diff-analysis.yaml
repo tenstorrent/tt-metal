@@ -1,0 +1,75 @@
+name: "Code diff analysis"
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-22.04-amd64"
+  workflow_dispatch:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-22.04-amd64"
+
+jobs:
+  build-docker-image:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      os: ${{ inputs.os }}
+
+
+  clang-tidy-diff:
+    needs: build-docker-image
+    env:
+      ARCH_NAME: wormhole_b0
+    runs-on:
+      - build
+      - in-service
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+          echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
+      - name: Update submodules
+        run: |
+          git submodule update --init --recursive
+      - name: Generate docker tag
+        id: generate-docker-tag
+        uses: ./.github/actions/generate-docker-tag
+        with:
+          image: ${{ inputs.os }}
+      - name: Docker login
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull docker image
+        run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+      - name: Analyze code with clang-tidy-diff
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+          options: |
+            --rm
+            --tmpfs /tmp
+            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+            --group-add 1457
+            -v ${{ github.workspace }}:${{ github.workspace }}
+            -v /etc/passwd:/etc/passwd:ro
+            -v /etc/shadow:/etc/shadow:ro
+            -v /etc/bashrc:/etc/bashrc:ro
+            -e ARCH_NAME=${{ env.ARCH_NAME }}
+            -e CARGO_HOME=${{ github.workspace }}/.cargo
+            -w ${{ github.workspace }}
+          run: |
+            set -eu # basic shell hygiene
+            mkdir result
+            nice -n 19 ./build_metal.sh --export-compile-commands --build-all --skip-build
+            nice -n 19 git diff -U0 "$(git merge-base HEAD "origin/main")" | clang-tidy-diff-17 -p1 -path build -j$(nproc) --warnings-as-errors=*
