@@ -29,7 +29,7 @@ void DramPrefetcher::validate(
     }
     // TT_FATAL(global_cb != nullptr, "Global circular buffer must be provided");
     // // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
-    // auto sender_receiver_core_mapping = global_cb->sender_receiver_core_mapping();
+    // auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
     // for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
     //     TT_FATAL(receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(), "Global circular
     //     buffer must have same number of receivers for each sender core");
