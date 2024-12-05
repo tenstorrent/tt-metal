@@ -24,7 +24,8 @@ constexpr uint32_t timeout_cycles = get_compile_time_arg_val(5);
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
 constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
 constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
-constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead;
+constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead0;
+constexpr uint32_t PACKET_QUEUE_TEST_BAD_HEADER = PACKET_QUEUE_STAUS_MASK | 0xdead1;
 constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
 
 // indexes of return values in test results buffer
@@ -105,7 +106,11 @@ void kernel_main() {
                     // fvc_consumer_req_buf->rdptr.ptr++;
                     fvc_consumer_state.packet_in_progress = 0;
                 }
-                loop_count = 0;
+                if (fvc_consumer_state.packet_in_progress) {
+                    loop_count++;
+                } else {
+                    loop_count = 0;
+                }
             }
         }
 
@@ -113,6 +118,9 @@ void kernel_main() {
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
             loop_count = 0;
+        } else if (fvc_producer_state.packet_corrupted) {
+            write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
+            return;
         }
 
         loop_count++;
@@ -138,6 +146,10 @@ void kernel_main() {
 
     set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    if (fvc_consumer_state.packet_in_progress) {
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+    } else {
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    }
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
 }

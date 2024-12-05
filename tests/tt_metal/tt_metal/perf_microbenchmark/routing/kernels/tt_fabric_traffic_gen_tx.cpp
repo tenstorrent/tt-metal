@@ -9,21 +9,6 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 // clang-format on
 
-
-/*
-constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
-constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
-constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
-constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead;
-constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
-
-// indexes of return values in test results buffer
-constexpr uint32_t PQ_TEST_STATUS_INDEX = 0;
-constexpr uint32_t PQ_TEST_WORD_CNT_INDEX = 2;
-constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
-constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
-constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
-*/
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
 static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
@@ -60,7 +45,6 @@ constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
 
 uint32_t max_packet_size_mask;
 
-// input_queue_rnd_state_t input_queue_state;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 
@@ -106,12 +90,13 @@ inline bool test_buffer_handler() {
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
             target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
-            packet_header.packet_parameters.misc_parameters.words[0] = input_queue_state.packet_rnd_seed;
-
-            bool split_header = words_to_init < PACKET_HEADER_SIZE_WORDS;
+            packet_header.packet_parameters.misc_parameters.words[1] = input_queue_state.packet_rnd_seed;
+            tt_fabric_add_header_checksum(&packet_header);
+            uint32_t words_left = words_to_init - words_initialized;
+            bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
             uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS;
             if (split_header) {
-                header_words_to_init = words_to_init;
+                header_words_to_init = words_left;
             }
 
             for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
@@ -166,6 +151,7 @@ void kernel_main() {
 
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
+    zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);
@@ -211,7 +197,6 @@ void kernel_main() {
     uint32_t curr_packet_size = 0;
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
-    bool all_packets_initialized = false;
 
     while (true) {
         iter++;
@@ -225,13 +210,9 @@ void kernel_main() {
         }
 #endif
 
-        if (test_producer.curr_packet_valid == false) {
-            all_packets_initialized = test_buffer_handler();
-        }
+        bool all_packets_initialized = test_buffer_handler();
+
         if (test_producer.get_curr_packet_valid()) {
-            if (test_producer.current_packet_header.routing.flags != FORWARD) {
-                break;
-            }
             curr_packet_size = (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
             curr_packet_words_sent += curr_data_words_sent;
@@ -248,36 +229,18 @@ void kernel_main() {
                 curr_packet_words_sent = 0;
                 packet_count++;
             }
+        } else if (test_producer.packet_corrupted) {
+            DPRINT << "Packet Header Corrupted: packet " << packet_count
+                   << " Addr: " << test_producer.get_local_buffer_read_addr() << ENDL();
+            break;
         } else if (all_packets_initialized) {
+            DPRINT << "all packets done" << ENDL();
             break;
         }
-        //words_flushed += output_queue_ptr->prev_words_in_flight_check_flush();
     }
-/*
-    if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00002;
-        if (!output_queue_ptr->output_barrier(timeout_cycles)) {
-            timeout = true;
-        }
-    }
-*/
+
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
-/*
-    if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00003;
-        progress_timestamp = get_timestamp_32b();
-        while (!output_queue_ptr->is_remote_finished()) {
-            if (timeout_cycles > 0) {
-                uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-                if (cycles_since_progress > timeout_cycles) {
-                    timeout = true;
-                    break;
-                }
-            }
-        }
-    }
-*/
     uint64_t num_packets = input_queue_state.get_num_packets();
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
     set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
@@ -288,14 +251,14 @@ void kernel_main() {
     set_64b_result(test_results, few_data_sent_iter, TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
-    if (!timeout) {
+    if (test_producer.packet_corrupted) {
+        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
+        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+    } else if (!timeout) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
         test_results[PQ_TEST_MISC_INDEX] = packet_count;
     } else {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
-        // these calls lead to code size issues?
-        // input_queue_ptr->dprint_object();
-        // output_queue_ptr->dprint_object();
     }
 }

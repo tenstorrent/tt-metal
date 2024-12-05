@@ -11,7 +11,8 @@
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
 constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
 constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
-constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead;
+constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead0;
+constexpr uint32_t PACKET_QUEUE_TEST_BAD_HEADER = PACKET_QUEUE_STAUS_MASK | 0xdead1;
 constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
 
 // indexes of return values in test results buffer
@@ -46,6 +47,7 @@ inline const char *packet_queue_test_status_to_string(uint32_t status) {
         return "DONE/OK";
     case PACKET_QUEUE_TEST_TIMEOUT:
         return "TIMEOUT";
+    case PACKET_QUEUE_TEST_BAD_HEADER: return "BAD_PACKET_HEADER";
     case PACKET_QUEUE_TEST_DATA_MISMATCH:
         return "DATA_MISMATCH";
     default:

@@ -207,6 +207,7 @@ extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
 
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
+bool tt_fabric_is_header_valid(packet_header_t* p_header);
 
 typedef struct fvc_consumer_state {
     volatile chan_payload_ptr remote_rdptr;
@@ -456,6 +457,7 @@ typedef struct fvc_producer_state {
     uint32_t words_since_last_sync;
     uint32_t words_to_forward;
     bool curr_packet_valid;
+    bool packet_corrupted;
     uint64_t packet_dest;
     packet_header_t current_packet_header;
 
@@ -605,7 +607,11 @@ typedef struct fvc_producer_state {
             this->packet_words_remaining =
                 (this->current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             this->packet_words_sent = 0;
-            this->curr_packet_valid = true;
+            if (tt_fabric_is_header_valid(&current_packet_header)) {
+                this->curr_packet_valid = true;
+            } else {
+                this->packet_corrupted = true;
+            }
         }
     }
 
@@ -616,8 +622,7 @@ typedef struct fvc_producer_state {
         if (packet_in_progress == 0) {
             advance_out_wrptr(words_available);
             local_pull_request->pull_request.wr_ptr = fvc_out_wrptr;
-            local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;  // inbound_rdptr.ptr_cleared;
-            // fvc_pull_rdptr = fvc_out_rdptr;
+            local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
             local_pull_request->pull_request.size = this->current_packet_header.routing.packet_size_bytes;
             local_pull_request->pull_request.buffer_size = buffer_size;
             local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
@@ -696,9 +701,6 @@ typedef struct fvc_producer_state {
             }
         } else if (current_packet_header.routing.flags == FORWARD) {
             words_processed = pull_data_from_fvc_buffer<fvc_mode>();
-        } else {
-            volatile uint32_t* temp = (volatile uint32_t*)0xffb2010c;
-            temp[0] = 0xdead2222;
         }
         return words_processed;
     }
@@ -726,6 +728,28 @@ inline uint64_t get_timestamp() {
 }
 
 inline uint64_t get_timestamp_32b() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+
+void tt_fabric_add_header_checksum(packet_header_t* p_header) {
+    uint16_t* ptr = (uint16_t*)p_header;
+    uint32_t sum = 0;
+    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
+        sum += ptr[i];
+    }
+    sum = ~sum;
+    sum += sum;
+    p_header->packet_parameters.misc_parameters.words[0] = sum;
+}
+
+bool tt_fabric_is_header_valid(packet_header_t* p_header) {
+    uint16_t* ptr = (uint16_t*)p_header;
+    uint32_t sum = 0;
+    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
+        sum += ptr[i];
+    }
+    sum = ~sum;
+    sum += sum;
+    return (p_header->packet_parameters.misc_parameters.words[0] == sum);
+}
 
 void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     for (uint32_t i = 0; i < size_bytes / 4; i++) {
