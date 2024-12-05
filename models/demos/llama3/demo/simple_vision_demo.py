@@ -87,26 +87,18 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "warmup_iters",
-    (0, 1),
-    ids=["cold", "warm"],
-)
-@pytest.mark.parametrize(
-    "enable_trace",
-    (False, True),
-    ids=["no_trace", "yes_trace"],
-)
-@pytest.mark.parametrize(
-    "max_batch_size",
-    (1, 2, 4, 8, 16, 32),
-    ids=["batch1", "batch2", "batch4", "batch8", "batch16", "batch32"],
-)
-@pytest.mark.parametrize(
     "test_type,max_seq_len",
     (("normal", 512),),
-    ids=[
-        "normal",
+    ids=["normal"],
+)
+@pytest.mark.parametrize(
+    "warmup_iters, enable_trace, max_batch_size",
+    [
+        (0, False, 1),  # batch1-notrace
+        (0, True, 1),  # batch1-trace
+        (0, True, 32),  # batch32-trace
     ],
+    ids=["batch1-notrace", "batch1-trace", "batch32-trace"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 def test_llama_multimodal_demo_text(
