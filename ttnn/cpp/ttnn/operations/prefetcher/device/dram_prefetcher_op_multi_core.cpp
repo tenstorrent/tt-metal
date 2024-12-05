@@ -30,73 +30,51 @@ void get_max_page_size_and_num_pages(
 }
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors,
-    // std::shared_ptr<tt_metal::v1::experimental::GlobalCircularBuffer> global_cb,
-    uint32_t num_receivers) {
+    const std::vector<Tensor>& tensors
+    // , std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
+) {
     Program program{};
 
+    // WORKAROUND
     // In validate we make sure that all tensors are on the same device
     tt::tt_metal::Device* device = tensors[0].device();
-
     uint32_t num_tensors = tensors.size();
 
-    // // DRAM reader cores
-    // CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
-    // CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
-
-    // // L1 receiver cores
-    // CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
-    // if (device->arch() == tt::ARCH::GRAYSKULL) {
-    //     l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers}};
-    // } else {
-    //     l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
-    // }
-    // CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
-
-    // std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-    // sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
-
     uint32_t global_cb_size = 750000;
-
-    // DRAM reader cores
-    CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
-    CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
+    uint32_t num_receivers_tmp = 2;
+    CoreCoord dram_reader_core_coord_tmp = CoreCoord{0, 0};
+    CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord_tmp}}};
 
     // L1 receiver cores
     CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
     if (device->arch() == tt::ARCH::GRAYSKULL) {
-        l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers}};
+        l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers_tmp}};
     } else {
-        l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
+        l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers_tmp, 0}};
     }
     CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
 
     std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-    sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
+    sender_receiver_core_mapping[dram_reader_core_coord_tmp] = l1_receiver_core;
 
-    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, global_cb_size, tt_metal::BufferType::L1);
+    auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+        device, sender_receiver_core_mapping, global_cb_size, tt::tt_metal::BufferType::L1);
 
-    // // Get l1_receiver_core from global_cb
-    // std::set<CoreRange> l1_sender_cores;
-    // std::set<CoreRange> l1_receiver_cores;
-    // for (const auto sender_core : global_cb->sender_cores()) {
-    //     l1_sender_cores.push_back(sender_core);
-    // }
-    // for (const auto receiver_core : global_cb->receiver_cores()) {
-    //     l1_receiver_cores.push_back(receiver_core);
-    // }
+    auto dram_reader_cores = global_cb->sender_cores();
+    uint32_t num_receivers = global_cb->sender_receiver_core_mapping().begin()->second.size();
 
     // DRAM reader CB
     uint32_t in1_reader_cb_index = 0;
-    uint32_t in1_reader_cb_size = 750000;  // Total available L1 per core: 1.5 MB; we take half the L1, so 750000 bytes
+    // uint32_t in1_reader_cb_size = 750000;  // Total available L1 per core: 1.5 MB; we take half the L1, so 750000
+    // bytes
+    uint32_t in1_reader_cb_size = global_cb->size();
     tt::DataFormat in1_reader_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t in1_reader_cb_single_tile_size = 2048;
 
     tt_metal::CircularBufferConfig in1_reader_cb_config =
         tt_metal::CircularBufferConfig(in1_reader_cb_size, {{in1_reader_cb_index, in1_reader_cb_data_format}})
             .set_page_size(in1_reader_cb_index, in1_reader_cb_single_tile_size);
-    auto in1_reader_cb = tt_metal::CreateCircularBuffer(program, dram_reader_core, in1_reader_cb_config);
+    auto in1_reader_cb = tt_metal::CreateCircularBuffer(program, dram_reader_cores, in1_reader_cb_config);
 
     // Writer CB maps inplace with global CB
     uint32_t in1_writer_cb_index = 31;
@@ -109,7 +87,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         .set_page_size(in1_writer_cb_single_tile_size)
         .set_data_format(in1_writer_cb_data_format);
     auto in1_writer_cb =
-        tt_metal::v1::experimental::CreateCircularBuffer(program, dram_reader_core, in1_writer_cb_config, *global_cb);
+        tt_metal::v1::experimental::CreateCircularBuffer(program, dram_reader_cores, in1_writer_cb_config, *global_cb);
 
     // Set up per tensor
     uint32_t in1_writer_page_sizes[num_tensors], in1_writer_num_pages[num_tensors];
@@ -149,7 +127,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto in1_reader_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/prefetcher/device/kernels/reader_dram.cpp",
-        dram_reader_core,
+        dram_reader_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
@@ -168,7 +146,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto in1_writer_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/prefetcher/device/kernels/writer_l1.cpp",
-        dram_reader_core,
+        dram_reader_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
@@ -176,9 +154,10 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .compile_args = in1_writer_compile_time_args});
 
     // reader rt
-    // auto dram_reader_core_coord = dram_reader_core.ranges().begin()->start_coord;
-    // log_info("dram_reader_core_coord: {}", dram_reader_core_coord);
-    // auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
+
+    // TODO: fix for multiple cores
+    const CoreCoord& dram_reader_core_coord = dram_reader_cores.ranges()[0].start_coord;
+
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
     uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
@@ -230,17 +209,21 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
     tt_metal::SetRuntimeArgs(program, in1_writer_kernel, dram_reader_core_coord, writer_rt_args);
 
-    auto override_runtime_arguments_callback = [in1_reader_kernel, in1_writer_kernel, dram_reader_core_coord](
+    auto override_runtime_arguments_callback = [in1_reader_kernel, in1_writer_kernel, dram_reader_cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto& reader_runtime_args = GetRuntimeArgs(program, in1_reader_kernel, dram_reader_core_coord);
-        auto& writer_runtime_args = GetRuntimeArgs(program, in1_writer_kernel, dram_reader_core_coord);
+        for (const auto& range : dram_reader_cores.ranges()) {
+            for (const auto& core_coord : range) {
+                // TODO: set runtime args for reader and writer
+                auto& reader_runtime_args = GetRuntimeArgs(program, in1_reader_kernel, core_coord);
+                auto& writer_runtime_args = GetRuntimeArgs(program, in1_writer_kernel, core_coord);
+            }
+        }
     };
 
-    // return {.program = std::move(program)};
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

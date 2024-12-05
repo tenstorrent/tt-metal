@@ -6,11 +6,16 @@
 
 #include "ttnn/decorators.hpp"
 
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
+#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+
 namespace ttnn {
 namespace operations::dram_prefetcher {
 
 struct ExecuteDramPrefetcher {
-    static ttnn::Tensor invoke(std::vector<ttnn::Tensor>& tensors);
+    static ttnn::Tensor invoke(std::vector<ttnn::Tensor>& tensors
+                               // , std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
+    );
 };
 
 }  // namespace operations::dram_prefetcher
