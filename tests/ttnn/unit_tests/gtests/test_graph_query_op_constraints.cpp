@@ -545,8 +545,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 24576,
-                     .l1_buffers_peak_per_core = 4096,
-                     .l1_output_buffer_per_core = 4096}}}),
+                     .l1_buffers_peak_per_core = 2048,
+                     .l1_output_buffer_per_core = 2048}}}),
 
         std::make_tuple(  // REUSE_MCAST_1D_IN0
             g_interleaved_1_1_2048_64_tiled,
@@ -570,8 +570,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 524288,
-                     .l1_buffers_peak_per_core = 77824,
-                     .l1_output_buffer_per_core = 77824}}}),
+                     .l1_buffers_peak_per_core = 65536,
+                     .l1_output_buffer_per_core = 65536}}}),
         std::make_tuple(  // REUSE_MCAST_2D_BLOCK_SHARDED
             g_block_shard_1_1_1600_256_tiled_to_32_cores,
             g_interleaved_1_1_245_1024_tiled,
@@ -595,8 +595,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 28736,
-                     .l1_buffers_peak_per_core = 30720,
-                     .l1_output_buffer_per_core = 30720}}})));
+                     .l1_buffers_peak_per_core = 26624,
+                     .l1_output_buffer_per_core = 26624}}})));
 
 }  // namespace test
 }  // namespace binary
