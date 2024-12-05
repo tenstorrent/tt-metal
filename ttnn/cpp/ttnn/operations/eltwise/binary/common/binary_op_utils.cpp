@@ -180,6 +180,9 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::RSUB: op_name = "rsub_binary_tile"; break;
         case BinaryOpType::POWER: op_name = "power_binary_tile"; break;
         case BinaryOpType::DIV_FAST: op_name = "div_binary_tile"; break;
+        case BinaryOpType::BITWISE_AND: op_name = "and_binary_tile"; break;
+        case BinaryOpType::BITWISE_OR: op_name = "or_binary_tile"; break;
+        case BinaryOpType::BITWISE_XOR: op_name = "xor_binary_tile"; break;
         // case BinaryOpType::DIV_FAST:
         //     new_defines.merge(get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
         //     op_name = "mul_binary_tile";
