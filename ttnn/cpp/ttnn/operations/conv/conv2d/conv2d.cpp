@@ -80,8 +80,17 @@ Result conv2d(
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt);
     }
 
+    ShardOrientation shard_orientation =
+        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+    auto num_cores_c = shard_orientation == ShardOrientation::COL_MAJOR ? device->compute_with_storage_grid_size().y : device->compute_with_storage_grid_size().x;
+    auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
+    bool is_non_tile_mul_width =
+        (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
+        (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
+        conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
+
     auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
-        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, mm_conv);
+        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, mm_conv, is_non_tile_mul_width);
     if (tensor_manipulated) {
         if (conv_config.deallocate_activation) {
             ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
@@ -96,6 +105,9 @@ Result conv2d(
     uint32_t out_channels_padded = tt::round_up(
         out_channels,
         get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
+    if(is_non_tile_mul_width) {
+        out_channels_padded = tt::round_up(out_channels, 32);
+    }
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, nhw_out, out_channels_padded}),
         output_parallel_config,
@@ -110,6 +122,9 @@ Result conv2d(
     uint32_t in_channels_padded = tt::round_up(
         in_channels,
         get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
+    if(is_non_tile_mul_width){
+        in_channels_padded = tt::round_up(in_channels, conv_config.input_channels_alignment);
+    }
 
     uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
                                     conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
@@ -141,7 +156,9 @@ Result conv2d(
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
-            input_width);
+            input_width,
+            true,
+            is_non_tile_mul_width);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
