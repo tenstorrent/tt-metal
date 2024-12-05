@@ -12,14 +12,14 @@
  * */
 void kernel_main() {
     std::uint32_t dram_buffer_dst_addr_base = get_arg_val<uint32_t>(0);
-    std::uint32_t dram_dst_noc = get_arg_val<uint32_t>(1);
+    std::uint32_t dram_bank_id = get_arg_val<uint32_t>(1);
     std::uint32_t dram_buffer_size = get_arg_val<uint32_t>(2);
     std::uint32_t local_eth_l1_addr_base = get_arg_val<uint32_t>(3);
 
     std::uint32_t dram_buffer_dst_addr = dram_buffer_dst_addr_base;
 
     // DRAM NOC dst address
-    std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_noc, dram_buffer_dst_addr);
+    std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, dram_buffer_dst_addr);
 
     noc_async_write(local_eth_l1_addr_base, dram_buffer_dst_noc_addr, dram_buffer_size);
     noc_async_write_barrier();
