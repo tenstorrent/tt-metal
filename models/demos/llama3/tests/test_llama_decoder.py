@@ -94,8 +94,7 @@ def test_llama_decoder_inference(
         model_args.rope_theta,
         model_args.use_scaled_rope,
     )
-    transformation_mats = rope_setup.get_trans_mats()
-    transformation_mats = {"decode": transformation_mats}
+    transformation_mats = rope_setup.get_both_trans_mats()
 
     # Prepare page table for paged attention
     page_table_tt = None

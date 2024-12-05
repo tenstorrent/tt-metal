@@ -98,11 +98,6 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-    def get_trans_mats(self):
-        # TODO: Colman deprecate
-        assert self.transformation_mat is not None, "Transformation matrix not initialized"
-        return self.transformation_mat
-
     def get_both_trans_mats(self):
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
         assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"

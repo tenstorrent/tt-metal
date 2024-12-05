@@ -100,8 +100,7 @@ def test_llama_attention_inference(
         model_args.use_scaled_rope,
     )
 
-    transformation_mats = rope_setup.get_trans_mats()
-    transformation_mats = {"decode": transformation_mats}
+    transformation_mats = rope_setup.get_both_trans_mats()
 
     page_table_tt = None
     paged_attention_config = None
