@@ -99,6 +99,7 @@ def run_multi_core_matmul_1d(
     max_dst_tiles=8,
     pcc_threshold=0.98,
     mm_chain=False,
+    hop_grid=None,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -164,6 +165,18 @@ def run_multi_core_matmul_1d(
             }
         )
 
+    hop_core_range_set = ttnn.CoreRangeSet([])
+    if hop_grid is not None:
+        hop_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in hop_grid
+            }
+        )
+
     in0_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -226,6 +239,7 @@ def run_multi_core_matmul_1d(
         fused_activation=activation,
         mcast_in0=False,
         gather_in0=True,
+        hop_cores=hop_core_range_set,
     )
 
     if is_grayskull():
@@ -386,6 +400,75 @@ def test_multi_core_matmul_1d_wh(
         grid,
         use_arbitrary_cores,
         num_iters,
+    )
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    [
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+    ],
+)
+@pytest.mark.parametrize(
+    "hop_grid",
+    [
+        [(7, 3), (7, 4)],
+    ],
+)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_arbitrary_cores",
+    [False],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [1],
+)
+def test_multi_core_matmul_1d_ring_hop_wh(
+    device,
+    in0_dtype,
+    in1_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    activation,
+    grid,
+    hop_grid,
+    use_arbitrary_cores,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        activation,
+        grid,
+        use_arbitrary_cores,
+        num_iters,
+        hop_grid=hop_grid,
     )
 
 
