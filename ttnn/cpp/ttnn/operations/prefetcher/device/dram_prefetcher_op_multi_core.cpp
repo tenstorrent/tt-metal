@@ -30,7 +30,7 @@ void get_max_page_size_and_num_pages(
 }
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    std::vector<Tensor>& tensors,
+    const std::vector<Tensor>& tensors,
     // std::shared_ptr<tt_metal::v1::experimental::GlobalCircularBuffer> global_cb,
     uint32_t num_receivers) {
     Program program{};
@@ -230,7 +230,15 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
     tt_metal::SetRuntimeArgs(program, in1_writer_kernel, dram_reader_core_coord, writer_rt_args);
 
-    auto override_runtime_arguments_callback = []() {};
+    auto override_runtime_arguments_callback = [in1_reader_kernel, in1_writer_kernel, dram_reader_core_coord](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, in1_reader_kernel, dram_reader_core_coord);
+        auto& writer_runtime_args = GetRuntimeArgs(program, in1_writer_kernel, dram_reader_core_coord);
+    };
 
     // return {.program = std::move(program)};
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
