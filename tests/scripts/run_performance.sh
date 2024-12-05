@@ -73,7 +73,7 @@ run_perf_models_cnn_javelin() {
 
     # Run tests
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=480
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
@@ -83,7 +83,7 @@ run_device_perf_models() {
     set -eo pipefail
     local test_marker=$1
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+    env pytest models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=600
 
     env pytest models/demos/distilbert/tests -m $test_marker
 
