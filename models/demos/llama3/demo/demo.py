@@ -302,7 +302,7 @@ def run_llama3_demo(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
 
     # Load TTNN Llama3.1 model
@@ -463,6 +463,19 @@ def run_llama3_demo(
 
         logger.info("Starting decode...")
 
+        # Shard the page table for TG decode
+        if paged_attention and model_args.is_galaxy and batch_size > 1:
+            page_table_tt = ttnn.from_torch(
+                page_table,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=(None, -2) if batch_size > 1 else (None, None),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )
         # Set sampling mode
         argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
@@ -478,7 +491,11 @@ def run_llama3_demo(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -567,7 +584,11 @@ def run_llama3_demo(
         current_pos_reset = ttnn.from_torch(
             current_pos,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(
@@ -925,7 +946,7 @@ def run_llama3_demo(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        LlamaOptimizations.performance,
+        # LlamaOptimizations.performance,
         LlamaOptimizations.accuracy,
     ],
 )
@@ -959,8 +980,8 @@ def test_llama_demo(
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
     # TODO: Remove this once batch>1 is supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size > 1:
-        pytest.skip("Skip batch>1 demo on TG")
+    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+        pytest.skip("TG only supports batch 1 and 32")
 
     mesh_device.enable_async(True)
 

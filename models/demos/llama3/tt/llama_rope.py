@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.utility_functions import nearest_32
@@ -84,7 +84,13 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ShardTensor2dMesh(
+                device,
+                dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
+                mesh_shape=device.shape,
+            )
+            if self.is_mesh_device
+            else None,
         )
 
     def get_trans_mats(self):
@@ -150,6 +156,11 @@ class TtLlamaRotarySetup(LightweightModule):
         if self.batch_size % ttnn.TILE_SIZE != 0:
             cos = cos[:, : self.batch_size, :, :]
             sin = sin[:, : self.batch_size, :, :]
+
+        if self.num_devices == 32 and self.batch_size > 1:
+            # On TG slice to num_batches_per_group
+            cos = cos[:, :8, :, :]
+            sin = sin[:, :8, :, :]
 
         grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
