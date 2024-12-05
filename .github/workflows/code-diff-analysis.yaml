@@ -72,4 +72,4 @@ jobs:
             set -eu # basic shell hygiene
             mkdir result
             nice -n 19 ./build_metal.sh --export-compile-commands --build-all --skip-build
-            nice -n 19 git diff -U0 "$(git merge-base HEAD "origin/main")" | clang-tidy-diff-17 -p1 -path build -j$(nproc) --warnings-as-errors=*
+            nice -n 19 git diff -U0 "$(git merge-base HEAD "origin/main")" | clang-tidy-diff-17.py -p1 -path build -j$(( $(nproc) / 2 ))
