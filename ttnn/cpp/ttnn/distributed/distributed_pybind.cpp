@@ -40,7 +40,14 @@ void py_module(py::module& module) {
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
                 return MeshDevice::create(
-                    MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type),
+                    MeshDeviceConfig(
+                        mesh_device_shape,
+                        MeshOffset{
+                            .row = offset.first,
+                            .col = offset.second,
+                        },
+                        physical_device_ids,
+                        mesh_type),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
