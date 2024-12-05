@@ -12,7 +12,6 @@ import llama_models.llama3.reference_impl.generation as llama_reference_generati
 from llama_models.llama3.api.tokenizer import Tokenizer
 from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-from models.demos.llama3.demo.tiny_demo import load_inputs
 
 from pkg_resources import resource_filename
 
@@ -25,22 +24,6 @@ import ttnn
 import time
 
 from models.demos.llama3.tt.generator import LlamaGenerator
-
-
-def get_sampler(temperature, top_p, tokenizer):
-    def sample(logits):
-        if temperature > 0:
-            probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-            next_token = llama_reference_generation.sample_top_p(probs, top_p)
-        else:
-            next_token = torch.argmax(logits[:, -1], dim=-1)
-
-        next_token = next_token.reshape(-1)
-        token = next_token[0].item()
-        text = tokenizer.decode(next_token.tolist())
-        return token, text
-
-    return sample
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -204,7 +187,7 @@ def test_llama_multimodal_demo_text(
             for gen_idx in range(max_gen_len - 1):
                 decode_start = time.perf_counter()
                 position_id = prefill_lens + gen_idx
-                next_token_tensor = next_tokens.reshape(max_batch_size, 1)  # 1, B
+                next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
                 if enable_trace:
                     logits = generator.easy_trace(

@@ -218,11 +218,8 @@ def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            if host_tensors[i] is None:
-                ret.append(None)
-            else:
-                on_device = ttnn.to_device(host_tensors[i], device=mesh_device)
-                ret.append(on_device)
+            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            ret.append(on_device)
         return ret
     else:
         for i in range(len(host_tensors)):

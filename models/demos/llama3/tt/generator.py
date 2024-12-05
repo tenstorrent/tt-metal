@@ -371,9 +371,7 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
-        ) = self.model.copy_host_to_device(
-            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id)
-        )
+        ) = copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id))
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_h_trace_input = tt_h
@@ -431,7 +429,7 @@ class LlamaGenerator:
             tokens, cross_attention_masks, full_text_row_masked_out_mask, position_id=position_id
         )
 
-        self.model.copy_host_to_device(
+        copy_host_to_device(
             host_tensors=(tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id),
             device_tensors=(
                 trace_h,
@@ -534,6 +532,8 @@ class LlamaGenerator:
             total_len=total_len,
             prefill_len=prefill_len,
         )
+
+        logits = logits.view(1, 1, self.model_args.max_vocab_size)
 
         def sample(logits):
             if temperature > 0:
