@@ -1468,7 +1468,7 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
 }
 
 void Program::set_pre_exec_callback(std::function<void(Program*)> callback){
-    this->pre_exec_callback_ = callback;
+    this->pre_exec_callback_ = std::move(callback);
 }
 
 void Program::call_pre_exec_callback(){
