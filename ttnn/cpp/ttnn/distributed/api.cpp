@@ -131,7 +131,6 @@ Tensor aggregate_as_tensor(
             reference_shard.get_layout(),
             tile);
     }
-    return physical_device_ids;
 }
 
 std::vector<int> get_t3k_physical_device_ids_ring() {
