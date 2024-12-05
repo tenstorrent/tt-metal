@@ -30,7 +30,7 @@ parameters = {
             input_shape_list=gen_shapes([1, 1, 32, 64], [6, 12, 256, 512], [1, 1, 32, 64], 16),
             cache_size_list=[random.randint(1, 2048) for i in range(8)],
         ),
-        "input_dtype": [ttnn.bfloat16],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -39,6 +39,8 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_dtype"] == ttnn.bfloat8_b:
+        return True, "bfloat8_b/bfloat4_b requires TILE_LAYOUT!"
     if test_vector["input_spec"]["input_shape"][-1] % 64 != 0:
         return True, "Input X dimension (133) must be divisible by 64 for tiling"
     if test_vector["input_spec"]["token_idx"] and test_vector["input_spec"]["input_shape"][0] != 1:
