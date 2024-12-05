@@ -191,8 +191,6 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
         }
 
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
-        //fp32 dest unsupported with reduce scalar, must fix zeroacc
-        static_assert(!is_fp32_dest_acc_en);
         for (int tile = 0; tile < 3; tile++) {
             // Wait and pool
             if constexpr (type == PoolType::MAX) {
