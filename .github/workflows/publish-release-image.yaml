@@ -104,6 +104,12 @@ jobs:
       - build-docker
       - in-service
     steps:
+      - name: Docker login
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag latest if this is a major version release
         run: |
           set -eu # basic shell hygiene
@@ -113,8 +119,11 @@ jobs:
           else
             LATEST_TAG=latest-rc
           fi
+          echo "Determined that the current tag is " $LATEST_TAG
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
+          echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG
           docker tag $TAG_NAME $REPO_IMAGE_NAME:$LATEST_TAG
+          echo "Pushing image with tag " $REPO_IMAGE_NAME:$LATEST_TAG
           docker push $REPO_IMAGE_NAME:$LATEST_TAG
