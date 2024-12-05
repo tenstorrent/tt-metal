@@ -239,7 +239,7 @@ TEST(TensorUtilsTest, TestUint32XTensor) {
         ttml::core::span_to_xtensor(std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
     auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device);
 
-    auto xtensor_back = ttml::core::to_xtensor(tensor);
+    auto xtensor_back = ttml::core::to_xtensor<uint32_t>(tensor);
 
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_back));
 }

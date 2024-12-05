@@ -142,3 +142,92 @@ TYPED_TEST(MeshOpsTest, VectorMeshToTensorVectorReturn) {
         EXPECT_TRUE(xt::allclose(result[i], shards[i]));
     }
 }
+
+template <typename T>
+void ExpectArraysEqual(const xt::xarray<T>& a, const xt::xarray<T>& b) {
+    ASSERT_EQ(a.shape(), b.shape());
+    for (size_t i = 0; i < a.size(); ++i) {
+        EXPECT_EQ(a.flat(i), b.flat(i));
+    }
+}
+
+TEST(ConcatenateTest, DefaultAxis) {
+    xt::xarray<double> a = {{1.0, 2.0}, {3.0, 4.0}};
+    xt::xarray<double> b = {{5.0, 6.0}, {7.0, 8.0}};
+    std::vector<xt::xarray<double>> input = {a, b};
+
+    xt::xarray<double> result = ttml::core::concatenate(input);  // axis=0 by default
+    xt::xarray<double> expected = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}, {7.0, 8.0}};
+
+    ExpectArraysEqual(result, expected);
+}
+
+TEST(ConcatenateTest, AxisOne) {
+    xt::xarray<int> x = {{1, 2, 3}, {4, 5, 6}};
+    xt::xarray<int> y = {{7, 8}, {9, 10}};
+    std::vector<xt::xarray<int>> input = {x, y};
+
+    xt::xarray<int> result = ttml::core::concatenate(input, 1);
+    xt::xarray<int> expected = {{1, 2, 3, 7, 8}, {4, 5, 6, 9, 10}};
+
+    ExpectArraysEqual(result, expected);
+}
+
+TEST(ConcatenateTest, MultipleArraysAxis0) {
+    xt::xarray<float> a = {1.0f, 2.0f};
+    xt::xarray<float> b = {3.0f, 4.0f};
+    xt::xarray<float> c = {5.0f, 6.0f};
+    std::vector<xt::xarray<float>> input = {a, b, c};
+
+    xt::xarray<float> result = ttml::core::concatenate(input, 0);
+    xt::xarray<float> expected = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+
+    ExpectArraysEqual(result, expected);
+}
+
+TEST(ConcatenateTest, EmptyArray) {
+    xt::xarray<int> a = {{1, 2}, {3, 4}};
+    xt::xarray<int> b;  // Empty
+    std::vector<xt::xarray<int>> input = {a, b};
+
+    xt::xarray<int> result = ttml::core::concatenate(input, 0);
+    // Concatenating an empty array should just return the original non-empty array
+    ExpectArraysEqual(result, a);
+}
+
+TEST(ConcatenateTest, IncompatibleShapes) {
+    xt::xarray<double> a = {{1.0, 2.0, 3.0}};
+    xt::xarray<double> b = {{4.0, 5.0}};  // Different shape along axis=1
+    std::vector<xt::xarray<double>> input = {a, b};
+
+    // Assuming your function throws an exception when shapes are incompatible
+    EXPECT_THROW({ auto result = ttml::core::concatenate(input, 1); }, std::runtime_error);
+}
+
+TEST(ConcatenateTest, HigherDimensions) {
+    xt::xarray<int> arr1 = xt::arange<int>(1, 9);  // 1 to 8
+    arr1.reshape({2, 2, 2});
+    xt::xarray<int> arr2 = xt::arange<int>(9, 17);  // 9 to 16
+    arr2.reshape({2, 2, 2});
+
+    std::vector<xt::xarray<int>> input = {arr1, arr2};
+    xt::xarray<int> result = ttml::core::concatenate(input, 0);
+
+    // Expected: shape (4,2,2) with arr1 stacked over arr2 along axis 0
+    xt::xarray<int> expected = xt::concatenate(xt::xtuple(arr1, arr2), 0);
+
+    ExpectArraysEqual(result, expected);
+}
+
+TEST(ConcatenateTest, HigherAxis) {
+    xt::xarray<int> arr1 = {{{1, 2}, {3, 4}}, {{5, 6}, {7, 8}}};
+    xt::xarray<int> arr2 = {{{9, 10}, {11, 12}}, {{13, 14}, {15, 16}}};
+    // Both have shape (2,2,2)
+
+    std::vector<xt::xarray<int>> input = {arr1, arr2};
+    xt::xarray<int> result = ttml::core::concatenate(input, 2);
+    // Expected shape: (2,2,4)
+    xt::xarray<int> expected = {{{1, 2, 9, 10}, {3, 4, 11, 12}}, {{5, 6, 13, 14}, {7, 8, 15, 16}}};
+
+    ExpectArraysEqual(result, expected);
+}

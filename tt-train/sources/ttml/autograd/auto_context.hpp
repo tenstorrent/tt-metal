@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <memory>
 #include <random>
 
+#include "core/indestructible.hpp"
 #include "core/mesh_device.hpp"
 #include "graph.hpp"
 
@@ -56,6 +58,8 @@ private:
     std::unique_ptr<core::MeshDevice> m_device;
 
     void init_device(tt::tt_metal::distributed::MeshShape shape);
+
+    friend class core::Indestructible<AutoContext>;
 };
 
 inline auto& ctx() {

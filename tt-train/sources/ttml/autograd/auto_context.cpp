@@ -22,7 +22,7 @@ uint32_t AutoContext::get_seed() const {
 }
 
 AutoContext& AutoContext::get_instance() {
-    static AutoContext instance;
+    static AutoContext& instance = core::Indestructible<AutoContext>::getInstance();
     return instance;
 }
 std::optional<NodeId> AutoContext::add_backward_node(GradFunction&& grad_function, std::span<NodeId> links) {
@@ -63,6 +63,7 @@ void AutoContext::set_mesh_shape(tt::tt_metal::distributed::MeshShape shape) {
     }
     m_mesh_shape = shape;
 }
+
 tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
     return m_mesh_shape;
 }

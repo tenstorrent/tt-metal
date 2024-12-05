@@ -25,6 +25,7 @@ MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :
 }
 
 MeshDevice::~MeshDevice() {
+    assert(m_mesh_device);
     ttnn::distributed::api::close_mesh_device(m_mesh_device);
 }
 
