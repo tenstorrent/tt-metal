@@ -142,6 +142,34 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     }
 
     new_span.len = new_len;
+
+    {
+        TT_ASSERT(this->link_spans_.size() != 0);
+        TT_ASSERT(link_spans_.size() <= 2);
+
+        std::vector<word_t> new_data2;
+
+        bool text_is_second =
+            link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
+        auto const& text = link_spans_[text_is_second];
+        TT_ASSERT(text.addr >= text_start && text.addr < text_end);
+
+        span new_span2 = text;
+
+        size_t offset = text_is_second ? link_spans_[0].len : 0;
+        new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
+
+        if (link_spans_.size() == 2) {
+            offset = text_is_second ? 0 : text.len;
+            auto const& data = link_spans_[!text_is_second];
+            TT_ASSERT(data.addr >= data_start && data.addr < data_end);
+            new_span2.len += data.len;
+            new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
+        }
+        TT_ASSERT(new_span == new_span2);
+        TT_ASSERT(new_data == new_data2);
+    }
+
     this->link_spans_.resize(1);
     this->link_spans_[0] = new_span;
     this->data_ = new_data;
