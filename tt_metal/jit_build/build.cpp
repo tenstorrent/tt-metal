@@ -41,14 +41,40 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
 
 JitBuildEnv::JitBuildEnv() {}
 
+void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path)
+{
+    if (dir_path.compare(git_hash_path) != 0) {
+        std::filesystem::remove_all(dir_path);
+    }
+}
+
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
-    this->root_ = llrt::OptionsG.get_root_dir();
-    this->out_root_ = this->root_ + "built/";
     this->arch_ = arch;
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
+    this->root_ = llrt::OptionsG.get_root_dir();
+    this->out_root_ = this->root_ + "built/";
+
+#ifndef GIT_COMMIT_HASH
+    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
+#else
+    std::string git_hash(GIT_COMMIT_HASH);
+
+    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
+    std::filesystem::path root_path(this->out_root_);
+    if((not tt::llrt::OptionsG.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
+        std::ranges::for_each(
+            std::filesystem::directory_iterator{root_path},
+            [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
+    }
+    else {
+        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
+    }
+
+    this->out_root_ = this->out_root_  + git_hash + "/";
+#endif
 
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
