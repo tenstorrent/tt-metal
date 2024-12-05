@@ -37,9 +37,7 @@ ttnn::Tensor convert_tile_to_rm(
     const uint8_t queue_id,
     const PadValue &pad_value
 ) {
-    //Convert the 3D->3D reshaping to row major and back to tile
-    const bool illegal = ((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0)) &&
-                         (tensor.get_dtype() == DataType::BFLOAT8_B);
+    // Convert the 3D->3D reshaping to row major and back to tile
     TT_FATAL(
         ((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0)) &&
             (tensor.get_dtype() == DataType::BFLOAT8_B),
