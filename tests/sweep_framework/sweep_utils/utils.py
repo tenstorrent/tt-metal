@@ -220,6 +220,28 @@ def gen_split_qkv_heads_spec(
         }
 
 
+def gen_rotary_embedding_spec(
+    input_shape_list,
+    cache_size_list,
+    use_token_idx_list=[True, False],
+):
+    for input_shape, cache_size, use_token_idx in itertools.product(
+        input_shape_list, cache_size_list, use_token_idx_list
+    ):
+        input_shape_ = input_shape.copy()
+        if use_token_idx is True:
+            token_idx = random.randint(1, cache_size - 1)
+            input_shape_[0] = 1
+        else:
+            token_idx = None
+
+        yield {
+            "input_shape": input_shape_,
+            "cache_size": cache_size,
+            "token_idx": token_idx,
+        }
+
+
 def gen_complex_tensor(input_shape, low, high, dtype=ttnn.bfloat16):
     torch_real = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(
         input_shape
