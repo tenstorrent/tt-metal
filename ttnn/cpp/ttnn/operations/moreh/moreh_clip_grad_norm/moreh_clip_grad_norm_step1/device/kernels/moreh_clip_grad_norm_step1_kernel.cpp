@@ -58,9 +58,8 @@ void MAIN {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         // Comput cb_xabs and mask(optional)
         // |x|
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_x, onetile);  // comes from the reader
-        cb_reserve_back(cb_xabs, onetile);
 
         copy_tile_init();
         copy_tile(cb_x, 0, dst0);
@@ -83,61 +82,70 @@ void MAIN {
 
         abs_tile_init();
         abs_tile(dst0);
+        cb_pop_front(cb_x, onetile);
+        tile_regs_commit();
 
+        tile_regs_wait();
+        cb_reserve_back(cb_xabs, onetile);
         pack_tile(dst0, cb_xabs);
 
-        cb_pop_front(cb_x, onetile);
         cb_push_back(cb_xabs, onetile);
-        REL();
+        tile_regs_release();
 
         // |x + decimal|^p
         power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
         if (tile_idx == 0) {
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_correct_xpow, onetile);
             cb_reserve_back(cb_xpowadd, onetile);
 
             copy_tile_init();
             copy_tile(cb_correct_xpow, 0, dst0);
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_xpowadd);
 
             cb_pop_front(cb_correct_xpow, onetile);
             cb_push_back(cb_xpowadd, onetile);
-            REL();
+            tile_regs_release();
         } else {
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_correct_xpow, onetile);
             cb_wait_front(cb_xpowadd, onetile);
             cb_reserve_back(cb_xpowadd, onetile);
 
             add_tiles_init();
             add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_xpowadd);
 
             cb_pop_front(cb_correct_xpow, onetile);
             cb_pop_front(cb_xpowadd, onetile);
             cb_push_back(cb_xpowadd, onetile);
-            REL();
+            tile_regs_release();
         }
     }
 
     // Compute cb_y
-    ACQ();
+    tile_regs_acquire();
     cb_wait_front(cb_xpowadd, onetile);
     cb_reserve_back(cb_y, onetile);
 
     reduce_init_delta<false>();
     reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
     reduce_revert_delta();
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, cb_y);
 
     cb_pop_front(cb_xpowadd, onetile);
     cb_push_back(cb_y, onetile);
-    REL();
+    tile_regs_release();
 
     cb_pop_front(cb_decimal, onetile);
     cb_pop_front(cb_one, onetile);
