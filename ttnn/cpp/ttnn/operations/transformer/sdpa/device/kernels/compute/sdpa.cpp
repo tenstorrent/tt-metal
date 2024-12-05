@@ -79,6 +79,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
     recip_tile_init();
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(in_cb);
 
     cb_wait_front(in_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -513,6 +515,7 @@ void MAIN {
                     }
                     // reconfig_data_format_srca(alias_mm2_cur_out);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                    reconfig_data_format(alias_prev_max, alias_cur_max);
 
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk > 0) {
