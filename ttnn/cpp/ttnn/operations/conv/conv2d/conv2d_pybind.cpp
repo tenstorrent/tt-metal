@@ -10,6 +10,9 @@
 #include "conv2d_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
+#include "conv2d_utils.hpp"
+#include "prepare_conv2d_weights.hpp"
+#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
@@ -121,10 +124,92 @@ void py_bind_conv2d(py::module& module) {
             py::arg("queue_id") = 0}
     );
 
+    module.def(
+        "prepare_conv_weights",
+        prepare_conv_weights<ttnn::Device>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_tensor_layout"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+
+    module.def(
+        "prepare_conv_weights",
+        prepare_conv_weights<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_tensor_layout"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_bias",
+        prepare_conv_bias<ttnn::Device>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_tensor_layout"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_bias",
+        prepare_conv_bias<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_tensor_layout"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
-        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_tiled_layout,
+        &convert_conv_weight_tensor_to_tiled_layout,
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("in1_block_h"),
         py::arg("in1_block_w"),
@@ -132,7 +217,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "convert_conv_weight_tensor_to_special_padding_tiled_layout",
-        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_special_padding_tiled_layout,
+        &convert_conv_weight_tensor_to_special_padding_tiled_layout,
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("in1_block_h"),
         py::arg("in1_block_w"),
@@ -140,7 +225,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "convert_conv_weight_tensor_to_grouped_layout",
-        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_grouped_layout,
+        &convert_conv_weight_tensor_to_grouped_layout,
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("num_groups"),
         py::arg("output_dtype").noconvert() = std::nullopt);
@@ -157,7 +242,7 @@ void py_bind_conv2d(py::module& module) {
            ShardOrientation block_shard_orientation,
            bool enable_channels_padding,
            bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
-            return ttnn::operations::conv::conv2d::determine_parallel_config(
+           return determine_parallel_config(
                 shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled);
         },
         py::arg("shard_layout"),
@@ -173,7 +258,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "create_sharded_memory_config_from_parallel_config",
-        &ttnn::operations::conv::conv2d::create_sharded_memory_config_from_parallel_config,
+        &create_sharded_memory_config_from_parallel_config,
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
@@ -236,16 +321,16 @@ void py_bind_conv2d(py::module& module) {
             py::arg("grid_size"),
             py::arg("num_cores_nhw") = 1,
             py::arg("num_cores_c") = 1,
-            py::arg("per_core_out_matrix_height_ntiles").noconvert() = 1,
-            py::arg("per_core_out_matrix_width_ntiles").noconvert() = 1)
+            py::arg("per_core_out_matrix_height").noconvert(),
+            py::arg("per_core_out_matrix_width").noconvert())
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
         .def_property_readonly(
             "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
         .def_property_readonly(
-            "per_core_out_matrix_height_ntiles",
-            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-        .def_property_readonly("per_core_out_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
-            return c.per_core_out_matrix_width_ntiles;
+            "per_core_out_matrix_height",
+            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height; })
+        .def_property_readonly("per_core_out_matrix_width", [](OptimizedConvParallelizationConfig const& c) {
+            return c.per_core_out_matrix_width;
         });
 
     py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")
