@@ -415,7 +415,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     finish_init();
 }
 
-JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
+JitBuildActiveEthernet::JitBuildActiveEthernet(
+    const JitBuildEnv& env, const JitBuiltStateConfig& build_config, bool is_cooperative) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
@@ -482,7 +483,6 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
             }
-
             string linker_str;
             if (this->is_fw_) {
                 linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";

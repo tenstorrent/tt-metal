@@ -149,12 +149,14 @@ bool test_load_write_read_risc_binary(
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
-    if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE") != nullptr) {
-        tt::Cluster::instance().l1_barrier(chip_id);
-        ll_api::memory read_mem = read_mem_from_core(chip_id, core, mem, local_init_addr);
-        log_debug(tt::LogLLRuntime, "read hex back from the core");
-        return mem == read_mem;
-    }
+    // if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE") != nullptr) {
+    // if (core.y == 1) {
+    tt::Cluster::instance().l1_barrier(chip_id);
+    ll_api::memory read_mem = read_mem_from_core(chip_id, core, mem, local_init_addr);
+    log_debug(tt::LogLLRuntime, "read hex back from the core");
+    TT_FATAL(mem == read_mem, "Expected binary to be same on core {}", core.str());
+    // }
+    // }
 
     return true;
 }
@@ -190,6 +192,25 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
     uint64_t go_msg_addr = tt_metal::hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+
+    if (dispatch_core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        // uint32_t pc_addr;
+        // // void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr,
+        uint32_t l1_unreserved_base_val;
+        tt::Cluster::instance().read_core(
+            &l1_unreserved_base_val,
+            sizeof(uint32_t),
+            tt_cxy_pair(chip_id, core),
+            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        // tt::Cluster::instance().read_reg(&pc_addr, tt_cxy_pair(chip_id, core), 0xFFB14008);
+        std::cout << "Eth core " << core.str() << " l1 unreserved base " << std::hex << l1_unreserved_base_val
+                  << std::dec << std::endl;
+
+        // uint32_t reset_val;
+        // tt::Cluster::instance().read_reg(&reset_val, tt_cxy_pair(chip_id, core), 0xFFB121B0);
+        // std::cout << "Active eth core " << core.str() << " in reset_cores reset val " << std::hex << reset_val <<
+        // std::dec << std::endl;
+    }
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;

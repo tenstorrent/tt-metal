@@ -16,6 +16,7 @@ struct address_map {
     // SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE)
     static constexpr std::int32_t SYSENG_RESERVED_SIZE = 64 * 1024;
     static constexpr std::int32_t ERISC_BARRIER_SIZE = 64;
+    static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;
     static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;
@@ -31,10 +32,22 @@ struct address_map {
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
     static constexpr std::uint32_t ERISC_BARRIER_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
 
+    static constexpr std::int32_t MAX_SIZE =
+        512 * 1024 - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE - ERISC_APP_SYNC_INFO_SIZE;
+    static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
+
+    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = MAX_SIZE;
+    static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
+
+    static constexpr std::uint32_t ERISC_BARRIER_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
+
+    // Kernel config buffer is WIP
+    // Size is presently based on the old sizes of the RTAs + CB config + Sems
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
     static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 24 * 1024;
     static constexpr std::uint32_t MEM_ERISC_LOCAL_SIZE = (8 * 1024);
     static constexpr std::int32_t RISC_LOCAL_MEM_BASE =
-        0xFFB00000;  // Actual local memory address as seen from risc firmware
+        0xFFB00000;  // Actaul local memory address as seen from risc firmware
                      // As part of the init risc firmware will copy local memory data from
                      // l1 locations listed above into internal local memory that starts
                      // at RISC_LOCAL_MEM_BASE address
@@ -45,6 +58,13 @@ struct address_map {
     static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3344;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =
+        (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2056;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+        (FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
     static constexpr std::int32_t FIRMWARE_BASE = ERISC_MEM_MAILBOX_END;
     static constexpr std::int32_t MEM_ERISC_MAP_END = FIRMWARE_BASE + ERISC_FIRMWARE_SIZE;
@@ -56,18 +76,13 @@ struct address_map {
     static constexpr std::int32_t MEM_ERISC_STACK_BASE =
         RISC_LOCAL_MEM_BASE + MEM_ERISC_LOCAL_SIZE - MEM_ERISC_STACK_SIZE;
 
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH =
-        MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE;
-    // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
-    // NUM_L1_BANKS)
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
-    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
-    // NUM_L1_BANKS)
-    static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
+    // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during
+    // runtime build, and is unused once FW copies the data to local memory during FW initialization.
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ERISC_L1_UNRESERVED_BASE;
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;  // don't need this - just to get things to compile
-    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (MEM_ERISC_MAP_END + (69 * 1024) + 63) & ~63;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (ERISC_MEM_BANK_TO_NOC_SCRATCH + 63) & ~63;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_SIZE - ERISC_L1_UNRESERVED_BASE;
 
     static_assert((ERISC_L1_UNRESERVED_BASE % 64) == 0);

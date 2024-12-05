@@ -85,6 +85,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
+    std::cout << "MEM_AERISC_FIRMWARE_BASE " << std::hex << MEM_AERISC_FIRMWARE_BASE << " FW BASE "
+              << eth_l1_mem::address_map::FIRMWARE_BASE << std::dec << std::endl;
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
