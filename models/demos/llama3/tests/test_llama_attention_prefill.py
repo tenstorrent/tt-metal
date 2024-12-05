@@ -49,10 +49,6 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
-)
-@pytest.mark.parametrize(
     "max_seq_len",
     (
         2048,
@@ -62,7 +58,6 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_attention_inference(
     max_seq_len,
-    batch_size,
     paged_attention,
     page_params,
     mesh_device,
@@ -72,6 +67,7 @@ def test_llama_attention_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
+    batch_size = 1  # For prefill we only support batch_size = 1
 
     mesh_device.enable_async(True)
 
