@@ -430,6 +430,15 @@ struct CclCommandCoreDescriptorTypeMcast {
         value |= (noc0_end_y << 24);
         return value;
     }
+    static CclCommandCoreDescriptorTypeMcast from_uint32(uint32_t value) {
+        CclCommandCoreDescriptorTypeMcast mcast;
+        mcast.noc0_start_x = (value >> 0) & 0xFF;
+        mcast.noc0_start_y = (value >> 8) & 0xFF;
+        mcast.noc0_end_x = (value >> 16) & 0xFF;
+        mcast.noc0_end_y = (value >> 24) & 0xFF;
+        return mcast;
+    }
+
     uint8_t noc0_start_x;
     uint8_t noc0_start_y;
     uint8_t noc0_end_x;
@@ -547,7 +556,7 @@ struct CclCommandHeader {
 
     static uint32_t to_uint32(CclCommandHeader const& cmd_header) {
         uint32_t encoded = 0;
-        encoded = (uint8_t)(cmd_header.code);
+        encoded = (uint32_t)(cmd_header.code);
         encoded |= (cmd_header.dest_type << 6);
         encoded |= (cmd_header.arg_count << 8);
         switch (cmd_header.dest_type) {

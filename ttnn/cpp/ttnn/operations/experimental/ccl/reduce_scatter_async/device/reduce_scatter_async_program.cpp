@@ -464,6 +464,7 @@ ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
 
     // Generate the reader kernel
     auto input_tensor_ptrs = std::vector<Tensor const*>{all_tensors.input_tensor, all_tensors.input_tensor_from_remote[0] != nullptr ? all_tensors.input_tensor_from_remote[0] : all_tensors.input_tensor_from_remote[1]};
+    TT_FATAL(input_tensor_ptrs[0] != nullptr && input_tensor_ptrs[1] != nullptr, "Internal error. Input tensor pointers are null");
     auto reader_kernel_id = generate_multi_command_stream_kernel_ct_args(
         program,
         // the CBs don't actuall matter for CT args - they will be removed as CT args in the near future
@@ -610,8 +611,8 @@ std::vector<size_t> compute_math_pages_from_per_worker_tensor_slices(
 // second result is total number of pages cycled through the CBs
 std::vector<std::array<ttnn::ccl::cmd::CclHostLowLevelCommandSequence, 2>>
 generate_partial_reducer_reader_worker_command_streams(
-    std::optional<TensorSyncSpec> in0_tensor_sync,
-    std::optional<TensorSyncSpec> in1_tensor_sync,
+    std::optional<TensorSyncSpec> const& in0_tensor_sync,
+    std::optional<TensorSyncSpec> const& in1_tensor_sync,
     ReaderCircularBufferIds const& reader_cbs,
     // Same for both operands
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& worker_tensor_slices,
@@ -1006,7 +1007,7 @@ void create_final_reducer_worker_rt_args_not_end_of_line(
             pages_per_cb_packet,  // TODO: get from fabric
             {w_logical},
             final_reducer_writer_commands.at(i),
-            std::nullopt,
+            {},
             std::nullopt,
             std::nullopt);
     }
@@ -1132,7 +1133,7 @@ void create_worker_runtime_args_for_inactive_workers(
         0,  // TODO: get from fabric
         inactive_cores,
         {},
-        std::nullopt,
+        {},
         std::nullopt,
         std::nullopt);
 
@@ -1147,7 +1148,7 @@ void create_worker_runtime_args_for_inactive_workers(
         0,  // TODO: get from fabric
         inactive_cores,
         {},
-        std::nullopt,
+        {},
         std::nullopt,
         std::nullopt);
 }
@@ -1278,7 +1279,7 @@ void create_worker_runtime_args_end_of_line(
         std::vector<std::vector<CclHostLowLevelWorkerCommand>> worker_in0_cmd_stream(num_workers);
         std::optional<std::vector<std::vector<CclHostLowLevelWorkerCommand>>> worker_in1_cmd_stream;
         std::vector<std::vector<CclHostLowLevelWorkerCommand>> worker_out0_cmd_stream(num_workers);
-        // TT_FATAL(reader_worker_slices_by_direction[direction].size() == num_workers, "Internal error. Expected number
+        // TT_FATAL(reader_worker_slices_by_direction[direction].sizer
         // of worker slices to match number of workers");
         TT_FATAL(
             reader_worker_slices[direction].size() == num_workers,
@@ -1294,7 +1295,7 @@ void create_worker_runtime_args_end_of_line(
             auto& out0_cmd_stream = worker_out0_cmd_stream[i];
 
             Tensor *output_tensor_ptr = nullptr;
-            auto input_tensor_ptrs = std::vector<Tensor const*>{nullptr};
+            auto input_tensor_ptrs = std::vector<Tensor const*>{nullptr, nullptr};
             auto const& w_logical = reader_worker_cores[i];
             size_t num_math_pages = 0;
             if (is_start_of_line) {
@@ -1366,25 +1367,25 @@ void create_worker_runtime_args_end_of_line(
                 program,
                 kernel_ids.reader,
                 input_tensor_ptrs,
-                {page_size},
+                {page_size, page_size},
                 device,
                 pages_per_cb_packet,  // TODO: get from fabric
                 {w_logical},
                 in0_cmd_stream,
-                std::nullopt,
+                worker_in1_cmd_stream.has_value() ? worker_in1_cmd_stream.value().at(i) : std::vector<CclHostLowLevelWorkerCommand>{},
                 std::nullopt,
                 std::nullopt);
             set_math_runtime_args(program, kernel_ids.math, w_logical, num_math_pages);
             generate_multi_input_command_stream_kernel_rt_args(
                 program,
                 kernel_ids.writer,
-                {output_tensor_ptr},
-                {page_size},
+                {output_tensor_ptr, nullptr},
+                {page_size, page_size},
                 device,
                 pages_per_cb_packet,  // TODO: get from fabric
                 {w_logical},
                 out0_cmd_stream,
-                std::nullopt,
+                std::vector<CclHostLowLevelWorkerCommand>{},
                 fwd_fabric_connection,
                 bwd_fabric_connection);
         }
@@ -1764,6 +1765,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     bool is_end_of_line = topology_config.is_at_end_of_line();
 
     const size_t pages_per_cb_packet = fabric.get_edm_buffer_size_bytes() / cb_page_size;
+    log_trace(tt::LogOp, "Pages per CB packet: {}", pages_per_cb_packet);
     if (is_end_of_line) {
         create_worker_runtime_args_end_of_line(
             program,
@@ -1809,6 +1811,9 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             fabric_teardown_cmd_info);
     }
 
+    if (do_dynamic_fabric_bringup_and_teardown) {
+        fabric.build_kernels();
+    }
     // Synchronous mode kernel invocation
     auto override_runtime_arguments_callback =
         [topology_config,
@@ -1898,6 +1903,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         fabric_lifetime_mode::TRANSIENT,
         from_remote_sem,
         teardown_sem);
+
 }
 
 }  // namespace ttnn::ccl::reduce_scatter_detail

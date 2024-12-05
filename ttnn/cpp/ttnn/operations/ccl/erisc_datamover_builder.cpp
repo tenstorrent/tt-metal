@@ -400,6 +400,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     auto const config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
 
     log_trace(tt::LogOp, "device id={}", local_device->id());
+    log_trace(tt::LogOp, "EDM Fabric Factory ctor on device: {}", local_device->id());
+    if (forward_device.has_value()) {
+        log_trace(tt::LogOp, "\tConnect[FORWARD]: {} -> {}", local_device->id(), forward_device.value()->id());
+    }
+    if (backward_device.has_value()) {
+        log_trace(tt::LogOp, "\tConnect[BACKWARD]: {} -> {}", local_device->id(), backward_device.value()->id());
+    }
 
     // Construct the builders
     std::array<std::pair<Device*, std::optional<Device*>>, 2> device_pairs = {
@@ -486,6 +493,14 @@ void EdmLineFabricOpInterface::build_kernels() const {
         auto &edm_builders = direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
         if (edm_builders.find(device->id()) != edm_builders.end()) {
             for (auto& edm_builder : edm_builders.at(device->id())) {
+                log_trace(
+                    tt::LogOp,
+                    "Building EDM kernel on device {}, logical-core (y={},x={}), noc_core (y={},x={})",
+                    device->id(),
+                    edm_builder.my_eth_core_logical.y,
+                    edm_builder.my_eth_core_logical.x,
+                    device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
+                    device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x);
                 auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
                     *program,
                     device,

@@ -5,9 +5,10 @@
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 
-#include <variant>
+
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/tt_stl/overloaded.hpp"
 
 #include <variant>
 namespace ttnn::ccl::cmd {
@@ -76,25 +77,27 @@ CclHostLowLevelWorkerCommand local_write_cb_to_tensor_slice(
 CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
     ttnn::ccl::v2::TensorSlice const& slice,
     size_t cb_id,
-    std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs> const& dest_args) {
+    std::variant<ttnn::ccl::cmd::UnicastCommandDestArgs, ttnn::ccl::cmd::MulticastCommandDestArgs> const& dest_args) {
     auto const dest_type = std::visit(
-        [](auto const& arg) -> CclCommandDestType {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, UnicastCommandDestArgs>) {
-                return CclCommandDestType::CHIP_UNICAST;
-            } else if constexpr (std::is_same_v<T, MulticastCommandDestArgs>) {
-                return CclCommandDestType::CHIP_MULTICAST;
+        tt::stl::overloaded{
+            [](ttnn::ccl::cmd::UnicastCommandDestArgs const&) { return CclCommandDestType::CHIP_UNICAST; },
+            [](ttnn::ccl::cmd::MulticastCommandDestArgs const&) { return CclCommandDestType::CHIP_MULTICAST; },
+            [](auto&&) -> void {
+                TT_THROW(
+                    "ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice called with unsupported fabric dest_args types. "
+                    "Currently supported types are UnicastCommandDestArgs and MulticastCommandDestArgs");
             }
         },
         dest_args);
     auto dest_args_variant = std::visit(
-        [](auto const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, UnicastCommandDestArgs>) {
-                return ttnn::ccl::cmd::UnicastCommandDestArgs(arg);
-            } else if constexpr (std::is_same_v<T, MulticastCommandDestArgs>) {
-                return ttnn::ccl::cmd::MulticastCommandDestArgs(arg);
-            }
+        tt::stl::overloaded{
+            [](ttnn::ccl::cmd::UnicastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs { return ttnn::ccl::cmd::UnicastCommandDestArgs(arg); },
+            [](ttnn::ccl::cmd::MulticastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs { return ttnn::ccl::cmd::MulticastCommandDestArgs(arg); },
+            // [](auto&&) -> void {
+            //     TT_THROW(
+            //         "ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice called with unsupported fabric dest_args types. "
+            //         "Currently supported types are UnicastCommandDestArgs and MulticastCommandDestArgs");
+            // }
         },
         dest_args);
 
@@ -117,28 +120,34 @@ CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
 }
 
 static ttnn::ccl::cmd::CclCommandAddrType get_semaphore_addr_type(semaphore_id_t const& semaphore_id) {
-    return std::visit([](semaphore_id_t const& semaphore) -> ttnn::ccl::cmd::CclCommandAddrType {
-        using T = std::decay_t<decltype(semaphore)>;
-        if constexpr (std::is_same_v<T, uint32_t>) {
-            return ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID;
-        } else if constexpr (std::is_same_v<T, GlobalSemaphore>) {
-            return ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS;
-        } else {
-            TT_THROW("ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
-        }
-    }, semaphore_id);
+    return std::visit(
+        tt::stl::overloaded{
+            [](uint32_t) { return ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID; },
+            [](GlobalSemaphore) { return ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS; },
+            // [](auto&&) -> void {
+            //     TT_THROW(
+            //         "ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. "
+            //         "Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
+            // }
+        },
+        semaphore_id);
 }
 static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t const& semaphore_id) {
-    return std::visit([](semaphore_id_t const& semaphore) -> ttnn::ccl::cmd::CclCommandAddrArgs {
-        using T = std::decay_t<decltype(semaphore)>;
-        if constexpr (std::is_same_v<T, uint32_t>) {
-            return ttnn::ccl::cmd::CclCommandAddrSemaphoreId{std::get<uint32_t>(semaphore_id)};
-        } else if constexpr (std::is_same_v<T, GlobalSemaphore>) {
-            return ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{std::get<GlobalSemaphore>(semaphore_id).address()};
-        } else {
-            TT_THROW("ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
-        }
-    }, semaphore_id);
+    using ttnn::ccl::cmd::CclCommandAddrArgs;
+    return std::visit(
+        tt::stl::overloaded{
+            [](uint32_t id) -> CclCommandAddrArgs { return ttnn::ccl::cmd::CclCommandAddrSemaphoreId{id}; },
+            [](GlobalSemaphore const& semaphore) -> CclCommandAddrArgs {
+                return ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{semaphore.address()};
+            },
+            [](auto&&) -> void {
+                TT_THROW(
+                    "ttnn::ccl::cmd::uops::get_semaphore_addr_val called with unsupported semaphore types. "
+                    "Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
+            }
+
+        },
+        semaphore_id);
 }
 
 [[nodiscard]] CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value) {
@@ -301,7 +310,8 @@ CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
 }
 
 CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc(
-    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     size_t dest_noc0_x,
     size_t dest_noc0_y,
@@ -315,8 +325,8 @@ CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc(
         ttnn::ccl::cmd::CclCommandAddrNone(),
 
         // dest
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        semaphore_dest_args,
+        get_semaphore_addr_type(semaphore_dest_args), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
+        get_semaphore_addr_val(semaphore_dest_args), // semaphore_dest_args,
 
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY,
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY{dest_noc0_x, dest_noc0_y},
