@@ -81,11 +81,11 @@ void kernel_main() {
         if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
             uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
             chan_request_entry_t* req = (chan_request_entry_t*)fvc_consumer_req_buf->chan_req + req_index;
-
-            if (req->bytes[47] & FORWARD) {
+            pull_request_t* pull_req = &req->pull_request;
+            bool can_pull = !fvc_consumer_state.sync_buf_full() && !fvc_consumer_state.sync_pending;
+            if (req->bytes[47] == FORWARD) {
                 // Data is packetized.
-                pull_request_t* pull_req = &req->pull_request;
-                if (!fvc_consumer_state.sync_buf_full() && !fvc_consumer_state.sync_pending) {
+                if (can_pull) {
                     pull_data_to_fvc_buffer(pull_req, &fvc_consumer_state);
                 }
                 if (!fvc_consumer_state.sync_buf_empty()) {
@@ -95,23 +95,36 @@ void kernel_main() {
                         update_pull_request_words_cleared(pull_req);
                         fvc_consumer_state.pull_words_in_flight = 0;
                     }
-                    fvc_consumer_state.forward_data_from_fvc_buffer();
                 }
-                fvc_consumer_state.check_sync_pending();
-                if (fvc_consumer_state.packet_in_progress == 1 and fvc_consumer_state.packet_words_remaining == 0 and
-                    fvc_consumer_state.pull_words_in_flight == 0) {
+
+            } else if (req->bytes[47] == INLINE_FORWARD) {
+                if (can_pull) {
+                    move_data_to_fvc_buffer(pull_req, &fvc_consumer_state);
+                    fvc_consumer_state.pull_words_in_flight = 0;
+                }
+            }
+
+            // Flush all sync entries here.
+            // There can be a previous pending sync entry plus another one
+            // from current inovcation of pull_data_to_fvc_buffer()
+            // current invocatoin may still result in sync pending,
+            // while previous sync pending has been serviced and pushed to sync buf
+            while (!fvc_consumer_state.sync_buf_empty()) {
+                fvc_consumer_state.forward_data_from_fvc_buffer();
+            }
+            if (!fvc_consumer_state.check_sync_pending()) {
+                if (fvc_consumer_state.packet_in_progress == 1 and fvc_consumer_state.packet_words_remaining == 0) {
                     // clear the flags field to invalidate pull request slot.
                     // flags will be set to non-zero by next requestor.
                     req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
                     // req->bytes[47] = 0;
                     // fvc_consumer_req_buf->rdptr.ptr++;
                     fvc_consumer_state.packet_in_progress = 0;
-                }
-                if (fvc_consumer_state.packet_in_progress) {
-                    loop_count++;
-                } else {
                     loop_count = 0;
                 }
+            }
+            if (fvc_consumer_state.packet_in_progress) {
+                loop_count++;
             }
         }
 

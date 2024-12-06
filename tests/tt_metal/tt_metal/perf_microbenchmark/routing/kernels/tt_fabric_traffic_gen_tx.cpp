@@ -42,6 +42,7 @@ constexpr pkt_dest_size_choices_t pkt_dest_size_choice = static_cast<pkt_dest_si
 
 constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
+constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
 uint32_t max_packet_size_mask;
 
@@ -57,7 +58,7 @@ uint64_t xy_local_addr;
 packet_header_t packet_header __attribute__((aligned(16)));
 
 // generates packets with random size and payload on the input side
-inline bool test_buffer_handler() {
+inline bool test_buffer_handler_async_wr() {
     if (input_queue_state.all_packets_done()) {
         return true;
     }
@@ -68,9 +69,10 @@ inline bool test_buffer_handler() {
     }
 
     // Each call to test_buffer_handler initializes only up to the end
-    // of the queue buffer, so we don't need to handle wrapping.
-    // TODO: we need to handle wrapping since header is 3 words now.
-    // if we have to wrap before next 3 words, header has to wrap.
+    // of the producer buffer. Since the header is 3 words, we need to handle
+    // split header cases, where the buffer has not enough space for the full header.
+    // In this case, we write as many words as space available, and remaining header words
+    // are written on next call.
     uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
     uint32_t words_to_init = std::min(free_words, test_producer.words_before_local_buffer_wrap());
     uint32_t words_initialized = 0;
@@ -107,20 +109,27 @@ inline bool test_buffer_handler() {
             input_queue_state.curr_packet_words_remaining -= header_words_to_init;
             byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
         } else {
+            uint32_t words_remaining = words_to_init - words_initialized;
             uint32_t packet_words_initialized = input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
             if (packet_words_initialized < PACKET_HEADER_SIZE_WORDS) {
                 tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
                 uint32_t header_words_initialized = packet_words_initialized;
                 uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS - header_words_initialized;
                 uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
+                header_words_to_init = std::min(words_remaining, header_words_to_init);
                 for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
                     header_ptr[i] = ((uint32_t *)&packet_header)[i + header_dword_index];
                 }
                 words_initialized += header_words_to_init;
+                words_remaining = words_to_init - words_initialized;
                 input_queue_state.curr_packet_words_remaining -= header_words_to_init;
                 byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
+                if (words_remaining == 0) {
+                    // no space left for packet data.
+                    break;
+                }
             }
-            uint32_t words_remaining = words_to_init - words_initialized;
+
             uint32_t num_words = std::min(words_remaining, input_queue_state.curr_packet_words_remaining);
             if constexpr (!skip_pkt_content_gen) {
                 uint32_t start_val =
@@ -135,6 +144,80 @@ inline bool test_buffer_handler() {
     }
     test_producer.advance_local_wrptr(words_initialized);
     return false;
+}
+
+// generates packets with random size and payload on the input side
+inline bool test_buffer_handler_atomic_inc() {
+    if (input_queue_state.all_packets_done()) {
+        return true;
+    }
+
+    uint32_t free_words = test_producer.get_num_words_free();
+    if (free_words < PACKET_HEADER_SIZE_WORDS) {
+        return false;
+    }
+
+    uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
+    uint32_t words_to_init = std::min(free_words, test_producer.words_before_local_buffer_wrap());
+    uint32_t words_initialized = 0;
+    while (words_initialized < words_to_init) {
+        if (input_queue_state.all_packets_done()) {
+            break;
+        }
+
+        if (!input_queue_state.packet_active()) {  // start of a new packet
+            input_queue_state.next_inline_packet(total_data_words);
+
+            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+
+            packet_header.routing.flags = INLINE_FORWARD;
+            packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+            packet_header.session.command = ATOMIC_INC;
+            packet_header.session.target_offset_l = target_address;
+            packet_header.session.target_offset_h = 0x410;
+            packet_header.packet_parameters.atomic_parameters.wrap_boundary = 31;
+            packet_header.packet_parameters.atomic_parameters.increment = 4;
+            tt_fabric_add_header_checksum(&packet_header);
+            uint32_t words_left = words_to_init - words_initialized;
+            bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
+            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS;
+            if (split_header) {
+                header_words_to_init = words_left;
+            }
+            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                header_ptr[i] = ((uint32_t*)&packet_header)[i];
+            }
+
+            words_initialized += header_words_to_init;
+            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
+            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
+        } else {
+            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+            uint32_t header_words_initialized =
+                input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
+            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS - header_words_initialized;
+            uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
+            uint32_t words_left = words_to_init - words_initialized;
+            header_words_to_init = std::min(words_left, header_words_to_init);
+
+            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                header_ptr[i] = ((uint32_t*)&packet_header)[i + header_dword_index];
+            }
+            words_initialized += header_words_to_init;
+            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
+            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
+        }
+    }
+    test_producer.advance_local_wrptr(words_initialized);
+    return false;
+}
+
+bool test_buffer_handler() {
+    if constexpr (test_command == ASYNC_WR) {
+        return test_buffer_handler_async_wr();
+    } else if constexpr (test_command == ATOMIC_INC) {
+        return test_buffer_handler_atomic_inc();
+    }
 }
 
 void kernel_main() {

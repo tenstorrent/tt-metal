@@ -166,6 +166,14 @@ struct input_queue_rnd_state_t : public input_queue_raw_state_t {
         }
     }
 
+    inline void next_inline_packet(uint64_t total_data_words) {
+        if (!data_packets_done) {
+            packet_rnd_seed = prng_next(packet_rnd_seed);
+            curr_packet_size_words = PACKET_HEADER_SIZE_WORDS;
+            input_queue_raw_state_t::packet_update(0, total_data_words);
+        }
+    }
+
     inline void next_packet_rnd_to_dest(uint32_t num_dest_endpoints,
                                         uint32_t dest_endpoint_id,
                                         uint32_t dest_endpoint_start_id,

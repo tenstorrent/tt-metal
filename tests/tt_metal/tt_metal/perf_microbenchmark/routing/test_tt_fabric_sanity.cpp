@@ -76,6 +76,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tx_data_sent_per_iter_low = 20;
     constexpr uint32_t default_tx_data_sent_per_iter_high = 240;
 
+    constexpr uint32_t default_fabric_command = 1;
+
     constexpr uint32_t default_dump_stat_json = 0;
     constexpr const char* default_output_dir = "/tmp";
 
@@ -155,6 +157,8 @@ int main(int argc, char **argv) {
     uint8_t tx_pkt_dest_size_choice = (uint8_t) test_args::get_command_option_uint32(input_args, "--tx_pkt_dest_size_choice", default_tx_pkt_dest_size_choice);
     uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
     uint32_t tx_data_sent_per_iter_high = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
+    uint32_t fabric_command =
+        test_args::get_command_option_uint32(input_args, "--fabric_command", default_fabric_command);
 
     assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
@@ -217,27 +221,28 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
             tx_phys_core.push_back(device->worker_core_from_logical_core(core));
-            std::vector<uint32_t> compile_args =
-                {
-                    (device->id() << 8) + src_endpoint_start_id + i, // 0: src_endpoint_id
-                    num_dest_endpoints, // 1: num_dest_endpoints
-                    dest_endpoint_start_id, // 2:
-                    tunneler_queue_start_addr, // 3:
-                    tx_queue_start_addr, // 4: queue_start_addr_words
-                    (tx_queue_size_bytes >> 4), // 5: queue_size_words
-                    tunneler_phys_core.x, // 6: router_x
-                    tunneler_phys_core.y, // 7: router_y
-                    test_results_addr, // 8: test_results_addr
-                    test_results_size, // 9: test_results_size
-                    prng_seed, // 10: prng_seed
-                    data_kb_per_tx, // 11: total_data_kb
-                    max_packet_size_words, // 12: max_packet_size_words
-                    timeout_mcycles * 1000 * 1000 * 4, // 13: timeout_cycles
-                    tx_skip_pkt_content_gen, // 14: skip_pkt_content_gen
-                    tx_pkt_dest_size_choice, // 15: pkt_dest_size_choice
-                    tx_data_sent_per_iter_low, // 16: data_sent_per_iter_low
-                    tx_data_sent_per_iter_high // 17: data_sent_per_iter_high
-                };
+            std::vector<uint32_t> compile_args = {
+                (device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
+                num_dest_endpoints,                               // 1: num_dest_endpoints
+                dest_endpoint_start_id,                           // 2:
+                tunneler_queue_start_addr,                        // 3:
+                tx_queue_start_addr,                              // 4: queue_start_addr_words
+                (tx_queue_size_bytes >> 4),                       // 5: queue_size_words
+                tunneler_phys_core.x,                             // 6: router_x
+                tunneler_phys_core.y,                             // 7: router_y
+                test_results_addr,                                // 8: test_results_addr
+                test_results_size,                                // 9: test_results_size
+                prng_seed,                                        // 10: prng_seed
+                data_kb_per_tx,                                   // 11: total_data_kb
+                max_packet_size_words,                            // 12: max_packet_size_words
+                timeout_mcycles * 1000 * 1000 * 4,                // 13: timeout_cycles
+                tx_skip_pkt_content_gen,                          // 14: skip_pkt_content_gen
+                tx_pkt_dest_size_choice,                          // 15: pkt_dest_size_choice
+                tx_data_sent_per_iter_low,                        // 16: data_sent_per_iter_low
+                tx_data_sent_per_iter_high,                       // 17: data_sent_per_iter_high
+                fabric_command
+
+            };
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
