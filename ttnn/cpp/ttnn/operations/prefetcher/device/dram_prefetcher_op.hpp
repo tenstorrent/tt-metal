@@ -17,7 +17,8 @@ namespace ttnn::operations::dram_prefetcher {
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
-    const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+    const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    Tensor& output_tensor);
 
 struct DramPrefetcher {
     const std::vector<Tensor> tensors;

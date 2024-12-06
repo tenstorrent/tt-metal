@@ -31,7 +31,8 @@ void get_max_page_size_and_num_pages(
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
-    const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    Tensor& output_tensor) {
     TT_FATAL(global_cb != std::nullopt, "Global circular buffer must be provided");
 
     Program program{};
@@ -90,7 +91,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     tt::DataFormat in1_writer_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t in1_writer_cb_single_tile_size = 2048;
 
-    tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_writer_cb_size);
+    tt_metal::CircularBufferConfig in1_writer_cb_config =
+        tt_metal::CircularBufferConfig(in1_writer_cb_size).set_globally_allocated_address(*output_tensor.buffer());
     in1_writer_cb_config.remote_index(in1_writer_cb_index)
         .set_page_size(in1_writer_cb_single_tile_size)
         .set_data_format(in1_writer_cb_data_format);
