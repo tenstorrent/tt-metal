@@ -5,6 +5,7 @@ target_sources(
     tt_metal
     PRIVATE
         tt_metal.cpp
+        hal/hal_api.cpp
         graph/graph_tracking.cpp
 )
 
