@@ -156,7 +156,7 @@ models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt 
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @shwetankTT
-models/demos/wormhole/yolov4 @dvartaniansTT @@shwetankTT
+models/demos/wormhole/yolov4 @dvartaniansTT @shwetankTT
 models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat
