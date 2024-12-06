@@ -1065,16 +1065,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     if (not_pad_by_zero) {
         uint32_t src1_cb_index = 1;
         tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src1_cb_index, cb_data_format}})
-                .set_page_size(src1_cb_index, stick_size_padded);
+            tt::tt_metal::CircularBufferConfig(row_major_min_bytes, {{src1_cb_index, cb_data_format}})
+                .set_page_size(src1_cb_index, row_major_min_bytes);
         auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
     }
-
-    uint32_t src2_cb_index = 2;
-    tt::tt_metal::CircularBufferConfig cb_src2_config =
-        tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src2_cb_index, cb_data_format}})
-            .set_page_size(src2_cb_index, stick_size_padded);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();

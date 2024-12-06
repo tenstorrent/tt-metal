@@ -100,7 +100,6 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_pad = tt::CBIndex::c_1;
-    constexpr auto cb_align_pad = tt::CBIndex::c_2;
 
 #define stick_size_is_pow2 get_compile_time_arg_val(19) == 1
 #if (stick_size_is_pow2)
