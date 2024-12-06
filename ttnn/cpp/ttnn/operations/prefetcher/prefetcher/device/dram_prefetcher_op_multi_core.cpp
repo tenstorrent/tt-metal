@@ -78,21 +78,22 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // bytes
     uint32_t in1_reader_cb_size = global_cb->size();
     tt::DataFormat in1_reader_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t in1_reader_cb_single_tile_size = 2048;
+    uint32_t in1_reader_cb_single_tile_size = 16;  // use max tile
 
     tt_metal::CircularBufferConfig in1_reader_cb_config =
         tt_metal::CircularBufferConfig(in1_reader_cb_size, {{in1_reader_cb_index, in1_reader_cb_data_format}})
             .set_page_size(in1_reader_cb_index, in1_reader_cb_single_tile_size);
     auto in1_reader_cb = tt_metal::CreateCircularBuffer(program, dram_reader_cores, in1_reader_cb_config);
+    // TODO: inplace with global CB by setting address
 
     // Writer CB maps inplace with global CB
     uint32_t in1_writer_cb_index = 31;
     uint32_t in1_writer_cb_size = global_cb->size();
     tt::DataFormat in1_writer_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t in1_writer_cb_single_tile_size = 2048;
+    uint32_t in1_writer_cb_single_tile_size = 16;
 
     tt_metal::CircularBufferConfig in1_writer_cb_config =
-        tt_metal::CircularBufferConfig(in1_writer_cb_size).set_globally_allocated_address(*output_tensor.buffer());
+        tt_metal::CircularBufferConfig(in1_writer_cb_size)); // .set_globally_allocated_address(*output_tensor.buffer()
     in1_writer_cb_config.remote_index(in1_writer_cb_index)
         .set_page_size(in1_writer_cb_single_tile_size)
         .set_data_format(in1_writer_cb_data_format);
@@ -103,7 +104,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t in1_writer_page_sizes[num_tensors], in1_writer_num_pages[num_tensors];
     uint32_t in1_reader_page_sizes[num_tensors], in1_reader_num_pages[num_tensors], single_tile_sizes[num_tensors];
     uint32_t in1_block_num_tiles[num_tensors], in1_num_tile_rows_write[num_tensors];
-    uint32_t num_blocks = 24;  // number of receiver cores
+    uint32_t num_blocks =
+        24;  // number of receiver cores // TODO: make this number of receiver cores in global cb mapping
     for (uint32_t i = 0; i < num_tensors; ++i) {
         uint32_t kt = tensors[i].get_legacy_shape()[0] / 32;
         uint32_t nt = tensors[i].get_legacy_shape()[1] / 32;

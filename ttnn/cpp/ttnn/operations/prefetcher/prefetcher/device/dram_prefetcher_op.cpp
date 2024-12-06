@@ -41,6 +41,10 @@ std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // Configure L1 interleaved memory layout
+
+    // TODO: set tensor address to be global_cb sender cores address or write out to another tensor
+    // create tensor with buffer and address of receiver cores address
+
     MemoryConfig output_mem_config = L1_MEMORY_CONFIG;
 
     auto input_tensor = input_tensors.at(0);
