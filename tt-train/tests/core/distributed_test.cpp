@@ -123,7 +123,7 @@ TYPED_TEST(MeshOpsTest, ConcatMesh2dToTensorRecomposition) {
         {TypeParam(8), TypeParam(9), TypeParam(10), TypeParam(11)},
         {TypeParam(12), TypeParam(13), TypeParam(14), TypeParam(15)}};
 
-    EXPECT_TRUE(xt::allclose(composed, expected));
+    EXPECT_TRUE(xt::allclose(composed[0], expected));
 }
 
 TYPED_TEST(MeshOpsTest, ConcatMeshToXTensorOneDimConcatenation) {
@@ -140,7 +140,7 @@ TYPED_TEST(MeshOpsTest, ConcatMeshToXTensorOneDimConcatenation) {
 
     xt::xarray<TypeParam> expected = {
         TypeParam(0), TypeParam(1), TypeParam(2), TypeParam(3), TypeParam(4), TypeParam(5)};
-    EXPECT_TRUE(xt::allclose(composed, expected));
+    EXPECT_TRUE(xt::allclose(composed[0], expected));
 }
 
 TYPED_TEST(MeshOpsTest, VectorMeshToXTensorVectorReturn) {

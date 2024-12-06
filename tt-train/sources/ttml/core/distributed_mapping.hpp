@@ -62,12 +62,12 @@ public:
     XTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
     }
 
-    std::vector<xt::xarray<T>> map(const xt::xarray<T>& tensor) {
-        return static_cast<Derived*>(this)->map_impl(tensor);
+    std::vector<xt::xarray<T>> map(const xt::xarray<T>& tensor) const {
+        return static_cast<Derived const*>(this)->map_impl(tensor);
     }
 
-    std::unordered_map<std::string, std::string> config() {
-        return static_cast<Derived*>(this)->config_impl();
+    std::unordered_map<std::string, std::string> config() const {
+        return static_cast<Derived const*>(this)->config_impl();
     }
 
 protected:
@@ -84,8 +84,8 @@ public:
     MeshToXTensor(tt::tt_metal::distributed::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
     }
 
-    xt::xarray<T> compose(const std::vector<xt::xarray<T>>& tensors) {
-        return static_cast<Derived*>(this)->compose_impl(tensors);
+    std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) const {
+        return static_cast<Derived const*>(this)->compose_impl(tensors);
     }
 
 protected:
@@ -100,13 +100,13 @@ public:
         Base(std::move(mesh_shape)), m_shard_dim(dim) {
     }
 
-    std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
+    std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) const {
         int num_devices = Base::get_num_devices();
         auto sliced_tensors = chunk(tensor, num_devices, m_shard_dim);
         return sliced_tensors;
     }
 
-    std::unordered_map<std::string, std::string> config_impl() {
+    std::unordered_map<std::string, std::string> config_impl() const {
         return {{"strategy", "shard"}, {"shard_dim", std::to_string(m_shard_dim)}};
     }
 
@@ -125,7 +125,7 @@ public:
         // We trust the provided mesh shape and do not validate against a MeshDevice.
     }
 
-    std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
+    std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) const {
         if (!m_dims.first.has_value() && !m_dims.second.has_value()) {
             throw std::invalid_argument("ShardTensor2dMesh requires at least one dimension to shard");
         }
@@ -175,7 +175,7 @@ public:
         return tensor_shards;
     }
 
-    std::unordered_map<std::string, std::string> config_impl() {
+    std::unordered_map<std::string, std::string> config_impl() const {
         return {
             {"strategy", "shard_2d"},
             {"mesh_shape_y", std::to_string(Base::m_mesh_shape.first)},
@@ -198,7 +198,7 @@ public:
         }
     }
 
-    xt::xarray<T> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
+    std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
         int rows = Base::m_mesh_shape.first;
         int cols = Base::m_mesh_shape.second;
         size_t row_dim = m_dims.first;
@@ -227,7 +227,7 @@ public:
 
         // Then concatenate the resulting tensors along rows
         auto result = core::concatenate(row_concatenated, row_dim);
-        return result;
+        return {result};
     }
 
 private:
@@ -241,7 +241,7 @@ public:
     ReplicateXTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
     }
 
-    std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) {
+    std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) const {
         int num_devices = Base::get_num_devices();
         std::vector<xt::xarray<T>> tensors;
         tensors.reserve(static_cast<size_t>(num_devices));
@@ -251,7 +251,7 @@ public:
         return tensors;
     }
 
-    std::unordered_map<std::string, std::string> config_impl() {
+    std::unordered_map<std::string, std::string> config_impl() const {
         int num_devices = Base::get_num_devices();
         return {{"strategy", "replicate"}, {"replication_factor", std::to_string(num_devices)}};
     }
@@ -265,8 +265,8 @@ public:
         Base(std::move(mesh_shape)), m_concat_dim(dim) {
     }
 
-    xt::xarray<T> compose_impl(const std::vector<xt::xarray<T>>& tensors) {
-        return core::concatenate(tensors, m_concat_dim);
+    std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
+        return {core::concatenate(tensors, m_concat_dim)};
     }
 
 private:
@@ -274,11 +274,12 @@ private:
 };
 
 template <typename T>
-class VectorMeshToXTensor {
+class VectorMeshToXTensor : public MeshToXTensor<VectorMeshToXTensor<T>, T> {
 public:
-    VectorMeshToXTensor([[maybe_unused]] tt::tt_metal::distributed::MeshShape mesh_shape) {
+    using Base = MeshToXTensor<VectorMeshToXTensor<T>, T>;
+    VectorMeshToXTensor([[maybe_unused]] tt::tt_metal::distributed::MeshShape mesh_shape) : Base(mesh_shape) {
     }
-    std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) {
+    std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
         return tensors;
     }
 };

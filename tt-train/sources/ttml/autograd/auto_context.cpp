@@ -42,13 +42,20 @@ void AutoContext::reset_graph() {
     m_graph.reset();
 }
 
-void AutoContext::init_device(tt::tt_metal::distributed::MeshShape shape) {
-    m_device = std::make_unique<core::MeshDevice>(shape);
+void AutoContext::open_device() {
+    if (m_device) {
+        throw std::runtime_error("open_device was called after the device was created.");
+    }
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape);
+}
+
+void AutoContext::close_device() {
+    m_device = nullptr;
 }
 
 ttnn::distributed::MeshDevice& AutoContext::get_device() {
     if (!m_device) {
-        init_device(m_mesh_shape);
+        open_device();
     }
 
     return m_device->get_device();

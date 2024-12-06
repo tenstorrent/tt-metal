@@ -46,6 +46,10 @@ public:
     void set_mesh_shape(tt::tt_metal::distributed::MeshShape shape);
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
+    void open_device();
+
+    void close_device();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -56,8 +60,6 @@ private:
     Graph m_graph;
     tt::tt_metal::distributed::MeshShape m_mesh_shape = {1, 1};
     std::unique_ptr<core::MeshDevice> m_device;
-
-    void init_device(tt::tt_metal::distributed::MeshShape shape);
 
     friend class core::Indestructible<AutoContext>;
 };

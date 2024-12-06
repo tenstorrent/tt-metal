@@ -61,12 +61,17 @@ template <class T = float>
     return span_to_xtensor(std::span<T>(vec.data(), vec.size()), shape);
 }
 
-template <class T = float, template <class> class MeshToXTensor = ConcatMeshToXTensor>
-auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensor<T>& composer) {
+template <class T = float>
+auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T>& composer) {
     auto cpu_tensor = tensor.cpu();
     cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-
-    return composer.compose(cpu_tensor);
+    auto cpu_tensors = ttnn::distributed::api::get_device_tensors(cpu_tensor);
+    std::vector<xt::xarray<T>> res;
+    res.reserve(cpu_tensors.size());
+    for (const auto& shard : cpu_tensors) {
+        res.push_back(to_xtensor<T>(shard));
+    }
+    return std::visit([&res](auto&& arg) { return arg.compose(res); }, composer);
 }
 
 template <class T = float>
@@ -77,7 +82,7 @@ tt::tt_metal::Tensor from_xtensor(
     Layout layout = Layout::TILE) {
     auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
     auto config = std::visit([](auto&& arg) { return arg.config(); }, composer);
-    auto output = from_xtensors_to_host(sharded_tensors, composer.get_config());
+    auto output = from_xtensors_to_host(sharded_tensors, config);
     MemoryConfig output_mem_config{};
     output = ttnn::to_device(output, device, output_mem_config);
     if (layout == Layout::TILE) {

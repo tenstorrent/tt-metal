@@ -6,12 +6,8 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_all_includes.hpp>
-#include <cstdint>
 #include <span>
 #include <ttnn/tensor/shape/shape.hpp>
-
-#include "xtensor/xbuffer_adaptor.hpp"
-#include "xtensor/xbuilder.hpp"
 
 // TODO: decide if we want to use xarray everwhere or xtensor is ok
 /*
