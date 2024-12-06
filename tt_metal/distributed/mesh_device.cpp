@@ -327,10 +327,10 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         LogMetal,
         "Instantiating submesh {}: {}x{} with offset: {} {}",
         submesh->get_mesh_id(),
-        submesh_shape.first,
-        submesh_shape.second,
-        offset.first,
-        offset.second);
+        submesh_shape.num_rows,
+        submesh_shape.num_cols,
+        offset.row,
+        offset.col);
     log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->get_mesh_id(), submesh->devices);
 
     return submesh;
