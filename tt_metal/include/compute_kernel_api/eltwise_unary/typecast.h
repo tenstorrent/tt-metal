@@ -28,6 +28,14 @@ namespace ckernel {
  *  Bfp8_b <-> Int32
  *  Bfp8_b <-> UInt16
  *  Bfp8_b <-> UInt32
+ *  Bfp8_b <-> Float16_b
+ *  Bfp8_b <-> Float32
+ *  Bfp4_b <-> Int32
+ *  Bfp4_b <-> UInt16
+ *  Bfp4_b <-> UInt32
+ *  Bfp4_b <-> Bfp8_b
+ *  Bfp4_b <-> Float16_b
+ *  Bfp4_b <-> Float32
  *  UInt16 -> UInt32
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.

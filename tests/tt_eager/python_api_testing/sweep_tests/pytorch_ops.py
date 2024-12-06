@@ -1482,6 +1482,38 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
         return torch.clamp(x.to(torch.int32), min=0, max=65535)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.bfloat16).to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
     else:
         return x
 
