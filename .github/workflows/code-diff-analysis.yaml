@@ -72,8 +72,27 @@ jobs:
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
+
             nice -n 19 ./build_metal.sh --export-compile-commands --build-all --skip-build
-            nice -n 19 git diff -U0 "$(git merge-base HEAD "origin/main")" | clang-tidy-diff-17.py -p1 -path build -j$(( $(nproc) / 2 )) -export-fixes=fixes.yaml
+
+            # Find all touched files present in compile_commands.json
+            # This is not as simple as filtering non-code files, as some code (eg: Kernels) are C++ code that
+            # is not built at this level, and thus clang-tidy will be unable to process them.
+            PREFIX=$(pwd)
+            jq --arg prefix "$PREFIX/" -r '.[].file | sub("^" + $prefix; "")' build/compile_commands.json > relative_files_in_build.txt
+            git diff --name-only "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")..." > changed_files.txt
+            grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
+
+            # Exit if there are no modified files known to CMake
+            [[ -s common_files.txt ]] || {
+              echo "No files to analyze"
+              exit 0
+            }
+
+            # Analyze the relevant diffs of the relevant files
+            git diff "$(git merge-base HEAD "origin/main")" -- $(cat common_files.txt) > filtered_changes.diff
+            clang-tidy-diff-17.py -p1 -path build -export-fixes fixes.yaml -j$(( $(nproc) / 2 )) < filtered_changes.diff
+
             if [ -s fixes.yaml ]; then
               echo "clang-tidy suggested fixes. Failing the workflow."
               cat fixes.yaml
