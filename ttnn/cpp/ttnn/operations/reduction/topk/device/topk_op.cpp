@@ -4,7 +4,7 @@
 
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
-#include "tt_metal/hal/hal_api.hpp"
+#include "tt_metal/tt_hal/hal_api.hpp"
 
 namespace topk_utils {
 

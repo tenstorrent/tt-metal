@@ -6,7 +6,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hal/hal_api.hpp"
+#include "tt_metal/tt_hal/hal_api.hpp"
 #include "tt_log.h"
 
 namespace ttnn::operations::reduction::detail {

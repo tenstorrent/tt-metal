@@ -6,7 +6,7 @@
 #include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hal/hal_api.hpp"
+#include "tt_metal/tt_hal/hal_api.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
