@@ -5,6 +5,7 @@
 #include "binary_generated.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -58,6 +59,7 @@ void LightMetalCaptureContext::reset() {
     cmdsVector_.clear();
     bufferToGlobalIdMap_.clear();
     programToGlobalIdMap_.clear();
+    kernelHandleToGlobalIdMap_.clear();
 }
 
 // Public Object Maps Accessors - Buffers
@@ -114,30 +116,31 @@ uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj) {
     }
 }
 
-uint32_t LightMetalCaptureContext::getGlobalId(KernelHandle kernel_id, bool must_exist) {
-    auto it = kernelHandleToGlobalIdMap_.find(kernel_id);
-    if (it != kernelHandleToGlobalIdMap_.end()) {
-        return it->second;
-    } else if (must_exist) {
-        throw std::runtime_error("KernelHandle not found in global_id map");
-    }
+// Public Object Maps Accessors - KernelHandle
 
+bool LightMetalCaptureContext::isInMap(const KernelHandle handle) {
+    return kernelHandleToGlobalIdMap_.find(handle) != kernelHandleToGlobalIdMap_.end();
+}
+
+uint32_t LightMetalCaptureContext::addToMap(const KernelHandle handle) {
+    if (isInMap(handle)) log_warning(tt::LogMetalTrace, "KernelHandle already exists in global_id map.");
     uint32_t global_id = nextGlobalId_++;
-    kernelHandleToGlobalIdMap_[kernel_id] = global_id;
+    kernelHandleToGlobalIdMap_[handle] = global_id;
     return global_id;
 }
 
-uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj, bool must_exist) {
-    auto it = programToGlobalIdMap_.find(obj);
-    if (it != programToGlobalIdMap_.end()) {
-        return it->second;
-    } else if (must_exist) {
-        throw std::runtime_error("Program object not found in global_id map");
-    }
+void LightMetalCaptureContext::removeFromMap(const KernelHandle handle) {
+    if (!isInMap(handle)) log_warning(tt::LogMetalTrace, "KernelHandle not found in global_id map.");
+    kernelHandleToGlobalIdMap_.erase(handle);
+}
 
-    uint32_t global_id = nextGlobalId_++;
-    programToGlobalIdMap_[obj] = global_id;
-    return global_id;
+uint32_t LightMetalCaptureContext::getGlobalId(const KernelHandle handle) {
+    auto it = kernelHandleToGlobalIdMap_.find(handle);
+    if (it != kernelHandleToGlobalIdMap_.end()) {
+        return it->second;
+    } else {
+        throw std::runtime_error("KernelHandle not found in global_id map.");
+    }
 }
 
 ////////////////////////////////////////////

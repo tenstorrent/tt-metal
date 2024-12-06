@@ -1031,7 +1031,8 @@ KernelHandle CreateKernel(
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
-    return std::visit(
+
+    KernelHandle kernel = std::visit(
         [&](auto &&cfg) -> KernelHandle {
             CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
             KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
@@ -1045,6 +1046,9 @@ KernelHandle CreateKernel(
             }
         },
         config);
+
+    TRACE_FUNCTION_CALL(captureCreateKernel, kernel, program, file_name, core_spec, config);
+    return kernel;
 }
 
 KernelHandle CreateKernelFromString(
