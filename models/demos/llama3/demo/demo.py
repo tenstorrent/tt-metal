@@ -227,9 +227,6 @@ def run_llama3_demo(
         max_seq_len=max_seq_len,
     )
 
-    if model_args.model_name == "3.1-70B" and max_seq_len >= 64 * 1024:
-        pytest.skip("Llama3.1-70B will run out of memory for max_seq_len >= 64k tokens")
-
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
@@ -262,6 +259,7 @@ def run_llama3_demo(
             ), "T3K only supports a max context length of 128k tokens for Llama3.1-8B and Llama3.2-11B"
     if llama_model_name == "3.1-70B":
         assert tt_device_name in ["T3K", "TG"], "Llama3.1-70B is only supported on T3K or TG"
+        assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
