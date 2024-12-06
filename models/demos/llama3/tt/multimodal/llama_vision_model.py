@@ -676,6 +676,12 @@ class CrossAttentionTransformer(torch.nn.Module):
         """
         This method runs prefill forward. It takes ttnn tensors in, returns ttnn tensors.
         """
+
+        if cross_page_table is not None:
+            assert (
+                xattn_caches is None and kv_cache is not None
+            ), "no separate xattn_caches should be allocated when using cross_page_table with paged kv cache"
+
         logits = self.text_model.forward(
             h,
             xattn_mask=xattn_mask,
@@ -710,6 +716,12 @@ class CrossAttentionTransformer(torch.nn.Module):
         """
         This method runs decode forward. It takes ttnn tensors in, returns ttnn tensors.
         """
+
+        if cross_page_table is not None:
+            assert (
+                xattn_caches is None and kv_cache is not None
+            ), "no separate xattn_caches should be allocated when using cross_page_table with paged kv cache"
+
         logits = self.text_model.forward(
             h,
             xattn_mask=xattn_mask,
