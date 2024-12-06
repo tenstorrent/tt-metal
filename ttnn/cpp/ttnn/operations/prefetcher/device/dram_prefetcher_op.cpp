@@ -5,7 +5,6 @@
 #include "dram_prefetcher_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
-// #include "ttnn/tensor/types.hpp"
 
 #include "tt_metal/common/constants.hpp"
 
@@ -51,7 +50,7 @@ std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tens
 
     // Create core ranges
     CoreRange first_core_range(CoreCoord(1, 0), CoreCoord(2, 0));
-    CoreRange second_core_range(CoreCoord(1, 5), CoreCoord(1, 6));
+    CoreRange second_core_range(CoreCoord(1, 4), CoreCoord(2, 4));
 
     // Create core range set using std::set
     std::set<CoreRange> ranges = {first_core_range, second_core_range};
