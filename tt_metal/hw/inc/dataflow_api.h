@@ -139,7 +139,7 @@ uint32_t get_bank_offset(uint32_t bank_index) {
 
 }  // namespace addrgen
 
-// if PROFILE_NOC_EVENTS is defined, enables RECORD* macros to tracking noc events via kernel profiler 
+// if PROFILE_NOC_EVENTS is defined, enables RECORD* macros to tracking noc events via kernel profiler
 // otherwise this just defines empty RECORD_* macros with no other effects
 #include "tools/profiler/noc_event_profiler.hpp"
 
@@ -1628,7 +1628,7 @@ template <bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_read_barrier(uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT(NocEventType::READ_BARRIER);
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
 
     WAYPOINT("NRBW");
     // BH cache is write-through so reader must invalidate if reading any address that was previously read
@@ -1636,6 +1636,8 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
         invalidate_l1_cache();
     } while (!ncrisc_noc_reads_flushed(noc));
     WAYPOINT("NRBD");
+
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_END);
 }
 
 /**
@@ -1650,12 +1652,14 @@ template <bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER);
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START);
 
     WAYPOINT("NWBW");
     while (!ncrisc_noc_nonposted_writes_flushed(noc))
         ;
     WAYPOINT("NWBD");
+
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END);
 }
 
 /**
@@ -1901,7 +1905,7 @@ void noc_async_read_tile_dram_sharded_with_state(uint32_t src_base_addr, uint32_
 template <bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_with_state_with_trid(uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    
+
     RECORD_NOC_EVENT(NocEventType::UNSUPPORTED);
 
     WAYPOINT("NRDW");

@@ -11,7 +11,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         READ_SET_TRID,
         READ_WITH_STATE,
         READ_WITH_STATE_AND_TRID,
-        READ_BARRIER,
+        READ_BARRIER_START,
+        READ_BARRIER_END,
         READ_BARRIER_WITH_TRID,
 
         WRITE,
@@ -19,7 +20,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         WRITE_MULTICAST,
         WRITE_SET_STATE,
         WRITE_WITH_STATE,
-        WRITE_BARRIER,
+        WRITE_BARRIER_START,
+        WRITE_BARRIER_END,
         WRITE_BARRIER_WITH_TRID,
         WRITE_FLUSH,
 
