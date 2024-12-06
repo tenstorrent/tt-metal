@@ -40,10 +40,13 @@ void py_module(py::module& module) {
             py::arg("num_cols"))
         .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
         .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
-        .def("__repr__", [](const MeshShape& ms) {
-            return "<MeshShape num_rows=" + std::to_string(ms.num_rows) + " num_cols=" + std::to_string(ms.num_cols) +
-                   ">";
-        });
+        .def(
+            "__repr__",
+            [](const MeshShape& ms) {
+                return "<MeshShape num_rows=" + std::to_string(ms.num_rows) +
+                       " num_cols=" + std::to_string(ms.num_cols) + ">";
+            })
+        .def("__iter__", [](const MeshShape& ms) { return py::iter(py::make_tuple(ms.num_rows, ms.num_cols)); });
     static_cast<py::class_<MeshOffset>>(module.attr("MeshOffset"))
         .def(
             py::init([](size_t row, size_t col) { return MeshOffset(row, col); }),
@@ -52,9 +55,12 @@ void py_module(py::module& module) {
             py::arg("col"))
         .def_readwrite("row", &MeshOffset::row, "Row offset in the mesh.")
         .def_readwrite("col", &MeshOffset::col, "Column offset in the mesh.")
-        .def("__repr__", [](const MeshOffset& mo) {
-            return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
-        });
+        .def(
+            "__repr__",
+            [](const MeshOffset& mo) {
+                return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
+            })
+        .def("__iter__", [](const MeshOffset& mo) { return py::iter(py::make_tuple(mo.row, mo.col)); });
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
