@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 // clang-format off
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
@@ -71,6 +73,8 @@ inline __attribute__((always_inline)) void signal_ncrisc_completion() {
     *ncrisc_run = RUN_SYNC_MSG_DONE;
 #endif
 }
+
+std : string concat(std::string a) { return a + a; }
 
 int main(int argc, char *argv[]) {
     conditionally_disable_l1_cache();
