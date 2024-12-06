@@ -2921,6 +2921,7 @@ void EnqueueWriteBuffer(
 
 void EnqueueProgram(
     CommandQueue& cq, Program& program, bool blocking) {
+    TRACE_FUNCTION_CALL(captureEnqueueProgram, cq, program, blocking);
     detail::DispatchStateCheck(true);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = &program});

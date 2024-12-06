@@ -213,3 +213,14 @@ inline void captureCreateProgram(Program& program) {
     auto cmd_variant = tt::target::CreateCreateProgramCommand(ctx.getBuilder(), program_global_id);
     captureCommand(tt::target::CommandType::CreateProgramCommand, cmd_variant.Union());
 }
+
+inline void captureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+    uint32_t cq_global_id = cq.id(); // FIXME - Maybe not correct, probably should handle same way as Buffers.
+    uint32_t program_global_id = ctx.getGlobalId(&program);
+    log_info(tt::LogMetalTrace, "captureEnqueueProgram: cq_global_id: {} program_global_id: {}", cq_global_id, program_global_id);
+
+    auto cmd_variant = tt::target::CreateEnqueueProgramCommand(ctx.getBuilder(), cq_global_id, program_global_id, blocking);
+    captureCommand(tt::target::CommandType::EnqueueProgramCommand, cmd_variant.Union());
+}

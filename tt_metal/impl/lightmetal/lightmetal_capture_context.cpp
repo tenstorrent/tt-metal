@@ -57,6 +57,7 @@ void LightMetalCaptureContext::reset() {
     builder_.Clear();
     cmdsVector_.clear();
     bufferToGlobalIdMap_.clear();
+    programToGlobalIdMap_.clear();
 }
 
 // Public Object Maps Accessors - Buffers
