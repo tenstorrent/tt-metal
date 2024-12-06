@@ -108,6 +108,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
             EnqueueProgram(device->command_queue(), incrementer_program, false);
         }
         Synchronize(device);
+        detail::DumpDeviceProfileResults(device);
     }
 }
 
@@ -136,5 +137,6 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
             EnqueueProgram(device->command_queue(), incrementer_program, false);
         }
         Synchronize(device);
+        detail::DumpDeviceProfileResults(device);
     }
 }
