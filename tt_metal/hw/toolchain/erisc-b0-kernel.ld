@@ -91,10 +91,6 @@ SECTIONS
     . = ALIGN(4);
     __ldm_bss_end = .;
   } > REGION_APP_KERNEL_DATA :data
-  /* Place uninitialized variables here, so we don't zero them out. */
-  .uninit : {
-    *(.uninit)
-  } > REGION_APP_KERNEL_DATA :data
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
