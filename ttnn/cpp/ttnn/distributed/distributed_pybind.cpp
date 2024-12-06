@@ -21,6 +21,8 @@ namespace py = pybind11;
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
+    py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
+    py::class_<MeshOffset>(module, "MeshOffset", "Struct representing the offset of a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -29,23 +31,44 @@ void py_module(py::module& module) {
         .value("Ring", MeshType::Ring)
         .value("Line", MeshType::Line)
         .export_values();
+
+    static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
+        .def(
+            py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
+            "Constructor with specified number of rows and columns.",
+            py::arg("num_rows"),
+            py::arg("num_cols"))
+        .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
+        .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
+        .def("__repr__", [](const MeshShape& ms) {
+            return "<MeshShape num_rows=" + std::to_string(ms.num_rows) + " num_cols=" + std::to_string(ms.num_cols) +
+                   ">";
+        });
+    static_cast<py::class_<MeshOffset>>(module.attr("MeshOffset"))
+        .def(
+            py::init([](size_t row, size_t col) { return MeshOffset(row, col); }),
+            "Constructor with specified row and column offsets.",
+            py::arg("row"),
+            py::arg("col"))
+        .def_readwrite("row", &MeshOffset::row, "Row offset in the mesh.")
+        .def_readwrite("col", &MeshOffset::col, "Column offset in the mesh.")
+        .def("__repr__", [](const MeshOffset& mo) {
+            return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
+        });
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
-            py::init([](const std::pair<size_t, size_t>& mesh_device_shape,
+            py::init([](const MeshShape& mesh_device_shape,
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
-                        const std::pair<size_t, size_t>& offset,
+                        const MeshOffset& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
                 return MeshDevice::create(
-                    MeshDeviceConfig(
-                        MeshShape(mesh_device_shape.first, mesh_device_shape.second),
-                        MeshOffset(offset.first, offset.second),
-                        physical_device_ids,
-                        mesh_type),
+                    MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
@@ -79,15 +102,7 @@ void py_module(py::module& module) {
         )doc")
         .def(
             "create_submesh",
-            [](MeshDevice& self,
-               const std::pair<size_t, size_t>& submesh_shape,
-               const std::pair<size_t, size_t>& offset,
-               MeshType mesh_type) {
-                return self.create_submesh(
-                    MeshShape(submesh_shape.first, submesh_shape.second),
-                    MeshOffset(offset.first, offset.second),
-                    mesh_type);
-            },
+            &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
             py::arg("offset"),
             py::arg("mesh_type"),
@@ -149,7 +164,7 @@ void py_module(py::module& module) {
             )doc")
         .def_property_readonly(
             "shape",
-            [](const MeshDevice& self) { return std::make_pair(self.shape().num_rows, self.shape().num_cols); },
+            &MeshDevice::shape,
             R"doc(
             Get the shape of the device mesh.
 
@@ -203,24 +218,7 @@ void py_module(py::module& module) {
 
     module.def(
         "open_mesh_device",
-        [](const std::pair<size_t, size_t>& mesh_shape,
-           size_t l1_small_size,
-           size_t trace_region_size,
-           size_t num_command_queues,
-           const DispatchCoreConfig& dispatch_core_config,
-           const std::pair<size_t, size_t>& offset,
-           const std::vector<chip_id_t>& physical_device_ids,
-           MeshType mesh_type) {
-            return open_mesh_device(
-                MeshShape(mesh_shape.first, mesh_shape.second),
-                l1_small_size,
-                trace_region_size,
-                num_command_queues,
-                dispatch_core_config,
-                mesh_type,
-                MeshOffset(offset.first, offset.second),
-                physical_device_ids);
-        },
+        &open_mesh_device,
         py::kw_only(),
         py::arg("mesh_shape"),
         py::arg("l1_small_size"),
