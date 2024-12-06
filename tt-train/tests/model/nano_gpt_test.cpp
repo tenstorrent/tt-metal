@@ -168,9 +168,9 @@ void train_test(bool use_moreh_adamw = false) {
     // verify program cache
     auto program_cache_entries = device->num_program_cache_entries();
     if (!use_moreh_adamw) {
-        EXPECT_EQ(program_cache_entries, 124);
+        EXPECT_EQ(program_cache_entries, 123);
     } else {
-        EXPECT_EQ(program_cache_entries, 103);
+        EXPECT_EQ(program_cache_entries, 102);
     }
 
     // verify time per step
