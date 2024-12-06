@@ -12,7 +12,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <string>
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
@@ -314,8 +313,6 @@ void wait_until_cores_done(
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
-
-std::string concat(std::string a) { return a + a; }
 
 }  // namespace internal_
 
