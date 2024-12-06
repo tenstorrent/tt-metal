@@ -24,7 +24,7 @@ private:
     autograd::AutocastTensor m_positional_embedding;
 
 public:
-    PositionalEmbedding(uint32_t embedding_dim, float dropout_prob = 0.F, uint32_t sequence_length = 1024);
+    explicit PositionalEmbedding(uint32_t embedding_dim, float dropout_prob = 0.F, uint32_t sequence_length = 1024);
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
@@ -35,7 +35,8 @@ class TrainablePositionalEmbedding : public PositionalEmbeddingBase {
     void initialize_tensors(uint32_t sequence_length, uint32_t embedding_dim);
 
 public:
-    TrainablePositionalEmbedding(uint32_t embedding_dim, float dropout_prob = 0.F, uint32_t sequence_length = 1024);
+    explicit TrainablePositionalEmbedding(
+        uint32_t embedding_dim, float dropout_prob = 0.F, uint32_t sequence_length = 1024);
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 

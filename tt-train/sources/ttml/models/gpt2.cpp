@@ -91,6 +91,19 @@ ttml::autograd::TensorPtr Transformer::operator()(
     return log_softmax;
 }
 
+PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
+    auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
+    if (positional_embedding_str == "trainable") {
+        return PositionalEmbeddingType::Trainable;
+    } else if (positional_embedding_str == "fixed") {
+        return PositionalEmbeddingType::Fixed;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown positional embedding type: {}. Supported positional embedding types [trainable, fixed]",
+            positional_embedding_str));
+    }
+}
+
 TransformerConfig read_config(const YAML::Node& config) {
     TransformerConfig transformer_config;
     transformer_config.num_heads = config["num_heads"].as<uint32_t>();
@@ -99,17 +112,7 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
     transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
-
-    auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
-    if (positional_embedding_str == "trainable") {
-        transformer_config.positional_embedding_type = PositionalEmbeddingType::Trainable;
-    } else if (positional_embedding_str == "fixed") {
-        transformer_config.positional_embedding_type = PositionalEmbeddingType::Fixed;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown positional embedding type: {}. Supported positional embedding types [trainable, fixed]",
-            positional_embedding_str));
-    }
+    transformer_config.positional_embedding_type = read_positional_embedding_type(config);
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =
