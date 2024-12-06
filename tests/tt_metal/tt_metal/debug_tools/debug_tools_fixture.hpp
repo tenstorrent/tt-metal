@@ -68,7 +68,7 @@ protected:
         DebugToolsFixture::TearDown();
 
         // Remove the DPrint output file after the test is finished.
-        std::remove(dprint_file_name.c_str());
+        // std::remove(dprint_file_name.c_str());
 
         // Reset DPrint settings
         tt::llrt::RunTimeOptions::get_instance().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -87,7 +87,7 @@ protected:
         Device* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
-        tt::DPrintServerClearLogFile();
+        // tt::DPrintServerClearLogFile();
         tt::DPrintServerClearSignals();
     }
 

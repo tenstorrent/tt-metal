@@ -16,6 +16,9 @@
 #include <set>
 #include <filesystem>
 #include <tuple>
+#include "common/core_descriptor.hpp"
+#include "device/device_handle.hpp"
+#include "fmt/color.h"
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/logger.hpp"
 
@@ -26,6 +29,8 @@
 
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "umd/device/tt_soc_descriptor.h"
 
 using std::cout;
 using std::endl;
@@ -57,21 +62,21 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
-static string GetRiscName(CoreType core_type, int hart_id) {
+static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (hart_id) {
             case DPRINT_RISCV_INDEX_ER:
-                return "ERISC";
+                return abbreviated ? "ER" : "ERISC";
                 // Default case falls through and handled at end.
         }
     } else {
         switch (hart_id) {
-            case DPRINT_RISCV_INDEX_NC: return "NCRISC";
-            case DPRINT_RISCV_INDEX_TR0: return "TRISC0";
-            case DPRINT_RISCV_INDEX_TR1: return "TRISC1";
-            case DPRINT_RISCV_INDEX_TR2: return "TRISC2";
+            case DPRINT_RISCV_INDEX_NC: return abbreviated ? "NC" : "NCRISC";
+            case DPRINT_RISCV_INDEX_TR0: return abbreviated ? "TR0" : "TRISC0";
+            case DPRINT_RISCV_INDEX_TR1: return abbreviated ? "TR1" : "TRISC1";
+            case DPRINT_RISCV_INDEX_TR2: return abbreviated ? "TR2" : "TRISC2";
             case DPRINT_RISCV_INDEX_BR:
-                return "BRISC";
+                return abbreviated ? "BR" : "BRISC";
                 // Default case falls through and handled at end.
         }
     }
@@ -225,6 +230,9 @@ private:
     // Transfers data from the given intermediate stream to the output stream and flushes the output stream so that the
     // data is visible to the user.
     void TransferToAndFlushOutputStream(const HartKey& hart_key, ostringstream* intermediate_stream);
+
+    // Returns the dprint data that should be outputted by the output stream.
+    string GetDataToOutput(const HartKey& hart_key, const ostringstream* stream);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
@@ -466,6 +474,8 @@ DebugPrintServerContext::DebugPrintServerContext() {
         tt::llrt::RunTimeOptions::get_instance().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
     bool one_file_per_risc =
         tt::llrt::RunTimeOptions::get_instance().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    bool prepend_device_core_risc =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
 
     // One file per risc auto-generates the output files and ignores the env var for it. Print a warning if both are
     // specified just in case.
@@ -473,6 +483,13 @@ DebugPrintServerContext::DebugPrintServerContext() {
         log_warning(
             "Both TT_METAL_DPRINT_FILE_NAME and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
             "TT_METAL_DPRINT_FILE_NAME will be ignored.");
+    }
+
+    if (prepend_device_core_risc && one_file_per_risc) {
+        log_warning(
+            "Both TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
+            "TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC will be disabled.");
+        tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
@@ -1190,11 +1207,38 @@ void DebugPrintServerContext::TransferIntermediateStreamsToOutputStreamAndFlush(
 
 void DebugPrintServerContext::TransferToAndFlushOutputStream(
     const HartKey& hart_key, ostringstream* intermediate_stream) {
-    const string& intermediate_stream_data = intermediate_stream->str();
+    const string& output_data = GetDataToOutput(hart_key, intermediate_stream);
     ostream* output_stream = GetOutputStream(hart_key);
-    *output_stream << intermediate_stream_data << flush;
+    *output_stream << output_data << flush;
     ResetStream(intermediate_stream);
 }  // TransferToAndFlushOutputStream
+
+string DebugPrintServerContext::GetDataToOutput(const HartKey& hart_key, const ostringstream* stream) {
+    string output;
+    const bool prepend_device_core_risc =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    if (prepend_device_core_risc) {
+        const chip_id_t device_id = get<0>(hart_key);
+        const CoreDescriptor& core_desc = get<1>(hart_key);
+        const uint32_t risc_id = get<2>(hart_key);
+
+        Device* device = tt::DevicePool::instance().get_active_device(device_id);
+        const CoreCoord& phys_core_coord = device->virtual_core_from_logical_core(core_desc.coord, core_desc.type);
+
+        const string& device_id_str = to_string(device_id);
+        const string& phys_core_coord_str = phys_core_coord.str();
+        const string& risc_name = GetRiscName(core_desc.type, risc_id, true);
+        output += fmt::format("{}:{}:{}: ", device_id_str, phys_core_coord_str, risc_name);
+    }
+
+    if (stream->str().empty()) {
+        output = "";
+    } else {
+        output += stream->str();
+    }
+
+    return output;
+}
 
 ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
     ostream* output_stream = stream_;
