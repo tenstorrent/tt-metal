@@ -17,13 +17,13 @@
 #endif
 
 // Macros for printing circular buffer internals
-#define CB_RD_PTR(id) (cb_interface[id].fifo_rd_ptr << 4)  // only valid in unpacker thread
-#define CB_RD_LIM(id) ((cb_interface[id].fifo_limit_plus_1 - 1) << 4)
-#define CB_RD_SZ(id) (cb_interface[id].fifo_size << 4)
+#define CB_RD_PTR(id) (get_local_cb_interface(id).fifo_rd_ptr << 4)  // only valid in unpacker thread
+#define CB_RD_LIM(id) ((get_local_cb_interface(id).fifo_limit_plus_1 - 1) << 4)
+#define CB_RD_SZ(id) (get_local_cb_interface(id).fifo_size << 4)
 
-#define CB_WR_PTR(id) (cb_interface[id].fifo_wr_ptr << 4)  // only valid in packer thread
-#define CB_PAGE_COUNT(id) (cb_interface[id].fifo_num_pages)
-#define CB_PAGE_SIZE(id) (cb_interface[id].fifo_page_size << 4)
+#define CB_WR_PTR(id) (get_local_cb_interface(id).fifo_wr_ptr << 4)  // only valid in packer thread
+#define CB_PAGE_COUNT(id) (get_local_cb_interface(id).fifo_num_pages)
+#define CB_PAGE_SIZE(id) (get_local_cb_interface(id).fifo_page_size << 4)
 
 //
 // Slices/samples elements of a tile 'itile' from cb using a given numpy style slice object SliceRange.

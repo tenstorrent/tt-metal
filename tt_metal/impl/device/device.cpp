@@ -19,7 +19,6 @@
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
-#include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -29,6 +28,9 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
+
+// FIXME: ARCH_NAME specific
+#include "eth_l1_address_map.h"
 
 namespace tt {
 
@@ -321,10 +323,16 @@ void Device::initialize_device_kernel_defines()
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
     auto pcie_cores = soc_d.get_pcie_cores();
     auto grid_size = this->grid_size();
-    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
-    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+
+    // Workaround for Simulator integration as they use a 2x2 grid which would underflow PCIE_NOC1*
+    CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
+    auto pcie_noc1_x = pcie_cores.empty() ? 14 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x);
+    auto pcie_noc1_y = pcie_cores.empty() ? 11 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y);
+
+    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
+    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(pcie_noc1_x));
+    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(pcie_noc1_x));
 }
 
 void Device::initialize_build() {
@@ -1281,7 +1289,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[13] = 0; // unused: remote ds semaphore
                         compile_args[14] = 0; // preamble size
                         compile_args[15] = true,    // split_prefetcher
-                        compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                        compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                         compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                         compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
                         compile_args[19] = settings.num_compute_cores;
@@ -1336,7 +1344,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[13] = 0; // unused: remote ds semaphore
                             compile_args[14] = 0; // preamble size
                             compile_args[15] = true,    // split_prefetcher
-                            compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                            compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                             compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                             compile_args[18] = mux_settings.cb_pages,
                             compile_args[19] = settings.num_compute_cores;
@@ -3137,7 +3145,7 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
     const auto& grid_size = this->grid_size();
-    return NOC_XY_ENCODING(
+    return tt::tt_metal::hal.noc_xy_encoding(
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
     );
@@ -3148,14 +3156,14 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
         );
     } else {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),

@@ -6,9 +6,6 @@
 
 #include <cstdint>
 
-#include "noc/noc_parameters.h"
-#include "noc/noc_overlay_parameters.h"
-
 #include "llrt/hal.hpp"
 
 namespace tt {

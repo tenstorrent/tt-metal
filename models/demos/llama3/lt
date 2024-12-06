@@ -389,12 +389,20 @@ def main(stdscr):
                         commands = parse_list(command_input, allow_space=False)
 
                         # Generate combinations (reordered)
+                        # Ignore invalid combinations:
+                        # - 11b and 11b-b models on n150 device
+                        # - 70b model on n150 and n300 devices
+                        # - Vision commands on non-vision (11b) models
                         combinations = [
                             (c, m, d)
                             for c in commands
                             for m in models
                             for d in devices
-                            if not ((m in ["11b", "11b-b"] and d == "n150") or (m == "70b" and d in ["n150", "n300"]))
+                            if not (
+                                (m in ["11b", "11b-b"] and d == "n150")
+                                or (m == "70b" and d in ["n150", "n300"])
+                                or ("vision" in c and m not in ["11b", "11b-b"])
+                            )
                         ]
 
                         # Create output entries
@@ -723,8 +731,9 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Define command shortcuts
     command_shortcuts = {
-        "demo": "pytest models/demos/llama3/demo/demo.py -k instruct_weights-1",
-        "demo-1layer": "pytest models/demos/llama3/demo/demo.py -k single_layer",
+        "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
+        "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
+        "demo-long": "pytest models/demos/llama3/demo/demo.py -k performance-long",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
@@ -733,9 +742,10 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
         "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
-        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k performance-full",
-        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k performance-quick",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-128 and full'",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-128 and quick'",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance-4096",
+        # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
         "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
@@ -749,7 +759,6 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "vision-encoder": "pytest models/demos/llama3/tests/multimodal/test_llama_vision_encoder.py",
         "vision-text-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py",
         "vision-vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
-        "perf": "pytest models/demos/llama3/tests/test_llama_perf.py -k 1024",
         "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k performance",
     }
 

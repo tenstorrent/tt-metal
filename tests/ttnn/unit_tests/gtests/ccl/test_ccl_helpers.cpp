@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;
@@ -53,6 +54,10 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
 }
 
 TEST(CclHelpers, EriscDatamoverConfig_GetEdmHandshakeAddress_GT_0) {
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    if (arch == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP();
+    }
     for (std::size_t i = 0; i < 8; i++) {
         ASSERT_TRUE(ttnn::ccl::EriscDatamoverConfig::get_edm_handshake_address() > 0);
     }

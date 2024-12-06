@@ -48,13 +48,20 @@ void ArgMax::validate_with_output_tensors(
     TT_FATAL(input_shape[1] == 1, "dim 1 must be 1");
 }
 
-std::vector<ttnn::SimpleShape> ArgMax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> ArgMax::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (output_tensors.at(0).has_value()) {
+        return {output_tensors.at(0)->get_tensor_spec()};
+    }
+
+    const auto& input_tensor = input_tensors[0];
+    ttnn::SimpleShape output_shape({1, 1, 1, 1});
     if (this->dim.has_value()) {
         auto input_shape = input_tensors[0].get_logical_shape();
-        return {ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]}};
-    } else {
-        return {ttnn::SimpleShape{1, 1, 1, 1}};
+        output_shape = ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]};
     }
+    return {
+        TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
 }
 
 std::vector<Tensor> ArgMax::create_output_tensors(
@@ -63,9 +70,7 @@ std::vector<Tensor> ArgMax::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
-    const auto& input_tensor = input_tensors[0];
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
+    return {create_device_tensor(compute_output_specs(input_tensors, output_tensors)[0], input_tensors[0].device())};
 }
 
 operation::ProgramWithCallbacks ArgMax::create_program(

@@ -17,6 +17,9 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 using std::vector;
 using namespace tt::tt_metal;
 
@@ -89,7 +92,8 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
     // to read from
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
@@ -828,7 +832,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
     for (Device* device : devices_) {

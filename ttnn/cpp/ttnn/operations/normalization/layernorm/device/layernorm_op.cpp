@@ -203,22 +203,19 @@ void LayerNorm::validate(
         },
         this->program_config);
 }
-std::vector<ttnn::SimpleShape> LayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = input_tensors.at(0).get_logical_shape();
+std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto output_shape = input_tensor.get_logical_shape();
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
         output_shape[3] = num_tiles_w * TILE_WIDTH;
     }
-    return {output_shape};
-}
-std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+
     return std::visit(
-        [&](const auto& program_config) -> std::vector<Tensor> {
+        [&](const auto& program_config) -> std::vector<TensorSpec> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
-                    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
                     auto shard_spec = input_tensor.shard_spec().value();
                     shard_spec.shape[1] = output_shape[3];
 
@@ -227,26 +224,37 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor>& 
                     shard_spec.grid = core_range_set;
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        output_shape, DataType::BFLOAT16, Layout::TILE, input_tensor.device(), mem_config)};
-                } else {
-                    if (program_config.inplace) {
-                        return {input_tensor};
-                    } else {
-                        auto mem_config = this->output_mem_config;
-                        mem_config.shard_spec = input_tensor.shard_spec().value();
-                        return {create_device_tensor(
-                            this->compute_output_shapes(input_tensors).at(0),
-                            input_tensors.at(0).get_dtype(),
-                            Layout::TILE,
-                            input_tensor.device(),
-                            mem_config)};
-                    }
+                    return {TensorSpec(
+                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
                 }
+
+                if (program_config.inplace) {
+                    return {input_tensor.get_tensor_spec()};
+                }
+
+                auto mem_config = this->output_mem_config;
+                mem_config.shard_spec = input_tensor.shard_spec().value();
+                return {TensorSpec(
+                    output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config))};
             } else {
-                return operation::generic_create_output_tensors(
-                    *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+                return {TensorSpec(
+                    output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
             }
+        },
+        this->program_config);
+}
+std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return std::visit(
+        [&](const auto& program_config) -> std::vector<Tensor> {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (this->distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
+                    program_config.inplace) {
+                    return {input_tensors.at(0)};
+                }
+            }
+            auto output_spec = compute_output_specs(input_tensors)[0];
+            return {create_device_tensor(output_spec, input_tensors.at(0).device())};
         },
         this->program_config);
 }

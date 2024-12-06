@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "circular_buffer_types.hpp"
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -143,12 +144,45 @@ std::optional<uint32_t> CircularBufferConfig::globally_allocated_address() const
     return this->globally_allocated_address_;
 }
 
+const std::unordered_set<uint8_t>& CircularBufferConfig::buffer_indices() const { return this->buffer_indices_; }
+const std::unordered_set<uint8_t>& CircularBufferConfig::local_buffer_indices() const {
+    return this->local_buffer_indices_;
+}
+const std::unordered_set<uint8_t>& CircularBufferConfig::remote_buffer_indices() const {
+    return this->remote_buffer_indices_;
+}
+
 const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::data_formats() const {
     return this->data_formats_;
 }
 
 const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::page_sizes() const {
     return this->page_sizes_;
+}
+
+CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
+    CircularBufferConfig& parent, uint8_t buffer_index) {
+    auto is_remote_index = parent.remote_buffer_indices_.find(buffer_index) != parent.remote_buffer_indices_.end();
+    if (is_remote_index) {
+        TT_THROW("Buffer index {} is already marked as remote", buffer_index);
+    }
+    auto builder = Builder(parent, buffer_index);
+    parent.local_buffer_indices_.insert(buffer_index);
+    return builder;
+}
+
+CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
+    CircularBufferConfig& parent, uint8_t buffer_index) {
+    auto is_local_index = parent.local_buffer_indices_.find(buffer_index) != parent.local_buffer_indices_.end();
+    if (is_local_index) {
+        TT_THROW("Buffer index {} is already marked as local", buffer_index);
+    }
+    if (parent.remote_buffer_indices_.find(buffer_index) == parent.remote_buffer_indices_.end()) {
+        TT_FATAL(parent.remote_buffer_indices_.empty(), "Can only specify one remote buffer index per config");
+    }
+    auto builder = Builder(parent, buffer_index);
+    parent.remote_buffer_indices_.insert(buffer_index);
+    return builder;
 }
 
 CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buffer_index) :
@@ -167,28 +201,28 @@ const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_for
     return *this;
 }
 
-const CircularBufferConfig::Builder& CircularBufferConfig::Builder::add_size(uint32_t size) const {
-    parent_.total_size_ += size;
+const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_total_size(uint32_t total_size) const {
+    parent_.set_total_size(total_size);
     return *this;
 }
 
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_page_size(uint32_t page_size) const {
-    if (parent_.total_size_ % page_size != 0) {
-        TT_THROW("Total circular buffer size {} B must be divisible by page size {} B", parent_.total_size_, page_size);
-    }
-    if (page_size % sizeof(uint32_t) != 0) {
-        TT_THROW("Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
-    }
-    parent_.page_sizes_[buffer_index_] = page_size;
+    parent_.set_page_size(buffer_index_, page_size);
     return *this;
 }
 
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_tile_dims(const Tile& tile) const {
-    parent_.tiles_[buffer_index_] = tile;
+    parent_.set_tile_dims(buffer_index_, tile);
     return *this;
 }
 
-CircularBufferConfig::Builder CircularBufferConfig::index(uint8_t buffer_index) { return Builder(*this, buffer_index); }
+CircularBufferConfig::Builder CircularBufferConfig::index(uint8_t buffer_index) {
+    return Builder::LocalBuilder(*this, buffer_index);
+}
+
+CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_index) {
+    return Builder::RemoteBuilder(*this, buffer_index);
+}
 
 void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
     if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
@@ -207,6 +241,7 @@ void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& d
         }
         this->data_formats_[buffer_index] = data_format;
         this->buffer_indices_.insert(buffer_index);
+        this->local_buffer_indices_.insert(buffer_index);
     }
 }
 

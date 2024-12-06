@@ -42,11 +42,11 @@ SECTIONS
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
   } > REGION_APP_CODE :text
 
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE :text
-  .rodata1        : { *(.rodata1) } > REGION_APP_CODE :text
-
   .data : ALIGN(4)
   {
+    *(.rodata .rodata.* .gnu.linkonce.r.*)
+    *(.rodata1)
+
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
 
@@ -65,6 +65,16 @@ SECTIONS
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
     ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
+  } > REGION_APP_DATA :data
+  .init_array.fini_array :
+  {
+    /* We don't support global static constructors or destructors. make sure there aren't any.  */
+    KEEP (*(.preinit_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP (*(.init_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP (*(.fini_array))
+    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
   } > REGION_APP_DATA :data
   .bss : ALIGN(4)
   {

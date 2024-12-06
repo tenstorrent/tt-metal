@@ -165,6 +165,8 @@ def run_conv_transpose2d(
     assert passing
 
 
+@skip_for_blackhole()
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -173,26 +175,11 @@ def run_conv_transpose2d(
         (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (1, 16, 16, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 256, 256, 32, 32, 1, 1, 1, 1, 0, 0, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         # Stride = 2
         (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (
-            1,
-            16,
-            16,
-            256,
-            256,
-            3,
-            3,
-            2,
-            2,
-            1,
-            1,
-            1,
-            1,
-            None,
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ),  # Fails with error : act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)
+        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         # # (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED), # Issue with reading block sharded tensor
         # Vanilla Unet
         # Filter Size = 2 not supported in Block sharded
@@ -232,6 +219,8 @@ def test_simple_conv_t2d(
     config,
     shard_layout,
 ):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,

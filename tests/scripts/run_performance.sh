@@ -19,6 +19,8 @@ run_perf_models_other() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -55,21 +57,6 @@ run_perf_models_llm_javelin() {
     env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
 
     env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m $test_marker
-
-    # Llama3.1-8B
-    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-    # Llama3.2-1B
-    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-    # Llama3.2-3B
-    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-    # Llama3.2-11B  (#Skip: Weights too big for single-chip ci VM)
-    llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-
-    # Run all Llama3 tests for 8B, 1B, and 3B weights
-    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/demos/llama3/tests/test_llama_perf.py -m $test_marker
-        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
-    done
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
@@ -132,6 +119,8 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b_common/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/ -m $test_marker
     fi
 
     ## Merge all the generated reports
