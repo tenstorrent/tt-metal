@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace tt::tt_metal::hw_abstract {
+namespace tt::tt_metal::hal {
 
 /**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific L1 Size
@@ -15,4 +15,4 @@ namespace tt::tt_metal::hw_abstract {
  */
 uint32_t get_l1_size();
 
-}  // namespace tt::tt_metal::hw_abstract
+}  // namespace tt::tt_metal::hal
