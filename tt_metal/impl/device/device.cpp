@@ -324,15 +324,10 @@ void Device::initialize_device_kernel_defines()
     auto pcie_cores = soc_d.get_pcie_cores();
     auto grid_size = this->grid_size();
 
-    // Workaround for Simulator integration as they use a 2x2 grid which would underflow PCIE_NOC1*
     CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
-    auto pcie_noc1_x = pcie_cores.empty() ? 14 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x);
-    auto pcie_noc1_y = pcie_cores.empty() ? 11 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y);
 
     this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
     this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(pcie_noc1_x));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(pcie_noc1_x));
 }
 
 void Device::initialize_build() {
