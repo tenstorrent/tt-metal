@@ -46,7 +46,7 @@ std::array<uint32_t, 4> get_shape_4d(const E& expr) {
     size_t dims = expr_shape.size();
 
     if (dims > max_dims) {
-        throw std::runtime_error("Number of dimensions greater than 4");
+        throw std::runtime_error(fmt::format("Number of dimensions {} greater than max_shape {}", dims, max_dims));
     }
 
     // Copy the dimensions into the shape array

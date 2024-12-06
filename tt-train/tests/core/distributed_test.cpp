@@ -46,13 +46,13 @@ TYPED_TEST(MeshOpsTest, ChunkBasicLessChunksThanProvided) {
     EXPECT_EQ(chunks[4].shape()[0], 1u);  // last chunk size 1
 }
 
-TYPED_TEST(MeshOpsTest, ShardTensorToMeshBasicShard) {
+TYPED_TEST(MeshOpsTest, ShardXTensorToMeshBasicShard) {
     tt::tt_metal::distributed::MeshShape mesh_shape = {1, 4};
 
     // A simple 1D tensor to shard across 4 devices
     auto tensor = xt::arange<TypeParam>(8);  // [0,...,7]
 
-    ttml::core::ShardTensorToMesh<TypeParam> sharder(mesh_shape, 0);
+    ttml::core::ShardXTensorToMesh<TypeParam> sharder(mesh_shape, 0);
     auto shards = sharder.map(tensor);
 
     // With 4 shards, each shard should have size 2
@@ -81,13 +81,13 @@ TYPED_TEST(MeshOpsTest, ShardTensor2dMeshTwoDimSharding) {
     }
 }
 
-TYPED_TEST(MeshOpsTest, ReplicateTensorToMeshReplication) {
+TYPED_TEST(MeshOpsTest, ReplicateXTensorToMeshReplication) {
     tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
     int num_devices = mesh_shape.first * mesh_shape.second;  // 4
 
     auto tensor = xt::arange<TypeParam>(4);  // [0,1,2,3]
 
-    ttml::core::ReplicateTensorToMesh<TypeParam> replicator(mesh_shape);
+    ttml::core::ReplicateXTensorToMesh<TypeParam> replicator(mesh_shape);
     auto replicas = replicator.map(tensor);
 
     ASSERT_EQ(static_cast<int>(replicas.size()), num_devices);
@@ -126,7 +126,7 @@ TYPED_TEST(MeshOpsTest, ConcatMesh2dToTensorRecomposition) {
     EXPECT_TRUE(xt::allclose(composed, expected));
 }
 
-TYPED_TEST(MeshOpsTest, ConcatMeshToTensorOneDimConcatenation) {
+TYPED_TEST(MeshOpsTest, ConcatMeshToXTensorOneDimConcatenation) {
     tt::tt_metal::distributed::MeshShape mesh_shape = {1, 3};
 
     // Create a few shards: [0,1], [2,3], [4,5]
@@ -135,7 +135,7 @@ TYPED_TEST(MeshOpsTest, ConcatMeshToTensorOneDimConcatenation) {
     xt::xarray<TypeParam> s3 = {TypeParam(4), TypeParam(5)};
 
     std::vector<xt::xarray<TypeParam>> shards = {s1, s2, s3};
-    ttml::core::ConcatMeshToTensor<TypeParam> composer(mesh_shape, 0);
+    ttml::core::ConcatMeshToXTensor<TypeParam> composer(mesh_shape, 0);
     auto composed = composer.compose(shards);
 
     xt::xarray<TypeParam> expected = {
@@ -143,9 +143,9 @@ TYPED_TEST(MeshOpsTest, ConcatMeshToTensorOneDimConcatenation) {
     EXPECT_TRUE(xt::allclose(composed, expected));
 }
 
-TYPED_TEST(MeshOpsTest, VectorMeshToTensorVectorReturn) {
+TYPED_TEST(MeshOpsTest, VectorMeshToXTensorVectorReturn) {
     tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
-    ttml::core::VectorMeshToTensor<TypeParam> vectorComposer(mesh_shape);
+    ttml::core::VectorMeshToXTensor<TypeParam> vectorComposer(mesh_shape);
 
     std::vector<xt::xarray<TypeParam>> shards = {
         xt::xarray<TypeParam>({TypeParam(0), TypeParam(1)}), xt::xarray<TypeParam>({TypeParam(2), TypeParam(3)})};
@@ -236,7 +236,7 @@ TYPED_TEST(MeshOpsTest, ConcatenateSameParametersAsCompose) {
     xt::xarray<TypeParam> s3 = {TypeParam(4), TypeParam(5)};
 
     std::vector<xt::xarray<TypeParam>> shards = {s1, s2, s3};
-    ttml::core::ConcatMeshToTensor<TypeParam> composer(mesh_shape, 0);
+    ttml::core::ConcatMeshToXTensor<TypeParam> composer(mesh_shape, 0);
     auto composed = ttml::core::concatenate(shards);
 
     xt::xarray<TypeParam> expected = {

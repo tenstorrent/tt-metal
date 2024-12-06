@@ -28,7 +28,6 @@ TEST(XTensorTest, BasicOperations) {
     EXPECT_TRUE(xt::allclose(arr2, expected));
 }
 
-// Test span_to_xtensor
 TEST(XTensorTest, SpanToXtensor) {
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
     std::span<int> data_span(data.data(), data.size());

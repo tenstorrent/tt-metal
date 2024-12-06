@@ -61,8 +61,8 @@ template <class T = float>
     return span_to_xtensor(std::span<T>(vec.data(), vec.size()), shape);
 }
 
-template <class T = float, template <class> class MeshToTensor = ConcatMeshToTensor>
-auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToTensor<T>& composer) {
+template <class T = float, template <class> class MeshToXTensor = ConcatMeshToXTensor>
+auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensor<T>& composer) {
     auto cpu_tensor = tensor.cpu();
     cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
 
@@ -73,7 +73,7 @@ template <class T = float>
 tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& tensor,
     ttnn::distributed::MeshDevice* device,
-    const TensorToMeshVariant<T>& composer,
+    const XTensorToMeshVariant<T>& composer,
     Layout layout = Layout::TILE) {
     auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
     auto config = std::visit([](auto&& arg) { return arg.config(); }, composer);
