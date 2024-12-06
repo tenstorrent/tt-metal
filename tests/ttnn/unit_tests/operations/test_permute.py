@@ -192,7 +192,6 @@ def generate_permutations(N):
 def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     torch.manual_seed(2005)
     input_a = torch.randn(shape)
-    # print(input_a)
     torch_output = torch.permute(input_a, perm)
 
     tt_input = ttnn.from_torch(
@@ -210,7 +209,6 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
     torch.manual_seed(520)
-    torch.set_printoptions(threshold=10000, precision=2, linewidth=1000)
     input_a = torch.randn(shape)
 
     torch_output = torch.permute(input_a, perm)
