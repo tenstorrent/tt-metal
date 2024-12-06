@@ -100,13 +100,15 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
 
-    auto positional_embedding_str = config["positional_embedding"].as<std::string>("trainable");
+    auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
     if (positional_embedding_str == "trainable") {
         transformer_config.positional_embedding_type = PositionalEmbeddingType::Trainable;
     } else if (positional_embedding_str == "fixed") {
         transformer_config.positional_embedding_type = PositionalEmbeddingType::Fixed;
     } else {
-        throw std::runtime_error(fmt::format("Unknown positional embedding type: {}", positional_embedding_str));
+        throw std::runtime_error(fmt::format(
+            "Unknown positional embedding type: {}. Supported positional embedding types [trainable, fixed]",
+            positional_embedding_str));
     }
 
     if (auto experimental_config = config["experimental"]) {
