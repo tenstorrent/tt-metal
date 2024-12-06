@@ -18,7 +18,6 @@
 #include <tuple>
 #include "common/core_descriptor.hpp"
 #include "device/device_handle.hpp"
-#include "fmt/color.h"
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/logger.hpp"
 
@@ -30,7 +29,6 @@
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
-#include "umd/device/tt_soc_descriptor.h"
 
 using std::cout;
 using std::endl;
