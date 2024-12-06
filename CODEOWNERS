@@ -155,6 +155,8 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat
+models/demos/yolov4 @dvartaniansTT @mbahnasTT
+models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT
 models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat
