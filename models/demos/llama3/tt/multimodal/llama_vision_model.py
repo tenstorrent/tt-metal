@@ -388,7 +388,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_rope_id,
             tt_page_table,
         ) = copy_host_to_device(
-            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id, tt_page_table)
+            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id, tt_page_table),
+            mesh_device=self.mesh_device,
         )
 
         tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(

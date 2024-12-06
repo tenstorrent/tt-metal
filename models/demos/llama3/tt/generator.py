@@ -371,7 +371,10 @@ class LlamaGenerator:
             tt_full_text_mask_expand_1NSH,
             tt_position_id,
             tt_rope_id,
-        ) = copy_host_to_device((tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id))
+        ) = copy_host_to_device(
+            (tt_h, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_position_id, tt_rope_id),
+            mesh_device=self.mesh_device,
+        )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_h_trace_input = tt_h
