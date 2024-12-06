@@ -162,60 +162,85 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .compile_args = in1_writer_compile_time_args});
 
     // reader rt
-
-    // TODO: fix for multiple cores
-    const CoreCoord& dram_reader_core_coord = dram_reader_cores.ranges()[0].start_coord;
-
-    uint32_t bank_id = 0;
-    uint32_t vc = bank_id & 0x1;
     uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
-    std::vector<uint32_t> reader_rt_args = {
-        (std::uint32_t)bank_id,
-        (std::uint32_t)vc,
-        (std::uint32_t)in1_reader_cb_size,
-        (std::uint32_t)total_num_blocks_in_buffer,
-        (std::uint32_t)num_blocks};
-    // tensor addresses
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        reader_rt_args.push_back(tensors[i].buffer()->address());
-    }
-    // page size
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        reader_rt_args.push_back(in1_reader_page_sizes[i]);
-    }
-    // num pages
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        reader_rt_args.push_back(in1_reader_num_pages[i]);
-    }
-    // num tiles in block
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        reader_rt_args.push_back(in1_block_num_tiles[i]);
-    }
-    tt_metal::SetRuntimeArgs(program, in1_reader_kernel, dram_reader_core_coord, reader_rt_args);
 
-    // in1 writer rt
-    std::vector<uint32_t> writer_rt_args = {};
-    // page size
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_writer_page_sizes[i]);
+    uint32_t bank_start_id = 1;
+    std::vector<uint32_t> bank_ids;
+
+    // Store all cores in a vector for easier access to previous cores
+    std::vector<CoreCoord> all_cores;
+    for (const auto& range : dram_reader_cores.ranges()) {
+        for (const auto& core : range) {
+            all_cores.push_back(core);
+        }
     }
-    // num pages
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_writer_num_pages[i]);
+
+    for (int core_index = 0; core_index < all_cores.size(); core_index++) {
+        const auto& core = all_cores[core_index];
+        uint32_t bank_id = core_index + bank_start_id;
+        uint32_t vc = bank_id & 0x1;
+
+        bank_ids.push_back(bank_id);
+
+        // Compare with previous cores
+        for (size_t j = 0; j < core_index; ++j) {
+            const CoreCoord& prev_core = all_cores[j];
+            if (prev_core.y == core.y and ((bank_id & 0x1) == (bank_ids[j] & 0x1))) {  // same vc and same row
+                vc = (vc + 1) & 0x1;
+                break;
+            }
+        }
+
+        log_info("core: {}, vc: {}, bank_id: {}", core, vc, bank_id);
+
+        std::vector<uint32_t> reader_rt_args = {
+            (std::uint32_t)bank_id,
+            (std::uint32_t)vc,
+            (std::uint32_t)in1_reader_cb_size,
+            (std::uint32_t)total_num_blocks_in_buffer,
+            (std::uint32_t)num_blocks};
+        // tensor addresses
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            reader_rt_args.push_back(tensors[i].buffer()->address());
+        }
+        // page size
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            reader_rt_args.push_back(in1_reader_page_sizes[i]);
+        }
+        // num pages
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            reader_rt_args.push_back(in1_reader_num_pages[i]);
+        }
+        // num tiles in block
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            reader_rt_args.push_back(in1_block_num_tiles[i]);
+        }
+        tt_metal::SetRuntimeArgs(program, in1_reader_kernel, core, reader_rt_args);
+
+        // in1 writer rt
+        std::vector<uint32_t> writer_rt_args = {};
+        // page size
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            writer_rt_args.push_back(in1_writer_page_sizes[i]);
+        }
+        // num pages
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            writer_rt_args.push_back(in1_writer_num_pages[i]);
+        }
+        // block num tiles
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            writer_rt_args.push_back(in1_block_num_tiles[i]);
+        }
+        // single tile size
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            writer_rt_args.push_back(single_tile_sizes[i]);
+        }
+        // num tile rows write
+        for (uint32_t i = 0; i < num_tensors; ++i) {
+            writer_rt_args.push_back(in1_num_tile_rows_write[i]);
+        }
+        tt_metal::SetRuntimeArgs(program, in1_writer_kernel, core, writer_rt_args);
     }
-    // block num tiles
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_block_num_tiles[i]);
-    }
-    // single tile size
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(single_tile_sizes[i]);
-    }
-    // num tile rows write
-    for (uint32_t i = 0; i < num_tensors; ++i) {
-        writer_rt_args.push_back(in1_num_tile_rows_write[i]);
-    }
-    tt_metal::SetRuntimeArgs(program, in1_writer_kernel, dram_reader_core_coord, writer_rt_args);
 
     auto override_runtime_arguments_callback = [in1_reader_kernel, in1_writer_kernel, dram_reader_cores](
                                                    const void* operation,

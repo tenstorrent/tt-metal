@@ -14,11 +14,7 @@ namespace ttnn::operations::dram_prefetcher {
 ttnn::Tensor ExecuteDramPrefetcher::invoke(
     std::vector<ttnn::Tensor>& tensors,
     const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
-    operation::run(
-        // DramPrefetcher{},
-        DramPrefetcher{.global_cb = global_cb},
-        {tensors},
-        {});
+    operation::run(DramPrefetcher{.global_cb = global_cb}, {tensors}, {});
     return tensors[0];
 }
 

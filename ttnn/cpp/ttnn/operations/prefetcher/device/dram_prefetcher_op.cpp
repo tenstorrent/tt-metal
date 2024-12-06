@@ -48,7 +48,6 @@ operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     return dram_prefetcher_multi_core(input_tensors, global_cb);
-    // return dram_prefetcher_multi_core(input_tensors);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
