@@ -80,7 +80,7 @@ jobs:
             # is not built at this level, and thus clang-tidy will be unable to process them.
             PREFIX=$(pwd)
             jq --arg prefix "$PREFIX/" -r '.[].file | sub("^" + $prefix; "")' build/compile_commands.json > relative_files_in_build.txt
-            git diff --name-only "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")..." > changed_files.txt
+            git diff --name-only "$(git merge-base HEAD "origin/main")..." > changed_files.txt
             grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
 
             # Exit if there are no modified files known to CMake
