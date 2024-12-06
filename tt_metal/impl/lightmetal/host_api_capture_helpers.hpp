@@ -203,3 +203,13 @@ inline void captureFinish(CommandQueue& cq) {
     auto cmd_variant = tt::target::CreateFinishCommand(ctx.getBuilder(), cq_global_id);
     captureCommand(tt::target::CommandType::FinishCommand, cmd_variant.Union());
 }
+
+inline void captureCreateProgram(Program& program) {
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+    uint32_t program_global_id = ctx.addToMap(&program);
+    log_info(tt::LogMetalTrace, "captureCreateProgram: program_global_id: {}", program_global_id);
+
+    auto cmd_variant = tt::target::CreateCreateProgramCommand(ctx.getBuilder(), program_global_id);
+    captureCommand(tt::target::CommandType::CreateProgramCommand, cmd_variant.Union());
+}

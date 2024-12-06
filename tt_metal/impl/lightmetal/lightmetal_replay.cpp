@@ -136,6 +136,25 @@ void LightMetalReplay::removeBufferFromMap(uint32_t global_id) {
     bufferMap_.erase(global_id);
 }
 
+void LightMetalReplay::addProgramToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Program> program) {
+    if (programMap_.find(global_id) != programMap_.end()) {
+        log_warning(tt::LogMetalTrace, "Program with global_id: {} already exists in map.", global_id);
+    }
+    programMap_[global_id] = program; // Shared ownership
+}
+
+std::shared_ptr<::tt::tt_metal::Program> LightMetalReplay::getProgramFromMap(uint32_t global_id) const {
+    auto it = programMap_.find(global_id);
+    if (it != programMap_.end()) {
+        return it->second; // Return shared_ptr
+    }
+    return nullptr; // If not found
+}
+
+void LightMetalReplay::removeProgramFromMap(uint32_t global_id) {
+    programMap_.erase(global_id);
+}
+
 void LightMetalReplay::setupDevices() {
     log_info(tt::LogMetalTrace, "Setting up system now...");
 
@@ -196,6 +215,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
   }
   case ::tt::target::CommandType::FinishCommand: {
     execute(command->cmd_as_FinishCommand());
+    break;
+  }
+  case ::tt::target::CommandType::CreateProgramCommand: {
+    execute(command->cmd_as_CreateProgramCommand());
     break;
   }
   default:
@@ -302,6 +325,12 @@ void LightMetalReplay::execute(tt::target::FinishCommand const *cmd) {
     log_info(tt::LogMetalTrace, "LightMetalReplay FinishCommand(). cq_global_id: {}", cmd->cq_global_id());
     CommandQueue &cq = this->device_->command_queue(cmd->cq_global_id());
     Finish(cq);
+}
+
+void LightMetalReplay::execute(tt::target::CreateProgramCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay CreateProgramCommand(). global_id: {} ", cmd->global_id());
+    auto program = CreateProgram();
+    addProgramToMap(cmd->global_id(), std::make_shared<Program>(std::move(program)));
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.
