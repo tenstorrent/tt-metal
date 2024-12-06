@@ -63,6 +63,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
             ReplayTrace(device, device->command_queue().id(), tid_2, false);
         }
         Synchronize(device);
+        detail::DumpDeviceProfileResults(device);
     }
 }
 
