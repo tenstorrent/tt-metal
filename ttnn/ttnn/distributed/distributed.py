@@ -139,7 +139,7 @@ def open_mesh_device(
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
-    offset: Tuple[int, int] = (0, 0),
+    offset: ttnn.MeshOffset = ttnn.MeshOffset(0, 0),
     physical_device_ids: List[int] = [],
     mesh_type: "MeshType" = MeshType.RowMajor,
 ):
@@ -152,7 +152,7 @@ def open_mesh_device(
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
-        offset (Tuple[int, int], optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+        offset (ttnn.MeshOffset, optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
         mesh_type (MeshType, optional): Defines type of mesh requested. Type imposes connectivity constraints and defines device iteration order.
 
     Returns:
@@ -165,7 +165,7 @@ def open_mesh_device(
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
         dispatch_core_config=dispatch_core_config,
-        offset=offset,
+        offset=offset.as_tuple(),
         physical_device_ids=physical_device_ids,
         mesh_type=mesh_type,
     )
