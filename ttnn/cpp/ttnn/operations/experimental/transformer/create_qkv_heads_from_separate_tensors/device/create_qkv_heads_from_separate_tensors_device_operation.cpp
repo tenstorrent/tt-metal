@@ -6,9 +6,7 @@
 #include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
-
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
+#include "tt_metal/hal/hal_api.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -124,6 +122,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
 
     const uint32_t single_tile_size =
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(q_input_tensor.get_dtype()));
+    const uint32_t L1_SIZE = tt::tt_metal::hal::get_l1_size();
     TT_FATAL(
         L1_SIZE >= 2 * (per_core_q_tiles + 2 * per_core_k_tiles) * single_tile_size, "Workload exceeds L1 capacity");
 

@@ -6,10 +6,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hal/hal_api.hpp"
 #include "tt_log.h"
-
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
 
 namespace ttnn::operations::reduction::detail {
 
@@ -193,6 +191,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
+        const uint32_t L1_SIZE = tt::tt_metal::hal::get_l1_size();
         if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < L1_SIZE && num_cores > 1) {
             return {num_cores + 1, split_size, rem, num_cores * k};
         }
