@@ -15,6 +15,9 @@ namespace tt::target::lightmetal {
 }
 
 namespace tt::tt_metal { // KCM Consider adding lightmetal namespace.
+
+using KernelHandle = std::uint16_t;
+
 inline namespace v0 {
 
 class Buffer;
@@ -35,6 +38,7 @@ public:
     // Object maps public accessors
     uint32_t getBufferGlobalId(Buffer* buffer);
     uint32_t getGlobalId(const Program* program, bool must_exist = false);
+    uint32_t getGlobalId(KernelHandle kernel_id, bool must_exist = false);
 
     void reset();
 
@@ -50,6 +54,7 @@ private:
     uint32_t nextGlobalId_ = 0; // Shared across all object types.
     std::unordered_map<Buffer*, uint32_t> bufferToGlobalIdMap_;
     std::unordered_map<const Program*, uint32_t> programToGlobalIdMap_;
+    std::unordered_map<KernelHandle, uint32_t> kernelHandleToGlobalIdMap_;
     // FIXME - Add one for CommandQueue object.
 
     // Delete copy constructor and assignment operator

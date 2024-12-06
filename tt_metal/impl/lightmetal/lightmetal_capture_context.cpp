@@ -5,6 +5,7 @@
 #include "binary_generated.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -79,6 +80,19 @@ uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj, bool must_exi
 
     uint32_t global_id = nextGlobalId_++;
     programToGlobalIdMap_[obj] = global_id;
+    return global_id;
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(KernelHandle kernel_id, bool must_exist) {
+    auto it = kernelHandleToGlobalIdMap_.find(kernel_id);
+    if (it != kernelHandleToGlobalIdMap_.end()) {
+        return it->second;
+    } else if (must_exist) {
+        throw std::runtime_error("KernelHandle not found in global_id map");
+    }
+
+    uint32_t global_id = nextGlobalId_++;
+    kernelHandleToGlobalIdMap_[kernel_id] = global_id;
     return global_id;
 }
 

@@ -65,6 +65,14 @@ table EnqueueProgramCommand {
     blocking: bool;
 }
 
+table CreateKernelCommand {
+    global_id: uint32;          // Reference to KernelHandle
+    program_global_id: uint32;  // Reference to Program
+    file_name: string;          // Later replace with src, then binary
+    core_spec: CoreSpec;
+    config: KernelConfig;
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
@@ -76,7 +84,8 @@ union CommandType {
     EnqueueReadBufferCommand,
     FinishCommand,
     CreateProgramCommand,
-    EnqueueProgramCommand
+    EnqueueProgramCommand,
+    CreateKernelCommand
 }
 
 table Command {

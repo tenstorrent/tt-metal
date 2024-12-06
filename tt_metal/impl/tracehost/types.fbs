@@ -30,3 +30,101 @@ table InterleavedBufferConfig {
     buffer_type: BufferType;
     buffer_layout: TensorMemoryLayout;
 }
+
+
+// Core Types //////////////////
+
+table CoreCoord {
+    x: int;
+    y: int;
+}
+
+table CoreRange {
+    start: CoreCoord;
+    end: CoreCoord;
+}
+
+table CoreRangeSet {
+    ranges: [CoreRange];
+}
+
+union CoreSpec {
+  CoreCoord,
+  CoreRange,
+  CoreRangeSet
+}
+
+enum DataMovementProcessor : byte {
+    RISCV_0,
+    RISCV_1
+}
+
+enum NOC : byte {
+    NOC_0,
+    NOC_1
+}
+
+enum NOC_MODE : byte {
+    DM_DEDICATED_NOC,
+    DM_DYNAMIC_NOC
+}
+
+enum Eth : ubyte {
+    SENDER = 0,
+    RECEIVER = 1,
+    IDLE = 2
+}
+
+enum MathFidelity : ubyte {
+    LoFi = 0,
+    HiFi2 = 2,
+    HiFi3 = 3,
+    HiFi4 = 4,
+    Invalid = 255
+}
+
+enum UnpackToDestMode : byte {
+    Default,
+    UnpackToDestFp32
+}
+
+table DefineEntry {
+    key: string;
+    value: string;
+}
+
+// Kernel Configurations //////////////////
+
+table DataMovementConfig {
+    processor: DataMovementProcessor;
+    noc: NOC;
+    noc_mode: NOC_MODE;
+    compile_args: [uint32]; // Array of compile arguments
+    defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+table ComputeConfig {
+    math_fidelity: MathFidelity;
+    fp32_dest_acc_en: bool;
+    dst_full_sync_en: bool;
+    unpack_to_dest_mode: [UnpackToDestMode]; // Array of unpack modes
+    bfp8_pack_precise: bool;
+    math_approx_mode: bool;
+    compile_args: [uint32]; // Array of compile arguments
+    defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+table EthernetConfig {
+    eth_mode: Eth;
+    noc: NOC;
+    processor: DataMovementProcessor;
+    compile_args: [uint32]; // Array of compile arguments
+    defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+// Union to include multiple configurations
+union KernelConfig {
+    DataMovementConfig,
+    ComputeConfig,
+    EthernetConfig
+}

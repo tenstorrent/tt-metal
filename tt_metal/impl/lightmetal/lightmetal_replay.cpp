@@ -65,7 +65,180 @@ inline BufferType fromFlatbuffer(tt::target::BufferType type) {
         case tt::target::BufferType::SystemMemory: return BufferType::SYSTEM_MEMORY;
         case tt::target::BufferType::L1Small: return BufferType::L1_SMALL;
         case tt::target::BufferType::Trace: return BufferType::TRACE;
-        default: throw std::invalid_argument("Unknown tt::target::BufferType value");
+        default: throw std::invalid_argument("Unknown BufferType value in fromFlatbuffer()");
+    }
+}
+
+inline tt::tt_metal::DataMovementProcessor fromFlatbuffer(tt::target::DataMovementProcessor in) {
+    switch(in) {
+        case tt::target::DataMovementProcessor::RISCV_0: return tt::tt_metal::DataMovementProcessor::RISCV_0;
+        case tt::target::DataMovementProcessor::RISCV_1: return tt::tt_metal::DataMovementProcessor::RISCV_1;
+        default: throw std::invalid_argument("Unknown DataMovementProcessor value in fromFlatbuffer()");
+    }
+}
+
+inline tt::tt_metal::NOC fromFlatbuffer(tt::target::NOC in) {
+    switch (in) {
+        case tt::target::NOC::NOC_0: return tt::tt_metal::NOC::NOC_0;
+        case tt::target::NOC::NOC_1: return tt::tt_metal::NOC::NOC_1;
+        default: throw std::invalid_argument("Invalid NOC value passed to fromFlatbuffer");
+    }
+}
+
+inline tt::tt_metal::NOC_MODE fromFlatbuffer(tt::target::NOC_MODE in) {
+    switch(in) {
+        case tt::target::NOC_MODE::DM_DEDICATED_NOC: return tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+        case tt::target::NOC_MODE::DM_DYNAMIC_NOC: return tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+        default: throw std::invalid_argument("Unknown NOC_MODE value in fromFlatbuffer()");
+    }
+}
+
+inline tt::tt_metal::Eth fromFlatbuffer(tt::target::Eth in) {
+    switch(in) {
+        case tt::target::Eth::SENDER: return tt::tt_metal::Eth::SENDER;
+        case tt::target::Eth::RECEIVER: return tt::tt_metal::Eth::RECEIVER;
+        case tt::target::Eth::IDLE: return tt::tt_metal::Eth::IDLE;
+        default: throw std::invalid_argument("Unknown Eth value in fromFlatbuffer()");
+    }
+}
+
+inline MathFidelity fromFlatbuffer(tt::target::MathFidelity input) {
+    switch (input) {
+        case tt::target::MathFidelity::LoFi: return MathFidelity::LoFi;
+        case tt::target::MathFidelity::HiFi2: return MathFidelity::HiFi2;
+        case tt::target::MathFidelity::HiFi3: return MathFidelity::HiFi3;
+        case tt::target::MathFidelity::HiFi4: return MathFidelity::HiFi4;
+        case tt::target::MathFidelity::Invalid: return MathFidelity::Invalid;
+        default: throw std::invalid_argument("Unknown MathFidelity value in fromFlatbuffer()");
+    }
+}
+
+inline UnpackToDestMode fromFlatbuffer(tt::target::UnpackToDestMode input) {
+    switch (input) {
+        case tt::target::UnpackToDestMode::UnpackToDestFp32: return UnpackToDestMode::UnpackToDestFp32;
+        case tt::target::UnpackToDestMode::Default: return UnpackToDestMode::Default;
+        default: throw std::invalid_argument("Invalid UnpackToDestMode value passed to fromFlatbuffer");
+    }
+}
+
+inline std::variant<CoreCoord, CoreRange, CoreRangeSet> fromFlatbuffer(
+    const tt::target::CoreSpec core_spec, const void *flatbuffer_union) {
+
+    switch (core_spec) {
+        case tt::target::CoreSpec::CoreCoord: {
+            auto core_coord = static_cast<const tt::target::CoreCoord *>(flatbuffer_union);
+            if (!core_coord) throw std::runtime_error("Invalid CoreCoord data");
+            return CoreCoord{core_coord->x(), core_coord->y()};
+        }
+        case tt::target::CoreSpec::CoreRange: {
+            auto core_range = static_cast<const tt::target::CoreRange *>(flatbuffer_union);
+            if (!core_range) throw std::runtime_error("Invalid CoreRange data");
+            return CoreRange{
+                {core_range->start()->x(), core_range->start()->y()},
+                {core_range->end()->x(), core_range->end()->y()}
+            };
+        }
+        case tt::target::CoreSpec::CoreRangeSet: {
+            auto core_range_set = static_cast<const tt::target::CoreRangeSet *>(flatbuffer_union);
+            if (!core_range_set) throw std::runtime_error("Invalid CoreRangeSet data");
+            std::vector<CoreRange> ranges;
+            for (const auto range : *core_range_set->ranges()) {
+                ranges.emplace_back(
+                    CoreCoord{range->start()->x(), range->start()->y()},
+                    CoreCoord{range->end()->x(), range->end()->y()}
+                );
+            }
+            return CoreRangeSet{ranges};
+        }
+        default:
+            throw std::runtime_error("Unhandled CoreSpec type in fromFlatbuffer");
+    }
+}
+
+inline DataMovementConfig fromFlatbuffer(const tt::target::DataMovementConfig *fb_config) {
+    DataMovementConfig config;
+
+    // Extract processor, noc, and noc_mode
+    config.processor = fromFlatbuffer(fb_config->processor());
+    config.noc = fromFlatbuffer(fb_config->noc());
+    config.noc_mode = fromFlatbuffer(fb_config->noc_mode());
+
+    // Extract compile_args
+    auto fb_compile_args = fb_config->compile_args();
+    config.compile_args.assign(fb_compile_args->begin(), fb_compile_args->end());
+
+    // Extract defines
+    auto fb_defines = fb_config->defines();
+    for (auto fb_define : *fb_defines) {
+        config.defines.emplace(fb_define->key()->str(), fb_define->value()->str());
+    }
+
+    return config;
+}
+
+inline ComputeConfig fromFlatbuffer(const tt::target::ComputeConfig *fb_config) {
+    ComputeConfig config;
+
+    // Extract math_fidelity and boolean flags
+    config.math_fidelity = fromFlatbuffer(fb_config->math_fidelity());
+    config.fp32_dest_acc_en = fb_config->fp32_dest_acc_en();
+    config.dst_full_sync_en = fb_config->dst_full_sync_en();
+    config.bfp8_pack_precise = fb_config->bfp8_pack_precise();
+    config.math_approx_mode = fb_config->math_approx_mode();
+
+    // Extract unpack_to_dest_mode
+    auto fb_unpack_modes = fb_config->unpack_to_dest_mode();
+    config.unpack_to_dest_mode.reserve(fb_unpack_modes->size());
+    for (auto fb_mode : *fb_unpack_modes) {
+        config.unpack_to_dest_mode.push_back(fromFlatbuffer(fb_mode));
+    }
+
+    // Extract compile_args
+    auto fb_compile_args = fb_config->compile_args();
+    config.compile_args.assign(fb_compile_args->begin(), fb_compile_args->end());
+
+    // Extract defines
+    auto fb_defines = fb_config->defines();
+    for (auto fb_define : *fb_defines) {
+        config.defines.emplace(fb_define->key()->str(), fb_define->value()->str());
+    }
+
+    return config;
+}
+
+inline EthernetConfig fromFlatbuffer(const tt::target::EthernetConfig *fb_config) {
+    EthernetConfig config;
+
+    // Extract eth_mode, noc, and processor
+    config.eth_mode = fromFlatbuffer(fb_config->eth_mode());
+    config.noc = fromFlatbuffer(fb_config->noc());
+    config.processor = fromFlatbuffer(fb_config->processor());
+
+    // Extract compile_args
+    auto fb_compile_args = fb_config->compile_args();
+    config.compile_args.assign(fb_compile_args->begin(), fb_compile_args->end());
+
+    // Extract defines
+    auto fb_defines = fb_config->defines();
+    for (auto fb_define : *fb_defines) {
+        config.defines.emplace(fb_define->key()->str(), fb_define->value()->str());
+    }
+
+    return config;
+}
+
+inline std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> fromFlatbuffer(
+    const tt::target::KernelConfig config_type, const void *flatbuffer_union) {
+
+    switch (config_type) {
+        case tt::target::KernelConfig::DataMovementConfig:
+            return fromFlatbuffer(static_cast<const tt::target::DataMovementConfig *>(flatbuffer_union));
+        case tt::target::KernelConfig::ComputeConfig:
+            return fromFlatbuffer(static_cast<const tt::target::ComputeConfig *>(flatbuffer_union));
+        case tt::target::KernelConfig::EthernetConfig:
+            return fromFlatbuffer(static_cast<const tt::target::EthernetConfig *>(flatbuffer_union));
+        default:
+            throw std::runtime_error("Unhandled KernelConfig type in fromFlatbuffer.");
     }
 }
 
@@ -155,6 +328,24 @@ void LightMetalReplay::removeProgramFromMap(uint32_t global_id) {
     programMap_.erase(global_id);
 }
 
+void LightMetalReplay::addKernelHandleToMap(uint32_t global_id, ::tt::tt_metal::KernelHandle kernel_id) {
+    if (kernelHandleMap_.find(global_id) != kernelHandleMap_.end()) {
+        log_warning(tt::LogMetalTrace, "KernelHandle with global_id: {} already exists in map.", global_id);
+    }
+    kernelHandleMap_[global_id] = kernel_id; // Shared ownership
+}
+
+::tt::tt_metal::KernelHandle LightMetalReplay::getKernelHandleFromMap(uint32_t global_id) const {
+    if (auto it = kernelHandleMap_.find(global_id); it != kernelHandleMap_.end()) {
+        return it->second; // Return KernelHandle.
+    }
+    throw std::runtime_error(fmt::format("KernelHandle with global_id: {} used but doesn't exist.", global_id));
+}
+
+void LightMetalReplay::removeKernelHandleFromMap(uint32_t global_id) {
+    kernelHandleMap_.erase(global_id);
+}
+
 void LightMetalReplay::setupDevices() {
     log_info(tt::LogMetalTrace, "Setting up system now...");
 
@@ -223,6 +414,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
   }
   case ::tt::target::CommandType::EnqueueProgramCommand: {
     execute(command->cmd_as_EnqueueProgramCommand());
+    break;
+  }
+  case ::tt::target::CommandType::CreateKernelCommand: {
+    execute(command->cmd_as_CreateKernelCommand());
     break;
   }
   default:
@@ -349,6 +544,20 @@ void LightMetalReplay::execute(tt::target::EnqueueProgramCommand const *cmd) {
     CommandQueue &cq = this->device_->command_queue(cmd->cq_global_id());
     EnqueueProgram(cq, *program, cmd->blocking());
 }
+
+void LightMetalReplay::execute(tt::target::CreateKernelCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay CreateKernelCommand(). global_id: {} program_global_id: {}", cmd->global_id(), cmd->program_global_id());
+    auto program = getProgramFromMap(cmd->program_global_id());
+    if (!program) {
+        throw std::runtime_error("Program with global_id: " + std::to_string(cmd->program_global_id()) + " not previously created");
+    }
+
+    auto core_spec = fromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    auto kernel_config = fromFlatbuffer(cmd->config_type(), cmd->config());
+    auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
+    addKernelHandleToMap(cmd->global_id(), kernel_id);
+}
+
 
 // Main entry point to execute a light metal binary blob, return true if pass.
 bool LightMetalReplay::executeLightMetalBinary() {

@@ -58,6 +58,7 @@ inline tt::target::BufferType toFlatbuffer(BufferType type) {
         case BufferType::SYSTEM_MEMORY: return tt::target::BufferType::SystemMemory;
         case BufferType::L1_SMALL: return tt::target::BufferType::L1Small;
         case BufferType::TRACE: return tt::target::BufferType::Trace;
+        default: throw std::invalid_argument("Unknown BufferType value in toFlatbuffer()");
     }
 }
 
@@ -69,8 +70,231 @@ inline tt::target::TensorMemoryLayout toFlatbuffer(TensorMemoryLayout layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED: return tt::target::TensorMemoryLayout::HeightSharded;
         case TensorMemoryLayout::WIDTH_SHARDED: return tt::target::TensorMemoryLayout::WidthSharded;
         case TensorMemoryLayout::BLOCK_SHARDED: return tt::target::TensorMemoryLayout::BlockSharded;
+        default: throw std::invalid_argument("Unknown TensorMemoryLayout value in toFlatbuffer()");
     }
 }
+
+// Original types defined in data_types.hpp
+inline tt::target::DataMovementProcessor toFlatbuffer(tt::tt_metal::DataMovementProcessor in) {
+    switch(in) {
+        case tt::tt_metal::DataMovementProcessor::RISCV_0: return tt::target::DataMovementProcessor::RISCV_0;
+        case tt::tt_metal::DataMovementProcessor::RISCV_1: return tt::target::DataMovementProcessor::RISCV_1;
+        default: throw std::invalid_argument("Unknown DataMovementProcessor value in toFlatbuffer()");
+    }
+}
+
+inline tt::target::NOC toFlatbuffer(tt::tt_metal::NOC in) {
+    switch (in) {
+        case tt::tt_metal::NOC::NOC_0: return tt::target::NOC::NOC_0;
+        case tt::tt_metal::NOC::NOC_1: return tt::target::NOC::NOC_1;
+        default: throw std::invalid_argument("Invalid NOC value passed to toFlatbuffer");
+    }
+}
+
+inline tt::target::NOC_MODE toFlatbuffer(tt::tt_metal::NOC_MODE in) {
+    switch(in) {
+        case tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC: return tt::target::NOC_MODE::DM_DEDICATED_NOC;
+        case tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC: return tt::target::NOC_MODE::DM_DYNAMIC_NOC;
+        default: throw std::invalid_argument("Unknown NOC_MODE value in toFlatbuffer()");
+    }
+}
+
+inline tt::target::Eth toFlatbuffer(tt::tt_metal::Eth in) {
+    switch(in) {
+        case tt::tt_metal::Eth::SENDER: return tt::target::Eth::SENDER;
+        case tt::tt_metal::Eth::RECEIVER: return tt::target::Eth::RECEIVER;
+        case tt::tt_metal::Eth::IDLE: return tt::target::Eth::IDLE;
+        default: throw std::invalid_argument("Unknown Eth value in toFlatbuffer()");
+    }
+}
+
+// Original types defined in base_types.hpp
+inline tt::target::MathFidelity toFlatbuffer(MathFidelity input) {
+    switch (input) {
+        case MathFidelity::LoFi: return tt::target::MathFidelity::LoFi;
+        case MathFidelity::HiFi2: return tt::target::MathFidelity::HiFi2;
+        case MathFidelity::HiFi3: return tt::target::MathFidelity::HiFi3;
+        case MathFidelity::HiFi4: return tt::target::MathFidelity::HiFi4;
+        case MathFidelity::Invalid: return tt::target::MathFidelity::Invalid;
+        default: throw std::invalid_argument("Unknown MathFidelity value in toFlatbuffer()");
+    }
+}
+
+inline tt::target::UnpackToDestMode toFlatbuffer(UnpackToDestMode input) {
+    switch (input) {
+        case UnpackToDestMode::UnpackToDestFp32: return tt::target::UnpackToDestMode::UnpackToDestFp32;
+        case UnpackToDestMode::Default: return tt::target::UnpackToDestMode::Default;
+        default: throw std::invalid_argument("Invalid UnpackToDestMode value passed to toFlatbuffer");
+    }
+}
+
+
+// Original types defined in core_coord.hpp
+inline std::pair<tt::target::CoreSpec, ::flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec) {
+
+    return std::visit(
+        [&](auto &&spec) -> std::pair<tt::target::CoreSpec, ::flatbuffers::Offset<void>> {
+            using T = std::decay_t<decltype(spec)>;
+            if constexpr (std::is_same_v<T, CoreCoord>) {
+                auto core_coord = tt::target::CreateCoreCoord(builder, spec.x, spec.y);
+                return {tt::target::CoreSpec::CoreCoord, core_coord.Union()};
+            } else if constexpr (std::is_same_v<T, CoreRange>) {
+                auto start = tt::target::CreateCoreCoord(builder, spec.start_coord.x, spec.start_coord.y);
+                auto end = tt::target::CreateCoreCoord(builder, spec.end_coord.x, spec.end_coord.y);
+                auto core_range = tt::target::CreateCoreRange(builder, start, end);
+                return {tt::target::CoreSpec::CoreRange, core_range.Union()};
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                std::vector<flatbuffers::Offset<tt::target::CoreRange>> range_offsets;
+                for (const auto &range : spec.ranges()) {
+                    auto start = tt::target::CreateCoreCoord(builder, range.start_coord.x, range.start_coord.y);
+                    auto end = tt::target::CreateCoreCoord(builder, range.end_coord.x, range.end_coord.y);
+                    range_offsets.push_back(tt::target::CreateCoreRange(builder, start, end));
+                }
+                auto ranges_vector = builder.CreateVector(range_offsets);
+                auto core_range_set = tt::target::CreateCoreRangeSet(builder, ranges_vector);
+                return {tt::target::CoreSpec::CoreRangeSet, core_range_set.Union()};
+            } else {
+                throw std::runtime_error("Unhandled variant type in toFlatbuffer");
+            }
+        },
+        core_spec);
+}
+
+// Original types defined in kernel_types.hpp
+inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const DataMovementConfig &config) {
+
+    // Convert defines (map) to FlatBuffer format
+    std::vector<flatbuffers::Offset<tt::target::DefineEntry>> defines_vector;
+    for (const auto &[key, value] : config.defines) {
+        auto key_offset = builder.CreateString(key);
+        auto value_offset = builder.CreateString(value);
+        defines_vector.push_back(tt::target::CreateDefineEntry(builder, key_offset, value_offset));
+    }
+    auto defines_offset = builder.CreateVector(defines_vector);
+
+    // Convert compile_args to FlatBuffer format
+    auto compile_args_offset = builder.CreateVector(config.compile_args);
+
+    // Create the FlatBuffer DataMovementConfig object
+    auto config_offset = tt::target::CreateDataMovementConfig(
+        builder,
+        toFlatbuffer(config.processor),
+        toFlatbuffer(config.noc),
+        toFlatbuffer(config.noc_mode),
+        compile_args_offset,
+        defines_offset);
+
+    return {tt::target::KernelConfig::DataMovementConfig, config_offset.Union()};
+}
+
+inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const ComputeConfig &config) {
+
+    // Convert defines (map) to FlatBuffer format
+    std::vector<flatbuffers::Offset<tt::target::DefineEntry>> defines_vector;
+    for (const auto &[key, value] : config.defines) {
+        auto key_offset = builder.CreateString(key);
+        auto value_offset = builder.CreateString(value);
+        defines_vector.push_back(tt::target::CreateDefineEntry(builder, key_offset, value_offset));
+    }
+    auto defines_offset = builder.CreateVector(defines_vector);
+
+    // Convert unpack_to_dest_mode to FlatBuffer format
+    std::vector<tt::target::UnpackToDestMode> unpack_modes;
+    for (const auto &mode : config.unpack_to_dest_mode) {
+        unpack_modes.push_back(toFlatbuffer(mode));
+    }
+    auto unpack_modes_offset = builder.CreateVector(unpack_modes);
+
+    // Convert compile_args to FlatBuffer format
+    auto compile_args_offset = builder.CreateVector(config.compile_args);
+
+    // Create the FlatBuffer ComputeConfig object
+    auto config_offset = tt::target::CreateComputeConfig(
+        builder,
+        toFlatbuffer(config.math_fidelity),
+        config.fp32_dest_acc_en,
+        config.dst_full_sync_en,
+        unpack_modes_offset,
+        config.bfp8_pack_precise,
+        config.math_approx_mode,
+        compile_args_offset,
+        defines_offset);
+
+    return {tt::target::KernelConfig::ComputeConfig, config_offset.Union()};
+}
+
+inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const EthernetConfig &config) {
+
+    // Convert defines (map) to FlatBuffer format
+    std::vector<flatbuffers::Offset<tt::target::DefineEntry>> defines_vector;
+    for (const auto &[key, value] : config.defines) {
+        auto key_offset = builder.CreateString(key);
+        auto value_offset = builder.CreateString(value);
+        defines_vector.push_back(tt::target::CreateDefineEntry(builder, key_offset, value_offset));
+    }
+    auto defines_offset = builder.CreateVector(defines_vector);
+
+
+    // Convert compile_args to FlatBuffer format
+    auto compile_args_offset = builder.CreateVector(config.compile_args);
+
+    // Create the FlatBuffer EthernetConfig object
+    auto config_offset = tt::target::CreateEthernetConfig(
+        builder,
+        toFlatbuffer(config.eth_mode),
+        toFlatbuffer(config.noc),
+        toFlatbuffer(config.processor),
+        compile_args_offset,
+        defines_offset);
+
+    return {tt::target::KernelConfig::EthernetConfig, config_offset.Union()};
+}
+
+
+// Generic function for variant, specialized for each type above.
+inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
+
+    return std::visit(
+        [&](auto &&cfg) -> std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig> ||
+                        std::is_same_v<T, ComputeConfig> ||
+                        std::is_same_v<T, EthernetConfig>) {
+                return toFlatbuffer(builder, cfg);
+            } else {
+                throw std::runtime_error("Unhandled config type in toFlatbuffer.");
+            }
+        },
+        config);
+}
+
+
+inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const ReaderDataMovementConfig &config) {
+    const DataMovementConfig &base_config = config; // Cast to base
+    return toFlatbuffer(builder, base_config);
+}
+
+inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuffer(
+    flatbuffers::FlatBufferBuilder &builder,
+    const WriterDataMovementConfig &config) {
+    const DataMovementConfig &base_config = config; // Cast to base
+    return toFlatbuffer(builder, base_config);
+}
+
+
+// MathFidelity : base_types.hpp
 
 //////////////////////////////////////////////////////////////
 // Host API tracing helper functions                        //
@@ -221,4 +445,28 @@ inline void captureEnqueueProgram(CommandQueue& cq, Program& program, bool block
 
     auto cmd_variant = tt::target::CreateEnqueueProgramCommand(ctx.getBuilder(), cq_global_id, program_global_id, blocking);
     captureCommand(tt::target::CommandType::EnqueueProgramCommand, cmd_variant.Union());
+}
+
+inline void captureCreateKernel(
+    KernelHandle kernel_id,
+    Program &program, const std::string &file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config)
+{
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+
+    uint32_t kernel_global_id = ctx.getGlobalId(kernel_id);
+    uint32_t program_global_id = ctx.getGlobalId(&program, true);
+    log_info(tt::LogMetalTrace, "captureCreateKernel: file_name: {} kernel_global_id: {} (kernel_id: {}) program_global_id: {}",
+        file_name, kernel_global_id, kernel_id, program_global_id);
+
+    auto& fbb = ctx.getBuilder();
+    auto filename_offset = fbb.CreateString(file_name);
+    auto [core_spec_type, core_spec_offset] = toFlatbuffer(fbb, core_spec);
+    auto [config_type, config_offset] = toFlatbuffer(fbb, config);
+
+    auto cmd_offset = tt::target::CreateCreateKernelCommand(fbb, kernel_global_id, program_global_id,
+        filename_offset, core_spec_type, core_spec_offset, config_type, config_offset);
+    captureCommand(tt::target::CommandType::CreateKernelCommand, cmd_offset.Union());
 }
