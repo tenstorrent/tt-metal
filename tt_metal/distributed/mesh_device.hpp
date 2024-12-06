@@ -45,66 +45,30 @@ struct MeshDeviceConfig {
 
 // SystemMesh creates a virtualization over the physical devices in the system.
 // It creates a logical 2D-mesh of devices and manages the mapping between logical and physical device coordinates.
-// It is responsible for the assignment of devices in a MeshDevice to physical devices, and the creation and deletion of
-// device resources.
 class SystemMesh {
-private:
-    using LogicalCoordinate = Coordinate;
-    using PhysicalCoordinate = eth_coord_t;
+   private:
+    friend class MeshDevice;
+    class Impl;  // Forward declaration only
+    std::unique_ptr<Impl> pimpl_;
+    SystemMesh();
+    ~SystemMesh();
 
-    // Keep track of the devices that were opened so we can close them later. We shouldn't
-    // to keep track of this but DevicePool seems to open all devices associated with an MMIO device id
-    std::unordered_map<MeshDeviceID, std::map<chip_id_t, Device*>> opened_devices;
-    std::unordered_map<MeshDeviceID, std::vector<chip_id_t>> assigned_devices;
-    std::unordered_map<MeshDeviceID, std::weak_ptr<MeshDevice>> assigned_mesh_device_devices;
-    std::unordered_map<chip_id_t, Device*> assigned_physical_id_to_device;
-
-    // Logical mesh shape and coordinates
-    MeshShape logical_mesh_shape;
-    std::unordered_map<LogicalCoordinate, PhysicalCoordinate> logical_to_physical_coordinates;
-
-    // Handling of physical coordinates
-    std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id;
-    std::unordered_map<chip_id_t, PhysicalCoordinate> physical_device_id_to_coordinate;
-
-    SystemMesh() = default;
-    SystemMesh(const SystemMesh&) = delete;
-    SystemMesh& operator=(const SystemMesh&) = delete;
-    SystemMesh(SystemMesh&&) = delete;
-    SystemMesh& operator=(SystemMesh&&) = delete;
-
-    static MeshShape get_system_mesh_shape(size_t system_num_devices);
-    static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> get_system_mesh_translation_map(
-        size_t system_num_devices);
-
-    bool is_system_mesh_initialized() const;
+    std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
+    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices);
 
 public:
     static SystemMesh& instance();
+    SystemMesh(const SystemMesh &) = delete;
+    SystemMesh &operator=(const SystemMesh &) = delete;
+    SystemMesh(SystemMesh &&) = delete;
+    SystemMesh &operator=(SystemMesh &&) = delete;
 
-    void initialize();
-
-    // Return the shape of the logical mesh
+    // Get the shape of the logical mesh
     const MeshShape& get_shape() const;
     size_t get_num_devices() const;
 
     // Get the physical device IDs mapped to a MeshDevice
-    std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices);
-
-    // Map MeshDevice to physical devices
-    std::vector<Device*> map_mesh_device(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        size_t num_command_queues,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        const DispatchCoreConfig& dispatch_core_config,
-        const MeshDeviceConfig& config);
-
-    // Unmap MeshDevice, releasing the associated physical devices.
-    void unmap_mesh_device(const MeshDevice* mesh_device);
-    std::shared_ptr<MeshDevice> get_mesh_device(const std::vector<chip_id_t>& physical_device_ids);
-    Device* get_device(const chip_id_t physical_device_id) const;
+    std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig &config) const;
 };
 
 class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
@@ -113,6 +77,7 @@ private:
     MeshShape mesh_device_shape;
     MeshType type;
     std::shared_ptr<MeshDeviceView> primary_view;
+    std::map<chip_id_t, Device*> opened_devices;
     std::vector<Device*> devices;
     std::vector<std::shared_ptr<MeshDevice>> submeshes;  // Parent owns submeshes and responsible fortheir destruction
     std::weak_ptr<MeshDevice> parent_mesh;               // Submesh created with reference to parent mesh
@@ -181,7 +146,6 @@ public:
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
 
-    static std::shared_ptr<MeshDevice> fetch_mesh_device(const std::vector<Device*>& devices);
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
