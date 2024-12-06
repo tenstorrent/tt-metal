@@ -125,13 +125,13 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
 
     YAML::Node yaml = YAML::LoadFile(mesh_graph_desc_file_path);
 
-    TT_FATAL(yaml["Chip"].IsMap(), "MeshGraph: Expecting yaml to define a Chip as a Map");
+    TT_FATAL(yaml["ChipSpec"].IsMap(), "MeshGraph: Expecting yaml to define a ChipSpec as a Map");
     TT_FATAL(yaml["Board"].IsSequence(), "MeshGraph: Expecting yaml to define Board as a Sequence");
     TT_FATAL(yaml["Mesh"].IsSequence(), "MeshGraph: Expecting yaml to define Mesh as a Sequence");
     TT_FATAL(yaml["Graph"].IsSequence(), "MeshGraph: Expecting yaml to define Graph as a Sequence");
 
     // Parse Chip
-    const auto& chip = yaml["Chip"];
+    const auto& chip = yaml["ChipSpec"];
     auto arch = magic_enum::enum_cast<tt::ARCH>(chip["arch"].as<std::string>(), magic_enum::case_insensitive);
     TT_FATAL(arch.has_value(), "MeshGraph: Invalid yaml chip arch: {}", chip["arch"].as<std::string>());
 
@@ -185,6 +185,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             // Resize all variables that loop over mesh_ids
             this->intra_mesh_connectivity_.resize(mesh_id + 1);
             this->inter_mesh_connectivity_.resize(mesh_id + 1);
+            this->mesh_shapes_.resize(mesh_id + 1);
             mesh_edge_ports_to_chip_id.resize(mesh_id + 1);
         }
         TT_FATAL(
@@ -202,6 +203,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         std::uint32_t mesh_ew_size = mesh["topology"][1].as<std::uint32_t>() * board_to_topology[mesh_board][1];
         std::uint32_t mesh_ns_size = mesh["topology"][0].as<std::uint32_t>() * board_to_topology[mesh_board][0];
         std::uint32_t mesh_size = mesh_ew_size * mesh_ns_size;
+        this->mesh_shapes_[mesh_id] = {mesh_ns_size, mesh_ew_size};
 
         // Print Mesh
         std::stringstream ss;

@@ -1,4 +1,4 @@
-Chip: {
+ChipSpec: {
   arch: wormhole_b0,
   ethernet_ports: {
     N: 4,
