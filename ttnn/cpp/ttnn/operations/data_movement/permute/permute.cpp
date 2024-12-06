@@ -190,6 +190,8 @@ ttnn::Tensor ExecutePermute::invoke(
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
+    auto padded_shape = input_tensor.get_padded_shape();
+
     const auto input_layout = input_tensor.get_layout();
     auto adjust_order = [](tt::stl::Span<const uint32_t> dims) {
         ttnn::SmallVector<uint32_t> new_order;
@@ -204,28 +206,14 @@ ttnn::Tensor ExecutePermute::invoke(
         return new_order;
     };
     auto itensor = (input_tensor.get_logical_shape().rank() < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
-    auto iorder = normalized_dims.size() < 4
-                      ? adjust_order(normalized_dims)
-                      : normalized_dims;  // internals of permute_impl already adjust negative indices
+    auto iorder = normalized_dims.size() < 4 ? adjust_order(normalized_dims) : normalized_dims;
 
     auto output_tensor =
         detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()), pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
 
     if (input_rank < 4) {
-        const auto shape = output_tensor.get_shape();
-        const auto full_shape = output_tensor.get_shape().with_tile_padding();
-        SmallVector<uint32_t> shape_vec{};
-        SmallVector<uint32_t> full_shape_vec{};
-        int i = 0;
-        while (i < 3 and shape[i] == 1) {
-            i++;
-        }
-        for (; i < shape.rank(); i++) {
-            shape_vec.push_back(shape[i]);
-            full_shape_vec.push_back(full_shape[i]);
-        }
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(shape_vec, full_shape_vec));
+        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_rank);
     }
 
     return output_tensor;
