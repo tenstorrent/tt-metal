@@ -342,7 +342,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -356,7 +356,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (lastDump) {
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
@@ -364,7 +364,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
                 EnqueueReadBuffer(device->command_queue(), output_dram_buffer, profile_buffer, true);
             }
         } else {
-            if (!lastDump) {
+            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
         }

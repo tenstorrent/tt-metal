@@ -65,20 +65,6 @@ std::mutex device_mutex;
 
 constexpr CoreCoord SYNC_CORE = {0, 0};
 
-std::vector<tracy::TTDeviceEvent> getSyncDeviceData(int device_id) {
-    std::vector<tracy::TTDeviceEvent> sync_data;
-    if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
-        ZoneScopedN("Fetching_device_sync_event");
-        for (auto event : tt_metal_device_profiler_map.at(device_id).device_sync_events) {
-            if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
-                sync_data.push_back(event);
-            }
-        }
-        // tt_metal_device_profiler_map.at(device_id).device_sync_events.clear();
-    }
-    return sync_data;
-}
-
 void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
@@ -289,6 +275,28 @@ void setShift(int device_id, int64_t shift, double scale) {
     }
 }
 
+void PeekDeviceData(Device* device, std::vector<CoreCoord>& worker_cores) {
+    ZoneScoped;
+    auto device_id = device->id();
+    std::string zoneName = fmt::format("peek {}", device_id);
+    ZoneName(zoneName.c_str(), zoneName.size());
+    if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
+        tt_metal_device_profiler_map.at(device_id).device_sync_new_events.clear();
+        tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores);
+        for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
+            if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
+                ZoneScopedN("Adding_device_sync_event");
+                auto ret = tt_metal_device_profiler_map.at(device_id).device_sync_events.insert(event);
+                if (ret.second) {
+                    tt_metal_device_profiler_map.at(device_id).device_sync_new_events.insert(event);
+                }
+            }
+        }
+    } else {
+        std::cout << "NOT FOUND: " << device_id << std::endl;
+    }
+}
+
 void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) {
     ZoneScopedC(tracy::Color::Tomato4);
     std::string zoneName = fmt::format("sync_device_device_{}->{}", device_id_sender, device_id_receiver);
@@ -309,7 +317,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
-        constexpr std::uint16_t sample_count = 120;
+        constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
@@ -331,10 +339,6 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
                 "No eth connection could be found between device {} and {}", device_id_sender, device_id_receiver);
             return;
         }
-
-        std::cout << "Connection :" << device_id_sender << ":" << eth_sender_core.x << "," << eth_sender_core.y;
-        std::cout << "->" << device_id_receiver << ":" << eth_receiver_core.x << "," << eth_receiver_core.y
-                  << std::endl;
 
         std::vector<uint32_t> const& ct_args = {
             channel_count,
@@ -371,50 +375,82 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         tt_metal::Finish(device_sender->command_queue());
         tt_metal::Finish(device_receiver->command_queue());
 
-        // constexpr uint32_t eriscIndex = 0;
-        // profiler_msg_t *profiler_msg = device_sender->get_dev_addr<profiler_msg_t *>(eth_sender_core,
-        // HalL1MemAddrType::PROFILER); uint64_t addr =
-        // reinterpret_cast<uint64_t>(&profiler_msg->buffer[eriscIndex][kernel_profiler::CUSTOM_MARKERS]);
-        // std::vector<std::uint32_t> sync_times = tt::llrt::read_hex_vec_from_core(
-        // device_id_sender,
-        // eth_sender_core,
-        // addr,
-        // 120 * 2 * sizeof(uint32_t));
-        // for (const auto& sync_time: sync_times)
-        //{
-        // std::cout <<  sync_time << std::endl;
-        //}
+        CoreCoord sender_core = {eth_sender_core.x, eth_sender_core.y};
+        std::vector<CoreCoord> sender_cores = {
+            device_sender->physical_core_from_logical_core(sender_core, CoreType::ETH)};
+
+        CoreCoord receiver_core = {eth_receiver_core.x, eth_receiver_core.y};
+        std::vector<CoreCoord> receiver_cores = {
+            device_receiver->physical_core_from_logical_core(receiver_core, CoreType::ETH)};
+
+        PeekDeviceData(device_sender, sender_cores);
+        PeekDeviceData(device_receiver, receiver_cores);
+
+        std::cout << "CON DEV:" << device_id_sender << "->" << device_id_receiver << std::endl;
+        std::cout << "ASSERT : " << tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size();
+        std::cout << " , " << tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size()
+                  << std::endl;
+
+        TT_ASSERT(
+            tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size() ==
+            tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size());
+
+        auto event_receiver = tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.begin();
+
+        for (auto event_sender = tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.begin();
+             event_sender != tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.end();
+             event_sender++) {
+            TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_events.end());
+            deviceDeviceTimePair.at(device_id_sender)
+                .at(device_id_receiver)
+                .push_back({event_sender->timestamp, event_receiver->timestamp});
+            event_receiver++;
+        }
     }
 }
 
-void ProfilerSync() {
+void ProfilerSync(ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
-    auto ethernet_connections = tt::Cluster::instance().get_ethernet_connections();
+    static bool do_sync_on_close = true;
+    if (state == ProfilerSyncState::INIT) {
+        auto ethernet_connections = tt::Cluster::instance().get_ethernet_connections();
+        std::set<chip_id_t> visited_devices = {};
+        for (const auto& device : ethernet_connections) {
+            for (const auto& connection : device.second) {
+                chip_id_t sender_device = device.first;
+                chip_id_t receiver_device = std::get<0>(connection.second);
 
-    std::set<chip_id_t> visited_devices = {};
-    std::vector<std::pair<chip_id_t, chip_id_t>> ping_pairs;
-    for (const auto& device : ethernet_connections) {
-        for (const auto& connection : device.second) {
-            chip_id_t sender_device = device.first;
-            chip_id_t receiver_device = std::get<0>(connection.second);
+                if (visited_devices.find(sender_device) == visited_devices.end() or
+                    visited_devices.find(receiver_device) == visited_devices.end()) {
+                    visited_devices.insert(sender_device);
+                    visited_devices.insert(receiver_device);
+                    std::pair<chip_id_t, chip_id_t> ping_pair = {sender_device, receiver_device};
 
-            if (visited_devices.find(sender_device) == visited_devices.end() or
-                visited_devices.find(receiver_device) == visited_devices.end()) {
-                visited_devices.insert(sender_device);
-                visited_devices.insert(receiver_device);
-                std::pair<chip_id_t, chip_id_t> ping_pair = {sender_device, receiver_device};
-                ping_pairs.push_back(ping_pair);
-
-                deviceDeviceTimePair.emplace(
-                    sender_device, (std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>){});
-                deviceDeviceTimePair.at(sender_device)
-                    .emplace(receiver_device, (std::vector<std::pair<uint64_t, uint64_t>>){});
+                    deviceDeviceTimePair.emplace(
+                        sender_device, (std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>){});
+                    deviceDeviceTimePair.at(sender_device)
+                        .emplace(receiver_device, (std::vector<std::pair<uint64_t, uint64_t>>){});
+                }
             }
         }
     }
 
-    for (const auto& ping_pair : ping_pairs) {
-        syncDeviceDevice(std::get<0>(ping_pair), std::get<1>(ping_pair));
+    if (state == ProfilerSyncState::INIT or (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close)) {
+        for (const auto& sender : deviceDeviceTimePair) {
+            for (const auto& receiver : sender.second) {
+                syncDeviceDevice(sender.first, receiver.first);
+            }
+        }
+        if (state == ProfilerSyncState::CLOSE_DEVICE) {
+            do_sync_on_close = false;
+            for (auto& sender : deviceDeviceTimePair) {
+                for (auto& receiver : sender.second) {
+                    for (auto& time_pair : receiver.second) {
+                        std::cout << time_pair.first << "," << time_pair.second << std::endl;
+                    }
+                }
+            }
+        }
     }
 
 #endif
@@ -481,7 +517,7 @@ void InitDeviceProfiler(Device* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(Device* device, bool lastDump) {
+void DumpDeviceProfileResults(Device* device, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     static bool device_sync_done = false;
@@ -500,65 +536,37 @@ void DumpDeviceProfileResults(Device* device, bool lastDump) {
         auto physicalCore = device->physical_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(physicalCore);
     }
-    device->push_work([device, workerCores, lastDump]() mutable {
-        if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and !lastDump) {
+    device->push_work([device, workerCores, state]() mutable {
+        DumpDeviceProfileResults(device, workerCores, state);
+        if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
+            state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
             for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
-                std::cout << "CON DEV:" << device->id() << "->" << connected_device.first << std::endl;
-                if (tt::DevicePool::instance().is_device_active(connected_device.first)) {
-                    // detail::syncDeviceDevice(device->id(), connected_device.first);
-                    Device* device_receiver = tt::DevicePool::instance().get_active_device(connected_device.first);
-                    // DumpDeviceProfileResults(device_receiver);
-                    // DumpDeviceProfileResults(device, workerCores, lastDump);
-                    //  detail::syncDeviceDevice (device->id(),connected_device.first);
-                    // Device* device_receiver = tt::DevicePool::instance().get_active_device(connected_device.first);
-                    // DumpDeviceProfileResults(device_receiver);
-                    // DumpDeviceProfileResults(device, workerCores, lastDump);
-
-                    // TT_ASSERT (tt_metal_device_profiler_map.find(device_receiver->id()) !=
-                    // tt_metal_device_profiler_map.end()) TT_ASSERT (tt_metal_device_profiler_map.find(device->id()) !=
-                    // tt_metal_device_profiler_map.end())
-                    //      TT_ASSERT(tt_metal_device_profiler_map.at(device->id()).device_sync_events.size() == \
-                            //tt_metal_device_profiler_map.at(device_receiver).device_sync_events.size())
-
-                    // auto event_receiver =
-                    // tt_metal_device_profiler_map.at(device_receiver->id()).device_sync_events.begin(); for (auto
-                    // event_sender = tt_metal_device_profiler_map.at(device->id()).device_sync_events.begin();
-                    // event_sender != tt_metal_device_profiler_map.at(device->id()).device_sync_events.end();
-                    // event_sender ++){
-                    // TT_ASSERT(event_receiver !=
-                    // tt_metal_device_profiler_map.at(device_receiver->id()).device_sync_events.end());
-
-                    ////std::cout << device->id() <<  "," << device_receiver->id() << std::endl;
-
-                    // event_receiver ++;
-                    //}
-
-                    // tt_metal_device_profiler_map.at(device->id()).device_sync_events.clear();
-                    // tt_metal_device_profiler_map.at(device_receiver->id()).device_sync_events.clear();
-                }
+                chip_id_t sender_id = device->id();
+                chip_id_t receiver_id = connected_device.first;
+                detail::syncDeviceDevice(sender_id, receiver_id);
             }
         }
         // std::vector<tracy::TTDeviceEvent> sync_data_sender = getSyncDeviceData(device->id());
-        //  auto device_id = device->id();
+        // auto device_id = device->id();
         //{
-        //  auto device_0 = tt::DevicePool::instance().get_active_device(0);
-        //  DumpDeviceProfileResults(device_0);
-        //  std::vector<tracy::TTDeviceEvent> sync_data_sender;
-        //  std::vector<tracy::TTDeviceEvent> sync_data_receiver;
-        //  for (int dev_id = 0; dev_id < 2; dev_id ++) {
-        //  ZoneScopedN("Fetching_device_sync_event");
-        //  std::set<tracy::TTDeviceEvent>& sync_data = detail::getSyncDeviceData (dev_id);
-        //  for (auto& event: sync_data){
-        //  if (event.zone_name.find("SENDER") != std::string::npos)
+        // auto device_0 = tt::DevicePool::instance().get_active_device(0);
+        // DumpDeviceProfileResults(device_0);
+        // std::vector<tracy::TTDeviceEvent> sync_data_sender;
+        // std::vector<tracy::TTDeviceEvent> sync_data_receiver;
+        // for (int dev_id = 0; dev_id < 2; dev_id ++) {
+        // ZoneScopedN("Fetching_device_sync_event");
+        // std::set<tracy::TTDeviceEvent>& sync_data = detail::getSyncDeviceData (dev_id);
+        // for (auto& event: sync_data){
+        // if (event.zone_name.find("SENDER") != std::string::npos)
         //{
-        //  sync_data_sender.push_back(event);
-        // }
-        //  else if (event.zone_name.find("RECEIVER") != std::string::npos)
+        // sync_data_sender.push_back(event);
+        //}
+        // else if (event.zone_name.find("RECEIVER") != std::string::npos)
         //{
-        //  sync_data_receiver.push_back(event);
-        // }
-        // }
-        // }
+        // sync_data_receiver.push_back(event);
+        //}
+        //}
+        //}
 
         // TT_ASSERT (sync_data_sender.size () == 120 * 2 * 2, "Wrong sync data sample count.");
         // TT_ASSERT (sync_data_receiver.size () == 120 * 2 * 2, "Wrong sync data sample count.");
@@ -611,7 +619,7 @@ void DumpDeviceProfileResults(Device* device, bool lastDump) {
 #endif
 }
 
-void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::string name = fmt::format("Device Dump {}", device->id());
@@ -632,7 +640,7 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
         }
     }
     if (getDeviceProfilerState()) {
-        if (!lastDump) {
+        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
             const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
             if (USE_FAST_DISPATCH) {
                 Finish(device->command_queue());
@@ -701,22 +709,13 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
-            if (!lastDump) {
+            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 syncDeviceHost(device, SYNC_CORE, tt_metal_device_profiler_map.at(device_id).sync_program, false);
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, lastDump);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state);
 
-            if (!lastDump) {
-                for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
-                    if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
-                        ZoneScopedN("Adding_device_sync_event");
-                        tt_metal_device_profiler_map.at(device_id).device_sync_events.insert(event);
-                    }
-                }
-            }
-
-            if (lastDump) {
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
                 // last owner. Sync program also contains a buffer so it is safter to release it here
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer.reset();

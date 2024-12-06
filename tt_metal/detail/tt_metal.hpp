@@ -12,6 +12,7 @@
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/tools/profiler/profiler.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -191,6 +192,7 @@ void ClearProfilerControlBuffer(Device* device);
  * */
 void InitDeviceProfiler(Device* device);
 
+enum class ProfilerSyncState { INIT, CLOSE_DEVICE };
 /**
  * Sync TT devices with host
  *
@@ -199,7 +201,7 @@ void InitDeviceProfiler(Device* device);
  * | Argument      | Description                                       | Type            | Valid Range               | Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
-void ProfilerSync();
+void ProfilerSync(ProfilerSyncState state);
 
 /**
  * Read device side profiler data and dump results into device side CSV log
@@ -210,10 +212,11 @@ void ProfilerSync();
  * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType,
- * std::vector<CoreCoord>> & |                           | True     | | last_dump     | Last dump before process dies |
- * bool                                                         |                           | False    |
+ * std::vector<CoreCoord>> & |
+ * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cores, bool last_dump = false);
+void DumpDeviceProfileResults(
+    Device* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState = ProfilerDumpState::NORMAL);
 
 /**
  * Traverse all cores and read device side profiler data and dump results into device side CSV log
@@ -223,9 +226,9 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
  * | Argument      | Description                                       | Type | Valid Range               | Required |
  * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
- * | last_dump     | Last dump before process dies                     | bool |                           | False    |
+ * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(Device* device, bool last_dump = false);
+void DumpDeviceProfileResults(Device* device, ProfilerDumpState = ProfilerDumpState::NORMAL);
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module

@@ -176,7 +176,7 @@ void DevicePool::init_profiler_devices() const {
             }
         }
     }
-    detail::ProfilerSync();
+    detail::ProfilerSync(detail::ProfilerSyncState::INIT);
 #endif
 }
 
@@ -451,6 +451,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
     ZoneScoped;
+    detail::ProfilerSync(detail::ProfilerSyncState::CLOSE_DEVICE);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -471,6 +472,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
     std::vector<chip_id_t> devices_to_close;
 
     ZoneScoped;
+    detail::ProfilerSync(detail::ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;

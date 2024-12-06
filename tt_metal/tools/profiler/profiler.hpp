@@ -27,6 +27,8 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class ProfilerDumpState { NORMAL, CLOSE_DEVICE_SYNC, LAST_CLOSE_DEVICE };
+
 class DeviceProfiler {
 private:
     // Device architecture
@@ -103,6 +105,8 @@ public:
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 
+    std::set<tracy::TTDeviceEvent> device_sync_new_events;
+
     //shift
     int64_t shift = 0;
 
@@ -121,7 +125,10 @@ public:
     void setOutputDir(const std::string& new_output_dir);
 
     // Traverse all cores on the device and dump the device profile results
-    void dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump);
+    void dumpResults(
+        Device* device,
+        const std::vector<CoreCoord>& worker_cores,
+        ProfilerDumpState state = ProfilerDumpState::NORMAL);
 };
 
 }  // namespace tt_metal
