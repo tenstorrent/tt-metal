@@ -92,7 +92,7 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
 
     auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tile_size(data_format);
-    const uint32_t L1_SIZE = tt::tt_metal::hal::get_l1_size();
+    const uint32_t L1_SIZE = tt::tt_metal::tt_hal::get_l1_size();
     TT_FATAL(
         L1_SIZE >= 2 * per_core_tiles * single_tile_size,
         "Workload of Tiles {} at Tile Size {} (times 2 for output) exceeds L1 capacity {}",
