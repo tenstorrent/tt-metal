@@ -53,6 +53,7 @@ inline void _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_() {
     math::inc_dst_addr<8>();
 }
 
+template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_binary_sfpu_init_() {
     sfpu::_init_sfpu_config_reg();
     eltwise_binary_sfpu_configure_addrmod();

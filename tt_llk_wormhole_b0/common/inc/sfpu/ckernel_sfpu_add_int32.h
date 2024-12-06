@@ -18,7 +18,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _add_int32_(const int iterations, const uint dst_offset) {
+inline void _add_int32_(const uint dst_offset) {
     // Operand A is input1 (int32)
     // Operand B is input2 (int32)
     // Output is int32

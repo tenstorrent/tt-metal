@@ -19,7 +19,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _quant_int32_(const int iterations, const uint dst_offset)
+inline void _quant_int32_(const uint dst_offset)
 {
     // Operand A is input (fp32)
     // Operand B is scaling factor (fp32)
@@ -44,7 +44,7 @@ inline void _quant_int32_(const int iterations, const uint dst_offset)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _requant_int32_(const int iterations, const uint dst_offset)
+inline void _requant_int32_(const uint dst_offset)
 {
     // Operand A is input to requant (int32)
     // Operand B is scaling factor (fp32)
@@ -72,7 +72,7 @@ inline void _requant_int32_(const int iterations, const uint dst_offset)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _dequant_int32_(const int iterations, const uint dst_offset)
+inline void _dequant_int32_(const uint dst_offset)
 {
     // Operand A[LREG0] is input to dequant (int32)
     // Operand B[LREG1] is scaling factor (fp32)
@@ -98,7 +98,7 @@ inline void _dequant_int32_(const int iterations, const uint dst_offset)
     }
 }
 
-inline void init_quant_zero_point(const uint zero_point)
+inline void _init_quant_zero_point_(const uint zero_point)
 {
     _sfpu_load_imm32_(2,zero_point);
 }
