@@ -63,7 +63,8 @@ run_t3000_llama3_tests() {
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
-    # LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?  # FIXME Issue #14843
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k attention-perf ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -86,6 +87,7 @@ run_t3000_llama3_70b_tests() {
   # Run test_model (decode and prefill) for llama3 70B
   LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
   LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k attention-perf ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
