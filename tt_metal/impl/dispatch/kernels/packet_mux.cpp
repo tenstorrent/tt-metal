@@ -4,11 +4,10 @@
 
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_v2.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
-packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
-packet_output_queue_state_t output_queue;
+using namespace packet_queue;
 
 constexpr uint32_t reserved = get_compile_time_arg_val(0);
 
@@ -17,8 +16,6 @@ constexpr uint32_t reserved = get_compile_time_arg_val(0);
 constexpr uint32_t rx_queue_start_addr_words = get_compile_time_arg_val(1);
 constexpr uint32_t rx_queue_size_words = get_compile_time_arg_val(2);
 constexpr uint32_t rx_queue_size_bytes = rx_queue_size_words*PACKET_WORD_SIZE_BYTES;
-
-static_assert(is_power_of_2(rx_queue_size_words), "rx_queue_size_words must be a power of 2");
 
 constexpr uint32_t mux_fan_in = get_compile_time_arg_val(3);
 
@@ -62,8 +59,6 @@ constexpr DispatchRemoteNetworkType remote_rx_network_type[MAX_SWITCH_FAN_IN] =
 
 constexpr uint32_t remote_tx_queue_start_addr_words = get_compile_time_arg_val(8);
 constexpr uint32_t remote_tx_queue_size_words = get_compile_time_arg_val(9);
-
-static_assert(is_power_of_2(remote_tx_queue_size_words), "remote_tx_queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_tx_x = get_compile_time_arg_val(10);
 constexpr uint32_t remote_tx_y = get_compile_time_arg_val(11);
@@ -137,99 +132,152 @@ constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(24) >> 24) & 0xFF
     };
 
+constexpr uint32_t mux_input_scratch_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(25),
+        get_compile_time_arg_val(26),
+        get_compile_time_arg_val(27),
+        get_compile_time_arg_val(28)
+    };
+constexpr uint32_t mux_input_remote_scratch_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(29),
+        get_compile_time_arg_val(30),
+        get_compile_time_arg_val(31),
+        get_compile_time_arg_val(32)
+    };
+
+constexpr uint32_t mux_output_scratch_buffer = get_compile_time_arg_val(33);
+constexpr uint32_t mux_output_remote_scratch_buffer = get_compile_time_arg_val(34);
+
+UnsafePacketInputQueueVariant raw_input_queues[MAX_SWITCH_FAN_IN];
+using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
+
+UnsafePacketOutputQueueVariant raw_output_queue;
+constexpr init_params_t output_queue_init_params{
+    .queue_id = mux_fan_in,
+    .queue_start_addr_words = remote_tx_queue_start_addr_words,
+    .queue_size_words = remote_tx_queue_size_words,
+    .remote_queue_id = remote_tx_queue_id,
+    .remote_x = remote_tx_x,
+    .remote_y = remote_tx_y,
+    .ptrs_addr = mux_output_scratch_buffer,
+    .remote_ptrs_addr = mux_output_remote_scratch_buffer,
+
+    .local_sem_id = output_depacketize_local_sem,
+    .remote_sem_id = output_depacketize_downstream_sem,
+    .log_page_size = output_depacketize_log_page_size,
+
+    .input_queues = raw_input_queues,
+    .num_input_queues = mux_fan_in,
+    .unpacketizer_output_remove_header = output_depacketize_remove_header,
+};
+using output_queue_network_sequence = NetworkTypeSequence<tx_network_type>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<output_depacketize>;
+
+inline void initialize_input_queues() {
+    init_params_t init_params{};
+    process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+        raw_input_queues[sequence_i].template engage<network_type, cbmode>();
+
+        auto* active_input_queue = raw_input_queues[sequence_i].template get<network_type, cbmode>();
+
+        init_params.queue_id = (uint8_t)sequence_i;
+        init_params.queue_start_addr_words = rx_queue_start_addr_words + sequence_i * rx_queue_size_words;
+        init_params.queue_size_words = rx_queue_size_words;
+        init_params.remote_queue_id = (uint8_t)remote_rx_queue_id[sequence_i];
+        init_params.remote_x = (uint8_t)remote_rx_x[sequence_i];
+        init_params.remote_y = (uint8_t)remote_rx_y[sequence_i];
+
+        init_params.ptrs_addr = mux_input_scratch_buffers[sequence_i];
+        init_params.remote_ptrs_addr = mux_input_remote_scratch_buffers[sequence_i];
+
+        init_params.local_sem_id = (uint8_t)input_packetize_local_sem[sequence_i];
+        init_params.remote_sem_id = (uint8_t)input_packetize_upstream_sem[sequence_i];
+        init_params.log_page_size = (uint8_t)input_packetize_log_page_size[sequence_i];
+
+        init_params.packetizer_input_src = (uint16_t)input_packetize_src_endpoint[sequence_i];
+        init_params.packetizer_input_dest = (uint16_t)input_packetize_dest_endpoint[sequence_i];
+
+        active_input_queue->init(&init_params);
+
+        return true;
+    });
+}
+
+inline void initialize_output_queues() {
+    raw_output_queue.engage<tx_network_type, output_depacketize, input_queue_network_sequence, input_queue_cb_mode_sequence>();
+    auto* output_queue = raw_output_queue.get<tx_network_type, output_depacketize, input_queue_network_sequence, input_queue_cb_mode_sequence>();
+    output_queue->init(&output_queue_init_params);
+}
 
 void kernel_main() {
+    initialize_input_queues();
+    initialize_output_queues();
 
-    write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
-    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);
+    auto* output_queue = raw_output_queue.get<tx_network_type, output_depacketize, input_queue_network_sequence, input_queue_cb_mode_sequence>();
 
-    for (uint32_t i = 0; i < mux_fan_in; i++) {
-        input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
-                             remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], remote_rx_network_type[i],
-                             input_packetize[i], input_packetize_log_page_size[i],
-                             input_packetize_local_sem[i], input_packetize_upstream_sem[i],
-                             input_packetize_src_endpoint[i], input_packetize_dest_endpoint[i]);
-    }
-
-    output_queue.init(mux_fan_in, remote_tx_queue_start_addr_words, remote_tx_queue_size_words,
-                      remote_tx_x, remote_tx_y, remote_tx_queue_id, tx_network_type,
-                      input_queues, mux_fan_in,
-                      output_depacketize, output_depacketize_log_page_size,
-                      output_depacketize_downstream_sem, output_depacketize_local_sem,
-                      output_depacketize_remove_header);
-
-    if (!wait_all_src_dest_ready(input_queues, mux_fan_in, &output_queue, 1, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence,
+                                     input_queue_cb_mode_sequence,
+                                     output_queue_network_sequence,
+                                     output_queue_cb_mode_sequence>(raw_input_queues, &raw_output_queue, timeout_cycles)) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
-    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
-
-    uint32_t curr_input = 0;
-    bool timeout = false;
     bool dest_finished = false;
     bool curr_input_partial_packet_sent = false;
+    uint32_t partial_packet_sent_index = 0;
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
-    uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
     uint32_t heartbeat = 0;
-    while (!dest_finished && !timeout) {
+    while (!dest_finished) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
-        if (timeout_cycles > 0) {
-            uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-            if (cycles_since_progress > timeout_cycles) {
-                timeout = true;
-                break;
+
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto i) -> bool {
+            if (curr_input_partial_packet_sent && partial_packet_sent_index != i) return true;
+            auto* active_input_queue = raw_input_queues[i].template get<network_type, cbmode>();
+            curr_input_partial_packet_sent = false;
+            active_input_queue->advance_if_not_valid();
+            if (active_input_queue->get_curr_packet_valid()) {
+                bool full_packet_sent;
+                uint32_t words_sent = output_queue->forward_data_from_input<sequence_i>(full_packet_sent, active_input_queue->get_end_of_cmd());
+                data_words_sent += words_sent;
+                curr_input_partial_packet_sent = !full_packet_sent;
             }
-        }
-        if (input_queues[curr_input].get_curr_packet_valid()) {
-            bool full_packet_sent;
-            uint32_t words_sent = output_queue.forward_data_from_input(curr_input, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
-            data_words_sent += words_sent;
-            if ((words_sent > 0) && (timeout_cycles > 0)) {
-                progress_timestamp = get_timestamp_32b();
+
+            if (curr_input_partial_packet_sent) {
+                partial_packet_sent_index = i;
+                // stop looping at this queue. come back to it at the next iteration from the outer while loop
+                return false;
             }
-            curr_input_partial_packet_sent = !full_packet_sent;
-        }
-        if (!curr_input_partial_packet_sent) {
-            curr_input++;
-            if (curr_input == mux_fan_in) {
-                curr_input = 0;
-            }
-        }
-        output_queue.prev_words_in_flight_check_flush();
-        dest_finished = output_queue.is_remote_finished();
+
+            return true; // keep looping
+        });
+
+        output_queue->prev_words_in_flight_check_flush();
+        dest_finished = output_queue->is_remote_finished();
     }
 
-    if (!timeout) {
-        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
-        if (!output_queue.output_barrier(timeout_cycles)) {
-            timeout = true;
-        }
+    if (!output_queue->output_barrier(timeout_cycles)) {
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        return;
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    if (!timeout) {
-        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
-        for (uint32_t i = 0; i < mux_fan_in; i++) {
-            input_queues[i].send_remote_finished_notification();
-        }
-    }
+    process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto i) -> bool {
+        auto* active_input_queue = raw_input_queues[i].template get<network_type, cbmode>();
+        active_input_queue->send_remote_finished_notification();
+        return true;
+    });
 
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
     set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
     set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
 
-    if (timeout) {
-        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-        // DPRINT << "mux timeout" << ENDL();
-        // input_queues[0].dprint_object();
-        // output_queue.dprint_object();
-    } else {
-        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
-    }
+    write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
 }

@@ -1,3 +1,4 @@
+
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -5,9 +6,11 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_v2.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
 // clang-format on
+
+using namespace packet_queue;
 
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
@@ -18,12 +21,8 @@ constexpr uint32_t queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t queue_size_words = get_compile_time_arg_val(3);
 constexpr uint32_t queue_size_bytes = queue_size_words * PACKET_WORD_SIZE_BYTES;
 
-static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
-
 constexpr uint32_t remote_rx_queue_start_addr_words = get_compile_time_arg_val(4);
 constexpr uint32_t remote_rx_queue_size_words = get_compile_time_arg_val(5);
-
-static_assert(is_power_of_2(remote_rx_queue_size_words), "remote_rx_queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_rx_x = get_compile_time_arg_val(6);
 constexpr uint32_t remote_rx_y = get_compile_time_arg_val(7);
@@ -62,14 +61,49 @@ constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(21);
 constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t output_queue_id = 1;
 
-packet_input_queue_state_t input_queue;
-packet_output_queue_state_t output_queue;
+// Inputs
+constexpr uint32_t traffic_gen_input_ptrs_addr = get_compile_time_arg_val(22);
+constexpr uint32_t traffic_gen_input_mock_remote_ptrs_addr = get_compile_time_arg_val(23);
 
-constexpr packet_input_queue_state_t* input_queue_ptr = &input_queue;
-constexpr packet_output_queue_state_t* output_queue_ptr = &output_queue;
+// Outputs - Update remote wptr
+constexpr uint32_t traffic_gen_output_ptrs_addr = get_compile_time_arg_val(24);
+constexpr uint32_t traffic_gen_output_remote_ptrs_addr = get_compile_time_arg_val(25);
 
 // input_queue_rnd_state_t input_queue_state;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
+
+UnsafePacketInputQueueVariant raw_input_queue;
+constexpr init_params_t input_queue_init_params{
+    .queue_id = input_queue_id,
+    .queue_start_addr_words = queue_start_addr_words,
+    .queue_size_words = queue_size_words,
+    .remote_queue_id = 0,
+    .remote_x = 0,
+    .remote_y = 0,
+    .ptrs_addr = traffic_gen_input_ptrs_addr,
+    .remote_ptrs_addr = traffic_gen_input_mock_remote_ptrs_addr,
+};
+using input_queue_network_sequence = NetworkTypeSequence<DispatchRemoteNetworkType::NONE>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<false>;
+
+
+UnsafePacketOutputQueueVariant raw_output_queue;
+constexpr init_params_t output_queue_init_params{
+    .queue_id = output_queue_id,
+    .queue_start_addr_words = remote_rx_queue_start_addr_words,
+    .queue_size_words = remote_rx_queue_size_words,
+    .remote_queue_id = remote_rx_queue_id,
+    .remote_x = remote_rx_x,
+    .remote_y = remote_rx_y,
+    .ptrs_addr = traffic_gen_output_ptrs_addr,
+    .remote_ptrs_addr = traffic_gen_output_remote_ptrs_addr,
+
+    .input_queues = &raw_input_queue,
+    .num_input_queues = 1,
+};
+using output_queue_network_sequence = NetworkTypeSequence<tx_network_type>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<false>;
+
 
 // generates packets with random size and payload on the input side
 inline bool input_queue_handler() {
@@ -77,15 +111,17 @@ inline bool input_queue_handler() {
         return true;
     }
 
-    uint32_t free_words = input_queue_ptr->get_queue_data_num_words_free();
+    auto* new_input_queue = raw_input_queue.get<DispatchRemoteNetworkType::NONE, false>();
+
+    uint32_t free_words = new_input_queue->get_queue_data_num_words_free();
     if (free_words == 0) {
         return false;
     }
 
     // Each call to input_queue_handler initializes only up to the end
     // of the queue buffer, so we don't need to handle wrapping.
-    uint32_t byte_wr_addr = input_queue_ptr->get_queue_wptr_addr_bytes();
-    uint32_t words_to_init = std::min(free_words, input_queue_ptr->get_queue_words_before_wptr_wrap());
+    uint32_t byte_wr_addr = new_input_queue->get_queue_wptr_addr_bytes();
+    uint32_t words_to_init = std::min(free_words, new_input_queue->get_queue_words_before_wptr_wrap());
     uint32_t words_initialized = 0;
 
     while (words_initialized < words_to_init) {
@@ -122,7 +158,8 @@ inline bool input_queue_handler() {
             byte_wr_addr += num_words * PACKET_WORD_SIZE_BYTES;
         }
     }
-    input_queue_ptr->advance_queue_local_wptr(words_initialized);
+
+    new_input_queue->advance_queue_local_wptr(words_initialized);
     return false;
 }
 
@@ -143,28 +180,17 @@ void kernel_main() {
         input_queue_state.init(src_endpoint_id, prng_seed);
     }
 
-    input_queue_ptr->init(
-        input_queue_id,
-        queue_start_addr_words,
-        queue_size_words,
-        // remote_x, remote_y, remote_queue_id, remote_update_network_type:
-        0,
-        0,
-        0,
-        DispatchRemoteNetworkType::NONE);
+    raw_input_queue.engage<DispatchRemoteNetworkType::NONE, false>();
+    raw_output_queue.engage<tx_network_type, false, input_queue_network_sequence, input_queue_cb_mode_sequence>();
 
-    output_queue_ptr->init(
-        output_queue_id,
-        remote_rx_queue_start_addr_words,
-        remote_rx_queue_size_words,
-        remote_rx_x,
-        remote_rx_y,
-        remote_rx_queue_id,
-        tx_network_type,
-        input_queue_ptr,
-        1);
+    // safe to use now
+    auto* new_input_queue = raw_input_queue.get<DispatchRemoteNetworkType::NONE, false>();
+    auto* new_output_queue = raw_output_queue.get<tx_network_type, false, input_queue_network_sequence, input_queue_cb_mode_sequence>();
 
-    if (!wait_all_src_dest_ready(NULL, 0, output_queue_ptr, 1, timeout_cycles)) {
+    new_input_queue->init(&input_queue_init_params);
+    new_output_queue->init(&output_queue_init_params);
+
+    if (!wait_all_input_output_ready<NoNetworkTypeSequence, NoCBModeTypeSequence, output_queue_network_sequence, output_queue_cb_mode_sequence>(NULL, &raw_output_queue, timeout_cycles)) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         return;
     }
@@ -193,10 +219,10 @@ void kernel_main() {
         }
 #endif
         bool all_packets_initialized = input_queue_handler();
-        if (input_queue_ptr->get_curr_packet_valid()) {
+        new_input_queue->advance_if_not_valid();
+        if (new_input_queue->get_curr_packet_valid()) {
             bool full_packet_sent;
-            uint32_t curr_data_words_sent = output_queue_ptr->forward_data_from_input(
-                input_queue_id, full_packet_sent, input_queue.get_end_of_cmd());
+            uint32_t curr_data_words_sent = new_output_queue->forward_data_from_input<input_queue_id>(full_packet_sent, new_input_queue->get_end_of_cmd());
             data_words_sent += curr_data_words_sent;
             if constexpr (!(data_sent_per_iter_low == 0 && data_sent_per_iter_high == 0)) {
                 zero_data_sent_iter += static_cast<uint64_t>(curr_data_words_sent <= 0);
@@ -209,12 +235,12 @@ void kernel_main() {
         } else if (all_packets_initialized) {
             break;
         }
-        words_flushed += output_queue_ptr->prev_words_in_flight_check_flush();
+        words_flushed += new_output_queue->prev_words_in_flight_check_flush();
     }
 
     if (!timeout) {
         test_results[PQ_TEST_MISC_INDEX] = 0xff00002;
-        if (!output_queue_ptr->output_barrier(timeout_cycles)) {
+        if (!new_output_queue->output_barrier(timeout_cycles)) {
             timeout = true;
         }
     }
@@ -224,7 +250,7 @@ void kernel_main() {
     if (!timeout) {
         test_results[PQ_TEST_MISC_INDEX] = 0xff00003;
         progress_timestamp = get_timestamp_32b();
-        while (!output_queue_ptr->is_remote_finished()) {
+        while (!new_output_queue->is_remote_finished()) {
             if (timeout_cycles > 0) {
                 uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
                 if (cycles_since_progress > timeout_cycles) {
@@ -251,8 +277,5 @@ void kernel_main() {
     } else {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
-        // these calls lead to code size issues?
-        // input_queue_ptr->dprint_object();
-        // output_queue_ptr->dprint_object();
     }
 }

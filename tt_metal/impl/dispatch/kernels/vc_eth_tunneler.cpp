@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// clang-format off
 #include "dataflow_api.h"
-#include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
-// clang-format on
+#include "packet_queue_ctrl.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_v2.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
+#include "debug/dprint.h"
 
-packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
-packet_output_queue_state_t output_queues[MAX_TUNNEL_LANES];
+using namespace packet_queue;
 
 constexpr uint32_t endpoint_id_start_index = get_compile_time_arg_val(0);
 constexpr uint32_t tunnel_lanes = get_compile_time_arg_val(1);
 constexpr uint32_t in_queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t in_queue_size_words = get_compile_time_arg_val(3);
 constexpr uint32_t in_queue_size_bytes = in_queue_size_words * PACKET_WORD_SIZE_BYTES;
-static_assert(is_power_of_2(in_queue_size_words), "in_queue_size_words must be a power of 2");
 static_assert(tunnel_lanes <= MAX_TUNNEL_LANES, "cannot have more than 2 tunnel directions.");
 static_assert(tunnel_lanes, "tunnel directions cannot be 0. 1 => Unidirectional. 2 => Bidirectional");
 
@@ -103,17 +103,6 @@ constexpr uint32_t remote_receiver_queue_size_words[MAX_TUNNEL_LANES] =
         get_compile_time_arg_val(33)
     };
 
-static_assert(is_power_of_2(remote_receiver_queue_size_words[0]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[1]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[2]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[3]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[4]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[5]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[6]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[7]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[8]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[9]), "remote_receiver_queue_size_words must be a power of 2");
-
 constexpr uint32_t remote_sender_x[MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(34) & 0xFF),
@@ -170,7 +159,6 @@ constexpr DispatchRemoteNetworkType remote_sender_network_type[MAX_TUNNEL_LANES]
         static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(43) >> 24) & 0xFF)
     };
 
-
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(44);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(45);
 
@@ -180,42 +168,169 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
-#define SWITCH_THRESHOLD 16
+constexpr uint32_t vc_eth_tunneler_input_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(48),
+    get_compile_time_arg_val(49),
+    get_compile_time_arg_val(50),
+    get_compile_time_arg_val(51),
+    get_compile_time_arg_val(52),
+    get_compile_time_arg_val(53),
+    get_compile_time_arg_val(54),
+    get_compile_time_arg_val(55),
+    get_compile_time_arg_val(56),
+    get_compile_time_arg_val(57),
+};
+
+constexpr uint32_t vc_eth_tunneler_input_remote_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(58),
+    get_compile_time_arg_val(59),
+    get_compile_time_arg_val(60),
+    get_compile_time_arg_val(61),
+    get_compile_time_arg_val(62),
+    get_compile_time_arg_val(63),
+    get_compile_time_arg_val(64),
+    get_compile_time_arg_val(65),
+    get_compile_time_arg_val(66),
+    get_compile_time_arg_val(67),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(68),
+    get_compile_time_arg_val(69),
+    get_compile_time_arg_val(70),
+    get_compile_time_arg_val(71),
+    get_compile_time_arg_val(72),
+    get_compile_time_arg_val(73),
+    get_compile_time_arg_val(74),
+    get_compile_time_arg_val(75),
+    get_compile_time_arg_val(76),
+    get_compile_time_arg_val(77),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_remote_scratch_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(78),
+    get_compile_time_arg_val(79),
+    get_compile_time_arg_val(80),
+    get_compile_time_arg_val(81),
+    get_compile_time_arg_val(82),
+    get_compile_time_arg_val(83),
+    get_compile_time_arg_val(84),
+    get_compile_time_arg_val(85),
+    get_compile_time_arg_val(86),
+    get_compile_time_arg_val(87),
+};
+
+UnsafePacketInputQueueVariant raw_input_queues[MAX_TUNNEL_LANES];
+using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],
+                                                         remote_sender_network_type[1],
+                                                         remote_sender_network_type[2],
+                                                         remote_sender_network_type[3],
+                                                         remote_sender_network_type[4],
+                                                         remote_sender_network_type[5],
+                                                         remote_sender_network_type[6],
+                                                         remote_sender_network_type[7],
+                                                         remote_sender_network_type[8],
+                                                         remote_sender_network_type[9]>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false>;
+
+UnsafePacketOutputQueueVariant raw_output_queues[MAX_TUNNEL_LANES];
+using output_queue_network_sequence = NetworkTypeSequence<remote_receiver_network_type[0],
+                                                          remote_receiver_network_type[1],
+                                                          remote_receiver_network_type[2],
+                                                          remote_receiver_network_type[3],
+                                                          remote_receiver_network_type[4],
+                                                          remote_receiver_network_type[5],
+                                                          remote_receiver_network_type[6],
+                                                          remote_receiver_network_type[7],
+                                                          remote_receiver_network_type[8],
+                                                          remote_receiver_network_type[9]>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false>;
+
+
+void initialize_input_queues() {
+    init_params_t init_params{};
+    process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+        raw_input_queues[sequence_i].template engage<network_type, cbmode>();
+
+        auto* active_input_queue = raw_input_queues[sequence_i].template get<network_type, cbmode>();
+        init_params.queue_id = (uint8_t)sequence_i;
+        init_params.queue_start_addr_words = in_queue_start_addr_words + sequence_i * in_queue_size_words;
+        init_params.queue_size_words = in_queue_size_words;
+        init_params.remote_queue_id = (uint8_t)remote_sender_queue_id[sequence_i];
+        init_params.remote_x = remote_sender_x[sequence_i];
+        init_params.remote_y = remote_sender_y[sequence_i];
+        init_params.ptrs_addr = vc_eth_tunneler_input_scratch_buffers[sequence_i];
+        init_params.remote_ptrs_addr = vc_eth_tunneler_input_remote_scratch_buffers[sequence_i];
+
+        active_input_queue->init(&init_params);
+
+        return true;
+    });
+}
+
+void initialize_output_queue() {
+    init_params_t init_params{};
+    process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+        // Sequence number for input queues should line up with the output queues
+        // input network/cb mode sequence in here is not the same as the global one
+        // each output queue only has 1 input queue connected to it
+        using this_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
+        using this_input_cb_mode = CBModeTypeSequence<false>;
+
+        raw_output_queues[sequence_i].template engage<network_type, cbmode, this_input_networks, this_input_cb_mode>();
+
+        auto* active_output_queue = raw_output_queues[sequence_i].template get<network_type, cbmode, this_input_networks, this_input_cb_mode>();
+
+        init_params.queue_id = (uint8_t)sequence_i + tunnel_lanes,
+        init_params.queue_start_addr_words = remote_receiver_queue_start_addr_words[sequence_i],
+        init_params.queue_size_words = remote_receiver_queue_size_words[sequence_i],
+        init_params.remote_queue_id = (uint8_t)remote_receiver_queue_id[sequence_i],
+        init_params.remote_x = remote_receiver_x[sequence_i],
+        init_params.remote_y = remote_receiver_y[sequence_i],
+        init_params.ptrs_addr = vc_eth_tunneler_output_scratch_buffers[sequence_i],
+        init_params.remote_ptrs_addr = vc_eth_tunneler_output_remote_scratch_buffers[sequence_i],
+
+        init_params.input_queues = &raw_input_queues[sequence_i],
+        init_params.num_input_queues = 1,
+
+        active_output_queue->init(&init_params);
+
+        return true;
+    });
+}
+
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 4, endpoint_id_start_index);
 
-    for (uint32_t i = 0; i < tunnel_lanes; i++) {
-        input_queues[i].init(
-            i,
-            in_queue_start_addr_words + i * in_queue_size_words,
-            in_queue_size_words,
-            remote_sender_x[i],
-            remote_sender_y[i],
-            remote_sender_queue_id[i],
-            remote_sender_network_type[i]);
-    }
+    initialize_input_queues();
+    initialize_output_queue();
 
-    for (uint32_t i = 0; i < tunnel_lanes; i++) {
-        output_queues[i].init(
-            i + tunnel_lanes, //MAX_TUNNEL_LANES,
-            remote_receiver_queue_start_addr_words[i],
-            remote_receiver_queue_size_words[i],
-            remote_receiver_x[i],
-            remote_receiver_y[i],
-            remote_receiver_queue_id[i],
-            remote_receiver_network_type[i],
-            &input_queues[i],
-            1);
-    }
-
-    if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence,
+                                     input_queue_cb_mode_sequence,
+                                     output_queue_network_sequence,
+                                     output_queue_cb_mode_sequence>(raw_input_queues, raw_output_queues, timeout_cycles)) {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
@@ -226,55 +341,83 @@ void kernel_main() {
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
-    uint32_t switch_counter = 0;
+    uint32_t heartbeat = 0;
     while (!all_outputs_finished) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
-        switch_counter++;
-        all_outputs_finished = switch_counter >= SWITCH_THRESHOLD;
-        for (uint32_t i = 0; i < tunnel_lanes; i++) {
-            if (input_queues[i].get_curr_packet_valid()) {
-                bool full_packet_sent;
-                uint32_t words_sent =
-                    output_queues[i].forward_data_from_input(0, full_packet_sent, input_queues[i].get_end_of_cmd());
-                data_words_sent += words_sent;
-                if (words_sent > 0) {
-                    switch_counter = 0;
-                    all_outputs_finished = false;
-                }
-            }
-            output_queues[i].prev_words_in_flight_check_flush();
-            if (switch_counter >= SWITCH_THRESHOLD) {
-                bool output_finished = output_queues[i].is_remote_finished();
-                if (output_finished) {
-                    uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
-                    if ((i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
-                        input_queues[i].remote_x = inner_stop_mux_d_bypass & 0xFF;
-                        input_queues[i].remote_y = (inner_stop_mux_d_bypass >> 8) & 0xFF;
-                        input_queues[i].set_remote_ready_status_addr((inner_stop_mux_d_bypass >> 16) & 0xFF);
+        all_outputs_finished = true; // default to done
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+            using this_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
+            using this_input_cb_mode = CBModeTypeSequence<false>;
+
+            auto* active_input_queue = raw_input_queues[sequence_i].template get<network_type, cbmode>();
+            auto* active_output_queue = raw_output_queues[sequence_i].template get<remote_receiver_network_type[sequence_i], false, this_input_networks, this_input_cb_mode>();
+
+            active_input_queue->handle_recv();
+            active_output_queue->handle_recv();
+
+            // No progress will be made when either of the queues are waiting
+            // If we are waiting too long, no progress will be made, and
+            // the while loop will exit
+            if (active_input_queue->busy() || active_output_queue->busy()) {
+                all_outputs_finished = false;
+            } else {
+                active_input_queue->advance_if_not_valid();
+                if (active_input_queue->get_curr_packet_valid()) {
+                    bool full_packet_sent;
+                    uint32_t words_sent = active_output_queue->template forward_data_from_input<0>(full_packet_sent, active_input_queue->get_end_of_cmd());
+                    data_words_sent += words_sent;
+                    if (words_sent > 0) {
+                        all_outputs_finished = false;
                     }
-                    input_queues[i].send_remote_finished_notification();
                 }
-                all_outputs_finished &= output_finished;
+
+                active_output_queue->prev_words_in_flight_check_flush();
+
+                if (iter & 0xFFF) {
+                    bool output_finished = active_output_queue->is_remote_finished();
+                    if (output_finished) {
+                        uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
+                        if ((sequence_i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
+                            active_input_queue->set_final_remote_xy(inner_stop_mux_d_bypass & 0xFF, (inner_stop_mux_d_bypass >> 8) & 0xFF);
+                            active_input_queue->set_remote_ready_status_addr((inner_stop_mux_d_bypass >> 16) & 0xFF);
+                        }
+                        active_input_queue->send_remote_finished_notification();
+                        DPRINT << "Output Finished\n";
+                    }
+                    all_outputs_finished &= output_finished;
+                }
             }
-        }
+
+            return true;
+        });
+
         uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
         if (launch_msg->kernel_config.exit_erisc_kernel) {
+            DPRINT << "Exit Signal\n";
             return;
         }
         // need to optimize this.
         // context switch to base fw is very costly.
-        if (switch_counter >= SWITCH_THRESHOLD) {
+        // if (iter & 0xFFFF) {
             internal_::risc_context_switch();
-            switch_counter = SWITCH_THRESHOLD;
-        }
-
+        // }
     }
+    DPRINT << "Exited\n";
 
+    bool timeout = false;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
-    for (uint32_t i = 0; i < tunnel_lanes; i++) {
-        output_queues[i].output_barrier();
-    }
+    process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+        auto* active_output_queue = raw_output_queues[sequence_i].template get<network_type, cbmode, input_queue_network_sequence, input_queue_cb_mode_sequence>();
+        if (!active_output_queue->output_barrier(timeout_cycles)) {
+            timeout = true;
+            return false;
+        }
+        return true;
+    });
+
+    DPRINT << "Output Barrier\n";
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
@@ -283,6 +426,11 @@ void kernel_main() {
     set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
     set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+    if (timeout) {
+        DPRINT << "Timed Out\n";
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+    } else {
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+    }
 }
