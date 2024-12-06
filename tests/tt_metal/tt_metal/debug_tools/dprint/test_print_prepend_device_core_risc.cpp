@@ -2,14 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 #include "core_coord.hpp"
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
 #include "kernels/kernel_types.hpp"
+// #include "trace/trace_buffer.hpp"
+#include "llrt/rtoptions.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+// #include "umd/device/tt_core_coordinates.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
@@ -19,47 +23,24 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const std::vector<string>& golden_output = {
-    "(0,0): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,0): Adding \
-the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,0): Now, in reverse, to make it \
-even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
-    "(0,1): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,1): Adding \
-the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,1): Now, in reverse, to make it \
-even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
-    "(0,2): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,2): Adding \
-the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,2): Now, in reverse, to make it \
-even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
-    "(0,0): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He \
-was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he \
-found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars \
-and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability \
-to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the \
-little mouse learned that bravery and kindness can change the world.",
-    "(0,1): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He \
-was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he \
-found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars \
-and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability \
-to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the \
-little mouse learned that bravery and kindness can change the world.",
-    "(0,2): Once upon a time, in a small village, there was a little mouse named Tim. Tim wasn't like other mice. He \
-was brave and curious, always venturing into places others wouldn't dare. One day, while exploring the forest, he \
-found a big cheese trapped in a cage. Tim knew he had to help. Using his sharp teeth, he gnawed through the bars \
-and set the cheese free. To his surprise, a kind old owl had been watching and offered him a gift - the ability \
-to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. And so, the \
-little mouse learned that bravery and kindness can change the world.",
-    "(0,0): This DPRINT message",
-    "contains several newline characters",
-    "and should be displayed over multiple lines.",
-    "(0,1): This DPRINT message",
-    "contains several newline characters",
-    "and should be displayed over multiple lines.",
-    "(0,2): This DPRINT message",
-    "contains several newline characters",
-    "and should be displayed over multiple lines."};
+static void UpdateGoldenOutput(std::vector<string>& golden_output, const Device* device, const string& risc) {
+    // Using wildcard characters in lieu of actual values for the physical coordinates as physical coordinates can vary
+    // by machine
+    const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+    const string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
+    golden_output.push_back(output_line_all_riscs);
+
+    if (risc != "ER") {
+        const string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
+        golden_output.push_back(output_line_risc);
+    }
+}
+
+static void RunTest(DPrintFixture* fixture, Device* device, const bool add_active_eth_kernel = false) {
+    std::vector<string> golden_output;
+
     CoreRange cores({0, 0}, {0, 1});
-
     Program program = Program();
 
     KernelHandle brisc_kernel_id = CreateKernel(
@@ -77,11 +58,27 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     KernelHandle trisc_kernel_id =
         CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", cores, ComputeConfig{});
 
-    KernelHandle erisc_kernel_id = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp",
-        cores,
-        EthernetConfig{.noc = NOC::NOC_0});
+    for (const CoreCoord& core : cores) {
+        UpdateGoldenOutput(golden_output, device, "BR");
+        UpdateGoldenOutput(golden_output, device, "NC");
+        UpdateGoldenOutput(golden_output, device, "TR0");
+        UpdateGoldenOutput(golden_output, device, "TR1");
+        UpdateGoldenOutput(golden_output, device, "TR2");
+    }
+
+    if (add_active_eth_kernel) {
+        const std::unordered_set<CoreCoord>& active_eth_cores = device->get_active_ethernet_cores(true);
+        CoreRangeSet crs(std::set<CoreRange>(active_eth_cores.begin(), active_eth_cores.end()));
+        KernelHandle erisc_kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp",
+            crs,
+            EthernetConfig{.noc = NOC::NOC_0});
+
+        for (const CoreCoord& core : active_eth_cores) {
+            UpdateGoldenOutput(golden_output, device, "ER");
+        }
+    }
 
     fixture->RunProgram(device, program);
 
@@ -92,8 +89,28 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
+    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+        tt::llrt::RunTimeDebugFeatureDprint, true);
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
     }
+    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+        tt::llrt::RunTimeDebugFeatureDprint, false);
+}
+
+TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
+    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+        tt::llrt::RunTimeDebugFeatureDprint, true);
+    for (Device* device : this->devices_) {
+        if (device->get_active_ethernet_cores(true).empty()) {
+            log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device->id());
+            continue;
+        }
+        this->RunTestOnDevice(
+            [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
+            device);
+    }
+    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+        tt::llrt::RunTimeDebugFeatureDprint, false);
 }

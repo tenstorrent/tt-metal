@@ -23,7 +23,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
 add_executable(unit_tests_debug_tools ${UNIT_TESTS_DEBUG_TOOLS_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_debug_tools)
 
-target_link_libraries(unit_tests_debug_tools PUBLIC test_metal_common_libs)
+target_link_libraries(unit_tests_debug_tools PRIVATE test_metal_common_libs)
 target_include_directories(
     unit_tests_debug_tools
     PRIVATE
