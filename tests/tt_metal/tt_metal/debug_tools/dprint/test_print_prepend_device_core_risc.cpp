@@ -9,11 +9,8 @@
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
 #include "kernels/kernel_types.hpp"
-// #include "trace/trace_buffer.hpp"
-#include "llrt/rtoptions.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-// #include "umd/device/tt_core_coordinates.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
