@@ -181,7 +181,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, mesh_device);
     if (mesh_device) {
-        auto workers = ttnn::distributed::get_devices_for_tensor(input_tensor, *mesh_device);
+        auto workers = ttnn::distributed::get_mapped_devices(input_tensor, *mesh_device);
         TT_FATAL(
             validate_worker_modes(workers),
             "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
