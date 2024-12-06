@@ -26,7 +26,6 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.tt.model_config import TtModelArgs
 
@@ -227,6 +226,7 @@ def run_llama3_demo(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
@@ -259,33 +259,12 @@ def run_llama3_demo(
             ), "T3K only supports a max context length of 128k tokens for Llama3.1-8B and Llama3.2-11B"
     if llama_model_name == "3.1-70B":
         assert tt_device_name in ["T3K", "TG"], "Llama3.1-70B is only supported on T3K or TG"
+        assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
-
-    # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
-        mesh_device,
-        batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-    )
-    transformation_mats_decode = rope_setup.get_trans_mats()
-
-    transformation_mats_prefill_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats_prefill = ttnn.from_torch(
-        transformation_mats_prefill_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
 
     page_table_tt = None
 
@@ -314,7 +293,6 @@ def run_llama3_demo(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
     tt_embd = TtLlamaEmbedding(
@@ -384,7 +362,7 @@ def run_llama3_demo(
                     :, decoding_pos[batch_id] :, :
                 ] = 0  # Zero out the tokens after the prefill length
 
-            prefill_input = model_args.prepare_inputs_ttnn_prefill(
+            prefill_input = model_args.prepare_residual_tensor_prefill(
                 pt_prefill_input[batch_id],
             )
 
@@ -476,7 +454,7 @@ def run_llama3_demo(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats, rot_mat_idxs = rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+        rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
@@ -519,7 +497,7 @@ def run_llama3_demo(
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
-        rot_mats = rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
@@ -562,7 +540,7 @@ def run_llama3_demo(
         # Reset the current position and output token tensors for the real decode run
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-        rot_mat_idxs_reset = rope_setup.get_rot_idxs(current_pos, on_host=True)
+        rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
         ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
         profiler.end(f"capture_trace_{batch_idx}")
@@ -591,7 +569,7 @@ def run_llama3_demo(
             # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
             # If this tensor is int32, it won't be supported by ttnn.embedding
             current_pos += 1
-            rot_mat_idxs_updated = rope_setup.get_rot_idxs(current_pos, on_host=True)
+            rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
             ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
 
             # Write to host
