@@ -22,7 +22,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_src = tt::CB::c_in1;
+    constexpr auto cb_id_src = tt::CBIndex::c_1;
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const DataFormat src_data_format = get_dataformat(cb_id_src);
@@ -30,7 +30,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<src_is_dram> src = {
         .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
 
-    constexpr auto cb_id_dst = tt::CB::c_out0;
+    constexpr auto cb_id_dst = tt::CBIndex::c_2;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const DataFormat dst_data_format = get_dataformat(cb_id_dst);
