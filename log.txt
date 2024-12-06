@@ -1,0 +1,12 @@
+prefetcher_11: start
+dispatch_11: start
+dispatch_s : start
+cmd_wait
+ DISPATCH WAIT 183b0 count 0
+cmd_write_paged is_dram: 1
+cmd_wait
+ DISPATCH WAIT 183b0 count 0
+cmd_write_paged is_dram: 1
+cmd_wait
+ DISPATCH WAIT 183b0 count 0
+cmd_write_paged is_dram: 1
