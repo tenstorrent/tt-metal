@@ -28,6 +28,7 @@ namespace tt::target {
     struct EnqueueWriteBufferCommand;
     struct EnqueueReadBufferCommand;
     struct FinishCommand;
+    struct CreateProgramCommand;
 
     // Forward decl for binary_generated.h
     namespace lightmetal {
@@ -68,11 +69,16 @@ public:
     void execute(tt::target::EnqueueWriteBufferCommand const *command);
     void execute(tt::target::EnqueueReadBufferCommand const *command);
     void execute(tt::target::FinishCommand const *command);
+    void execute(tt::target::CreateProgramCommand const *command);
 
     // Object maps public accessors
     void addBufferToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Buffer> buffer);
     std::shared_ptr<::tt::tt_metal::Buffer> getBufferFromMap(uint32_t global_id) const;
     void removeBufferFromMap(uint32_t global_id);
+
+    void addProgramToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Program> program);
+    std::shared_ptr<::tt::tt_metal::Program> getProgramFromMap(uint32_t global_id) const;
+    void removeProgramFromMap(uint32_t global_id);
 
 private:
 
@@ -90,6 +96,7 @@ private:
 
     // Object maps for storing objects by global_id
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> bufferMap_;
+    std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Program>> programMap_;
 };
 
 }  // namespace v0

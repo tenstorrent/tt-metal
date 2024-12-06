@@ -4,6 +4,7 @@
 #include "command_generated.h"
 #include "binary_generated.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/program/program.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -84,17 +85,31 @@ uint32_t LightMetalCaptureContext::getGlobalId(Buffer* obj) {
     }
 }
 
-uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj, bool must_exist) {
-    auto it = programToGlobalIdMap_.find(obj);
-    if (it != programToGlobalIdMap_.end()) {
-        return it->second;
-    } else if (must_exist) {
-        throw std::runtime_error("Program object not found in global_id map");
-    }
+// Public Object Maps Accessors - Programs
 
+bool LightMetalCaptureContext::isInMap(const Program* obj) {
+    return programToGlobalIdMap_.find(obj) != programToGlobalIdMap_.end();
+}
+
+uint32_t LightMetalCaptureContext::addToMap(const Program* obj) {
+    if (isInMap(obj)) log_warning(tt::LogMetalTrace, "Program already exists in global_id map.");
     uint32_t global_id = nextGlobalId_++;
     programToGlobalIdMap_[obj] = global_id;
     return global_id;
+}
+
+void LightMetalCaptureContext::removeFromMap(const Program* obj) {
+    if (!isInMap(obj)) log_warning(tt::LogMetalTrace, "Program not found in global_id map.");
+    programToGlobalIdMap_.erase(obj);
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj) {
+    auto it = programToGlobalIdMap_.find(obj);
+    if (it != programToGlobalIdMap_.end()) {
+        return it->second;
+    } else {
+        throw std::runtime_error("Program not found in global_id map.");
+    }
 }
 
 uint32_t LightMetalCaptureContext::getGlobalId(KernelHandle kernel_id, bool must_exist) {
@@ -107,6 +122,19 @@ uint32_t LightMetalCaptureContext::getGlobalId(KernelHandle kernel_id, bool must
 
     uint32_t global_id = nextGlobalId_++;
     kernelHandleToGlobalIdMap_[kernel_id] = global_id;
+    return global_id;
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj, bool must_exist) {
+    auto it = programToGlobalIdMap_.find(obj);
+    if (it != programToGlobalIdMap_.end()) {
+        return it->second;
+    } else if (must_exist) {
+        throw std::runtime_error("Program object not found in global_id map");
+    }
+
+    uint32_t global_id = nextGlobalId_++;
+    programToGlobalIdMap_[obj] = global_id;
     return global_id;
 }
 
