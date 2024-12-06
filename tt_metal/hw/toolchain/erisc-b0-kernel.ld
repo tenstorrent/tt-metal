@@ -46,10 +46,10 @@ SECTIONS
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
   } > REGION_APP_KERNEL_CODE :text
 
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*)  } > REGION_APP_KERNEL_CODE :text
-  .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE :text
-
   .data : ALIGN(16) {
+    *(.rodata .rodata.* .gnu.linkonce.r.*)
+    *(.rodata1)
+
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
 
