@@ -144,7 +144,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     return physical_device_ids;
 }
 
-std::vector<Device*> get_devices_for_tensor(const Tensor& tensor, MeshDevice& mesh_device) {
+std::vector<Device*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device) {
     // For multi-device tensors, returns the number of workers capped by the number of buffers
     // Otherwise, returns all available workes from mesh_device.
     auto get_workers_for_tensor = [&tensor, &mesh_device]() {
