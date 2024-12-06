@@ -18,6 +18,7 @@ namespace tt::tt_metal { // KCM Consider adding lightmetal namespace.
 inline namespace v0 {
 
 class Buffer;
+class Program;
 
 class LightMetalCaptureContext {
 public:
@@ -33,6 +34,7 @@ public:
 
     // Object maps public accessors
     uint32_t getBufferGlobalId(Buffer* buffer);
+    uint32_t getGlobalId(const Program* program, bool must_exist = false);
 
     void reset();
 
@@ -47,6 +49,7 @@ private:
     // Object maps for associating each object with a global_id
     uint32_t nextGlobalId_ = 0; // Shared across all object types.
     std::unordered_map<Buffer*, uint32_t> bufferToGlobalIdMap_;
+    std::unordered_map<const Program*, uint32_t> programToGlobalIdMap_;
     // FIXME - Add one for CommandQueue object.
 
     // Delete copy constructor and assignment operator

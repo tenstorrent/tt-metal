@@ -945,7 +945,11 @@ bool CloseDevice(Device *device) {
     return tt::DevicePool::instance().close_device(device_id);
 }
 
-Program CreateProgram() { return Program(); }
+Program CreateProgram() {
+    auto program = Program();
+    TRACE_FUNCTION_CALL(captureCreateProgram, program);
+    return program;
+}
 
 KernelHandle CreateDataMovementKernel(
     Program &program,

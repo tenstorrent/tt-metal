@@ -4,6 +4,7 @@
 #include "command_generated.h"
 #include "binary_generated.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/program/program.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -65,6 +66,19 @@ uint32_t LightMetalCaptureContext::getBufferGlobalId(Buffer* buffer) {
 
     uint32_t global_id = nextGlobalId_++;
     bufferToGlobalIdMap_[buffer] = global_id;
+    return global_id;
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(const Program* obj, bool must_exist) {
+    auto it = programToGlobalIdMap_.find(obj);
+    if (it != programToGlobalIdMap_.end()) {
+        return it->second;
+    } else if (must_exist) {
+        throw std::runtime_error("Program object not found in global_id map");
+    }
+
+    uint32_t global_id = nextGlobalId_++;
+    programToGlobalIdMap_[obj] = global_id;
     return global_id;
 }
 
