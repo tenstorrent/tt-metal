@@ -44,7 +44,7 @@ void bind_permute(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                uint8_t queue_id,
                const std::optional<float>& pad_value) {
-                return self(queue_id, input_tensor, dims, memory_config, false, pad_value);
+                return self(queue_id, input_tensor, dims, memory_config, pad_value);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dims"),
