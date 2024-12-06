@@ -73,4 +73,9 @@ jobs:
           run: |
             set -eu # basic shell hygiene
             nice -n 19 ./build_metal.sh --export-compile-commands --build-all --skip-build
-            nice -n 19 git diff -U0 "$(git merge-base HEAD "origin/main")" | clang-tidy-diff-17.py -p1 -path build -j$(( $(nproc) / 2 )) -- --warnings-as-errors=*
+            nice -n 19 git diff -U0 "$(git merge-base HEAD "origin/main")" | clang-tidy-diff-17.py -p1 -path build -j$(( $(nproc) / 2 )) -export-fixes=fixes.yaml
+            if [ -s fixes.yaml ]; then
+              echo "clang-tidy suggested fixes. Failing the workflow."
+              cat fixes.yaml
+              exit 1
+            fi
