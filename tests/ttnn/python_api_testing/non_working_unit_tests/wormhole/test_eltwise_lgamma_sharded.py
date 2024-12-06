@@ -19,6 +19,8 @@ def run_tests(
     sharding_strategy,
     shard_orientation,
     tensor_hw_as_shard_shape,
+    torch_op,
+    ttnn_op,
     device,
 ):
     random.seed(0)
@@ -26,7 +28,7 @@ def run_tests(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
-    torch_output_tensor = torch.lgamma(torch_input_tensor_a)
+    torch_output_tensor = torch_op(torch_input_tensor_a)
 
     sharded_config = ttnn.create_sharded_memory_config(
         shape=input_shape,
@@ -44,7 +46,7 @@ def run_tests(
         memory_config=sharded_config,
     )
 
-    output_tensor = ttnn.lgamma(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn_op(input_tensor_a, memory_config=sharded_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     [passed, message] = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
@@ -163,5 +165,27 @@ def test_eltwise_lgamma(input_shape, dtype, dlayout, sharding_strategy, shard_or
         sharding_strategy,
         shard_orientation,
         hw_as_shard_shape,
+        torch.lgamma,
+        ttnn.lgamma,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_multigammaln(
+    input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device
+):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        ttnn.get_golden_function(ttnn.multigammaln),
+        ttnn.multigammaln,
         device,
     )
