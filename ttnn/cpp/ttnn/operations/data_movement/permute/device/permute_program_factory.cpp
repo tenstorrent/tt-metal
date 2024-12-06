@@ -287,7 +287,8 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     tt::tt_metal::Device* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    uint32_t src1_cb_index = tt::CBIndex::c_2;
+    uint32_t src2_cb_index = tt::CBIndex::c_1;
     uint32_t num_input_pages_to_read = 2;
 
     // we are focused on reading one row at a time, in a pattern that allows us to write an entire output row at a time
@@ -329,6 +330,13 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
             num_input_pages_to_read * output_cb_page_size * w_block_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, output_cb_page_size);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+
+    tt::tt_metal::CircularBufferConfig cb_src2_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_input_pages_to_read * x_block_size * w_block_size * input_tensor.element_size(),
+            {{src2_cb_index, cb_data_format}})
+            .set_page_size(src2_cb_index, x_block_size * w_block_size * input_tensor.element_size());
+    auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
@@ -382,9 +390,32 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
+    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
+    auto compute_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xh_rm_single_tile_size.cpp",
+        all_cores,
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_kernel_args,
+        });
+
     auto input_shape_view = input_tensor.get_logical_shape().view();
 
+    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
+    reader_runtime_args.insert(reader_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
+    reader_runtime_args.insert(reader_runtime_args.end(), input_strides.begin(), input_strides.end());
+
+    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
+
+    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_runtime_args.insert(
+        writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
     auto cores = corerange_to_cores(all_cores, std::nullopt);
+
+    std::vector<uint32_t> compute_runtime_args = {dst_buffer->address(), 0, 0};
 
     uint32_t start_block = 0;
     uint32_t num_blocks_per_core = 0;
@@ -397,19 +428,15 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
             // no-op
             num_blocks_per_core = 0;
         }
+        compute_runtime_args[0] = num_blocks_per_core;
         uint32_t end_block = start_block + num_blocks_per_core;
-        std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), start_block, end_block};
-        reader_runtime_args.insert(reader_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-        reader_runtime_args.insert(reader_runtime_args.end(), input_strides.begin(), input_strides.end());
-
-        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), start_block, end_block};
-
-        writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-        writer_runtime_args.insert(
-            writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-        writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
+        reader_runtime_args[1] = start_block;
+        reader_runtime_args[2] = end_block;
+        writer_runtime_args[1] = start_block;
+        writer_runtime_args[2] = end_block;
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
         start_block = end_block;
     }
 
@@ -417,6 +444,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         std::move(program),
         {.unary_reader_kernel_id = unary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
+         .compute_kernel_id = compute_kernel_id,
          .all_cores = all_cores}};
 }
 
@@ -428,6 +456,7 @@ void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments
     auto& program = cached_program.program;
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -442,6 +471,8 @@ void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments
         runtime_args[0] = src_buffer->address();
         auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args_writer[0] = dst_buffer->address();
+        auto& runtime_args_compute = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_id, core);
+        runtime_args_compute[0] = dst_buffer->address();
     }
 }
 
