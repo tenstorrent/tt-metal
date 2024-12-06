@@ -72,8 +72,8 @@ std::vector<ttnn::TensorSpec> AllGatherMatmul::compute_output_specs(const std::v
     ttnn::TensorSpec datacopy_output_shape = all_gather_output_shape;
 
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs =
-        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]})[0];
+    ttnn::SimpleShape matmul_output_shapes =
+        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0].logical_shape();
 
     return {all_gather_output_shape, matmul_output_specs, datacopy_output_shape};
 }
