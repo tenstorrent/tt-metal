@@ -32,6 +32,7 @@
 
 // FIXME: ARCH_NAME specific
 #include "dev_msgs.h" // RUN_MSG_DONE
+#include "dev_mem_map.h" // MEM_IERISC_FIRMWARE_BASE
 #include "eth_l1_address_map.h" // address_map
 
 
@@ -44,10 +45,13 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path,
-    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
-
+ll_api::memory const& get_risc_binary(
+    string const& path,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx,
+    ll_api::memory::PackSpans span_type,
+    ll_api::memory::Relocate relo_type) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
       std::mutex mutex;
@@ -178,7 +182,12 @@ void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
 }
 
 bool test_load_write_read_risc_binary(
-    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx) {
+    ll_api::memory const& mem,
+    chip_id_t chip_id,
+    const CoreCoord& core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx) {
     assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
 
     uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
@@ -202,8 +211,7 @@ bool test_load_write_read_risc_binary(
     return true;
 }
 
-void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
-
+void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);

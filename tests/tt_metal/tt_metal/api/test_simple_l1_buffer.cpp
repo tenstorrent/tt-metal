@@ -9,105 +9,112 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-
 using tt::tt_metal::Device;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 
 namespace tt::test::buffer::detail {
-    bool SimpleL1ReadOnly (Device* device, size_t local_address, size_t byte_size) {
-        std::vector<uint32_t> inputs =
-            generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-        std::vector<uint32_t> outputs;
-        CoreCoord bank0_logical_core = device->logical_core_from_bank_id(0);
-        writeL1Backdoor(device, bank0_logical_core, local_address, inputs);
-        readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
-        bool pass = (inputs == outputs);
-        if (not pass) {
-            tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
-        }
-        return pass;
+bool SimpleL1ReadOnly(Device* device, size_t local_address, size_t byte_size) {
+    std::vector<uint32_t> inputs =
+        generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
+    std::vector<uint32_t> outputs;
+    CoreCoord bank0_logical_core = device->logical_core_from_bank_id(0);
+    writeL1Backdoor(device, bank0_logical_core, local_address, inputs);
+    readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
+    bool pass = (inputs == outputs);
+    if (not pass) {
+        tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
     }
-    bool SimpleL1WriteOnly (Device* device, size_t local_address, size_t byte_size) {
-        std::vector<uint32_t> inputs =
-            generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-        std::vector<uint32_t> outputs;
-        CoreCoord bank0_logical_core = device->logical_core_from_bank_id(0);
-        writeL1Backdoor(device, bank0_logical_core, local_address, inputs);
-        readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
-        bool pass = (inputs == outputs);
-        if (not pass) {
-            tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
-        }
-        return pass;
-    }
-    // input_l1_buffer -->  Reader reads from this location --> CB --> Writer --> output_l1_buffer
-    bool SimpleTiledL1WriteCBRead  (Device* device, CoreCoord core, size_t input_local_address, size_t output_local_address, size_t byte_size) {
-        TT_FATAL ((byte_size % (32*32*2)) == 0, "byte_size={} must be multiple of tile size (32x32x2(w*h*datum_byte_size))", byte_size);
-        int page_size = (32 * 32 * 2);
-        int num_tiles = byte_size / page_size;
-
-        std::vector<uint32_t> inputs =
-            generate_uniform_random_vector<uint32_t>(5, 5, byte_size / sizeof(uint32_t));
-        std::vector<uint32_t> outputs;
-
-        tt_metal::Program program = tt_metal::CreateProgram();
-        const uint32_t cb_index = 0;
-        const uint32_t output_cb_index = 16;
-        const CoreCoord phys_core = device->worker_core_from_logical_core(core);
-
-        tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_index, page_size);
-        auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
-
-        auto reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_0, .compile_args = {cb_index}});
-        auto writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_1, .compile_args = {cb_index}});
-
-
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel,
-            core,
-            {
-                (uint32_t)input_local_address,
-                (uint32_t)phys_core.x,
-                (uint32_t)phys_core.y,
-                (uint32_t)num_tiles,
-            });
-        tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel,
-            core,
-            {
-                (uint32_t)output_local_address,
-                (uint32_t)phys_core.x,
-                (uint32_t)phys_core.y,
-                (uint32_t)num_tiles,
-            });
-
-
-        writeL1Backdoor(device, core, input_local_address, inputs);
-        tt_metal::detail::LaunchProgram(device, program);
-        readL1Backdoor(device, core, input_local_address, byte_size, outputs);
-        tt::log_debug("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
-        readL1Backdoor(device, core, output_local_address, byte_size, outputs);
-        tt::log_debug("inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
-        bool pass = (inputs == outputs);
-        if (not pass) {
-            tt::log_info("Mismatch at Core={}, phys_core={}, Packet Size(in Bytes)={}", core.str(), phys_core.str(), byte_size);
-        }
-        return pass;
-    }
+    return pass;
 }
+bool SimpleL1WriteOnly(Device* device, size_t local_address, size_t byte_size) {
+    std::vector<uint32_t> inputs =
+        generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
+    std::vector<uint32_t> outputs;
+    CoreCoord bank0_logical_core = device->logical_core_from_bank_id(0);
+    writeL1Backdoor(device, bank0_logical_core, local_address, inputs);
+    readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
+    bool pass = (inputs == outputs);
+    if (not pass) {
+        tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
+    }
+    return pass;
+}
+// input_l1_buffer -->  Reader reads from this location --> CB --> Writer --> output_l1_buffer
+bool SimpleTiledL1WriteCBRead(
+    Device* device, CoreCoord core, size_t input_local_address, size_t output_local_address, size_t byte_size) {
+    TT_FATAL(
+        (byte_size % (32 * 32 * 2)) == 0,
+        "byte_size={} must be multiple of tile size (32x32x2(w*h*datum_byte_size))",
+        byte_size);
+    int page_size = (32 * 32 * 2);
+    int num_tiles = byte_size / page_size;
+
+    std::vector<uint32_t> inputs = generate_uniform_random_vector<uint32_t>(5, 5, byte_size / sizeof(uint32_t));
+    std::vector<uint32_t> outputs;
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    const uint32_t cb_index = 0;
+    const uint32_t output_cb_index = 16;
+    const CoreCoord phys_core = device->worker_core_from_logical_core(core);
+
+    tt_metal::CircularBufferConfig l1_cb_config =
+        tt_metal::CircularBufferConfig(byte_size, {{cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_index, page_size);
+    auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
+
+    auto reader_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = {cb_index}});
+    auto writer_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_1,
+            .compile_args = {cb_index}});
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        reader_kernel,
+        core,
+        {
+            (uint32_t)input_local_address,
+            (uint32_t)phys_core.x,
+            (uint32_t)phys_core.y,
+            (uint32_t)num_tiles,
+        });
+    tt_metal::SetRuntimeArgs(
+        program,
+        writer_kernel,
+        core,
+        {
+            (uint32_t)output_local_address,
+            (uint32_t)phys_core.x,
+            (uint32_t)phys_core.y,
+            (uint32_t)num_tiles,
+        });
+
+    writeL1Backdoor(device, core, input_local_address, inputs);
+    tt_metal::detail::LaunchProgram(device, program);
+    readL1Backdoor(device, core, input_local_address, byte_size, outputs);
+    tt::log_debug("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
+    readL1Backdoor(device, core, output_local_address, byte_size, outputs);
+    tt::log_debug("inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
+    bool pass = (inputs == outputs);
+    if (not pass) {
+        tt::log_info(
+            "Mismatch at Core={}, phys_core={}, Packet Size(in Bytes)={}", core.str(), phys_core.str(), byte_size);
+    }
+    return pass;
+}
+}  // namespace tt::test::buffer::detail
 
 TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {

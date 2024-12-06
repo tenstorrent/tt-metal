@@ -29,8 +29,6 @@
 #include "tt_metal/program.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // L1_KERNEL_CONFIG_SIZE
-
 namespace tt::tt_metal {
 
 namespace {
@@ -202,6 +200,8 @@ class Program_ {
     std::unordered_map<CBHandle,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
     // Tracks which circular buffer indices are being used
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
+    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
+    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
 
@@ -230,7 +230,13 @@ class Program_ {
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &core_type);
 
+    CBHandle add_circular_buffer_(
+        const CoreRangeSet& core_range_set, const std::shared_ptr<CircularBuffer>& circular_buffer);
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
@@ -240,6 +246,8 @@ class Program_ {
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device);
+
+    void set_remote_circular_buffer_init(Device* device, const std::shared_ptr<Kernel>& kernel) const;
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
@@ -356,12 +364,13 @@ std::shared_ptr<Kernel> Program::get_kernel(KernelHandle kernel_id) const { retu
 KernelGroup::KernelGroup() : core_ranges(CoreRangeSet()) {}
 
 KernelGroup::KernelGroup(
-    const detail::Program_ &program,
+    const detail::Program_& program,
     uint32_t programmable_core_type_index,
     kernel_id_array_t kernel_ids,
     bool erisc_is_idle,
-    int last_cb_index,
-    const CoreRangeSet &new_ranges) :
+    uint32_t max_local_cb_end_index,
+    uint32_t min_remote_cb_start_index,
+    const CoreRangeSet& new_ranges) :
     core_ranges(CoreRangeSet()) {
     this->programmable_core_type_index = programmable_core_type_index;
     this->core_ranges = this->core_ranges.merge(new_ranges);
@@ -408,7 +417,7 @@ KernelGroup::KernelGroup(
         }
     }
 
-    for (uint32_t index = 0; index < MaxProcessorsPerCoreType; index ++) {
+    for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index ++) {
         this->kernel_bin_sizes[index] = 0;
         this->kernel_text_offsets[index] = 0;
         this->launch_msg.kernel_config.kernel_text_offset[index] = 0;
@@ -416,7 +425,8 @@ KernelGroup::KernelGroup(
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
 
     this->launch_msg.kernel_config.exit_erisc_kernel = false;
-    this->launch_msg.kernel_config.max_cb_index = last_cb_index + 1;
+    this->launch_msg.kernel_config.max_local_cb_end_index = max_local_cb_end_index;
+    this->launch_msg.kernel_config.min_remote_cb_start_index = min_remote_cb_start_index;
     this->go_msg.signal = RUN_MSG_GO;
 }
 
@@ -529,7 +539,9 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
         core_to_kernel_group_index_table_[programmable_core_type_index].resize(
             grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y, core_to_kernel_group_invalid_index);
         for (auto &kg_to_cores : map) {
-            int last_cb_index = -1;
+            // Start inclusive, max exclusive
+            uint32_t max_local_cb_end_index = 0;
+            uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
@@ -538,26 +550,36 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                         core_to_kernel_group_index_table_[programmable_core_type_index][y * grid_extent_[programmable_core_type_index].x + x] = index;
 
                         if (not hal.get_supports_cbs(programmable_core_type_index)) continue;
-                        auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
-                        if (val != per_core_cb_indices_.end()) {
-                            int i;
-                            for (i = NUM_CIRCULAR_BUFFERS - 1; i >= 0; i--) {
-                                if (val->second[i]) {
-                                    break;
-                                }
-                            }
-                            last_cb_index = (i > last_cb_index) ? i : last_cb_index;
+                        auto core = CoreCoord({x, y});
+                        auto local_val = per_core_local_cb_indices_.find(core);
+                        if (local_val != per_core_local_cb_indices_.end()) {
+                            max_local_cb_end_index = std::max(
+                                max_local_cb_end_index,
+                                NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(local_val->second.to_ulong()));
+                        }
+                        auto remote_val = per_core_remote_cb_indices_.find(core);
+                        if (remote_val != per_core_remote_cb_indices_.end()) {
+                            min_remote_cb_start_index = std::min(
+                                min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
                         }
                     }
                 }
             }
-
+            TT_FATAL(
+                max_local_cb_end_index <= min_remote_cb_start_index,
+                "Circular buffer indices overlap for KernelGroup {} on programmable core type {}. Local end index {}, "
+                "Remote start index {}",
+                index,
+                programmable_core_type_index,
+                max_local_cb_end_index,
+                min_remote_cb_start_index);
             kernel_groups_[programmable_core_type_index].push_back(KernelGroup(
                 *this,
                 programmable_core_type_index,
                 kg_to_cores.first.kernel_ids,
                 erisc_is_idle,
-                last_cb_index,
+                max_local_cb_end_index,
+                min_remote_cb_start_index,
                 kg_to_cores.second));
             index++;
         }
@@ -583,9 +605,8 @@ void detail::Program_::CircularBufferAllocator::mark_address(uint64_t address, u
     }
 }
 
-CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
-    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
-    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
+CBHandle detail::Program_::add_circular_buffer_(
+    const CoreRangeSet& core_range_set, const std::shared_ptr<CircularBuffer>& circular_buffer) {
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -599,22 +620,31 @@ CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet &core_range_se
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
                 std::bitset<NUM_CIRCULAR_BUFFERS> &cb_indices = this->per_core_cb_indices_[logical_core];
-
-                for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
-                    if (buffer_index > NUM_CIRCULAR_BUFFERS) {
-                        TT_THROW(
+                std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
+                std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
+                auto add_buffer_indices = [&cb_indices](
+                                              const std::unordered_set<uint8_t>& buffer_indices,
+                                              std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
+                    for (uint32_t buffer_index : buffer_indices) {
+                        // TT_ASSERT since we validate when constructing the config that it's within range
+                        TT_ASSERT(
+                            buffer_index < NUM_CIRCULAR_BUFFERS,
                             "Invalid circular buffer index: {} should be between 0 and {}",
                             buffer_index,
                             NUM_CIRCULAR_BUFFERS);
+                        if (cb_indices[buffer_index]) {
+                            TT_THROW(
+                                "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
+                                "circular "
+                                "buffer already exists",
+                                buffer_index);
+                        }
+                        cb_indices[buffer_index] = 1;
+                        target_cb_indices[buffer_index] = 1;
                     }
-                    if (cb_indices.to_ulong() & (1 << buffer_index)) {
-                        TT_THROW(
-                            "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular "
-                            "buffer already exists",
-                            buffer_index);
-                    }
-                    cb_indices[buffer_index] = 1;
-                }
+                };
+                add_buffer_indices(circular_buffer->config().local_buffer_indices(), local_cb_indices);
+                add_buffer_indices(circular_buffer->config().remote_buffer_indices(), remote_cb_indices);
             }
         }
 
@@ -634,8 +664,31 @@ CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet &core_range_se
     return circular_buffer->id();
 }
 
+CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
+    return add_circular_buffer_(core_range_set, circular_buffer);
+}
+
+CBHandle detail::Program_::add_circular_buffer(
+    const CoreRangeSet& core_range_set,
+    const CircularBufferConfig& config,
+    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    std::shared_ptr<CircularBuffer> circular_buffer =
+        std::make_shared<CircularBuffer>(core_range_set, config, global_circular_buffer);
+    return add_circular_buffer_(core_range_set, circular_buffer);
+}
+
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     return pimpl_->add_circular_buffer(core_range_set, config);
+}
+
+CBHandle Program::add_circular_buffer(
+    const CoreRangeSet& core_range_set,
+    const CircularBufferConfig& config,
+    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
+    return pimpl_->add_circular_buffer(core_range_set, config, global_circular_buffer);
 }
 
 std::shared_ptr<CircularBuffer> detail::Program_::get_circular_buffer(CBHandle cb_id) const {
@@ -708,7 +761,7 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
     }
 
     uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
-    for (const std::shared_ptr<CircularBuffer>& circular_buffer : this->circular_buffers_) {
+    for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
         }
@@ -835,10 +888,61 @@ std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
 
 std::vector<std::vector<CoreCoord>> Program::logical_cores() const { return pimpl_->logical_cores(); }
 
+void detail::Program_::set_remote_circular_buffer_init(Device* device, const std::shared_ptr<Kernel>& kernel) const {
+    const auto& kernel_defines = kernel->defines();
+    const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS", "UPDATE_REMOTE_CB_CONFIGS_IN_L1"};
+    for (const auto& str : reserved_defines) {
+        TT_FATAL(
+            kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
+    }
+    std::string align_code = "";
+    std::unordered_set<CBHandle> initialized_cbs;
+    std::unordered_set<uint8_t> remote_cb_indices;
+    for (auto logical_cr : kernel->logical_coreranges()) {
+        const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+        for (const auto& circular_buffer : cbs_on_core) {
+            if (circular_buffer->remote_buffer_indices().empty() || initialized_cbs.contains(circular_buffer->id())) {
+                continue;
+            }
+            initialized_cbs.insert(circular_buffer->id());
+            auto remote_cb_index = *circular_buffer->remote_buffer_indices().begin();
+            remote_cb_indices.insert(remote_cb_index);
+
+            // We only need the first remote buffer index
+            if (!circular_buffer->local_buffer_indices().empty()) {
+                align_code += fmt::format(
+                    "experimental::align_local_cbs_to_remote_cb<{}>({},{{",
+                    circular_buffer->local_buffer_indices().size(),
+                    remote_cb_index);
+                for (auto buffer_index : circular_buffer->local_buffer_indices()) {
+                    align_code += fmt::format("{},", buffer_index);
+                }
+                align_code.back() = '}';
+                align_code.append(");");
+            }
+        }
+    }
+    if (!remote_cb_indices.empty()) {
+        std::map<std::string, std::string> defines;
+        std::string update_code = fmt::format("experimental::update_remote_cb_configs_in_l1<{}>({{", remote_cb_indices.size());
+        for (auto buffer_index : remote_cb_indices) {
+            update_code += fmt::format("{},", buffer_index);
+        }
+        update_code.back() = '}';
+        update_code.append(");");
+        defines["UPDATE_REMOTE_CB_CONFIGS_IN_L1"] = update_code;
+
+        if (!align_code.empty()) {
+            defines["ALIGN_LOCAL_CBS_TO_REMOTE_CBS"] = align_code;
+        }
+        kernel->add_defines(defines);
+    }
+}
+
 void detail::Program_::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
     //ZoneScoped;
-    for (auto logical_cr : crs) {
-        auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+    for (const auto& logical_cr : crs) {
+        const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
                 build_options.set_cb_dataformat_all_cores(
@@ -851,7 +955,7 @@ void detail::Program_::set_cb_data_fmt(Device *device, const std::vector<CoreRan
 void detail::Program_::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
     //ZoneScoped;
     for (const auto &logical_cr : crs) {
-        auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+        const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto &circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
                 auto tile = circular_buffer->tile(buffer_index);
@@ -953,7 +1057,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             uint32_t transfer_info_index = 0;
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
-                const ll_api::memory &kernel_bin = binaries[sub_kernel_index];
+                const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
                 // Spans are now packed into one
                 // TODO: code below can be simplified w/ a single span
@@ -1198,25 +1302,32 @@ void detail::Program_::set_launch_msg_sem_offsets() {
 }
 
 uint32_t detail::Program_::finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    int count = 0;
-
+    uint32_t max_local_end_index = 0;
+    uint32_t min_remote_start_index = NUM_CIRCULAR_BUFFERS;
     // TODO: has to be better way to do this and don't read from volatile
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        // TODO "max_cb_index" is misnamed, it is really the count of indices
-        int32_t id = kg.launch_msg.kernel_config.max_cb_index;
-        if (id > count) {
-            count = id;
-        }
-
-        kg.launch_msg.kernel_config.cb_offset = base_offset;
+    auto& kernel_groups = this->get_kernel_groups(programmable_core_type_index);
+    for (auto& kg : kernel_groups) {
+        max_local_end_index =
+            std::max(max_local_end_index, (uint32_t)kg.launch_msg.kernel_config.max_local_cb_end_index);
+        min_remote_start_index =
+            std::min(min_remote_start_index, (uint32_t)kg.launch_msg.kernel_config.min_remote_cb_start_index);
     }
 
-    uint32_t cb_size = count * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].cb_size = cb_size;
+    uint32_t local_cb_size = max_local_end_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t remote_cb_offset = base_offset + local_cb_size;
+    for (auto& kg : kernel_groups) {
+        kg.launch_msg.kernel_config.local_cb_offset = base_offset;
+        kg.launch_msg.kernel_config.remote_cb_offset = remote_cb_offset;
+    }
 
-    return base_offset + cb_size;
+    uint32_t remote_cb_size = (NUM_CIRCULAR_BUFFERS - min_remote_start_index) *
+                              UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t total_cb_size = local_cb_size + remote_cb_size;
+    this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
+    this->program_configs_[programmable_core_type_index].cb_size = total_cb_size;
+    this->program_configs_[programmable_core_type_index].local_cb_size = local_cb_size;
+
+    return align(base_offset + total_cb_size, hal.get_alignment(HalMemType::L1));
 }
 
 uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset) {
@@ -1231,7 +1342,7 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
             auto& optional_id = kg.kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = this->get_kernel(optional_id.value());
-                std::vector<ll_api::memory> const &binaries = kernel->binaries(device->build_key());
+                std::vector<ll_api::memory const*> const& binaries = kernel->binaries(device->build_key());
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
@@ -1275,8 +1386,8 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else {
-                        kg.kernel_text_offsets[class_id] = binaries[0].get_text_addr();
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0].get_text_addr();
+                        kg.kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
                     }
                 }
             }
@@ -1456,6 +1567,9 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
                 [kernel, device, this] {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
+                    if (this->compiled_.empty()) {
+                        this->set_remote_circular_buffer_init(device, kernel);
+                    }
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 

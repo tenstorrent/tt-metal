@@ -137,21 +137,20 @@ inline Tensor create_tensor_from_buffer(
             auto data = cast<::bfloat16, T>(input_buffer);
             return create_owned_tensor(std::move(data), shape, dtype, Layout::ROW_MAJOR).to(input_layout);
         }
-        case DataType::BFLOAT8_B: {
-            auto data = cast<float, T>(input_buffer);
-            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
-            auto storage = OwnedStorage{std::move(buffer)};
-            return Tensor(std::move(storage), shape, dtype, Layout::ROW_MAJOR)
-                .to(ttnn::TILE_LAYOUT);  // has to be in tile layout
-        }
+        case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             auto data = cast<float, T>(input_buffer);
-            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
-            auto storage = OwnedStorage{std::move(buffer)};
-            return Tensor(std::move(storage), shape, dtype, Layout::ROW_MAJOR)
-                .to(ttnn::TILE_LAYOUT);  // has to be in tile layout
+            auto buffer = owned_buffer::create<float>(std::move(data));
+            auto tensor =
+                Tensor(OwnedStorage{std::move(buffer)}, shape, DataType::FLOAT32, Layout::ROW_MAJOR).to(Layout::TILE);
+            auto output_float_data = owned_buffer::get_as<float>(tensor).get();
+            auto output_packed_data =
+                dtype == DataType::BFLOAT8_B
+                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            return Tensor(
+                OwnedStorage{std::move(output_buffer)}, shape, dtype, Layout::TILE);  // has to be in tile layout
         }
         default: {
             TT_THROW("Unsupported DataType: {}", dtype);

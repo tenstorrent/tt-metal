@@ -44,7 +44,7 @@ std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& input
     return {};
 }
 
-std::vector<ttnn::SimpleShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<TensorSpec> Prod::compute_output_specs(const std::vector<Tensor>&) const {
     // Inplace
     return {};
 }

@@ -35,7 +35,7 @@ def find_max_subblock(out_block_h, out_block_w):
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [768])
-@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("transpose_tile", [True, False])

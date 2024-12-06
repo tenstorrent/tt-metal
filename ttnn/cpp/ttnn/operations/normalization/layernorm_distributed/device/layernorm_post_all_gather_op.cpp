@@ -96,15 +96,11 @@ void LayerNormPostAllGather::validate(
     }
 }
 
-std::vector<ttnn::SimpleShape> LayerNormPostAllGather::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_logical_shape()};
-}
-
-std::vector<Tensor> LayerNormPostAllGather::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->memory_config);
+std::vector<TensorSpec> LayerNormPostAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    auto& input_tensor = input_tensors.at(0);
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), memory_config))};
 }
 
 operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(

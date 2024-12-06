@@ -542,7 +542,7 @@ void JitBuildState::compile_one(
     if (settings != nullptr) {
         if (process_defines_at_compile) {
             settings->process_defines([&defines](const string& define, const string& value) {
-                defines += "-D" + define + "=" + value + " ";
+                defines += "-D" + define + "='" + value + "' ";
             });
         }
 

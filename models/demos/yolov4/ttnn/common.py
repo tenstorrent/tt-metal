@@ -43,6 +43,8 @@ class Conv:
         fused_op=True,
         width_sharding=False,
         output_layout=ttnn.TILE_LAYOUT,
+        enable_split_reader=False,
+        enable_act_double_buffer=False,
     ) -> None:
         if fused_op:
             self.weights, self.bias = fold_bn_to_conv_weights_bias(model, path)
@@ -59,6 +61,8 @@ class Conv:
         self.act_block_h = act_block_h
         self.reshard = reshard
         self.output_layout = output_layout
+        self.enable_split_reader = enable_split_reader
+        self.enable_act_double_buffer = enable_act_double_buffer
 
         if width_sharding:
             self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -88,6 +92,8 @@ class Conv:
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             reallocate_halo_output=False,
+            enable_split_reader=self.enable_split_reader,
+            enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
         )
         if self.act_block_h is not None:

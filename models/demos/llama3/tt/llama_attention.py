@@ -20,7 +20,9 @@ class TtLlamaAttention(LightweightModule):
         weight_cache_path,
         layer_num,
         dtype,
+        transformation_mats,
         configuration,
+        paged_attention_config=None,
     ):
         super().__init__()
 
@@ -34,7 +36,7 @@ class TtLlamaAttention(LightweightModule):
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
-        self.paged_attention_config = configuration.paged_attention_config
+        self.paged_attention_config = paged_attention_config
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
 
         self.n_local_heads = self.n_heads // configuration.num_devices
@@ -42,12 +44,13 @@ class TtLlamaAttention(LightweightModule):
 
         self.dtype = dtype
 
-        self.kv_seq_len = configuration.kv_seq_len
-        self.sliding_window = configuration.sliding_window
+        self.max_seq_len = configuration.max_seq_len
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+
+        self.transformation_mats = transformation_mats
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -113,7 +116,7 @@ class TtLlamaAttention(LightweightModule):
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         if self.is_multichip and self.use_fused_all_gather_matmul:
             pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
-            wo_ttnn = ttnn.as_tensor(
+            self.wo = ttnn.as_tensor(
                 pt_wo,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
@@ -122,7 +125,6 @@ class TtLlamaAttention(LightweightModule):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
                 cache_file_name=cache_name("wo_width_sharded"),
             )
-            self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
         else:  # For line topology we can't do all gather matmul for now, but we can height shard and reduce scatter
             # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
             wo_mem_config = configuration.create_dram_sharded_mem_config(
@@ -163,16 +165,16 @@ class TtLlamaAttention(LightweightModule):
             cache_k = torch.zeros(
                 (
                     self.max_batch_size,
-                    self.n_kv_heads,
-                    self.sliding_window,
+                    self.n_kv_heads // configuration.num_devices,
+                    self.max_seq_len,
                     self.head_dim,
                 )
             )
             cache_v = torch.zeros(
                 (
                     self.max_batch_size,
-                    self.n_kv_heads,
-                    self.sliding_window,
+                    self.n_kv_heads // configuration.num_devices,
+                    self.max_seq_len,
                     self.head_dim,
                 )
             )
@@ -180,14 +182,14 @@ class TtLlamaAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
-                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 dtype=self.dtype,
+                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
                 if weight_cache_path and not configuration.dummy_weights
                 else None,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -198,14 +200,13 @@ class TtLlamaAttention(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mat=None,
+        rot_mats=None,
         page_table=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-        assert self.max_batch_size * self.n_kv_heads < 64
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -245,26 +246,14 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
 
-        q_heads_1BQD = ttnn.linear(
-            q_heads_pre_rot_1BQD,
-            rot_mat,
-            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"](
-                q_heads_pre_rot_1BQD.shape[-2], q_heads_pre_rot_1BQD.shape[-1], rot_mat.shape[-1]
-            ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
+        # Q Rotary Embeddings
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
 
-        k_heads_1BKD = ttnn.linear(
-            k_heads_pre_rot_1BKD,
-            rot_mat,
-            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"](
-                k_heads_pre_rot_1BKD.shape[-2], k_heads_pre_rot_1BKD.shape[-1], rot_mat.shape[-1]
-            ),
-            memory_config=k_heads_pre_rot_1BKD.memory_config(),
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
+        # K Rotary Embeddings
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
@@ -275,20 +264,24 @@ class TtLlamaAttention(LightweightModule):
         ###
         keys = self.layer_past[0]
         values = self.layer_past[1]
-
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, sliding_window, head_dim]
+        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
+
         self.layer_past[0] = keys
         self.layer_past[1] = values
 
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
 
+        # NOTE: Varying the batch size will result in slightly different outputs.
+        # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
+        # This is because the SDPA op in decode mode has different number of reductions depending on batch size
+        # Which leads to slightly different outputs from attention (due to accumulated errors)
         if page_table:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -369,7 +362,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
-    def forward_prefill(self, x_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):
+    def forward_prefill(self, x_11SH, rot_mats, user_id: int = 0, page_table=None):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -414,12 +407,20 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
@@ -427,21 +428,27 @@ class TtLlamaAttention(LightweightModule):
         keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+
         ttnn.deallocate(k_heads_1KSD)
+
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen:
+        if (
+            seq_len >= self.min_kv_prefill_shard_seqlen and not page_table
+        ):  # ttnn.experimental.paged_fill_cache only supports interleaved inputs
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-
-        ttnn.deallocate(v_heads_1VSD)
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen:
+        if (
+            seq_len >= self.min_kv_prefill_shard_seqlen and not page_table
+        ):  # ttnn.experimental.paged_fill_cache only supports interleaved inputs
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
+
+        ttnn.deallocate(v_heads_1VSD)
 
         if page_table:
             ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx=user_id)
@@ -458,7 +465,7 @@ class TtLlamaAttention(LightweightModule):
                 user_id,
             )
 
-        if seq_len >= self.min_kv_prefill_shard_seqlen:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -483,6 +490,7 @@ class TtLlamaAttention(LightweightModule):
             v_heads_V1SD_8b,
             is_causal=True,
             scale=self.scale,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
         )
 
@@ -542,10 +550,8 @@ class TtLlamaAttention(LightweightModule):
         else:
             return output_11SH
 
-    def forward(
-        self, x, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode", page_table=None
-    ):
+    def forward(self, x, current_pos, rot_mats=None, user_id=0, mode="decode", page_table=None):
         if mode == "prefill":
-            return self.forward_prefill(x, rot_mats, transformation_mats, user_id, page_table)
+            return self.forward_prefill(x, rot_mats, user_id, page_table)
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table)

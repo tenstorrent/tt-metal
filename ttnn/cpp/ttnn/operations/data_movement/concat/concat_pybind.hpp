@@ -18,7 +18,7 @@ void bind_concat(py::module& module) {
     const auto doc = R"doc(
 
 Args:
-    input_tensor (ttnn.Tensor): the input tensor.
+    input_tensor (List of ttnn.Tensor): the input tensors.
     dim (number): the concatenating dimension.
 
 Keyword Args:
@@ -32,13 +32,11 @@ Returns:
 
 Example:
 
-    >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
-
     >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
     >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> output = ttnn.concat([tensor1, tensor2], dim=4)
+    >>> output = ttnn.concat([tensor1, tensor2], dim=3)
     >>> print(output.shape)
-    [1, 1, 32, 64]
+    [1, 1, 64, 64]
 
     )doc";
 

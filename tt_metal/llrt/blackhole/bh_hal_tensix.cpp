@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core_config.h"
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"

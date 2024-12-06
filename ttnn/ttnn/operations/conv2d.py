@@ -32,6 +32,82 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
 
 
+def prepare_conv_weights(
+    *,
+    weight_tensor,
+    input_memory_config,
+    input_layout,
+    weights_format,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    groups,
+    device,
+    conv_config=None,
+):
+    return ttnn._ttnn.operations.conv.prepare_conv_weights(
+        weight_tensor=weight_tensor,
+        input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
+        weights_format=weights_format,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        groups=groups,
+        device=device,
+        conv_config=conv_config,
+    )
+
+
+def prepare_conv_bias(
+    *,
+    bias_tensor,
+    input_memory_config,
+    input_layout,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    groups,
+    device,
+    conv_config=None,
+):
+    return ttnn._ttnn.operations.conv.prepare_conv_bias(
+        bias_tensor=bias_tensor,
+        input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        groups=groups,
+        device=device,
+        conv_config=conv_config,
+    )
+
+
 def convert_conv_weight_tensor_to_tiled_layout(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype=None):
     """
     Converts convolution weights to 2d matrix tiled layout on host

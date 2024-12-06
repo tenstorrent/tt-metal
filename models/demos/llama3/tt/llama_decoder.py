@@ -10,7 +10,17 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
 
 
 class TtTransformerBlock(LightweightModule):
-    def __init__(self, args, mesh_device, dtype, state_dict, layer_num, weight_cache_path):
+    def __init__(
+        self,
+        args,
+        mesh_device,
+        dtype,
+        state_dict,
+        layer_num,
+        weight_cache_path,
+        transformation_mats,
+        paged_attention_config=None,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -25,7 +35,6 @@ class TtTransformerBlock(LightweightModule):
         self.max_batch_size = args.max_batch_size
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
-        self.sliding_window = args.sliding_window
         self.model_config = args.get_model_config()
 
         self.layer_num = layer_num
@@ -36,7 +45,9 @@ class TtTransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
+            transformation_mats=transformation_mats,
             configuration=args,
+            paged_attention_config=paged_attention_config,
         )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,
@@ -82,8 +93,7 @@ class TtTransformerBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mat=None,
-        transformation_mats=None,
+        rot_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -99,8 +109,7 @@ class TtTransformerBlock(LightweightModule):
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
-            rot_mat,
-            transformation_mats,
+            rot_mats,
             user_id,
             mode,
             page_table,

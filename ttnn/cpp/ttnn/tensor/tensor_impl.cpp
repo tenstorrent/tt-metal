@@ -822,21 +822,21 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         return tensor;
     }
 
-    auto shape = tensor.get_legacy_shape();
     auto source_layout = tensor.get_layout();
     auto tile = tensor.tensor_spec().tile();
-    auto convert = [tile, &shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
+    auto physical_shape = tensor.tensor_spec().physical_shape();
+    auto convert = [tile, &physical_shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 if (target_layout == Layout::TILE) {
-                    return convert_layout_row_major_to_tile(shape, tile, input_data);
+                    return convert_layout_row_major_to_tile(physical_shape, tile, input_data);
                 } else {
                     TT_THROW("Unsupported layout conversion");
                 }
                 break;
             case Layout::TILE:
                 if (target_layout == Layout::ROW_MAJOR) {
-                    return convert_layout_tile_to_row_major(shape, tile, input_data);
+                    return convert_layout_tile_to_row_major(physical_shape, tile, input_data);
                 } else {
                     TT_THROW("Unsupported layout conversion");
                 }
@@ -896,111 +896,18 @@ template Tensor to_layout<uint32_t>(const Tensor& tensor, Layout target_layout);
 template Tensor to_layout<uint16_t>(const Tensor& tensor, Layout target_layout);
 template Tensor to_layout<uint8_t>(const Tensor& tensor, Layout target_layout);
 
-// Template Specialization for unpack_bfloat_tiles_into_float {bfp4,bfp8}
-template <typename... Args>
-inline std::vector<float> unpack_bfloat_tiles_into_float_vec(const bfloat8_b&, Args&&... args) {
-    return unpack_bfp8_tiles_into_float_vec(std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline std::vector<float> unpack_bfloat_tiles_into_float_vec(const bfloat4_b&, Args&&... args) {
-    return unpack_bfp4_tiles_into_float_vec(std::forward<Args>(args)...);
-}
-
-// Template Specialization for pack_fp32_vec_as_bfp4_tiles {bfp4,bfp8}
-template <typename... Args>
-inline std::vector<uint32_t> pack_fp32_vec_as_bfloat_tiles(const bfloat8_b&, Args&&... args) {
-    return pack_fp32_vec_as_bfp8_tiles(std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline std::vector<uint32_t> pack_fp32_vec_as_bfloat_tiles(const bfloat4_b&, Args&&... args) {
-    return pack_fp32_vec_as_bfp4_tiles(std::forward<Args>(args)...);
-}
-
-// Template specialization for BFloatLayout based on type T
-template <typename T>
-struct bfloat_enum;
-
-template <>
-struct bfloat_enum<bfloat8_b> {
-    static constexpr DataType value = DataType::BFLOAT8_B;
-};
-
-template <>
-struct bfloat_enum<bfloat4_b> {
-    static constexpr DataType value = DataType::BFLOAT4_B;
-};
-
 template <typename T>
 Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
     static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
-
-    // TODO(arakhmati): do not convert to FLOA32
-
-    if (tensor.get_layout() == target_layout) {
-        return tensor;
+    // TODO: Flip to assert when we remove use cases in python and c++
+    if (tensor.get_layout() != target_layout or tensor.get_layout() != Layout::TILE) {
+        log_warning(
+            tt::LogAlways,
+            "Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Conversion from {} to {} was not executed!",
+            tensor.get_layout(),
+            target_layout);
     }
-    auto tile = tensor.get_tensor_spec().tile();
-    return std::visit(
-        [&tensor, &target_layout, &tile](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                std::vector<OwnedBuffer> output_buffers;
-                for (int i = 0; i < storage.num_buffers(); i++) {
-                    // Convert to FLOAT32 tensor and change layout
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(storage.get_buffer(i)).get();
-                    auto input_float_data = unpack_bfloat_tiles_into_float_vec(
-                        T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor = Tensor(
-                                            OwnedStorage{input_float_buffer},
-                                            tensor.get_legacy_shape(),
-                                            DataType::FLOAT32,
-                                            tensor.get_layout(),
-                                            tile)
-                                            .to(target_layout);
-
-                    // Convert back to BFLOAT8_B
-                    auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
-                    auto output_packed_data = pack_fp32_vec_as_bfloat_tiles(
-                        T{}, output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
-                    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                    output_buffers.push_back(output_uint32_buffer);
-                }
-                return Tensor(
-                    std::move(MultiDeviceHostStorage{storage.strategy, output_buffers, storage.shapes}),
-                    tensor.get_legacy_shape(),
-                    bfloat_enum<T>::value,
-                    target_layout,
-                    tile);
-
-            } else {
-                // Convert to FLOAT32 tensor and change layout
-                auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                auto input_float_data = unpack_bfloat_tiles_into_float_vec(
-                    T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                auto float_tensor = Tensor(
-                                        OwnedStorage{input_float_buffer},
-                                        tensor.get_legacy_shape(),
-                                        DataType::FLOAT32,
-                                        tensor.get_layout(),
-                                        tile)
-                                        .to(target_layout);
-
-                // Convert back to BFLOAT
-                auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
-                auto output_packed_data = pack_fp32_vec_as_bfloat_tiles(
-                    T{}, output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-                    tensor.get_legacy_shape(),
-                    bfloat_enum<T>::value,
-                    target_layout,
-                    tile);
-            }
-        },
-        tensor.get_storage());
+    return tensor;
 }
 
 template <>

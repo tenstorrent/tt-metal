@@ -73,6 +73,8 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
         self.conv7_3 = Conv(
             torch_model,
@@ -80,6 +82,8 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
         self.conv8 = Conv(
             torch_model,
@@ -93,6 +97,8 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
         self.conv8_2 = Conv(
             torch_model,
@@ -106,6 +112,8 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
 
         self.conv9 = Conv(
@@ -115,6 +123,8 @@ class TtNeck:
             (1, 1, 0, 0),
             deallocate=False,
             height_sharding=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
         self.conv9_2 = Conv(
             torch_model,

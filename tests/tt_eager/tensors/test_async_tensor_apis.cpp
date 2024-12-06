@@ -30,12 +30,10 @@ uint32_t get_device_buffer_address(const Tensor& tensor) {
     TT_FATAL(std::holds_alternative<DeviceStorage>(tensor.get_storage()), "Tensor storage is not DeviceStorage");
     auto buffer = std::get<DeviceStorage>(tensor.get_storage()).buffer;
     uint32_t result = 0;
-    buffer->device()->push_work([&]() {
-        result = buffer->address();
-    }, true);
+    buffer->device()->push_work([&]() { result = buffer->address(); }, true);
     return result;
 }
-}
+}  // namespace
 
 TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
@@ -125,11 +123,17 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
     for (int i = 0; i < 5; i++) {
         // Initialize tensors and move them to DRAM
         Tensor input_tensor_a =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
+            ttnn::numpy::full<float>(
+                tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE)
+                .to(device);
         Tensor input_tensor_b =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
+            ttnn::numpy::full<float>(
+                tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE)
+                .to(device);
         Tensor input_tensor_c =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
+            ttnn::numpy::full<float>(
+                tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE)
+                .to(device);
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
@@ -177,10 +181,12 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     for (int i = 0; i < 5; i++) {
         // Run for multiple loops to ensure deterministic behaviour with device addresses
         // Initialize 2 tensors on device
-        Tensor tensor1 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
-        Tensor tensor2 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor1 = ttnn::numpy::full<float>(
+                             tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16)
+                             .to(device);
+        Tensor tensor2 = ttnn::numpy::full<float>(
+                             tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16)
+                             .to(device);
         uint32_t tensor2_device_buf_addr = get_device_buffer_address(tensor2);
         // Assign tensor1 to tensor2 and ensure that ref counts are appropriately updated with the buffer for tensor2
         // deallocated
@@ -189,15 +195,18 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         EXPECT_EQ(tensor1.tensor_attributes->main_thread_ref_count, 2);
         // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the
         // prev addr for tensor2
-        Tensor tensor3 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor3 = ttnn::numpy::full<float>(
+                             tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16)
+                             .to(device);
         EXPECT_EQ(get_device_buffer_address(tensor3), tensor2_device_buf_addr);
         EXPECT_EQ(get_device_buffer_address(tensor1), get_device_buffer_address(tensor2));
     }
     log_info(LogTest, "Testing Device tensor self-assignment through function");
     for (int i = 0; i < 5; i++) {
         Tensor device_tensor =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+            ttnn::numpy::full<float>(
+                tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16)
+                .to(device);
         uint32_t device_tensor_address = get_device_buffer_address(device_tensor);
         // This step will copy the tensor to a temp rval and std::move it back to the caller's instance of device_tensor
         // Ensure ref count and address remain unchanged
@@ -208,15 +217,18 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
 
     log_info(LogTest, "Testing Device tensor move assignment");
     for (int i = 0; i < 5; i++) {
-        Tensor tensor1 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor1 = ttnn::numpy::full<float>(
+                             tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16)
+                             .to(device);
         Tensor tensor2 = std::move(tensor1);
         EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 1);
     }
 
     log_info(LogTest, "Testing Device tensor self-assignment");
     Tensor tensor_to_self_assign =
-        ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(0), DataType::BFLOAT16).to(device);
+        ttnn::numpy::full<float>(
+            tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(0), DataType::BFLOAT16)
+            .to(device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
     tensor_to_self_assign = tensor_to_self_assign;
     EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);

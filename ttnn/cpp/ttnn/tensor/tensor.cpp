@@ -10,6 +10,7 @@
 
 #include "common/bfloat16.hpp"
 #include "impl/buffers/buffer_constants.hpp"
+#include "tt_metal/tt_stl/overloaded.hpp"
 #include "tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -735,30 +736,23 @@ namespace detail {
 template <typename DataType>
 void* get_raw_host_data_ptr(const Tensor& tensor) {
     return std::visit(
-        [](auto&& storage) -> void* {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                auto buffer = owned_buffer::get_as<DataType>(storage.buffer);
+        tt::stl::overloaded{
+            [](const OwnedStorage& s) {
+                auto buffer = owned_buffer::get_as<DataType>(s.buffer);
                 return buffer.data();
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+            },
+            [](const BorrowedStorage& s) {
                 if constexpr (
                     std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
                     std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
                     std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>) {
-                    auto buffer = borrowed_buffer::get_as<DataType>(storage.buffer);
+                    auto buffer = borrowed_buffer::get_as<DataType>(s.buffer);
                     return buffer.data();
                 } else {
                     TT_THROW("Borrowed storage doesn't support this data type");
                 }
-            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else {
-                raise_unsupported_storage<StorageType>();
-            }
+            },
+            [](auto&&) -> void* { TT_THROW("Device storage doesn't support this data type"); },
         },
         tensor.get_storage());
 }

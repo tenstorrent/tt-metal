@@ -8,10 +8,12 @@
 #include <numeric>
 #include <vector>
 
-#include "core_config.h"  // ProgrammableCoreType
+#include "core_config.h"
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
+#include "noc/noc_overlay_parameters.h"
+#include "tensix.h"
 
 #include "hal.hpp"
 
@@ -142,6 +144,22 @@ void Hal::initialize_gs() {
         // No relocation needed
         return addr;
     };
+
+    this->valid_reg_addr_func_ = [](uint32_t addr) {
+        return (
+            ((addr >= NOC_OVERLAY_START_ADDR) &&
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+            ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
+            ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
+            (addr == RISCV_DEBUG_REG_SOFT_RESET_0));
+    };
+
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
+        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+    };
+
+    num_nocs_ = NUM_NOCS;
 }
 
 }  // namespace tt_metal

@@ -213,6 +213,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 // clang-format off
 /**
  * Update the total size of the circular buffer at the given circular buffer handle. Updating a program-local circular buffer requires all circular buffers in the program to be reallocated.
+ * If it is required to update the address and total size of a dynamic circular buffer, use `UpdateDynamicCircularBufferAddressAndTotalSize`.
  *
  * Return value: void
  *
@@ -244,6 +245,7 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 // clang-format off
 /**
  * Update the address of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
+ * If it is required to update the address and total size of a dynamic circular buffer, use `UpdateDynamicCircularBufferAddressAndTotalSize`.
  *
  * Return value: void
  *
@@ -257,6 +259,20 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 
 // clang-format off
+/**
+ * Update the address and total size of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
+ *
+ * Return value: void
+ *
+ * | Argument   | Description                                                                              | Type                         | Valid Range | Required |
+ * |------------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program    | The program containing the circular buffer                                               | Program &                    |             | Yes      |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
+ * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
+ * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
+ */
+void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
@@ -281,7 +297,7 @@ uint32_t CreateSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::shared_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -291,7 +307,7 @@ uint32_t CreateSemaphore(
  * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
@@ -299,7 +315,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::shared_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -309,7 +325,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off

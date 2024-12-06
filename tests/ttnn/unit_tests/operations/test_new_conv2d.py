@@ -153,7 +153,7 @@ def run_conv(
     if config_override and "act_block_h" in config_override and not auto_shard:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
-    if config_override and "act_block_w_div" in config_override:
+    if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
     if config_override and "num_cores_nhw" in config_override:
@@ -635,7 +635,7 @@ def test_conv_ws(
         enable_split_reader=False,
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
-        act_block_w_div=act_block_w_div,
+        act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
     )
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
@@ -2616,6 +2616,92 @@ def test_non_tile_multiple_height_conv_wh(
         packer_l1_acc=packer_l1_acc,
         fp32_accum=fp32_accum,
         has_bias=has_bias,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    (
+        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 384, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 448, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 512, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 576, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 384, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 448, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 512, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 576, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 128, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 320, 320, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("enable_auto_formatting", [False])
+def test_non_tile_multiple_width_conv_wh(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    enable_auto_formatting,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=(input_channels == 16),
+        transpose_mcast=use_1d_systolic_array,
+        enable_auto_formatting=enable_auto_formatting,
+        padded_input_channels=16 if input_channels == 16 else None,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 

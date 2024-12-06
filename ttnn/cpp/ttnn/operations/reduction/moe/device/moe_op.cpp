@@ -43,11 +43,19 @@ void MoeDeviceOperation::validate_with_output_tensors(
     TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]);
 }
 
-std::vector<ttnn::SimpleShape> MoeDeviceOperation::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = input_tensors.at(0).get_logical_shape();
+std::vector<TensorSpec> MoeDeviceOperation::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (output_tensors.size() == 1) {
+        if (output_tensors.at(0).has_value()) {
+            return {output_tensors[0]->get_tensor_spec()};
+        }
+    }
+
+    auto& input_tensor = input_tensors.at(0);
+    auto output_shape = input_tensor.get_logical_shape();
     output_shape[-1] = 1;
-    return {output_shape};
+    return {
+        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> MoeDeviceOperation::create_output_tensors(
@@ -57,8 +65,7 @@ std::vector<Tensor> MoeDeviceOperation::create_output_tensors(
             return {output_tensors[0].value()};
         }
     }
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
+    return {create_device_tensor(compute_output_specs(input_tensors, output_tensors)[0], input_tensors.at(0).device())};
 }
 
 operation::ProgramWithCallbacks MoeDeviceOperation::create_program(

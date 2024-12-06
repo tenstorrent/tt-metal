@@ -17,7 +17,10 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
-void py_module_types(py::module& module) { py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice"); }
+void py_module_types(py::module& module) {
+    py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
+    py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
+}
 
 void py_module(py::module& module) {
     py::enum_<MeshType>(module, "MeshType")
@@ -137,7 +140,50 @@ void py_module(py::module& module) {
             Returns:
                 Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
         )doc")
-        .def("__repr__", &MeshDevice::to_string);
+        .def("__repr__", &MeshDevice::to_string)
+        .def(
+            "create_sub_device_manager",
+            [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
+                return self.create_sub_device_manager(sub_devices, local_l1_size);
+            },
+            py::arg("sub_devices"),
+            py::arg("local_l1_size"),
+            R"doc(
+                Creates a sub-device manager for the given mesh device.
+
+                Args:
+                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
+                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
+
+                Returns:
+                    MeshSubDeviceManagerId: The ID of the created sub-device manager.
+            )doc")
+        .def(
+            "load_sub_device_manager",
+            &MeshDevice::load_sub_device_manager,
+            py::arg("mesh_sub_device_manager_id"),
+            R"doc(
+                Loads the sub-device manager with the given ID.
+
+                Args:
+                    mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to load.
+            )doc")
+        .def(
+            "clear_loaded_sub_device_manager",
+            &MeshDevice::clear_loaded_sub_device_manager,
+            R"doc(
+                Clears the loaded sub-device manager for the given mesh device.
+            )doc")
+        .def(
+            "remove_sub_device_manager",
+            &MeshDevice::remove_sub_device_manager,
+            py::arg("mesh_sub_device_manager_id"),
+            R"doc(
+                Removes the sub-device manager with the given ID.
+
+                Args:
+                    mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
+            )doc");
 
     module.def(
         "open_mesh_device",

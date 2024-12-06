@@ -197,12 +197,18 @@ def test_create_head_max_width_shard(
 
 def run_test_create_min_width_shard(
     device,
+    batch,
     n_local_heads,
     n_local_kv_heads,
     head_dim,
+    overlap_coregrid,
 ):
     ## Split Heads
-    batch = 32
+    if not overlap_coregrid and batch >= 32:
+        # Test with smaller batch size for CI to pass on devices not utlizing full coregrid
+        pytest.skip(
+            "Skipping tests for batch>=32 for non-overlapping coregrid as CI device does not support full coregrid"
+        )
     seq_len = 1
     total_heads = n_local_heads + n_local_kv_heads * 2
     total_cores = total_heads * head_dim // 32
@@ -220,23 +226,24 @@ def run_test_create_min_width_shard(
             ),
         }
     )
+    CREATE_HEAD_SHARD_SPEC = ttnn.ShardSpec(
+        shard_spec_n_cores_grid,
+        [
+            32,
+            32,
+        ],
+        ttnn.ShardOrientation.ROW_MAJOR,
+        False,
+    )
     CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            shard_spec_n_cores_grid,
-            [
-                32,
-                32,
-            ],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, CREATE_HEAD_SHARD_SPEC
     )
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
 
     # Prepare tt input
-    proj_output_tt = torch2tt_tensor(proj_output, tt_device=None).to(device=device, mem_config=CREATE_HEAD_INPUT_MEMCFG)
+    proj_output_tt = ttnn.from_torch(
+        proj_output, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=CREATE_HEAD_INPUT_MEMCFG
+    )
 
     # tt operation
     (
@@ -248,6 +255,7 @@ def run_test_create_min_width_shard(
         num_heads=n_local_heads,
         num_kv_heads=n_local_kv_heads,
         memory_config=HEIGHT_SHARDED_MEMCFG,
+        overlap_qk_coregrid=overlap_coregrid,
     )
     logger.info(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
     logger.info(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
@@ -280,15 +288,19 @@ def run_test_create_min_width_shard(
 
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("batch", (1, 8, 16, 32))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
     ((8, 1, 128), (8, 4, 96), (16, 2, 64)),
 )
+@pytest.mark.parametrize("overlap_coregrid", (True, False))
 def test_create_min_width_shard(
+    batch,
     n_local_heads,
     n_local_kv_heads,
     head_dim,
     device,
+    overlap_coregrid,
     use_program_cache,
 ):
     torch.manual_seed(0)
@@ -297,10 +309,13 @@ def test_create_min_width_shard(
         # multiple loops to test program caching
         run_test_create_min_width_shard(
             device,
+            batch,
             n_local_heads,
             n_local_kv_heads,
             head_dim,
+            overlap_coregrid,
         )
+    assert device.num_program_cache_entries() == 1, "Only one Op program cache should exist"
 
 
 def run_test_create_width_shard_by_head(

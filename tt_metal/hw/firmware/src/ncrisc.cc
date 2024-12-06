@@ -13,6 +13,7 @@
 #include "risc_attribs.h"
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
+#include "circular_buffer_init.h"
 
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
@@ -94,9 +95,14 @@ int main(int argc, char *argv[]) {
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
-        uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            launch_msg->kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg->kernel_config.max_cb_index, true, true, false);
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t end_cb_index = launch_msg->kernel_config.max_local_cb_end_index;
+        setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, true, true, false);
+
+        cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
+        end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        experimental::setup_remote_cb_interfaces(cb_l1_base, end_cb_index);
         WAYPOINT("R");
 
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);

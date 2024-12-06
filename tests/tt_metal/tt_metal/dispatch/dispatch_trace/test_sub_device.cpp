@@ -22,11 +22,12 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     uint32_t num_iters = 5;
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         device->load_sub_device_manager(sub_device_manager);
 
-        auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_sync_program(device, sub_device_1, sub_device_2);
+        auto [waiter_program, syncer_program, incrementer_program, global_sem] =
+            create_basic_sync_program(device, sub_device_1, sub_device_2);
 
         // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program, false);
@@ -68,16 +69,20 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
 TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasicEthPrograms) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     uint32_t num_iters = 5;
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id() << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
         }
         auto eth_core = *device->get_active_ethernet_cores(true).begin();
-        SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}), CoreRangeSet(CoreRange(eth_core, eth_core))});
+        SubDevice sub_device_2(std::array{
+            CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}),
+            CoreRangeSet(CoreRange(eth_core, eth_core))});
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         device->load_sub_device_manager(sub_device_manager);
 
-        auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_eth_sync_program(device, sub_device_1, sub_device_2);
+        auto [waiter_program, syncer_program, incrementer_program, global_sem] =
+            create_basic_eth_sync_program(device, sub_device_1, sub_device_2);
 
         // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program, false);
@@ -121,19 +126,23 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
     SubDevice sub_device_2(std::array{CoreRangeSet(std::array{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     SubDevice sub_device_3(std::array{CoreRangeSet(std::array{CoreRange({2, 4}, {3, 4}), CoreRange({5, 1}, {6, 3})})});
     uint32_t num_iters = 5;
-    for (Device *device : devices_) {
+    for (Device* device : devices_) {
         if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id() << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
         }
         auto eth_core = *device->get_active_ethernet_cores(true).begin();
-        SubDevice sub_device_4(std::array{CoreRangeSet(std::array{CoreRange({2, 1}, {2, 2}), CoreRange({1, 5}, {5, 5})}), CoreRangeSet(CoreRange(eth_core, eth_core))});
+        SubDevice sub_device_4(std::array{
+            CoreRangeSet(std::array{CoreRange({2, 1}, {2, 2}), CoreRange({1, 5}, {5, 5})}),
+            CoreRangeSet(CoreRange(eth_core, eth_core))});
 
         auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_3, sub_device_4}, 3200);
 
         device->load_sub_device_manager(sub_device_manager_1);
 
-        auto [waiter_program_1, syncer_program_1, incrementer_program_1, global_sem_1] = create_basic_sync_program(device, sub_device_1, sub_device_2);
+        auto [waiter_program_1, syncer_program_1, incrementer_program_1, global_sem_1] =
+            create_basic_sync_program(device, sub_device_1, sub_device_2);
 
         // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program_1, false);
@@ -155,7 +164,8 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
 
         device->load_sub_device_manager(sub_device_manager_2);
 
-        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] = create_basic_eth_sync_program(device, sub_device_3, sub_device_4);
+        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] =
+            create_basic_eth_sync_program(device, sub_device_3, sub_device_4);
 
         // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program_2, false);
@@ -213,13 +223,19 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
     // Assert no idle eth cores specified
-    EXPECT_THROW(SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3})), CoreRangeSet(CoreRange({4, 4}, {4, 4})), CoreRangeSet(CoreRange({5, 5}, {5, 5}))}), std::exception);
-    for (Device *device : devices_) {
+    EXPECT_THROW(
+        SubDevice sub_device_3(std::array{
+            CoreRangeSet(CoreRange({3, 3}, {3, 3})),
+            CoreRangeSet(CoreRange({4, 4}, {4, 4})),
+            CoreRangeSet(CoreRange({5, 5}, {5, 5}))}),
+        std::exception);
+    for (Device* device : devices_) {
         auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_2, sub_device_1}, 3200);
         device->load_sub_device_manager(sub_device_manager_1);
 
-        auto [waiter_program_1, syncer_program_1, incrementer_program_1, global_sem_1] = create_basic_sync_program(device, sub_device_1, sub_device_2);
+        auto [waiter_program_1, syncer_program_1, incrementer_program_1, global_sem_1] =
+            create_basic_sync_program(device, sub_device_1, sub_device_2);
 
         // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program_1, false);
@@ -238,7 +254,8 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
         EndTraceCapture(device, device->command_queue().id(), tid_1);
 
         device->load_sub_device_manager(sub_device_manager_2);
-        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] = create_basic_sync_program(device, sub_device_2, sub_device_1);
+        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] =
+            create_basic_sync_program(device, sub_device_2, sub_device_1);
 
         EnqueueProgram(device->command_queue(), waiter_program_2, false);
         EnqueueProgram(device->command_queue(), syncer_program_2, false);

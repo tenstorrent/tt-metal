@@ -25,10 +25,9 @@ static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
 template <bool MEASURE>
 FORCE_INLINE void run_loop_iteration(
     std::array<uint32_t, NUM_CHANNELS> const& channel_addrs,
-    std::array<volatile eth_channel_sync_t *, NUM_CHANNELS> const& channel_sync_addrs,
+    std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& channel_sync_addrs,
     uint32_t full_payload_size,
-    uint32_t full_payload_size_eth_words
-) {
+    uint32_t full_payload_size_eth_words) {
     if constexpr (MEASURE) {
         DeviceZoneScopedN("SENDER-LOOP-ITER");
         {
@@ -47,23 +46,20 @@ FORCE_INLINE void run_loop_iteration(
         {
             DeviceZoneScopedN("WAIT-ACKS-PHASE");
             for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-                while (channel_sync_addrs[i]->bytes_sent != 0) { }
+                while (channel_sync_addrs[i]->bytes_sent != 0) {
+                }
             }
         }
     } else {
-
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
             channel_sync_addrs[i]->bytes_sent = 1;
             channel_sync_addrs[i]->receiver_ack = 0;
             eth_send_bytes_over_channel_payload_only(
-                channel_addrs[i],
-                channel_addrs[i],
-                full_payload_size,
-                full_payload_size,
-                full_payload_size_eth_words);
+                channel_addrs[i], channel_addrs[i], full_payload_size, full_payload_size, full_payload_size_eth_words);
         }
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-            while (channel_sync_addrs[i]->bytes_sent != 0) { }
+            while (channel_sync_addrs[i]->bytes_sent != 0) {
+            }
         }
     }
 }
@@ -78,7 +74,7 @@ void kernel_main() {
     const uint32_t message_size_eth_words = message_size >> 4;
 
     const uint32_t full_payload_size = message_size + sizeof(eth_channel_sync_t);
-    const uint32_t full_payload_size_eth_words =full_payload_size >> 4;
+    const uint32_t full_payload_size_eth_words = full_payload_size >> 4;
 
     ASSERT(NUM_CHANNELS * 2 <= 8);
 
@@ -100,27 +96,16 @@ void kernel_main() {
     }
     eth_setup_handshake(handshake_addr, true);
 
-    run_loop_iteration<false>(
-        channel_addrs,
-        channel_sync_addrs,
-        full_payload_size,
-        full_payload_size_eth_words
-    );
+    run_loop_iteration<false>(channel_addrs, channel_sync_addrs, full_payload_size, full_payload_size_eth_words);
     {
         DeviceZoneScopedN("MAIN-TEST-BODY");
         uint32_t i = 0;
         for (uint32_t i = 0; i < num_messages; i++) {
-
             while (eth_txq_is_busy()) {
                 // Start on an empty q (don't let separate loop iterations interfere with each other)
             }
 
-            run_loop_iteration<true>(
-                channel_addrs,
-                channel_sync_addrs,
-                full_payload_size,
-                full_payload_size_eth_words
-            );
+            run_loop_iteration<true>(channel_addrs, channel_sync_addrs, full_payload_size, full_payload_size_eth_words);
         }
     }
 }

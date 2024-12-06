@@ -23,7 +23,7 @@ static inline void skip_test_if_not_t3000() {
     }
 }
 class MeshDevice_T3000 : public ::testing::Test {
-   protected:
+protected:
     void SetUp() override {
         skip_test_if_not_t3000();
         this->mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
@@ -40,6 +40,19 @@ TEST_F(MeshDevice_T3000, SimpleMeshDeviceTest) {
     EXPECT_EQ(mesh_device_->num_devices(), 8);
     EXPECT_EQ(mesh_device_->num_rows(), 2);
     EXPECT_EQ(mesh_device_->num_cols(), 4);
+}
+
+TEST(MeshDeviceSuite, Test1x1SystemMeshInitialize) {
+    auto& sys = tt::tt_metal::distributed::SystemMesh::instance();
+
+    auto config =
+        tt::tt_metal::distributed::MeshDeviceConfig({1, 1}, std::pair<size_t, size_t>(0, 0), {}, MeshType::RowMajor);
+
+    EXPECT_NO_THROW({
+        auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+            config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
+        mesh->close_devices();
+    });
 }
 
 }  // namespace tt::tt_metal::distributed::test

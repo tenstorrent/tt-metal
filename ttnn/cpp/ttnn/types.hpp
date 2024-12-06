@@ -6,6 +6,9 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -54,6 +57,11 @@ static std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
     os << "ttnn.CoreGrid(x=" << core_grid.x << ", y=" << core_grid.y << ")";
     return os;
 }
+
+using tt::tt_metal::GlobalSemaphore;
+using tt::tt_metal::SubDevice;
+using tt::tt_metal::SubDeviceManagerId;
+using tt::tt_metal::v1::experimental::GlobalCircularBuffer;
 
 }  // namespace types
 

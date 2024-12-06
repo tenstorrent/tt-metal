@@ -13,16 +13,6 @@ enum ProgrammableCoreType {
     COUNT = 3,
 };
 
-enum class AddressableCoreType : uint8_t {
-    TENSIX = 0,
-    ETH = 1,
-    PCIE = 2,
-    DRAM = 3,
-    HARVESTED = 4,
-    UNKNOWN = 5,
-    COUNT = 6,
-};
-
 enum class TensixProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, MATH0 = 2, MATH1 = 3, MATH2 = 4, COUNT = 5 };
 
 enum class EthProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };

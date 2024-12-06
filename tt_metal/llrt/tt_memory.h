@@ -41,7 +41,15 @@ class memory {
   memory();
   memory(std::string const &path, Relocate relo_type);
 
- public:
+  public:
+  // These can be large objects, so ban copying ...
+  memory(memory const&) = delete;
+  memory& operator=(memory const&) = delete;
+  // ... but permit moving.
+  memory(memory&&) = default;
+  memory& operator=(memory&&) = default;
+
+  public:
   const std::vector<word_t>& data() const { return this->data_; }
 
   // memory& operator=(memory &&src);
@@ -56,10 +64,6 @@ class memory {
   size_t size() const { return data_.size(); }
 
   size_t num_spans() const { return link_spans_.size(); }
-
-private:
-  // Read from file
-  void fill_from_discontiguous_hex(std::string const &path);
 
 public:
   // Process spans in arg mem to fill data in *this (eg, from device)

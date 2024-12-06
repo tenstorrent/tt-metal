@@ -18,7 +18,7 @@ using namespace tt::tt_metal;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -40,57 +40,51 @@ int main(int argc, char **argv) {
         CoreCoord core = {0, 0};
         uint32_t single_tile_size = 2 * 1024;
         uint32_t Mt = 4, Kt = 2, Nt = 3, B = 2;
-        uint32_t num_tilesA = Mt*Kt*B;
-        uint32_t num_tilesB = Mt*Kt*B;
-        uint32_t num_tilesC = Mt*Nt*B;
+        uint32_t num_tilesA = Mt * Kt * B;
+        uint32_t num_tilesB = Mt * Kt * B;
+        uint32_t num_tilesC = Mt * Nt * B;
         uint32_t bytesA = single_tile_size * num_tilesA;
         uint32_t bytesB = single_tile_size * num_tilesB;
         uint32_t bytesC = single_tile_size * num_tilesC;
 
         tt_metal::InterleavedBufferConfig src0_config{
-                                        .device=device,
-                                        .size = bytesA,
-                                        .page_size = single_tile_size,
-                                        .buffer_type = tt_metal::BufferType::DRAM
-                                        };
+            .device = device, .size = bytesA, .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
         auto src0_dram_buffer = CreateBuffer(src0_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
         tt_metal::InterleavedBufferConfig src1_config{
-                                        .device=device,
-                                        .size = bytesB,
-                                        .page_size = single_tile_size,
-                                        .buffer_type = tt_metal::BufferType::DRAM
-                                        };
+            .device = device, .size = bytesB, .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
         auto src1_dram_buffer = CreateBuffer(src1_config);
         uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
 
         tt_metal::InterleavedBufferConfig dst_config{
-                                        .device=device,
-                                        .size = bytesC,
-                                        .page_size = single_tile_size,
-                                        .buffer_type = tt_metal::BufferType::DRAM
-                                        };
+            .device = device, .size = bytesC, .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
         auto dst_dram_buffer = CreateBuffer(dst_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 2;
-        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
-        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig cb_src1_config =
+            tt_metal::CircularBufferConfig(
+                num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src1_cb_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_tiles = 2;
-        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         bool src0_is_dram = true;
@@ -103,29 +97,32 @@ int main(int argc, char **argv) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_compile_time_args});
 
         auto writer = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
 
         vector<uint32_t> compute_kernel_args = {
-            B, // batch
-            Mt, // Mt
-            Kt, // Kt
-            Nt // Nt
+            B,   // batch
+            Mt,  // Mt
+            Kt,  // Kt
+            Nt   // Nt
         };
 
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
-        );
-
-
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
@@ -134,13 +131,11 @@ int main(int argc, char **argv) {
 
         uint32_t do_bcast = 0;
         tt_metal::SetRuntimeArgs(
-            program, reader, core,
-            {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, do_bcast}
-        );
-        tt_metal::SetRuntimeArgs(
-            program, writer, core,
-            {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
-        );
+            program,
+            reader,
+            core,
+            {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast});
+        tt_metal::SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B});
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -151,7 +146,7 @@ int main(int argc, char **argv) {
             // Read the result back from device DRAM and ref comparisone
             int argfail = -1;
             auto comparison_function = [](float a, float b) {
-                const float rtol = 0.05f; // TODO(AP): need a spec for reference
+                const float rtol = 0.05f;  // TODO(AP): need a spec for reference
                 const float atol = 0.05f;
                 float maxabs = fmaxf(fabsf(a), fabsf(b));
                 float absdiff = fabsf(a - b);
@@ -160,28 +155,39 @@ int main(int argc, char **argv) {
             };
 
             // recover a linear view of input vector for consumption by gold_ function
-            vector<uint32_t> shapeA = {1, B, Mt*32, Kt*32};
-            vector<uint32_t> shapeB = {1, B, Kt*32, Nt*32};
-            vector<uint32_t> shapeC = {1, B, Mt*32, Nt*32};
+            vector<uint32_t> shapeA = {1, B, Mt * 32, Kt * 32};
+            vector<uint32_t> shapeB = {1, B, Kt * 32, Nt * 32};
+            vector<uint32_t> shapeC = {1, B, Mt * 32, Nt * 32};
             auto u16_src0_vec = u16_from_u32_vector(src0_vec);
             auto u16_src1_vec = u16_from_u32_vector(src1_vec);
-            vector<uint16_t> src0_linear = convert_layout<uint16_t>(u16_src0_vec, shapeA, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
-            vector<uint16_t> src1_linear = convert_layout<uint16_t>(u16_src1_vec, shapeB, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+            vector<uint16_t> src0_linear = convert_layout<uint16_t>(
+                u16_src0_vec,
+                shapeA,
+                tests::utils::TensorLayoutType::TILED_NFACES,
+                tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+            vector<uint16_t> src1_linear = convert_layout<uint16_t>(
+                u16_src1_vec,
+                shapeB,
+                tests::utils::TensorLayoutType::TILED_NFACES,
+                tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
             vector<uint16_t> ref_bmm = gold_bmm(shapeA, src0_linear, shapeB, src1_linear);
 
             // Tilize gold from row major and convert to pairs (uint32_t)
-            auto gold_4f_u32 = u32_from_u16_vector( convert_layout<uint16_t>(
-                ref_bmm, shapeC, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES));
+            auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
+                ref_bmm,
+                shapeC,
+                tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+                tests::utils::TensorLayoutType::TILED_NFACES));
 
             pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
-            if (!pass)
+            if (!pass) {
                 log_error(LogTest, "Failure position={}", argfail);
-
+            }
         }
-        //pass &= (src0_vec == result_vec);
+        // pass &= (src0_vec == result_vec);
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

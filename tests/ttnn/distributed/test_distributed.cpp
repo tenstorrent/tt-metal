@@ -11,7 +11,7 @@
 namespace ttnn::distributed::test {
 
 class DistributedTest : public ::testing::Test {
-   protected:
+protected:
     void SetUp() override {}
     void TearDown() override {}
 };

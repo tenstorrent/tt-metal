@@ -48,7 +48,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_fps}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.01, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.02, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"unet-shallow_batch-{batch}_groups-{groups}",

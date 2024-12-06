@@ -27,7 +27,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     uint16_t num_tiles_recv;
     do {
         tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
-        num_tiles_recv = tiles_received - cb_interface[input].tiles_acked;
+        num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 }
 
@@ -37,16 +37,16 @@ inline void llk_pop_tiles(
     std::uint32_t input = operand;
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
-    std::uint32_t num_words = num_tiles * cb_interface[operand].fifo_page_size;
+    std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
 
-    cb_interface[input].tiles_acked += num_tiles;
-    TT_SETDMAREG(0, cb_interface[input].tiles_acked, 0, LO_16(4));
+    get_local_cb_interface(input).tiles_acked += num_tiles;
+    TT_SETDMAREG(0, get_local_cb_interface(input).tiles_acked, 0, LO_16(4));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
-    cb_interface[input].fifo_rd_ptr += num_words;
+    get_local_cb_interface(input).fifo_rd_ptr += num_words;
 
-    if (cb_interface[input].fifo_rd_ptr >= cb_interface[input].fifo_limit) {
-        cb_interface[input].fifo_rd_ptr -= cb_interface[input].fifo_size;
+    if (get_local_cb_interface(input).fifo_rd_ptr >= get_local_cb_interface(input).fifo_limit) {
+        get_local_cb_interface(input).fifo_rd_ptr -= get_local_cb_interface(input).fifo_size;
     }
 }
 
@@ -56,17 +56,17 @@ inline void llk_wait_blocks(int operand, std::int32_t num_blocks) { llk_wait_til
 // FIXME: FP32 accumulation --> pop tiles in the operand? just change rd_ptr?
 inline void llk_clear_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
     // std::uint32_t input = operand_to_input_index(operand);
-    // if (cb_interface[input].accumulation_buffer) {
-    //     std::uint32_t num_words = num_tiles * cb_interface[input].fifo_page_size;
+    // if (get_local_cb_interface(input).accumulation_buffer) {
+    //     std::uint32_t num_words = num_tiles * get_local_cb_interface(input).fifo_page_size;
 
-    //     cb_interface[input].fifo_rd_ptr += num_words;
+    //     get_local_cb_interface(input).fifo_rd_ptr += num_words;
 
-    //     if (cb_interface[input].f.fifo_rd_ptr >= operands[input].fifo_limit) {
-    //         cb_interface[input].f.fifo_rd_ptr -= operands[input].fifo_size;
+    //     if (get_local_cb_interface(input).f.fifo_rd_ptr >= operands[input].fifo_limit) {
+    //         get_local_cb_interface(input).f.fifo_rd_ptr -= operands[input].fifo_size;
     //     }
 
-    //     cb_interface[input].f.fifo_rd_base_ptr = operands[input].fifo_rd_ptr; //inc base ptr
+    //     get_local_cb_interface(input).f.fifo_rd_base_ptr = operands[input].fifo_rd_ptr; //inc base ptr
 
-    //     cb_interface[input].curr_iter = 0;
+    //     get_local_cb_interface(input).curr_iter = 0;
     // }
 }

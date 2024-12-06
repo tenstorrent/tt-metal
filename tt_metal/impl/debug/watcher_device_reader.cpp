@@ -356,7 +356,8 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             DumpL1Status(core, &mbox_data->launch[launch_msg_read_ptr]);
         }
         if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled()) {
-            for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+            const auto NUM_NOCS_ = tt::tt_metal::hal.get_num_nocs();
+            for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(core, core_str, mbox_data, noc);
             }
         }
@@ -380,7 +381,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     } else {
         fprintf(f, "rmsg:");
         DumpRunState(core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
-        fprintf(f, " ");
+        fprintf(f, " h_id:%d ", mbox_data->launch[launch_msg_read_ptr].kernel_config.host_assigned_id);
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
@@ -684,7 +685,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         fprintf(f, "t");
     }
 
-    fprintf(f, " ");
+    fprintf(f, " h_id:%d ", launch_msg->kernel_config.host_assigned_id);
 
     fprintf(f, "smsg:");
     DumpRunState(core, launch_msg, slave_sync->dm1);

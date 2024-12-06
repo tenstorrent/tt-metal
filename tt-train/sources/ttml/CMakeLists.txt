@@ -22,8 +22,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/src/firmware/riscv/wormhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device"
+        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
@@ -38,6 +37,7 @@ if(NOT TARGET Metalium::Metal)
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
 
     if(TT_METAL_LIBRARY)
         add_library(Metalium::Metal SHARED IMPORTED)
@@ -49,6 +49,7 @@ if(NOT TARGET Metalium::Metal)
                 INTERFACE_INCLUDE_DIRECTORIES
                     "${METALIUM_INCLUDE_DIRS}"
         )
+        target_link_libraries(Metalium::Metal INTERFACE ${DEVICE_LIBRARY})
         message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
     else()
         message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")

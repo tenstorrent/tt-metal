@@ -35,7 +35,7 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
         face_r_dim,
         unpack_src_format[operand_id],
         unpack_dst_format[operand_id],
-        cb_interface[operand_id].fifo_page_size);
+        get_local_cb_interface(operand_id).fifo_page_size);
 }
 
 inline void llk_unpack_untilize_uninit(uint32_t operand) {
@@ -92,7 +92,7 @@ inline void llk_unpack_untilize_uninit(uint32_t operand) {
 template <bool first_pass = true>
 inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_tile_cols) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;
+    const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
     _llk_unpack_untilize_pass_<first_pass>(base_address, block_tile_cols);
 }

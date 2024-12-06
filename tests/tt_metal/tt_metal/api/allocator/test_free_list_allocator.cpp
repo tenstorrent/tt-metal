@@ -16,11 +16,10 @@ TEST(FreeListAllocator, TestDirectedSeriesOfAllocDealloc) {
 
     tt::tt_metal::allocator::FreeList free_list_allocator = tt::tt_metal::allocator::FreeList(
         max_size_bytes,
-        /*offset*/0,
+        /*offset*/ 0,
         min_allocation_size_bytes,
         alignment,
-        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST
-    );
+        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST);
 
     std::optional<uint64_t> addr_0 = free_list_allocator.allocate(32, true);
     ASSERT_TRUE(addr_0.has_value());
@@ -42,7 +41,7 @@ TEST(FreeListAllocator, TestDirectedSeriesOfAllocDealloc) {
     ASSERT_TRUE(addr_4.has_value());
     EXPECT_EQ(addr_4.value(), 512);
 
-    free_list_allocator.deallocate(96); // coalesce with next block
+    free_list_allocator.deallocate(96);  // coalesce with next block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
     std::optional<uint64_t> addr_5 = free_list_allocator.allocate_at_address(128, 64);
@@ -54,7 +53,7 @@ TEST(FreeListAllocator, TestDirectedSeriesOfAllocDealloc) {
     EXPECT_EQ(addr_6.value(), 96);
 
     free_list_allocator.deallocate(32);
-    free_list_allocator.deallocate(64); // coalesce with prev block
+    free_list_allocator.deallocate(64);  // coalesce with prev block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
     std::optional<uint64_t> addr_7 = free_list_allocator.allocate(64, true);
@@ -67,7 +66,7 @@ TEST(FreeListAllocator, TestDirectedSeriesOfAllocDealloc) {
 
     free_list_allocator.deallocate(32);
     free_list_allocator.deallocate(128);
-    free_list_allocator.deallocate(96); // coalesce with prev and next block
+    free_list_allocator.deallocate(96);  // coalesce with prev and next block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
     std::optional<uint64_t> addr_9 = free_list_allocator.allocate_at_address(64, 96);
@@ -138,11 +137,10 @@ TEST(FreeListAllocator, TestResizeAllocator) {
 
     tt::tt_metal::allocator::FreeList free_list_allocator = tt::tt_metal::allocator::FreeList(
         max_size_bytes,
-        /*offset*/0,
+        /*offset*/ 0,
         min_allocation_size_bytes,
         alignment,
-        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST
-    );
+        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST);
 
     std::optional<uint64_t> addr_0 = free_list_allocator.allocate(32, false);
     ASSERT_TRUE(addr_0.has_value());
@@ -190,11 +188,10 @@ TEST(FreeListAllocator, TestDirectedResizeAllocator) {
 
     tt::tt_metal::allocator::FreeList free_list_allocator = tt::tt_metal::allocator::FreeList(
         max_size_bytes,
-        /*offset*/0,
+        /*offset*/ 0,
         min_allocation_size_bytes,
         alignment,
-        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST
-    );
+        tt::tt_metal::allocator::FreeList::SearchPolicy::FIRST);
 
     std::optional<uint64_t> addr_0 = free_list_allocator.allocate_at_address(32, 992);
     ASSERT_TRUE(addr_0.has_value());
@@ -229,5 +226,4 @@ TEST(FreeListAllocator, TestDirectedResizeAllocator) {
     std::optional<uint64_t> addr_6 = free_list_allocator.allocate(32, true);
     ASSERT_TRUE(addr_6.has_value());
     EXPECT_EQ(addr_6.value(), 32);
-
 }

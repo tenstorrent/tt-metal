@@ -39,7 +39,7 @@ class TtLlamaMLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
-        self.four_bit_mlp = self.args.is_large_model
+        self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
         self.w1 = as_sharded_tensor(

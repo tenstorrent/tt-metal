@@ -16,22 +16,18 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-
-
+        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -41,27 +37,40 @@ int main(int argc, char **argv) {
         uint32_t Kt = 2;
         uint32_t Nt = 4;
         uint32_t B = 5;
-        tt::tt_metal::LegacyShape shapea = {B, 1, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
-        tt::tt_metal::LegacyShape shapeb = {B, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
-        tt::tt_metal::LegacyShape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        tt::tt_metal::LegacyShape shapea = {B, 1, Mt * TILE_HEIGHT, Kt * TILE_WIDTH};
+        tt::tt_metal::LegacyShape shapeb = {B, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH};
+        tt::tt_metal::LegacyShape shapeb1 = {1, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::numpy::random::random(shapea).to(Layout::TILE).to(device);
         Tensor b = ttnn::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
         Tensor b1 = ttnn::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
-        Tensor mm = ttnn::operations::matmul::matmul(a, b, /*bias=*/std::nullopt,
-                ttnn::operations::matmul::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();
+        Tensor mm = ttnn::operations::matmul::matmul(
+                        a,
+                        b,
+                        /*bias=*/std::nullopt,
+                        ttnn::operations::matmul::Matmul{
+                            /*program_config=*/std::nullopt,
+                            /*bcast_batch=*/std::nullopt,
+                            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                            /*output_dtype=*/std::nullopt,
+                            /*compute_kernel_config=*/std::nullopt,
+                            /*untilize_out=*/false,
+                            /*user_core_coord=*/std::nullopt,
+                            /*user_fused_activation=*/std::nullopt,
+                            /*user_run_batched=*/true})
+                        .cpu();
         Tensor mm1 = ttnn::operations::matmul::matmul(a, b1).cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        Tensor host_a = a.cpu(); // Move tensor a to host to validate
+        Tensor host_a = a.cpu();  // Move tensor a to host to validate
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

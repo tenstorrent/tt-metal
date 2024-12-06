@@ -19,7 +19,7 @@ from difflib import SequenceMatcher
             [
                 "Climate change refers to long-term shifts in temperatures and weather patterns. Such shifts can be natural due to changes in the sun's activity or volcanic eruptions."
             ],
-            ["They can also be caused by human activity, such"],
+            ["They can also be caused by human activities, such"],
             "state-spaces/mamba-2.8b-slimpj",
             10,
             32,
@@ -28,7 +28,7 @@ from difflib import SequenceMatcher
             [
                 "The city of Sarnia is located on the eastern shore of Lake Huron at its extreme southern point where it flows into the St. Clair River . Most of the surrounding area is flat , and the elevation ranges from 169 metres ( 554 ft ) and 281 metres ( 922 ft ) above sea level . The soil mostly comprises clay . Despite this high percentage of clay , the soil is remarkably rich for cultivation . Prior to the Ice Age , glaciers covered most of the area , as can be seen not only by the existence of the Great Lakes themselves but also of alluvial sand deposits, terminal moraines, and rich oil reserves."
             ],
-            ["The Great Lakes are the largest freshwater system in"],
+            ["The area was settled by the Iroqu"],
             "state-spaces/mamba-2.8b-slimpj",
             10,
             128,
@@ -65,4 +65,4 @@ def test_demo(
     def similarity(x, y) -> float:
         return SequenceMatcher(None, x, y).ratio()
 
-    assert similarity(actual, expected) > 0.988, "Expected demo output to match provided value"
+    assert similarity(actual, expected) > 0.99, "Expected demo output to match provided value"

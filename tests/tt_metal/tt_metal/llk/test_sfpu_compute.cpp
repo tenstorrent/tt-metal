@@ -26,7 +26,6 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
-
 const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
@@ -78,7 +77,8 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const stri
     }
 }
 
-bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
+bool is_close_packed_sfpu_output(
+    const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
     if (op_name == "tanh") {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
@@ -120,11 +120,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     tt::tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
@@ -135,7 +131,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1                            // per_core_block_cnt
+        1                                 // per_core_block_cnt
     };
 
     // Input
@@ -166,12 +162,14 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
-            .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
+        tt_metal::CircularBufferConfig l1_input_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
+                .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
         auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
-        tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
-            .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
+        tt_metal::CircularBufferConfig l1_output_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
+                .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
         auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateKernel(
@@ -196,9 +194,9 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-	    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
+        sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
         auto sfpu_kernel = tt_metal::CreateKernel(
             program,
@@ -209,8 +207,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .compile_args = compute_kernel_args,
                 .defines = sfpu_defines});
 
-        for (const CoreCoord& core_coord : core_range)
-        {
+        for (const CoreCoord& core_coord : core_range) {
             SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
         }

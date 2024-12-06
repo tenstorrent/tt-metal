@@ -110,17 +110,22 @@ void Softmax::validate(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Softmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
+std::vector<TensorSpec> Softmax::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    auto& input_tensor = input_tensors.at(0);
+    if (this->inplace) {
+        return {input_tensor.get_tensor_spec()};
+    }
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     if (this->inplace) {
         return {input_tensors.at(0)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
     }
+
+    return {create_device_tensor(compute_output_specs(input_tensors)[0], input_tensors.at(0).device())};
 }
 
 operation::ProgramWithCallbacks Softmax::create_program(

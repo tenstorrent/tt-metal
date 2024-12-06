@@ -50,7 +50,7 @@ conv_ttnn_params = [
 ]
 conv_feature_ids = [0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28]
 classifier_ids = [0, 3, 6]
-h_override = [128, 128, 128, 64, 32, 32, 32, 32, 32, 32, 32, 32, 32]
+h_override = [None, None, None, None, None, 256, 256, None, None, None, None, None, None]
 
 
 def ttnn_vgg16(
@@ -98,7 +98,6 @@ def ttnn_vgg16(
                 deallocate_activation=False,
                 input_channels_alignment=32,
                 reallocate_halo_output=False,
-                act_block_h_override=h_override[iter_conv_id],
                 transpose_shards=True,
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -106,6 +105,8 @@ def ttnn_vgg16(
                 reshard_if_not_optimal=True,
                 enable_weights_double_buffer=True,
             )
+            if h_override[iter_conv_id] is not None:
+                conv_config.act_block_h_override = h_override[iter_conv_id]
 
             tt_weight = parameters.features[conv_feature_ids[iter_conv_id]].weight
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -173,7 +174,7 @@ conv_ttnn_params_2 = [
     [512, 512, 14, 14],
     [512, 512, 14, 14],
 ]
-height_override_11 = [128, 128, 32, 32, 32, 32, 32, 32]
+height_override_11 = [None, None, None, 256, None, None, None, None]
 
 
 def ttnn_vgg11(
@@ -220,13 +221,14 @@ def ttnn_vgg11(
                 deallocate_activation=False,
                 input_channels_alignment=32,
                 reallocate_halo_output=False,
-                act_block_h_override=height_override_11[iter_conv_id],
                 transpose_shards=True,
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 enable_weights_double_buffer=True,
             )
+            if height_override_11[iter_conv_id] is not None:
+                conv_config.act_block_h_override = height_override_11[iter_conv_id]
 
             tt_weight = parameters.features[conv_feature_ids_2[iter_conv_id]].weight
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)

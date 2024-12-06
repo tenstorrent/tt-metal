@@ -380,7 +380,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_specs = operation.compute_output_shapes(input_tensors);
+    auto output_specs = operation.compute_output_shapes(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
         std::move(operation),
         formatted_input_tensors,
@@ -453,7 +453,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_specs = operation.compute_output_shapes(input_tensors);
+    auto output_specs = operation.compute_output_shapes(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
         std::move(operation),
         formatted_input_tensors,

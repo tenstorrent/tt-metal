@@ -20,7 +20,7 @@ void MAIN {
     dropout_tile_init(seed);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CBIndex::c_16, per_core_block_dim);
-        for(uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             acquire_dst();
 
             // Pop tile after tile, copy to DST and pack
@@ -39,4 +39,4 @@ void MAIN {
         cb_push_back(tt::CBIndex::c_16, per_core_block_dim);
     }
 }
-}
+}  // namespace NAMESPACE

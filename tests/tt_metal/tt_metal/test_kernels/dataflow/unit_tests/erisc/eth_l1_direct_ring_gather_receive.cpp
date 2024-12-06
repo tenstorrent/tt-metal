@@ -28,6 +28,5 @@ void kernel_main() {
         eth_noc_semaphore_wait(receiver_semaphore_addr_ptr, 1);
         noc_semaphore_set(receiver_semaphore_addr_ptr, 0);
         eth_receiver_done();
-
     }
 }

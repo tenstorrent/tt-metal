@@ -104,6 +104,7 @@ template struct ExecuteUnary<UnaryOpType::CEIL>;
 template struct ExecuteUnary<UnaryOpType::GEZ>;
 template struct ExecuteUnary<UnaryOpType::GTZ>;
 template struct ExecuteUnary<UnaryOpType::I0>;
+template struct ExecuteUnary<UnaryOpType::I1>;
 template struct ExecuteUnary<UnaryOpType::ISFINITE>;
 template struct ExecuteUnary<UnaryOpType::ISINF>;
 template struct ExecuteUnary<UnaryOpType::ISNAN>;

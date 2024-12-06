@@ -28,7 +28,7 @@ TEST_F(CommandQueueFixture, TestCannotAccessCommandQueueForClosedDevice) {
 }
 
 TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
-    auto &command_queue = this->device_->command_queue();
+    auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
     Program program;
@@ -44,7 +44,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
     std::vector<uint32_t> runtime_args = {src0->address()};
     try {
         SetRuntimeArgs(program, dummy_kernel, core, runtime_args);
-    } catch (std::runtime_error &e) {
+    } catch (std::runtime_error& e) {
         std::string expected =
             "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for "
             "Fast Dispatch.";
@@ -91,20 +91,21 @@ TEST_F(CommandQueueBufferFixture, DISABLED_TensixTestAsyncCBAllocation) {
 
     auto buffer_size = page_size;
     tt::tt_metal::InterleavedBufferConfig buff_config{
-                    .device=this->device_,
-                    .size = buffer_size,
-                    .page_size = buffer_size,
-                    .buffer_type = tt::tt_metal::BufferType::L1
-        };
+        .device = this->device_,
+        .size = buffer_size,
+        .page_size = buffer_size,
+        .buffer_type = tt::tt_metal::BufferType::L1};
     // Asynchronously allocate an L1 Buffer
     auto l1_buffer = CreateBuffer(buff_config);
     CoreRange cr({0, 0}, {0, 2});
     CoreRangeSet cr_set({cr});
     std::vector<uint8_t> buffer_indices = {16, 24};
 
-    CircularBufferConfig config1 = CircularBufferConfig(page_size, {{buffer_indices[0], data_format}, {buffer_indices[1], data_format}}, *l1_buffer)
-        .set_page_size(buffer_indices[0], page_size)
-        .set_page_size(buffer_indices[1], page_size);
+    CircularBufferConfig config1 =
+        CircularBufferConfig(
+            page_size, {{buffer_indices[0], data_format}, {buffer_indices[1], data_format}}, *l1_buffer)
+            .set_page_size(buffer_indices[0], page_size)
+            .set_page_size(buffer_indices[1], page_size);
     // Asynchronously assign the L1 Buffer to the CB
     auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
     auto cb_ptr = detail::GetCircularBuffer(program, multi_core_cb);

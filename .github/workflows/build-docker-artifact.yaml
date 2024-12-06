@@ -53,7 +53,7 @@ jobs:
       - name: Determine docker image tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: ${{ inputs.os }}
+          image: tt-metalium/${{ inputs.os }}
       - name: Build Docker image and push to GHCR
         if: steps.changed-files-specific.outputs.any_changed == 'true'
         uses: docker/build-push-action@v6

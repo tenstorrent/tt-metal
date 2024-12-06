@@ -14,7 +14,7 @@
 #include "dispatch_test_utils.hpp"
 
 class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
-   protected:
+protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
 
@@ -63,7 +63,7 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
 
     static const uint32_t NUM_PROGRAMS = 75;
 
-    Device *device_;
+    Device* device_;
 
     void SetUp() override {
         CommandQueueSingleCardProgramFixture::SetUp();
@@ -78,10 +78,10 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
     }
 
     void create_kernel(
-        Program &program,
+        Program& program,
         const CoreType kernel_core_type,
         const bool simple_kernel = false,
-        const KernelProperties &kernel_properties = KernelProperties()) {
+        const KernelProperties& kernel_properties = KernelProperties()) {
         CoreRangeSet cores = this->get_cores(kernel_core_type);
         const bool create_eth_config = kernel_core_type == CoreType::ETH;
 
@@ -119,8 +119,8 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
     }
 
     std::vector<uint32_t> generate_semaphores(
-        Program &program,
-        const CoreRangeSet &cores,
+        Program& program,
+        const CoreRangeSet& cores,
         const CoreType core_type = CoreType::WORKER,
         const uint32_t min = MIN_NUM_SEMS,
         const uint32_t max = MAX_NUM_SEMS) {
@@ -134,8 +134,8 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
     }
 
     std::vector<uint32_t> generate_circular_buffers(
-        Program &program,
-        const CoreRangeSet &cores,
+        Program& program,
+        const CoreRangeSet& cores,
         const uint32_t min = MIN_NUM_CBS,
         const uint32_t max = MAX_NUM_CBS) {
         const uint32_t num_cbs = this->generate_random_num(min, max);
@@ -153,8 +153,8 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
     }
 
     std::pair<std::vector<uint32_t>, std::vector<uint32_t>> generate_runtime_args(
-        const std::vector<uint32_t> &sem_ids,
-        const std::vector<uint32_t> &cb_page_sizes,
+        const std::vector<uint32_t>& sem_ids,
+        const std::vector<uint32_t>& cb_page_sizes,
         const uint32_t min = MIN_NUM_RUNTIME_ARGS,
         const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
         const uint32_t num_sems = sem_ids.size();
@@ -212,10 +212,10 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
         return large_kernel_properties;
     }
 
-   private:
+private:
     KernelHandle create_kernel(
-        Program &program,
-        const CoreRangeSet &cores,
+        Program& program,
+        const CoreRangeSet& cores,
         const bool create_eth_config,
         const uint32_t num_sems,
         const uint32_t num_cbs,
@@ -327,7 +327,7 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
         return cores;
     }
 
-    CoreRangeSet generate_subset_of_cores(const CoreRangeSet &cores, const uint32_t resulting_ratio_of_cores) {
+    CoreRangeSet generate_subset_of_cores(const CoreRangeSet& cores, const uint32_t resulting_ratio_of_cores) {
         std::set<CoreRange> cores_subset;
         const uint32_t num_cores = cores.num_cores();
         const uint32_t num_cores_to_include_in_subset =
@@ -351,8 +351,9 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture
     }
 };
 
-class RandomProgramTraceFixture : virtual public RandomProgramFixture, virtual public CommandQueueSingleCardTraceFixture {
-   protected:
+class RandomProgramTraceFixture : virtual public RandomProgramFixture,
+                                  virtual public CommandQueueSingleCardTraceFixture {
+protected:
     static const uint32_t NUM_TRACE_ITERATIONS = 50;
     Program programs[NUM_PROGRAMS];
 
@@ -368,10 +369,10 @@ class RandomProgramTraceFixture : virtual public RandomProgramFixture, virtual p
         return trace_id;
     }
 
-   private:
+private:
     uint32_t capture_trace() {
         const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
-        for (Program &program : this->programs) {
+        for (Program& program : this->programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
         }
         EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);

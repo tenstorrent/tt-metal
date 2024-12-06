@@ -15,6 +15,10 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#include "circular_buffer_init.h"
+#endif
+
 // Global vars
 uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
@@ -50,6 +54,12 @@ void kernel_launch(uint32_t kernel_base_addr)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
     memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 #endif
+#if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+    ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#endif
     run_kernel();
+#if !defined(UCK_CHLKC_MATH) and defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+    UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#endif
 #endif
 }
