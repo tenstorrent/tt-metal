@@ -70,6 +70,7 @@ void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
     uint32_t loop_count = 0;
     uint32_t switch_counter = 0;
+    uint32_t total_words_procesed = 0;
     fvc_consumer_state.init(
         fvc_data_buf_start, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
     fvc_producer_state.init(
@@ -114,9 +115,16 @@ void kernel_main() {
             }
         }
 
+        if (fvc_req_buf_is_empty(fvc_consumer_req_buf)) {
+            noc_async_read_barrier();
+            while (!fvc_consumer_state.sync_buf_empty()) {
+                fvc_consumer_state.forward_data_from_fvc_buffer();
+            }
+        }
+
         fvc_producer_state.update_remote_rdptr_sent();
         if (fvc_producer_state.get_curr_packet_valid()) {
-            fvc_producer_state.process_inbound_packet();
+            total_words_procesed += fvc_producer_state.process_inbound_packet();
             loop_count = 0;
         } else if (fvc_producer_state.packet_corrupted) {
             write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
@@ -137,6 +145,7 @@ void kernel_main() {
             switch_counter = SWITCH_THRESHOLD;
         }
     }
+    DPRINT << "Router words processed " << total_words_procesed << ENDL();
     uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
