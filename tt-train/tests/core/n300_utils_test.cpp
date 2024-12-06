@@ -90,8 +90,12 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
+    // optimized branch
     xt::xarray<float> test_data = xt::arange(64 * 64 * 4) / 100.F;
     xt::xarray<float> xtensor = test_data.reshape({2, 2, 64, 64});
+    // non optimized branch
+    // xt::xarray<float> test_data = xt::arange(32 * 32 * 1) / 100.F;
+    // xt::xarray<float> xtensor = test_data.reshape({1, 1, 32, 32});
 
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
     auto tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
