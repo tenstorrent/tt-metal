@@ -27,6 +27,7 @@ uint32_t layer = 0;
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
+    // TODO: all info per weight only send once
     coalesced_page_size = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     coalesced_num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     block_num_tiles = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
@@ -34,6 +35,7 @@ void kernel_main() {
         increment_arg_idx(rt_args_idx, num_tensors)));  // why is this page_size and not single_tile_size??
     num_tile_rows = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
 
+    // TODO: two loops, one for layer, one for matmul weights
     for (uint32_t l = 0; l < num_tensors; ++l) {
         uint32_t curr_coalesced_page_size = coalesced_page_size[l];
         uint32_t curr_coalesced_num_pages = coalesced_num_pages[l];
