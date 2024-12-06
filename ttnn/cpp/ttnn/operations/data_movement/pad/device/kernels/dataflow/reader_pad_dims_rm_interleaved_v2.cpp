@@ -5,6 +5,23 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#define ENABLE_DEBUG 1
+
+#if ENABLE_DEBUG
+#include "debug/dprint.h"
+
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+#endif
+
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
@@ -24,6 +41,16 @@ void kernel_main() {
     uint32_t front_pad_h = get_arg_val<uint32_t>(6);
     tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
 
+    DPRINT << "run time args: " << ENDL();
+    DPRINT << "num_sticks_per_core_read= " << num_sticks_per_core_read << ENDL();
+    DPRINT << "num_read_per_barrier= " << num_read_per_barrier << ENDL();
+    DPRINT << "start_id= " << start_id << ENDL();
+    DPRINT << "front_pad_n= " << front_pad_n << ENDL();
+    DPRINT << "front_pad_c= " << front_pad_c << ENDL();
+    DPRINT << "front_pad_h= " << front_pad_h << ENDL();
+    DPRINT << "start_dim_offset:dim0= " << start_dim_offset[0] << ", dim1= " << start_dim_offset[1]
+           << ", dim2= " << start_dim_offset[2] << ", dim3= " << start_dim_offset[3] << ENDL();
+
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t N = get_compile_time_arg_val(1);
     constexpr uint32_t H = get_compile_time_arg_val(2);
@@ -37,6 +64,24 @@ void kernel_main() {
     constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(10);
     constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(11);
     constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(12);
+    DPRINT << "compile time args: " << ENDL();
+    if (src_is_dram) {
+        DPRINT << "src_is_dram" << ENDL();
+    } else {
+        DPRINT << "src_is_L1" << ENDL();
+    }
+    DPRINT << "N= " << N << ENDL();
+    DPRINT << "H= " << H << ENDL();
+    DPRINT << "C= " << C << ENDL();
+    DPRINT << "stick_size_bytes= " << stick_size_bytes << ENDL();
+    DPRINT << "N_padded= " << N_padded << ENDL();
+    DPRINT << "H_padded= " << H_padded << ENDL();
+    DPRINT << "C_padded= " << C_padded << ENDL();
+    DPRINT << "stick_size_padded= " << stick_size_padded << ENDL();
+    DPRINT << "stick_size_padded_front= " << stick_size_padded_front << ENDL();
+    DPRINT << "stick_size_padded_end= " << stick_size_padded_end << ENDL();
+    DPRINT << "num_zero_pad_sticks_read= " << num_zero_pad_sticks_read << ENDL();
+    DPRINT << "last_zero_stick_size= " << last_zero_stick_size << ENDL();
 
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
 #if (not_pad_by_zero)
@@ -45,6 +90,12 @@ void kernel_main() {
     constexpr uint32_t num_front_pad_sticks_read = get_compile_time_arg_val(16);
     constexpr uint32_t num_end_pad_sticks_read = get_compile_time_arg_val(17);
     constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(18);
+    DPRINT << "not pad by zero = " << get_compile_time_arg_val(13) << ENDL();
+    DPRINT << "packed_pad_value = " << packed_pad_value << ENDL();
+    DPRINT << "row_major_min_bytes= " << row_major_min_bytes << ENDL();
+    DPRINT << "num_front_pad_sticks_read= " << num_front_pad_sticks_read << ENDL();
+    DPRINT << "num_end_pad_sticks_read= " << num_end_pad_sticks_read << ENDL();
+    DPRINT << "num_sticks_padded_read= " << num_sticks_padded_read << ENDL();
 #endif
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -84,6 +135,7 @@ void kernel_main() {
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
 
             if (read_stick) {
+                DPRINT << "into read stick" << ENDL();
 #if (not_pad_by_zero)
                 if constexpr (stick_size_padded_front != 0) {
                     for (uint32_t j = 0; j < num_front_pad_sticks_read; ++j) {
@@ -117,6 +169,7 @@ void kernel_main() {
 #endif
 
             } else {
+                DPRINT << "into read padded scratch" << ENDL();
 #if (not_pad_by_zero)
                 for (uint32_t j = 0; j < num_sticks_padded_read; ++j) {
                     noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
@@ -142,7 +195,8 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-
+        DPRINT << "number of elements in a page = " << stick_size_padded / sizeof(uint16_t) << ENDL();
+        print_pages(get_read_ptr(cb_in0), stick_size_padded / sizeof(uint16_t), 1);
         cb_push_back(cb_in0, num_read_per_barrier);
     }
 }
