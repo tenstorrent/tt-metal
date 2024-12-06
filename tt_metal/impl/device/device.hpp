@@ -191,8 +191,8 @@ class Device {
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
 
-    uint32_t get_allocator_alignment() const;
-    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const;
+    uint32_t get_allocator_alignment(const BufferType &buffer_type) const;
+    uint32_t get_allocator_alignment(SubDeviceId sub_device_id, const BufferType &buffer_type) const;
 
     size_t get_l1_small_size() const;
     size_t get_l1_small_size(SubDeviceId sub_device_id) const;

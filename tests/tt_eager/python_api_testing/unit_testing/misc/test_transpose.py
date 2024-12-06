@@ -581,7 +581,6 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "n, c, h, w, grid_size",
     [

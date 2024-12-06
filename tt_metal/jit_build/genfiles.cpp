@@ -456,8 +456,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
+    std::vector<int32_t>& l1_bank_offset_map) {
     stringstream ss;
 
     ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
@@ -543,15 +542,13 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
+    std::vector<int32_t>& l1_bank_offset_map) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(
         grid_size,
         dram_bank_map,
         dram_bank_offset_map,
         l1_bank_map,
-        l1_bank_offset_map,
-        allocator_alignment);
+        l1_bank_offset_map);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");

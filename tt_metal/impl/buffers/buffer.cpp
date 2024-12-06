@@ -455,7 +455,7 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
 }
 
 uint32_t Buffer::alignment() const {
-    return this->allocator_->config.alignment;
+    return this->device_->get_allocator_alignment(this->buffer_type_);
 }
 
 DeviceAddr Buffer::aligned_page_size() const {

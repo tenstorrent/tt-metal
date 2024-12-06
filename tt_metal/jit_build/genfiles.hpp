@@ -27,8 +27,7 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment);
+    std::vector<int32_t>& l1_bank_offset_map);
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options);
 
