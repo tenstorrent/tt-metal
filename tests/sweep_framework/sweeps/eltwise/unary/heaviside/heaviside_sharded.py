@@ -5,13 +5,28 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import json
 import torch
+import random
 import ttnn
+import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from tests.sweep_framework.sweep_utils.sharding_utils import (
+    gen_sharded_spec_unary_2,
+    parse_sharding_spec,
+    invalidate_vector_sharding,
+    roundup,
+    divup,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 120
+
+random.seed(0)
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -20,11 +35,8 @@ from models.utility_functions import torch_random
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 64),
+        "input_spec": gen_sharded_spec_unary_2(16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
 
@@ -33,8 +45,23 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is not supported"
+    input_spec = parse_sharding_spec(test_vector["input_spec"])
+    (
+        input_shape,
+        core_grid_size,
+        shard_orientation,
+        sharding_strategy,
+        tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
+        input_layout,
+    ) = input_spec
+    invlidated, output_str = invalidate_vector_sharding(*input_spec)
+    if invlidated:
+        return invlidated, output_str
+
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "bfloat8_b is only supported on tiled layout"
+
     return False, None
 
 
@@ -43,38 +70,55 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    input_shape,
+    input_spec,
     input_a_dtype,
-    input_layout,
-    input_a_memory_config,
-    output_memory_config,
     *,
     device,
 ) -> list:
-    torch.manual_seed(0)
+    data_seed = random.randint(0, 20000000)
+    torch.manual_seed(data_seed)
+
+    (
+        input_shape,
+        core_grid_size,
+        shard_orientation,
+        sharding_strategy,
+        tensor_hw_as_shard_shape,
+        shard_height_mul_of_32,
+        input_layout,
+    ) = parse_sharding_spec(input_spec)
+    y, x = core_grid_size
+    device_grid_size = ttnn.CoreGrid(y=y, x=x)
+
+    sharded_config = ttnn.create_sharded_memory_config_(
+        shape=input_shape,
+        core_grid=device_grid_size,
+        strategy=sharding_strategy,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+        tile_layout=True,
+    )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_output_tensor = torch_input_tensor_a.clone()
-
-    golden_function = ttnn.get_golden_function(ttnn.normalize_hw)
-    torch_output_tensor = golden_function(torch_output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.hardsigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=sharded_config,
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.normalize_hw(input_tensor_a, memory_config=output_memory_config)
+    output_tensor = ttnn.hardsigmoid(input_tensor_a, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)

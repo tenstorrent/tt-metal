@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 import random
 from loguru import logger
 from itertools import product
@@ -247,3 +248,14 @@ def complex_from_torch(torch_tensor, dtype, layout, memory_config, device):
         memory_config=memory_config,
     )
     return ttnn.complex_tensor(tt_real, tt_imag)
+
+
+def get_device_grid_size():
+    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
+    assert device_name in ["wormhole_b0", "grayskull"]
+    if device_name == "grayskull":
+        y, x = 9, 12
+    else:
+        y, x = 8, 8
+
+    return y, x
