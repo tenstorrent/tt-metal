@@ -58,6 +58,14 @@ CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS
 
 CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
 
+CPMAddPackage(
+    NAME xtensor-blas
+    GITHUB_REPOSITORY xtensor-stack/xtensor-blas
+    GIT_TAG 0.21.0
+    OPTIONS
+        "XTENSOR_ENABLE_TESTS OFF"
+)
+
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_msgpack.cmake)
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)

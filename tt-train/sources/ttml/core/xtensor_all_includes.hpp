@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/xadapt.hpp>
 #include <xtensor/xarray.hpp>
 #include <xtensor/xbuffer_adaptor.hpp>

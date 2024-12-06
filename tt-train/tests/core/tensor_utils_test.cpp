@@ -6,12 +6,10 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
-#include <memory>
 #include <ttnn/tensor/types.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 
