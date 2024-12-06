@@ -1577,6 +1577,14 @@ void Matmul::validate(
 }
 
 std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(optional_output_tensors.length() <= 1, "None or One Optional output tensor can be passed when accessing it for computing Matmul's output specs");
+
+    const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+
+    if (optional_output_tensors.empty()) {
+        return {optional_output_tensors.at(0)->get_tensor_spec()};
+    }
+
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const ttnn::SimpleShape input_shape_a = input_tensor_a.get_logical_shape();
@@ -1749,7 +1757,6 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(const std::vector<Ten
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     return operation::default_create_output_tensors(*this, input_tensors, {});
-}
 
 operation::ProgramWithCallbacks Matmul::create_program(
     const std::vector<Tensor>& input_tensors,
