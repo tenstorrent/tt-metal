@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <filesystem>
 
+#include "third_party/tracy/public/common/TracyTTDeviceData.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tools/profiler/profiler.hpp"
@@ -396,14 +397,35 @@ void DeviceProfiler::dumpJsonReport(
     Device* device, const std::vector<std::uint32_t>& profile_buffer, const std::vector<CoreCoord>& worker_cores) {
     auto device_id = device->id();
 
-    std::string prefix = "noc_trace";
-    std::string basename = prefix + "_dev" + std::to_string(device_id) + ".json";
+    // determine rpt filepath
+    std::string requested_rpt_path = tt::llrt::OptionsG.get_profiler_noc_events_report_path();
+    std::filesystem::path rpt_filepath;
+    if (requested_rpt_path.empty()){
+        std::string prefix = "noc_trace";
+        std::string basename = prefix + "_dev" + std::to_string(device_id) + ".json";
+        rpt_filepath = output_dir / basename;
+    } else {
+        rpt_filepath = requested_rpt_path;
+    }
 
-    std::filesystem::path log_path = output_dir / basename;
-    std::ofstream json_rpt_os(log_path.string());
-    log_info("Dumping noc event trace to '{}'", log_path.string());
+    // check that filepath can be created/already exists
+    auto rpt_dir = rpt_filepath.parent_path();
+    std::filesystem::create_directories(rpt_dir);
+    if (not std::filesystem::is_directory(rpt_dir)){
+        log_error("Could not write noc event json trace to '{}' because the directory path could not be created!",rpt_filepath);
+        return;
+    }
 
-    uint64_t starting_timestamp = 0;
+    std::ofstream json_rpt_os(rpt_filepath);
+    if (!json_rpt_os){
+        log_error("Could not open noc event json trace file at '{}'!",rpt_filepath);
+        return;
+    }
+    log_info("Dumping noc event trace to '{}'", rpt_filepath);
+
+    // helper function for quoting strings
+    auto dquote = [](std::string_view str) { return fmt::format(R"("{}")", str); };
+
     bool first_record = true;
     json_rpt_os << "[" << std::endl;
 
@@ -412,6 +434,8 @@ void DeviceProfiler::dumpJsonReport(
         HalProgrammableCoreType CoreType;
         int riscCount;
         profiler_msg_t* profiler_msg;
+
+        uint64_t kernel_start_timestamp = 0;
 
         const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
         auto ethCores = soc_d.get_physical_ethernet_cores();
@@ -496,33 +520,71 @@ void DeviceProfiler::dumpJsonReport(
                         uint32_t timer_id = (profile_buffer[index] >> 12) & 0x7FFFF;
                         kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
+                        uint32_t time_H = profile_buffer[index] & 0xFFF;
+                        uint32_t time_L = profile_buffer[index + 1];
+                        uint64_t timestamp = (uint64_t(time_H) << 32) | time_L;
+
+                        int64_t kernel_start_delta = int64_t(timestamp) - int64_t(kernel_start_timestamp);
+
                         switch (packet_type) {
+                            case kernel_profiler::ZONE_START:
+                            case kernel_profiler::ZONE_END: {
+                                if (timer_id || time_H) {
+                                    tracy::TTDeviceEventPhase zone_phase = (packet_type == kernel_profiler::ZONE_END)
+                                                                               ? tracy::TTDeviceEventPhase::end
+                                                                               : tracy::TTDeviceEventPhase::begin;
+                                    std::string zone_name;
+                                    std::string source_file;
+                                    std::string source_line;
+                                    if (hash_to_zone_src_locations.find((uint16_t)timer_id) !=
+                                        hash_to_zone_src_locations.end()) {
+                                        std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
+                                        getline(source_info, zone_name, ',');
+                                        getline(source_info, source_file, ',');
+
+                                        std::string source_line_str;
+                                        getline(source_info, source_line_str, ',');
+                                        source_line = stoi(source_line_str);
+                                    }
+                                    if (zone_name.ends_with("-FW") || zone_phase == tracy::TTDeviceEventPhase::end) {
+                                        break;
+                                    } else if (
+                                        zone_name.ends_with("-KERNEL") &&
+                                        zone_phase == tracy::TTDeviceEventPhase::begin) {
+                                        kernel_start_timestamp = timestamp;
+                                    }
+
+                                    std::string prefix(first_record ? " " : ",");
+                                    first_record = false;
+                                    json_rpt_os
+                                        << std::endl
+                                        << fmt::format(
+                                               R"({}{{ "zone":{:<14}, "zone_phase":{:<7}, "sx":{:<2}, "sy":{:<2}, "timestamp" : {} }})",
+                                               prefix,
+                                               dquote(zone_name),
+                                               dquote(magic_enum::enum_name(zone_phase)),
+                                               worker_core.x,
+                                               worker_core.y,
+                                               timestamp,
+                                               source_file)
+                                        << std::endl;
+                                }
+                                break;
+                            }
                             case kernel_profiler::TS_DATA: {
-                                uint32_t time_H = profile_buffer[index] & 0xFFF;
-                                uint32_t time_L = profile_buffer[index + 1];
-                                uint64_t timestamp = (uint64_t(time_H) << 32) | time_L;
                                 index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                                 uint32_t data_H = profile_buffer[index];
                                 uint32_t data_L = profile_buffer[index + 1];
                                 uint64_t event_metadata = (uint64_t(data_H) << 32) | data_L;
 
-                                if (starting_timestamp == 0) {
-                                    starting_timestamp = timestamp;
-                                } else {
-                                    starting_timestamp = std::min(starting_timestamp, timestamp);
-                                }
-
                                 KernelProfilerNocEventMetadata ev_md(event_metadata);
-                                int64_t rel_timestamp = int64_t(timestamp) - int64_t(starting_timestamp);
 
                                 std::string prefix(first_record ? " " : ",");
                                 first_record = false;
 
-                                auto dquote = [](std::string_view str) { return fmt::format(R"("{}")", str); };
-
                                 json_rpt_os
                                     << fmt::format(
-                                           R"({}{{ "proc":{:<6},  "sx":{:<2},  "sy":{:<2},  "dx":{:<2},  "dy":{:<2},  "num_bytes":{:<6},  "type":{:<16}, "timestamp":{:<16} }})",
+                                           R"({}{{ "proc":{:<6},  "sx":{:<2},  "sy":{:<2},  "dx":{:<2},  "dy":{:<2},  "num_bytes":{:<6},  "type":{:<22}, "timestamp":{:<16}, "kernel_start_delta":{:<6} }})",
                                            prefix,
                                            dquote(tracy::riscName[riscType]),
                                            worker_core.x,
@@ -531,13 +593,14 @@ void DeviceProfiler::dumpJsonReport(
                                            ev_md.dst_y,
                                            ev_md.num_bytes,
                                            dquote(magic_enum::enum_name(ev_md.noc_xfer_type)),
-                                           rel_timestamp,
-                                           starting_timestamp) +
+                                           timestamp,
+                                           kernel_start_delta) +
                                            "\n";
 
                                 break;
                             }
                             default: {
+                                //log_info("Unsupported packet format {}", magic_enum::enum_name(packet_type));
                                 break;
                             }
                         }
