@@ -202,6 +202,10 @@ int main(int argc, char **argv) {
         {"seed", static_cast<int>(config.seed)},
         {"use_kahan_summation", config.use_kahan_summation},
         {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
+        {"positional_embedding_type",
+         config.transformer_config.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
+             ? "trainable"
+             : "fixed"},
     });
 
     // set seed
