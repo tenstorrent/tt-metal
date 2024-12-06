@@ -258,11 +258,6 @@ class LlamaGenerator:
         output_xattn_masks = []
         output_full_text_row_masked_out_masks = []
 
-        if cross_page_table is not None:
-            assert (
-                xattn_caches is None and kv_cache is not None
-            ), "no separate xattn_caches should be allocated when using cross_page_table with paged kv cache"
-
         for user_id in range(batch):
             print(f"Prefilling User {user_id}")
             seq_len = prompt_lens[user_id]
@@ -291,15 +286,46 @@ class LlamaGenerator:
 
         return output_logits, output_xattn_masks, output_full_text_row_masked_out_masks
 
-    def decode_forward(self, *args, enable_trace=True, **kwargs):
+    def decode_forward(
+        self,
+        start_pos,
+        tokens,
+        cross_attention_masks,
+        full_text_row_masked_out_mask,
+        xattn_caches=None,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        enable_trace=True,
+        read_from_device=True,
+    ):
+        decode_kwargs = {
+            "position_id": start_pos,
+            "tokens": tokens,
+            "cross_attention_masks": cross_attention_masks,
+            "full_text_row_masked_out_mask": full_text_row_masked_out_mask,
+            "xattn_caches": xattn_caches,
+            "page_table": page_table,
+            "kv_cache": kv_cache,
+            "cross_page_table": cross_page_table,
+        }
         if enable_trace:
-            return self._easy_trace(*args, **kwargs)
+            tt_logits = self._easy_trace(**decode_kwargs)
         else:
-            return self._decode_forward_no_trace(*args, **kwargs)
+            tt_logits = self._decode_forward_no_trace(**decode_kwargs)
+
+        if read_from_device:
+            return self.read_decode_output(tt_logits, tokens.shape[0])
+        else:
+            return tt_logits
+
+    def read_decode_output(self, tt_logits, unpadded_batch):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
+        return logits
 
     def _decode_forward_no_trace(
         self,
-        start_pos,
+        position_id,
         tokens,
         cross_attention_masks,
         full_text_row_masked_out_mask,
@@ -310,13 +336,8 @@ class LlamaGenerator:
     ):
         """
         Performs text decode step.
-        Returns logits
+        Returns tt_logits on device
         """
-
-        if cross_page_table is not None:
-            assert (
-                xattn_caches is None and kv_cache is not None
-            ), "no separate xattn_caches should be allocated when using cross_page_table with paged kv cache"
 
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
@@ -335,7 +356,7 @@ class LlamaGenerator:
             tokens,
             cross_attention_masks,
             full_text_row_masked_out_mask,
-            position_id=start_pos,
+            position_id=position_id,
             page_table=page_table,
             cross_page_table=cross_page_table,
         )
@@ -352,8 +373,7 @@ class LlamaGenerator:
             cross_page_table=tt_cross_page_table,
         )
 
-        logits = self.model.process_output_decode(tt_logits, B, S)
-        return logits
+        return tt_logits
 
     def _capture_trace(
         self,
@@ -501,6 +521,9 @@ class LlamaGenerator:
         trace_page_table,
         trace_cross_page_table,
     ):
+        """
+        Executes the trace for the decode_forward method but does not read back outputs.
+        """
         (
             tt_h,
             tt_xattn_mask,
@@ -541,14 +564,11 @@ class LlamaGenerator:
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
-        B, S = tokens.shape
-        logits = self.model.process_output_decode(trace_logits_rm, B=B, S=S)
-
-        return logits
+        return trace_logits_rm
 
     def _easy_trace(
         self,
-        start_pos,
+        position_id,
         tokens,
         cross_attention_masks,
         full_text_row_masked_out_mask,
@@ -572,7 +592,7 @@ class LlamaGenerator:
                 tt_page_table,
                 tt_cross_page_table,
             ) = self._capture_trace(
-                start_pos,
+                position_id,
                 tokens,
                 cross_attention_masks,
                 full_text_row_masked_out_mask,
@@ -595,8 +615,8 @@ class LlamaGenerator:
                 "tt_logits_rm": tt_logits_rm,
             }
 
-        return self._decode_forward_trace(
-            start_pos,
+        trace_logits_rm = self._decode_forward_trace(
+            position_id,
             tokens,
             cross_attention_masks,
             full_text_row_masked_out_mask,
@@ -612,6 +632,8 @@ class LlamaGenerator:
             self.trace_inputs["tt_page_table"],
             self.trace_inputs["tt_cross_page_table"],
         )
+
+        return trace_logits_rm
 
     def generate(
         self,
