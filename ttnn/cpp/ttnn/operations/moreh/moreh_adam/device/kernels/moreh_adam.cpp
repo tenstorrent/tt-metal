@@ -63,7 +63,7 @@ void MAIN {
     cb_wait_front(cb_scalar_args, 5);
     cb_wait_front(cb_one, onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args);
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // grad += grad + param * weight_decay;

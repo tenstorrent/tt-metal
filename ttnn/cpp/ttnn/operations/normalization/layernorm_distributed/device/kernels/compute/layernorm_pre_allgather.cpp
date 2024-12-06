@@ -68,7 +68,7 @@ void MAIN {
          */
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_out);
         cb_wait_front(cb_x2, Wt);
         cb_reserve_back(cb_out, onetile);
         ACQ();
@@ -80,7 +80,7 @@ void MAIN {
         cb_push_back(cb_out, onetile);
         cb_pop_front(cb_x2, Wt);
 
-        reduce_revert_delta();
+        reduce_revert_delta(cb_out);
 
 #ifndef RMSNORM
 
