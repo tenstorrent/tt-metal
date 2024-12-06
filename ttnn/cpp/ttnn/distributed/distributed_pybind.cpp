@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
+#include <utility>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -31,7 +32,7 @@ void py_module(py::module& module) {
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
-            py::init([](const MeshShape& mesh_device_shape,
+            py::init([](const std::pair<size_t, size_t>& mesh_device_shape,
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
@@ -41,11 +42,8 @@ void py_module(py::module& module) {
                         MeshType mesh_type) {
                 return MeshDevice::create(
                     MeshDeviceConfig(
-                        mesh_device_shape,
-                        MeshOffset{
-                            .row = offset.first,
-                            .col = offset.second,
-                        },
+                        MeshShape(mesh_device_shape.first, mesh_device_shape.second),
+                        MeshOffset(offset.first, offset.second),
                         physical_device_ids,
                         mesh_type),
                     l1_small_size,
@@ -81,7 +79,15 @@ void py_module(py::module& module) {
         )doc")
         .def(
             "create_submesh",
-            &MeshDevice::create_submesh,
+            [](MeshDevice& self,
+               const std::pair<size_t, size_t>& submesh_shape,
+               const std::pair<size_t, size_t>& offset,
+               MeshType mesh_type) {
+                return self.create_submesh(
+                    MeshShape(submesh_shape.first, submesh_shape.second),
+                    MeshOffset(offset.first, offset.second),
+                    mesh_type);
+            },
             py::arg("submesh_shape"),
             py::arg("offset"),
             py::arg("mesh_type"),
@@ -141,7 +147,10 @@ void py_module(py::module& module) {
             R"doc(
                 Disable program cache across all devices in the mesh.
             )doc")
-        .def_property_readonly("shape", &MeshDevice::shape, R"doc(
+        .def_property_readonly(
+            "shape",
+            [](const MeshDevice& self) { return std::make_pair(self.shape().num_rows, self.shape().num_cols); },
+            R"doc(
             Get the shape of the device mesh.
 
             Returns:
@@ -194,13 +203,29 @@ void py_module(py::module& module) {
 
     module.def(
         "open_mesh_device",
-        &open_mesh_device,
+        [](const std::pair<size_t, size_t>& mesh_shape,
+           size_t l1_small_size,
+           size_t trace_region_size,
+           size_t num_command_queues,
+           const DispatchCoreConfig& dispatch_core_config,
+           const std::pair<size_t, size_t>& offset,
+           const std::vector<chip_id_t>& physical_device_ids,
+           MeshType mesh_type) {
+            return open_mesh_device(
+                MeshShape(mesh_shape.first, mesh_shape.second),
+                l1_small_size,
+                trace_region_size,
+                num_command_queues,
+                dispatch_core_config,
+                mesh_type,
+                MeshOffset(offset.first, offset.second),
+                physical_device_ids);
+        },
         py::kw_only(),
         py::arg("mesh_shape"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-
         py::arg("offset"),
         py::arg("physical_device_ids"),
         py::arg("mesh_type"),

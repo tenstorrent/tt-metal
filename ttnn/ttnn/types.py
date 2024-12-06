@@ -71,6 +71,15 @@ class MeshShape:
         return (self.y, self.x)
 
 
+@dataclasses.dataclass
+class MeshOffset:
+    y: int
+    x: int
+
+    def as_tuple(self):
+        return (self.y, self.x)
+
+
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2
