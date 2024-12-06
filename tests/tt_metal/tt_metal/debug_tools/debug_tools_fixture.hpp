@@ -46,6 +46,7 @@ protected:
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
         tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::llrt::OptionsG.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::llrt::OptionsG.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
         tt::llrt::OptionsG.set_feature_all_cores(
@@ -79,6 +80,7 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::llrt::OptionsG.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::llrt::OptionsG.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, "");
+        tt::llrt::OptionsG.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::llrt::OptionsG.set_test_mode_enabled(false);
     }
 
