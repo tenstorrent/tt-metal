@@ -84,10 +84,10 @@ jobs:
             grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
 
             # Exit if there are no modified files known to CMake
-            [[ -s common_files.txt ]] || {
+            if [ -s common_files.txt ]; then
               echo "No files to analyze"
               exit 0
-            }
+            fi
 
             # Analyze the relevant diffs of the relevant files
             git diff "$(git merge-base HEAD "origin/main")" -- $(cat common_files.txt) > filtered_changes.diff
