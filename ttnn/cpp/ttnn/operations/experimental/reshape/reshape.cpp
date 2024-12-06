@@ -35,6 +35,76 @@
 #include "ttnn/core.hpp"
 
 namespace ttnn::operations::experimental::reshape {
+
+ttnn::Tensor MultiDeviceHostStorage_visit(
+    auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
+    using T = std::decay_t<decltype(storage)>;
+    auto updated_storage = std::get<T>(input_tensor.get_storage());
+    for (int i = 0; i < updated_storage.shapes.size(); i++) {
+        updated_storage.shapes[i] = new_shape;
+    }
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+        return Tensor(updated_storage, new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), std::nullopt);
+    } else {
+        const auto tile = input_tensor.get_tensor_spec().tile();
+        return Tensor(updated_storage, new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), tile);
+    }
+}
+
+ttnn::Tensor MultiDeviceStorage_visit(auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
+    using T = std::decay_t<decltype(storage)>;
+    MultiDeviceStorage updated_storage = std::get<T>(input_tensor.get_storage());
+    std::unordered_map<int, ttnn::Shape> new_shapes;
+
+    for (auto device_id : updated_storage.ordered_device_ids) {
+        new_shapes.insert({device_id, new_shape});
+    }
+    updated_storage.shapes = new_shapes;
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+        return Tensor(updated_storage, new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), std::nullopt);
+    } else {
+        const auto tile = input_tensor.get_tensor_spec().tile();
+        return Tensor(updated_storage, new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), tile);
+    }
+}
+
+ttnn::Tensor DeviceStorage_visit(auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
+    using T = std::decay_t<decltype(storage)>;
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+        if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+            DeviceStorage device_storage = std::get<T>(input_tensor.get_storage());
+            DeviceBuffer device_buffer = device_storage.get_buffer();
+            device_buffer->set_page_size(new_shape[-1] * input_tensor.element_size());
+            device_storage.insert_buffer(device_buffer);
+            return Tensor(device_storage, new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), std::nullopt);
+        } else {
+            DeviceStorage device_storage = std::get<T>(input_tensor.get_storage());
+            DeviceBuffer device_buffer = device_storage.get_buffer();
+            ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
+
+            auto shard_spec = shard_spec_buffer.tensor_shard_spec;
+            auto shard_shape = shard_spec.shape;
+
+            uint32_t mul_div =
+                new_shape[-1] > shard_shape[1] ? (new_shape[-1] / shard_shape[1]) : (shard_shape[1] / new_shape[-1]);
+            shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
+            shard_spec.shape[1] = new_shape[-1];
+
+            shard_spec_buffer.page_shape = {1, new_shape[-1]};
+            shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
+            shard_spec_buffer.set_shard_spec(shard_spec);
+
+            device_buffer->set_shard_spec(shard_spec_buffer);
+            device_storage.insert_buffer(device_buffer);
+
+            return Tensor(device_storage, new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), std::nullopt);
+        }
+    } else {
+        const auto tile = input_tensor.get_tensor_spec().tile();
+        return Tensor(input_tensor.get_storage(), new_shape, input_tensor.get_dtype(), input_tensor.get_layout(), tile);
+    }
+}
+
 ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("ttnn::experimental::unsafe_view", input_tensor, new_shape);
@@ -57,67 +127,13 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                auto updated_storage = std::get<T>(tensor.get_storage());
-                for (int i = 0; i < updated_storage.shapes.size(); i++) {
-                    updated_storage.shapes[i] = new_shape;
-                }
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
-                } else {
-                    const auto tile = input_tensor.get_tensor_spec().tile();
-                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
-                }
+                return MultiDeviceHostStorage_visit(storage, input_tensor, new_shape);
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, ttnn::Shape> new_shapes;
-
-                for (auto device_id : updated_storage.ordered_device_ids) {
-                    new_shapes.insert({device_id, new_shape});
-                }
-                updated_storage.shapes = new_shapes;
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
-                } else {
-                    const auto tile = input_tensor.get_tensor_spec().tile();
-                    return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
-                }
+                return MultiDeviceStorage_visit(storage, input_tensor, new_shape);
             }
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                    if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
-                        device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
-                        device_storage.insert_buffer(device_buffer);
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
-                    } else {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
-                        ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
-
-                        auto shard_spec = shard_spec_buffer.tensor_shard_spec;
-                        auto shard_shape = shard_spec.shape;
-
-                        uint32_t mul_div = new_shape[-1] > shard_shape[1] ? (new_shape[-1] / shard_shape[1])
-                                                                          : (shard_shape[1] / new_shape[-1]);
-                        shard_spec.shape[0] =
-                            new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
-                        shard_spec.shape[1] = new_shape[-1];
-
-                        shard_spec_buffer.page_shape = {1, new_shape[-1]};
-                        shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
-                        shard_spec_buffer.set_shard_spec(shard_spec);
-
-                        device_buffer->set_shard_spec(shard_spec_buffer);
-                        device_storage.insert_buffer(device_buffer);
-
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), std::nullopt);
-                    }
-                } else {
-                    const auto tile = input_tensor.get_tensor_spec().tile();
-                    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
-                }
+                return DeviceStorage_visit(storage, input_tensor, new_shape);
             } else {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     return Tensor(
