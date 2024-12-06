@@ -42,6 +42,11 @@ void kernel_main() {
     constexpr uint32_t noc = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
 
+    // TODO:
+    // pass in tensors, but assume contiguous addresses (need to create weights in order), so we just need first address
+    // and num_tensors for all other params that repeat for each layer we can pass in once per MM and then num
+    // repetitions as param
+
     uint32_t rt_args_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
