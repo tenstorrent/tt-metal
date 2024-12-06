@@ -10,15 +10,15 @@ namespace ttml::modules {
 
 namespace {
 
-autograd::AutocastTensor generate_positional_embedding_tensor(uint32_t sequence_length, uint32_t embedding_dim) {
+autograd::AutocastTensor create_positional_embedding_tensor(uint32_t sequence_length, uint32_t embedding_dim) {
     std::vector<float> positional_embedding_data;
     positional_embedding_data.reserve(sequence_length * embedding_dim);
 
-    const float div_const = 10000.0f;
+    const float div_const = 10000.F;
     for (uint32_t pos = 0; pos < sequence_length; ++pos) {
         for (uint32_t emb_idx = 0; emb_idx < embedding_dim; ++emb_idx) {
-            float value = (emb_idx & 1) ? std::cos(pos / std::powf(div_const, 2 * emb_idx / embedding_dim))
-                                        : std::sin(pos / std::powf(div_const, 2 * emb_idx / embedding_dim));
+            float value = (emb_idx & 1) ? std::cos(pos / std::powf(div_const, 2.F * emb_idx / embedding_dim))
+                                        : std::sin(pos / std::powf(div_const, 2.F * emb_idx / embedding_dim));
             positional_embedding_data.push_back(value);
         }
     }
@@ -34,7 +34,7 @@ autograd::AutocastTensor generate_positional_embedding_tensor(uint32_t sequence_
 PositionalEmbedding::PositionalEmbedding(uint32_t embedding_dim, float dropout_prob, uint32_t sequence_length) :
     m_sequence_length(sequence_length) {
     m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
-    m_positional_embedding = generate_positional_embedding_tensor(sequence_length, embedding_dim);
+    m_positional_embedding = create_positional_embedding_tensor(sequence_length, embedding_dim);
 
     create_name("positional_embedding");
     register_module(m_dropout, "dropout");
