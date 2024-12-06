@@ -142,7 +142,7 @@ def test_llama_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
-        decode_input = model_args.prepare_inputs_ttnn_prefill(
+        decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
         )
         positions = torch.LongTensor(range(max_seq_len))

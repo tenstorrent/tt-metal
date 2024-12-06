@@ -187,12 +187,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
         xk = self.k_norm(xk, mode="decode")
 
-        # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
-        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
-
         k_cache, v_cache = xattn_cache
-
         # Work around fill_cache memory constraint by making these sharded
         k_fill = ttnn.interleaved_to_sharded(xk, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
         v_fill = ttnn.interleaved_to_sharded(xv, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
@@ -312,27 +307,22 @@ class TtLlamaCrossAttention(LightweightModule):
 
         xq = self.q_norm(xq, mode="prefill")
 
-        scores = ttnn.matmul(
-            xq,
-            ttnn.transpose(k_cache_user, -1, -2),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            program_config=self.model_config["VISION_XATTN_SCORE_PROGCFG"](seq_len, cache_seq_len),
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
         )
 
-        scores = ttnn.multiply(scores, self.scale)
-        # WARNING: This add is buggy if xattn_mask has to be broadcasted to n_local_heads. Workaround is to broadcast on host side
-        scores = ttnn.add(scores, xattn_mask)
-        scores = ttnn.softmax(scores, dim=-1, numeric_stable=True)
-
-        output = ttnn.matmul(
-            scores,
+        output = ttnn.transformer.scaled_dot_product_attention(
+            xq,
+            k_cache_user,
             v_cache_user,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_OUTPUT_PROGCFG"](seq_len, cache_seq_len),
+            is_causal=False,
+            attn_mask=xattn_mask,
+            scale=self.scale,
+            program_config=program_config,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         # WARNING: this broadcast is also broken, must broadcast on host
