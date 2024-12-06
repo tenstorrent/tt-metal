@@ -73,7 +73,7 @@ std::vector<ttnn::SimpleShape> AllGatherMatmul::compute_output_shapes(const std:
 
     // Matmul shape
     ttnn::SimpleShape matmul_output_shapes =
-        this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
+        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0].logical_shape();
 
     return {all_gather_output_shape, matmul_output_shapes, datacopy_output_shape};
 }
