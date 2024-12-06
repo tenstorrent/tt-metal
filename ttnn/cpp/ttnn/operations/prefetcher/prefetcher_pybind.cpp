@@ -13,6 +13,6 @@ namespace ttnn::operations::prefetcher {
 
 namespace py = pybind11;
 
-void py_module(py::module& module) { py_bind_dram_prefetcher(module); }
+void py_module(py::module& module) { dram_prefetcher::detail::bind_dram_prefetcher(module); }
 
 }  // namespace ttnn::operations::prefetcher
