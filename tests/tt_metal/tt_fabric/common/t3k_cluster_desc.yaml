@@ -1,0 +1,75 @@
+arch: {
+   0: Wormhole,
+   1: Wormhole,
+   2: Wormhole,
+   3: Wormhole,
+   4: Wormhole,
+   5: Wormhole,
+   6: Wormhole,
+   7: Wormhole,
+}
+
+chips: {
+   0: [1,0,0,0],
+   1: [1,1,0,0],
+   2: [2,1,0,0],
+   3: [2,0,0,0],
+   4: [0,0,0,0],
+   5: [0,1,0,0],
+   6: [3,1,0,0],
+   7: [3,0,0,0],
+}
+
+ethernet_connections: [
+   [{chip: 0, chan: 0}, {chip: 3, chan: 0}],
+   [{chip: 0, chan: 1}, {chip: 3, chan: 1}],
+   [{chip: 0, chan: 8}, {chip: 4, chan: 0}],
+   [{chip: 0, chan: 9}, {chip: 4, chan: 1}],
+   [{chip: 0, chan: 14}, {chip: 1, chan: 14}],
+   [{chip: 0, chan: 15}, {chip: 1, chan: 15}],
+   [{chip: 1, chan: 6}, {chip: 2, chan: 6}],
+   [{chip: 1, chan: 7}, {chip: 2, chan: 7}],
+   [{chip: 1, chan: 8}, {chip: 5, chan: 0}],
+   [{chip: 1, chan: 9}, {chip: 5, chan: 1}],
+   [{chip: 2, chan: 8}, {chip: 6, chan: 0}],
+   [{chip: 2, chan: 9}, {chip: 6, chan: 1}],
+   [{chip: 2, chan: 14}, {chip: 3, chan: 14}],
+   [{chip: 2, chan: 15}, {chip: 3, chan: 15}],
+   [{chip: 3, chan: 8}, {chip: 7, chan: 0}],
+   [{chip: 3, chan: 9}, {chip: 7, chan: 1}],
+   [{chip: 4, chan: 6}, {chip: 5, chan: 6}],
+   [{chip: 4, chan: 7}, {chip: 5, chan: 7}],
+   [{chip: 6, chan: 6}, {chip: 7, chan: 6}],
+   [{chip: 6, chan: 7}, {chip: 7, chan: 7}],
+]
+
+chips_with_mmio: [
+   0: 0,
+   1: 1,
+   2: 2,
+   3: 3,
+]
+
+# harvest_mask is the bit indicating which tensix row is harvested. So bit 0 = first tensix row; bit 1 = second tensix row etc...
+harvesting: {
+   0: {noc_translation: true, harvest_mask: 3},
+   1: {noc_translation: true, harvest_mask: 9},
+   2: {noc_translation: true, harvest_mask: 65},
+   3: {noc_translation: true, harvest_mask: 33},
+   4: {noc_translation: true, harvest_mask: 9},
+   5: {noc_translation: true, harvest_mask: 5},
+   6: {noc_translation: true, harvest_mask: 65},
+   7: {noc_translation: true, harvest_mask: 65},
+}
+
+# This value will be null if the boardtype is unknown, should never happen in practice but to be defensive it would be useful to throw an error on this case.
+boardtype: {
+   0: n300,
+   1: n300,
+   2: n300,
+   3: n300,
+   4: n300,
+   5: n300,
+   6: n300,
+   7: n300,
+}
