@@ -441,4 +441,48 @@ size_t MeshDevice::num_program_cache_entries() const {
     return total_entries;
 }
 
+MeshSubDeviceManagerId MeshDevice::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
+    for (uint32_t i = 0; i < this->num_devices(); i++) {
+        auto* device = this->devices[i];
+        auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
+        device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id]() {
+            sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
+        });
+    }
+    for (auto* device : this->devices) {
+        device->synchronize();
+    }
+    return mesh_sub_device_manager_id;
+}
+void MeshDevice::load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
+    for (uint32_t i = 0; i < this->num_devices(); i++) {
+        auto* device = this->devices[i];
+        auto sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
+        device->push_work([device, sub_device_manager_id]() {
+            device->load_sub_device_manager(sub_device_manager_id);
+        });
+    }
+}
+void MeshDevice::clear_loaded_sub_device_manager() {
+    for (auto* device : this->devices) {
+        device->push_work([device]() {
+            device->clear_loaded_sub_device_manager();
+        });
+    }
+}
+void MeshDevice::remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
+    for (uint32_t i = 0; i < this->num_devices(); i++) {
+        auto* device = this->devices[i];
+        auto sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
+        device->push_work([device, sub_device_manager_id]() {
+            device->remove_sub_device_manager(sub_device_manager_id);
+        });
+    }
+}
+
+MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
+    this->sub_device_manager_ids.resize(mesh_device.num_devices());
+}
+
 }  // namespace tt::tt_metal::distributed

@@ -306,9 +306,9 @@ inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
 inline void set_ncrisc_kernel_resume_deassert_address() {
 #ifdef NCRISC_HAS_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    WAYPOINT("INW");
+    WAYPOINT("INRW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
-    WAYPOINT("IND");
+    WAYPOINT("INRD");
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 #endif
 }
@@ -431,12 +431,15 @@ int main() {
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
 
             // re-initialize the NoCs
-            if (prev_noc_mode != noc_mode) {
-                if (noc_mode == DM_DEDICATED_NOC) {
+            if (noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-                } else {
+                }
+            } else {
+                if (prev_noc_mode != noc_mode) {
                     dynamic_noc_init();
                 }
+                dynamic_noc_local_state_init();
             }
             prev_noc_mode = noc_mode;
 
@@ -462,6 +465,13 @@ int main() {
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
             } else {
+#if defined(PROFILE_KERNEL)
+                // This was not initialized in the kernel
+                // Currently FW does not issue a barrier except when using profiler
+                if (noc_mode == DM_DEDICATED_NOC) {
+                    noc_local_state_init(noc_index);
+                }
+#endif
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
@@ -474,6 +484,19 @@ int main() {
             WAYPOINT("D");
 
             wait_ncrisc_trisc();
+
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                // barrier to make sure all writes are finished
+                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
+                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
+            }
+
+#if defined(PROFILE_KERNEL)
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                // re-init for profiler to able to run barrier in dedicated noc mode
+                noc_local_state_init(noc_index);
+            }
+#endif
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
 

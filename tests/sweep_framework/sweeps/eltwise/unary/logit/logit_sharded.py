@@ -29,7 +29,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, max_tensor_size=1 * 1024 * 1024, layouts=["TILE_LAYOUT"]),
+        "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=14 * 1024, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.bfloat16],
         "eps": [0.2],  # 0, 10e-6, 10e-4, 10e-2,
     },

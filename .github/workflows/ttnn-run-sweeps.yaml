@@ -42,9 +42,11 @@ on:
           - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
+          - eltwise.unary.frac.frac_sharded
           - eltwise.unary.ceil.ceil
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
+          - eltwise.unary.trunc.trunc_sharded
           - eltwise.unary.floor.floor
           - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
@@ -111,6 +113,7 @@ on:
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
           - eltwise.unary.selu.selu
+          - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.logit_bw
@@ -180,6 +183,7 @@ on:
           - eltwise.unary.mish.mish
           - eltwise.unary.mish.mish_sharded
           - eltwise.unary.multigammaln.multigammaln
+          - eltwise.unary.multigammaln.multigammaln_sharded
           - eltwise.unary.isfinite.isfinite
           - eltwise.unary.isfinite.isfinite_sharded
           - eltwise.unary.isinf.isinf
@@ -329,6 +333,7 @@ on:
           - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
           - data_movement.backward.concat_bw.concat_bw
+          - conv_transpose2d.short.conv_transpose2d_short_sweep
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window

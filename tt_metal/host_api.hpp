@@ -297,7 +297,7 @@ uint32_t CreateSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>
+ * Return value: std::shared_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -307,7 +307,7 @@ uint32_t CreateSemaphore(
  * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
@@ -315,7 +315,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>
+ * Return value: std::shared_ptr<GlobalSemaphore>
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -325,7 +325,7 @@ std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
