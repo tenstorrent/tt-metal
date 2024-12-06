@@ -17,6 +17,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "device/reshape_rm_op.hpp"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -36,18 +37,20 @@ ttnn::Tensor convert_tile_to_rm(
     const uint8_t queue_id,
     const PadValue &pad_value
 ) {
-    //Convert the 3D->3D reshaping to row major and back to tile
-    auto rm_tensor =
-        ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, tensor.get_dtype(), std::nullopt, (Device*)nullptr);
-    rm_tensor = ReshapeViewOperation::invoke(
-        rm_tensor,
-        shape,
-        memory_config,
-        queue_id,
-        pad_value
-    );
-    rm_tensor = ttnn::to_layout(rm_tensor, ttnn::TILE_LAYOUT, rm_tensor.get_dtype(), memory_config, (Device*)nullptr);
-    return rm_tensor;
+    // Convert the 3D->3D reshaping to row major and back to tile
+    TT_FATAL(
+        !(((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0) ||
+           (tensor.get_shape()[-1] % tile_first_dim != 0) || (tensor.get_shape()[-2] % tile_second_dim != 0)) &&
+          (tensor.get_dtype() == DataType::BFLOAT8_B)),
+        "illegal dimensions for a bfloat8 tensor");
+    auto new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
+    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, tensor.get_dtype(), std::nullopt, (Device*)nullptr);
+    new_tensor = ReshapeViewOperation::invoke(new_tensor, shape, memory_config, queue_id, pad_value);
+    new_tensor =
+        ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.get_dtype(), memory_config, (Device*)nullptr);
+    new_tensor =
+        (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.get_dtype()) : new_tensor;
+    return new_tensor;
 }
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     //This function is due to embedding issue 15558, once the issue is fixed we want to delete it
@@ -350,10 +353,10 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         return tensor;
     }
     PadValue default_pad_value;
-    if(tensor.get_dtype() == DataType::BFLOAT16 or tensor.get_dtype() == DataType::FLOAT32) {
+    if (tensor.get_dtype() == DataType::BFLOAT8_B or tensor.get_dtype() == DataType::BFLOAT16 or
+        tensor.get_dtype() == DataType::FLOAT32) {
         default_pad_value = 0.0f;
-    }
-    else {
+    } else {
         default_pad_value = (uint32_t)0;
     }
 
