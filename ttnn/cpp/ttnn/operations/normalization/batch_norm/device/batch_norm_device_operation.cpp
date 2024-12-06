@@ -1,0 +1,155 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "batch_norm_device_operation.hpp"
+
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::normalization {
+void BatchNormOperation::validate_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+
+    auto& output = tensor_args.output;
+    auto& mean = tensor_args.mean;
+    auto& rstd = tensor_args.rstd;
+
+    auto& gamma = tensor_args.gamma;
+    auto& beta = tensor_args.beta;
+
+    check_tensor(input, "batch_norm", "input");
+
+    check_tensor(output, "batch_norm", "output");
+    check_tensor(mean, "batch_norm", "mean");
+    check_tensor(rstd, "batch_norm", "rstd");
+
+    check_tensor(gamma, "batch_norm", "gamma");
+    check_tensor(beta, "batch_norm", "beta");
+
+    // input (N, C, H, W)
+    auto C = input.get_shape().value[1];
+    // output (N, C, H, W)
+    if (output.has_value()) {
+        auto check_C = output.value().get_shape().value[1];
+        TT_FATAL(C == check_C, "output_shape[1] must be the same as input's channel size.");
+    }
+    // gamma (1, C, 1, 1)
+    if (gamma.has_value()) {
+        auto check_C = gamma.value().get_shape().value.without_padding()[1];
+        TT_FATAL(C == check_C, "gamma_shape[1] must be the same as input's channel size.");
+    }
+    // beta (1, C, 1, 1)
+    if (beta.has_value()) {
+        auto check_C = beta.value().get_shape().value.without_padding()[1];
+        TT_FATAL(C == check_C, "beta_shape[1] must be the same as input's channel size.");
+    }
+
+    // mean (1, C, 1, 1)
+    if (mean.has_value()) {
+        TT_FATAL(
+            mean.value().get_shape().value.without_padding()[1] == C,
+            "mean_shape[1] must be the same as input's channel size.");
+    }
+    // rstd (1, C, 1, 1)
+    if (rstd.has_value()) {
+        TT_FATAL(
+            rstd.value().get_shape().value.without_padding()[1] == C,
+            "rstd_shape[1] must be the same as input's channel size.");
+    }
+}
+
+BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return BatchNormFactory();
+}
+
+void BatchNormOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_tensors(operation_attributes, tensor_args);
+};
+
+void BatchNormOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_tensors(operation_attributes, tensor_args);
+};
+
+BatchNormOperation::shape_return_value_t BatchNormOperation::compute_output_shapes(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
+    // mean, rstd (1, C, 1, 1)
+    const auto output_shape = tensor_args.input.get_logical_shape();
+    const auto C = output_shape[1];
+    SmallVector<uint32_t> mean_rstd_origin_shape{1, C, 1, 1};
+
+    SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
+    return {output_shape, mean_rstd_shape, mean_rstd_shape};
+}
+
+BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
+    auto dtype = tensor_args.input.get_dtype();
+    Layout layout{Layout::TILE};
+    auto device = tensor_args.input.device();
+
+    std::vector<std::optional<Tensor>> result;
+    result.reserve(3);
+
+    // output
+    if (tensor_args.output.has_value()) {
+        result.push_back(tensor_args.output.value());
+    } else {
+        result.push_back(
+            create_device_tensor(output_shapes[0].value(), dtype, layout, device, operation_attributes.memory_config));
+    }
+
+    // mean
+    if (tensor_args.mean.has_value()) {
+        result.push_back(tensor_args.mean.value());
+    } else if (operation_attributes.are_required_outputs[1]) {
+        result.push_back(create_device_tensor(
+            output_shapes[1].value(), dtype, layout, device, operation_attributes.mean_memory_config));
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    // rstd
+    if (tensor_args.rstd.has_value()) {
+        result.push_back(tensor_args.rstd.value());
+    } else if (operation_attributes.are_required_outputs[2]) {
+        result.push_back(create_device_tensor(
+            output_shapes[2].value(), dtype, layout, device, operation_attributes.rstd_memory_config));
+    } else {
+        result.push_back(std::nullopt);
+    }
+    return std::move(result);
+}
+
+std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tensor_args_t> BatchNormOperation::invoke(
+    const Tensor& input,
+    const Tensor& batch_mean,
+    const Tensor& batch_var,
+    const float eps,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& mean,
+    const std::optional<const Tensor>& rstd,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& mean_memory_config,
+    const std::optional<MemoryConfig>& rstd_memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    operation_attributes_t operation_attributes{
+        eps,
+        are_required_outputs,
+        memory_config.value_or(input.memory_config()),
+        mean_memory_config.value_or(input.memory_config()),
+        rstd_memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    tensor_args_t tensor_args{input, batch_mean, batch_var, gamma, beta, output, mean, rstd};
+    return {operation_attributes, tensor_args};
+}
+}  // namespace ttnn::operations::normalization
