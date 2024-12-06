@@ -203,8 +203,8 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
-@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
+@pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
+@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
@@ -221,3 +221,19 @@ def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
     tt_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+def test_permute_nd(device):
+    torch_tensor = torch.rand((1, 3, 16, 16, 16, 16), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, (0, 2, 4, 3, 5, 1))
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, (0, 2, 4, 3, 5, 1))
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+def test_permute_squeeze(device):
+    tensor = ttnn.ones((1, 1, 3))
+    tensor = ttnn.to_device(tensor, device)
+    out = ttnn.permute(tensor, (0, 1, 2))
+    assert out.shape == (1, 1, 3)
