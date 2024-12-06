@@ -2106,7 +2106,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, output, 0.999)
-    # assert_with_pcc(optional_output_tensor, output, 0.999)
+    assert_with_pcc(optional_output_tensor, output, 0.999)
     assert (
         optional_output_tensor is pre_execution_optional_output_tensor
     ), "optional_output_tensor & pre_execution_optional_output_tensor are not same object anymore!"
