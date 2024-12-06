@@ -52,7 +52,7 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
         tt::llrt::OptionsG.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
         // Send output to a file so the test can check after program is run.
-        tt::llrt::OptionsG.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
+        // tt::llrt::OptionsG.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
         tt::llrt::OptionsG.set_test_mode_enabled(true);
         watcher_previous_enabled = tt::llrt::OptionsG.get_watcher_enabled();
         tt::llrt::OptionsG.set_watcher_enabled(false);
@@ -68,7 +68,7 @@ protected:
         DebugToolsFixture::TearDown();
 
         // Remove the DPrint output file after the test is finished.
-        std::remove(dprint_file_name.c_str());
+        // std::remove(dprint_file_name.c_str());
 
         // Reset DPrint settings
         tt::llrt::OptionsG.set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -87,7 +87,7 @@ protected:
         Device* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
-        tt::DPrintServerClearLogFile();
+        // tt::DPrintServerClearLogFile();
         tt::DPrintServerClearSignals();
     }
 
