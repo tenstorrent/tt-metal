@@ -104,7 +104,6 @@ void kernel_main() {
                 noc_async_read(pad_val_noc_addr, l1_write_addr, W_padding_back_bytes);
                 l1_write_addr += W_padding_back_bytes;
             }
-            l1_write_addr = old_l1_write_addr + stick_size_bytes;
             i_stick++;
         } else {
             noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_bytes);

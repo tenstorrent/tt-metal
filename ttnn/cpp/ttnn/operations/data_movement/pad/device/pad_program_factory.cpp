@@ -1615,4 +1615,142 @@ operation::ProgramWithCallbacks pad_rm_sharded(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+operation::ProgramWithCallbacks pad_rm_sharded_stickwise(const Tensor &input_tensor,
+                                                         Tensor &output,
+                                                         const tt::tt_metal::LegacyShape &output_tensor_shape,
+                                                         const ttnn::SimpleShape &input_tensor_start,
+                                                         const float pad_value)
+    Program program{};
+
+    auto output_shape = output_tensor_shape;
+    uint32_t W = input_tensor.shape()[3], H = input_tensor.shape()[2], C = input_tensor.shape()[1], N = input_tensor.shape()[0];
+    uint32_t num_unpadded_sticks = H * C * N;
+    uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
+    uint32_t num_padded_sticks = H_padded * C_padded * N_padded;
+    // stick sizes
+    auto unpadded_stick_bytes = W * input_tensor.element_size();
+    auto padded_stick_bytes = W_padded * input_tensor.element_size();
+    TT_FATAL(unpadded_stick_bytes != padded_stick_bytes,
+             "ttnn.pad: pad_rm_sharded_stickwise should only be used with non-zero width padding.");
+
+    uint32_t row_major_min_bytes = 16;
+
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+
+    Device *device = input_tensor.device();
+
+    // input shard spec
+    auto input_shard_spec = input_tensor.shard_spec().value();
+    uint32_t input_shard_height = input_shard_spec.shape[0];
+    uint32_t input_shard_width = input_shard_spec.shape[1];
+    bool row_major = input_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+
+    auto& input_shard_grid = input_shard_spec.grid;
+    uint32_t num_cores_input = input_shard_spec.num_cores();
+    auto input_bbox = input_shard_grid.bounding_box();
+    CoreCoord input_grid_size = {input_bbox.end_coord.x + 1, input_bbox.end_coord.y+1};
+    uint32_t num_cores_x_input = input_grid_size.x;
+    uint32_t num_cores_y_input = input_grid_size.y;
+
+    // output shard spec
+    auto shard_spec_padded = output.shard_spec().value();
+    uint32_t shard_height_padded = shard_spec_padded.shape[0];
+    uint32_t shard_width_padded = shard_spec_padded.shape[1];
+
+    auto& all_cores_padded = shard_spec_padded.grid;
+    uint32_t num_cores_padded = shard_spec_padded.num_cores();
+    auto bbox_padded = shard_spec_padded.grid.bounding_box();
+    CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y+1};
+    uint32_t num_cores_x_padded = grid_size_padded.x;
+    uint32_t num_cores_y_padded = grid_size_padded.y;
+
+    tt::log_debug("num_unpadded_sticks: {}", num_unpadded_sticks);
+    tt::log_debug("shard_height_unpadded: {}", shard_height_unpadded);
+    tt::log_debug("all_cores_unpadded: {}", all_cores_unpadded);
+    tt::log_debug("num_cores_unpadded: {}", num_cores_unpadded);
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    uint32_t input_shard_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig input_shard_cb_config =
+        tt::tt_metal::CircularBufferConfig(shard_height_unpadded * stick_size_unpadded, {{input_shard_cb_index, input_cb_data_format}})
+            .set_page_size(input_shard_cb_index, stick_size_unpadded)
+            .set_globally_allocated_address(*input_tensor.buffer());
+    auto input_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, input_shard_cb_config);
+
+    uint32_t output_shard_cb_index = tt::CBIndex::c_16;
+    tt::tt_metal::CircularBufferConfig output_shard_cb_config = tt::tt_metal::CircularBufferConfig(shard_height_padded * stick_size_padded, {{output_shard_cb_index, dst_cb_data_format}})
+        .set_page_size(output_shard_cb_index, stick_size_padded)
+        .set_globally_allocated_address(*output.buffer());
+    auto output_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, output_shard_cb_config);
+
+    // construct const buffer with the pad_value
+    uint32_t pad_val_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_pad_val_config =
+        tt::tt_metal::CircularBufferConfig(stick_size_padded, {{pad_val_cb_index, cb_data_format}})
+        .set_page_size(pad_val_cb_index, stick_size_padded);
+    auto pad_val_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_pad_val_config);
+
+    std::vector<uint32_t> reader_ct_args = {(std::uint32_t) unpadded_stick_bytes,
+                                            (std::uint32_t) padded_stick_bytes,
+                                            (std::uint32_t) shard_height_unpadded,
+                                            (std::uint32_t) shard_height_padded,
+                                            (std::uint32_t) W_padding_front_bytes,
+                                            (std::uint32_t) W_padding_back_bytes};
+
+    uint32_t padding_value_as_u32;
+    if (input_tensor.dtype == tt::tt_metal::DataType::FLOAT16) {
+        auto bfloat_pad_value = bfloat16(pad_value);
+        padding_value_as_u32 = reinterpret_cast<uint32_t>(bfloat_pad_value);
+    } else if (input_tensor.dtype == tt::tt_metal::DataType::FLOAT32) {
+        padding_value_as_u32 = reinterpret_cast<uint32_t>(pad_value);
+    } else {
+        // FIXME: what to do for other dtypes?
+        // for int types we need to convert the padding value to the nearest uint{sz}_t first -> probably should be a pad api change
+        // for bf8 I have no idea.
+        TT_FATAL(false, "ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
+        padding_value_as_u32 = reinterpret_cast<uint32_t>(pad_value);
+    }
+
+    std::vector<uint32_t> writer_ct_args = {
+        (std::uint32_t) padded_stick_bytes,
+        (std::uint32_t) shard_height_padded,
+        (std::uint32_t) padding_value_as_u32,
+        (std::uint32_t) output.element_size()
+    };
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded_stickwise.cpp",
+        all_cores_padded,
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded_stickwise.cpp",
+        all_cores_padded,
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+
+    auto override_runtime_args_callback = [
+            input_shard_cb,
+            output_shard_cb
+        ]
+    (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
+    ) {
+        auto input_buffer = input_tensors.at(0).buffer();
+        auto output_buffer = output_tensors.at(0).buffer();
+
+        UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
+        UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
+    };
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+} // namespace ttnn::operations::reduction::detail

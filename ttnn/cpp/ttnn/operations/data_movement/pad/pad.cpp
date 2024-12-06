@@ -92,6 +92,20 @@ static ttnn::Tensor pad_impl(
         TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
     }
 
+
+    // FIXME: may not be necessary. let's see what we get back.
+    // auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+    // if (input_tensor.is_sharded() and !output_memory_config.has_value()) {
+    //     auto width_padding = padding.back();
+    //     if (width_padding.first != 0 or width_padding.second != 0) {
+    //         // for sharded tensors with padding on the width dimension, we need
+    //         // to update the shard spec for the output tensor.
+    //         auto [shard_height, shard_width] = output_memory_config.shard_spec->shape;
+    //         shard_width += width_padding.first + width_padding.second;
+    //         output_memory_config.shard_spec->shape = {shard_height, shard_width};
+    //     }
+    // }
+
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding.size() - 2];
         const int target_width = output_padded_shape[padding.size() - 1];
