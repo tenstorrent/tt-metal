@@ -29,6 +29,9 @@ class RoutingTableGenerator {
     }
     const ChipSpec& get_chip_spec() const { return this->mesh_graph_->get_chip_spec(); }
 
+    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return this->mesh_graph_->get_mesh_ns_size(mesh_id); }
+    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return this->mesh_graph_->get_mesh_ew_size(mesh_id); }
+
     RoutingTable get_intra_mesh_table() const { return this->intra_mesh_table_; }
     RoutingTable get_inter_mesh_table() const { return this->inter_mesh_table_; }
 

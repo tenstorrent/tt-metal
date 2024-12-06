@@ -74,7 +74,10 @@ class MeshGraph {
 
     const ChipSpec& get_chip_spec() const { return chip_spec_; }
 
-   private:
+    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
+    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
+
+private:
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_mesh, FabricType fabric_type) const;
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
@@ -87,6 +90,7 @@ class MeshGraph {
         RoutingDirection port_direction);
 
     ChipSpec chip_spec_;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> mesh_shapes_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
 };

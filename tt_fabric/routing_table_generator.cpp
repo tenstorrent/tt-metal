@@ -38,7 +38,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
     for (mesh_id_t mesh_id = 0; mesh_id < this->intra_mesh_table_.size(); mesh_id++) {
         for (chip_id_t src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id].size(); src_chip_id++) {
             for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id].size(); dst_chip_id++) {
-                int row_size = 8;  // TODO: get this from mesh descriptor
+                int row_size = this->mesh_graph_->get_mesh_ew_size(mesh_id);
                 uint32_t src_x = src_chip_id / row_size;
                 uint32_t src_y = src_chip_id % row_size;
                 uint32_t dst_x = dst_chip_id / row_size;
@@ -86,7 +86,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
 std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTableGenerator::get_paths_to_all_meshes(
     mesh_id_t src, const InterMeshConnectivity& inter_mesh_connectivity) {
     // TODO: add more tests for this
-    uint32_t num_meshes = inter_mesh_connectivity.size();
+    std::uint32_t num_meshes = inter_mesh_connectivity.size();
     bool visited[num_meshes];
     std::fill_n(visited, num_meshes, false);
 
@@ -95,8 +95,8 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTa
     paths.resize(num_meshes);
     paths[src] = {{{}}};
 
-    uint32_t dist[num_meshes];
-    std::fill_n(dist, num_meshes, std::numeric_limits<uint32_t>::max());
+    std::uint32_t dist[num_meshes];
+    std::fill_n(dist, num_meshes, std::numeric_limits<std::uint32_t>::max());
     dist[src] = 0;
 
     std::queue<mesh_id_t> q;
