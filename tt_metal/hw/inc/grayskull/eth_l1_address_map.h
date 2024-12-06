@@ -27,8 +27,6 @@ struct address_map {
 
     static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 16;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = 0;
-    static constexpr std::uint32_t ISSUE_CQ_CB_BASE = 0;
-    static constexpr std::uint32_t COMPLETION_CQ_CB_BASE = 0;
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;
     static constexpr std::uint32_t FW_VERSION_ADDR = 0;
 
@@ -36,7 +34,6 @@ struct address_map {
     static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1;
 
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = 0;
-    static constexpr std::int32_t ERISC_L1_TUNNEL_BUFFER_SIZE = 0;
 
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
