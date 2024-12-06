@@ -125,9 +125,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    TT_FATAL(
-        num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
-        "Error");
+    uint32_t num_cores_in_grid = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    TT_FATAL(num_cores_available <= num_cores_in_grid, "Expected number of cores available to be less than or equal to the number of cores in the grid, got {} and {}", num_cores_available, num_cores_in_grid);
+    TT_FATAL(num_cores_available >= B, "Expect number of cores available to be greater or equal to batch size, got {} and {}", num_cores_available, B);
 
     // balance the number of cores to use based on batch
     uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
