@@ -52,6 +52,9 @@ public:
     const string& get_out_root_path() const { return out_root_; }
     const string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
+    // Accessors for tt_builder
+    const string& get_gpp_tool() const { return gpp_; }
+
 private:
     tt::ARCH arch_;
     string arch_name_;
@@ -122,6 +125,15 @@ public:
     const string get_target_out_path(const string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
+
+    // Accessors for tt_builder
+    inline const string& get_cflags() { return cflags_; }
+    inline const string& get_defines() { return defines_; }
+    inline const string& get_includes() { return includes_; }
+    inline const string& get_lflags() { return lflags_; }
+    inline const auto& get_srcs() { return srcs_; }
+    inline const auto& get_objs() { return objs_; }
+    inline const string& get_link_objs() { return link_objs_; }
 };
 
 // Set of build states
