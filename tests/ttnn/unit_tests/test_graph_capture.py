@@ -23,7 +23,9 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     output_tensor = input_tensor + scalar
     output_tensor = ttnn.to_torch(output_tensor, torch_rank=1)
     captured_graph = ttnn.graph.end_graph_capture()
+    calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
+    assert "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
     assert captured_graph[1]["params"]["name"] == "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor"

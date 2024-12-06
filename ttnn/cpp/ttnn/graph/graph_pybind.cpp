@@ -5,6 +5,7 @@
 #include "graph_pybind.hpp"
 
 #include "graph_processor.hpp"
+#include "graph_trace_utils.hpp"
 
 #include "pybind11/stl.h"
 
@@ -44,6 +45,17 @@ void py_graph_module(py::module& m) {
             return json_module.attr("loads")(json_object_str);
         },
         doc_end);
+
+    m.def(
+        "extract_calltrace",
+        [](const py::object& py_trace) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_calltrace(trace);
+        },
+        "Extracts calltrace from the graph trace",
+        py::arg("trace"));
 }
 
 }  // namespace ttnn::graph
