@@ -65,15 +65,21 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
     bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;
 
-    std::vector<uint32_t> output_end;
-    for (auto index = 0; index < input_tensor.get_shape().rank(); ++index) {
-        output_end.push_back(input_tensor.get_shape()[index] - 1);
+    std::vector<uint32_t> output_end_vector;
+    tt::tt_metal::LegacyShape output_end = tt::tt_metal::LegacyShape{};
+    if (input_tensor.get_shape().rank() > 4) {
+        for (auto index = 0; index < input_tensor.get_shape().rank(); ++index) {
+            output_end_vector.push_back(input_tensor.get_shape()[index] - 1);
+        }
+        output_end = squeeze_output_shape(LegacyShape(output_end_vector));
+    } else {
+        output_end = output_tensor_end;
     }
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
             UntilizeWithUnpadding{
-                squeeze_output_shape(LegacyShape(output_end)),
+                output_end,
                 memory_config.value_or(input_tensor.memory_config()),
                 use_multicore,
                 use_pack_untilize,
