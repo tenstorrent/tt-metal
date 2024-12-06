@@ -856,15 +856,9 @@ DeviceAddr AllocateBuffer(Buffer* buffer) {
             *buffer->sub_device_manager_id(),
             buffer->device()->get_active_sub_device_manager_id());
     }
-    auto allocator = buffer->allocator();
-    DeviceAddr allocated_addr;
 
-    if (is_sharded(buffer->buffer_layout())) {
-        allocated_addr = allocator::allocate_buffer(
-            *allocator, buffer->shard_spec().size() * buffer->num_cores().value() * buffer->page_size(), buffer);
-    } else {
-        allocated_addr = allocator::allocate_buffer(*allocator, buffer->size(), buffer);
-    }
+    DeviceAddr allocated_addr = allocator::allocate_buffer(*buffer->allocator(), buffer);
+
     // Assertion here because buffer class returns a u32 when address is queried
     // Requires updating all use cases of buffer address to accept a u64 to remove
     TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());

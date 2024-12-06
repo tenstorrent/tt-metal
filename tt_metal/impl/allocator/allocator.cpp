@@ -437,9 +437,10 @@ void reset_allocator_size(Allocator& allocator, const BufferType& buffer_type) {
     }
 }
 
-DeviceAddr allocate_buffer(Allocator& allocator, DeviceAddr size, Buffer* buffer) {
+DeviceAddr allocate_buffer(Allocator& allocator, Buffer* buffer) {
     DeviceAddr address = 0;
-    auto page_size = buffer->page_size();
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
     auto num_shards = buffer->num_cores();
