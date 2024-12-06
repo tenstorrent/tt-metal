@@ -76,7 +76,6 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
         self,
         tokens: torch.Tensor,
         images: List[PIL.Image.Image],
-        start_pos,
         page_table: torch.Tensor,
         kv_cache,
         prompt_lens,
