@@ -11,7 +11,7 @@ void MAIN {
 #else
 void kernel_main() {
 #endif
-    DPRINT << "Printing on all RISCs" << ENDL();
+    DPRINT << "Printing on a RISC." << ENDL();
     DPRINT_UNPACK(DPRINT << "Printing on TR0." << ENDL(););
     DPRINT_MATH(DPRINT << "Printing on TR1." << ENDL(););
     DPRINT_PACK(DPRINT << "Printing on TR2." << ENDL(););
