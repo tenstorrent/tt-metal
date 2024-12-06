@@ -5,15 +5,12 @@
 import math
 import ttnn
 import torch
-from tqdm import tqdm
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 
 from models.utility_functions import (
     nearest_32,
@@ -44,7 +41,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         weight_cache_path,
         dtype,
         configuration,
-        use_paged_kv_cache=False,
     ):
         super().__init__()
         self.vocab_size = configuration.vocab_size
@@ -120,31 +116,12 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 
-        self.rope_setup = TtLlamaRotarySetup(
-            mesh_device,
-            configuration.max_batch_size,
-            configuration.head_dim,
-            configuration.max_seq_len,
-            configuration.rope_theta,
-            configuration.use_scaled_rope,
-        )
-        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
-
         # transformer blocks
         self.layers = []
         self.cross_attention_layers = []
-        for i in tqdm(range(configuration.n_layers), desc="Loading text transformer layers"):
+        for i in range(configuration.n_layers):
             layer_id = i
-            block = TtTransformerBlock(
-                configuration,
-                mesh_device,
-                dtype,
-                state_dict,
-                layer_id,
-                weight_cache_path,
-                transformation_mats=self.trans_mats_dict,
-                use_paged_kv_cache=use_paged_kv_cache,
-            )
+            block = TtTransformerBlock(configuration, mesh_device, dtype, state_dict, layer_id, weight_cache_path)
             self.layers.append(block)
             if layer_id in self.fusion_schedule:
                 xa_layer_id = self.fusion_schedule.index(layer_id)
@@ -247,7 +224,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             [
                 ttnn.from_torch(
                     torch.zeros(
-                        max_batch_size, self.configuration.n_kv_heads, vision_seq_len, self.configuration.head_dim
+                        max_batch_size, self.configuration.n_heads, vision_seq_len, self.configuration.head_dim
                     ),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
@@ -270,14 +247,14 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         full_text_row_masked_out_mask_11SD: ttnn.Tensor,
         xattn_caches,
         current_pos,
-        rot_mats=None,
+        rot_mat=None,
+        transformation_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
-        kv_cache=None,
+        # get_last_token=-1,
         text_only_inference=False,
         vision_tokens=None,
-        get_last_token=-1,
     ):
         for idx, (
             layer,
@@ -298,15 +275,12 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             h = layer(
                 h,
                 current_pos,
-                rot_mats=rot_mats,
+                rot_mat=rot_mat,
+                transformation_mats=transformation_mats,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
-                kv_cache=kv_cache,
             )
 
-        if get_last_token != -1:
-            h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
         h = self.norm(h, mode=mode)
 
         # TODO: Switch to using dram-sharded LM head and remove this

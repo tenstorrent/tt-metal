@@ -2,8 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tqdm import tqdm
+from typing import List, Optional
+import torch
 
+import ttnn
 from models.utility_functions import (
     nearest_32,
 )
@@ -39,7 +41,7 @@ class TtLlamaImageTransformer(LightweightModule):
                 configuration=configuration,
                 gated=gated,
             )
-            for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
+            for i in range(layers)
         ]
 
     def forward(self, x, return_intermediate=None, mask=None):
