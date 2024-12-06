@@ -21,7 +21,9 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -597,6 +599,107 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         max.value(),
         temp,
         output_memory_config);
+}
+
+inline Tensor mean_NHW(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    ttnn::SmallVector<int> dims = {2, 3};
+    Tensor mean_hw = ttnn::mean(input_tensor, dims, true);
+    ttnn::SmallVector<int64_t> permute_dims = {1, 2, 3, 0};
+    Tensor permute_mean_hw = ttnn::permute(mean_hw, permute_dims, output_mem_config);
+    dims = {3};
+    Tensor mean = ttnn::mean(permute_mean_hw, dims, true);
+    permute_dims = {3, 0, 1, 2};
+    mean = ttnn::permute(mean, permute_dims, output_mem_config);
+    mean_hw.deallocate();
+    permute_mean_hw.deallocate();
+    return mean;
+}
+
+// Updated running value = momentum * running_stat + (1 - momentum) * batch_stat
+inline Tensor updated_running_stats(
+    const Tensor& batch_stats,
+    const Tensor& running_stats,
+    const float momentum,
+    const MemoryConfig& output_mem_config) {
+    return ttnn::add(
+        ttnn::multiply(batch_stats, (1 - momentum), std::nullopt, output_mem_config),
+        ttnn::multiply(running_stats, momentum, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+}
+
+Tensor ExecuteUnaryCompositeBatchNorm::invoke(
+    const Tensor& input_tensor,  // [2, 3, 32, 32]
+    const float eps,
+    const float momentum,
+    std::optional<Tensor> running_mean,
+    std::optional<Tensor> running_var,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& bias,
+    const bool training,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(input_tensor.memory_config());
+    // mean, var along NHW
+    Tensor mean = mean_NHW(input_tensor, output_memory_config);
+    Tensor mean_sq = mean_NHW(ttnn::square(input_tensor, output_memory_config), output_memory_config);
+    Tensor var = ttnn::subtract(mean_sq, ttnn::square(mean, output_memory_config), std::nullopt, output_mem_config);
+    Tensor normalized = full_like(input_tensor, 0.0f);
+    if (training) {
+        if (!running_mean.has_value()) {
+            running_mean = full_like(mean, 0.0f);
+        }
+        running_mean = updated_running_stats(mean, running_mean.value(), momentum, output_memory_config);
+        running_mean = ttnn::multiply(
+            running_mean.value(),
+            ttnn::div(mean, mean),
+            std::nullopt,
+            output_mem_config);  // change shape as in PyTorch --> [1,C,1,1]
+        if (!running_var.has_value()) {
+            running_var = full_like(var, 1.0f);
+        }
+        running_var = updated_running_stats(var, running_var.value(), momentum, output_memory_config);
+        running_var = ttnn::multiply(
+            running_var.value(),
+            ttnn::div(var, var),
+            std::nullopt,
+            output_mem_config);  // change shape as in PyTorch --> [1,C,1,1]
+        Tensor numerator = ttnn::subtract(input_tensor, mean, std::nullopt, output_mem_config);  // 2,3,32,32
+        Tensor denom = ttnn::sqrt(ttnn::add(var, eps, std::nullopt, output_mem_config), output_mem_config);  // 1,3,1,1
+        Shape repeats(std::array<uint32_t, 4>{numerator.get_logical_shape()[0], 1, 1, 1});
+        Tensor repeat_N = ttnn::repeat(
+            ttnn::multiply(denom, ttnn::div(var, var), std::nullopt, output_mem_config),
+            repeats);  // [2, 3, 1[32], 1[32]]
+        normalized = ttnn::div(
+            numerator,
+            ttnn::repeat_interleave(
+                ttnn::repeat_interleave(repeat_N, input_tensor.get_logical_shape()[3], 3),
+                input_tensor.get_logical_shape()[2],
+                2));  // [2, 3, 1[32], 1[32]] --> [2, 3, 32, 32]
+    } else {
+        TT_FATAL(
+            (running_mean.has_value() && running_var.has_value()),
+            "running_mean and running_var must be defined in evaluation mode");
+        Tensor numerator = ttnn::subtract(input_tensor, running_mean.value(), std::nullopt, output_mem_config);
+        Tensor denom =
+            ttnn::sqrt(ttnn::add(running_var.value(), eps, std::nullopt, output_mem_config), output_mem_config);
+        Shape repeats(std::array<uint32_t, 4>{numerator.get_logical_shape()[0], 1, 1, 1});
+        Tensor repeat_N = ttnn::repeat(
+            ttnn::multiply(denom, ttnn::div(running_var.value(), running_var.value()), std::nullopt, output_mem_config),
+            repeats);
+        normalized = ttnn::div(
+            numerator,
+            ttnn::repeat_interleave(
+                ttnn::repeat_interleave(repeat_N, input_tensor.get_logical_shape()[3], 3),
+                input_tensor.get_logical_shape()[2],
+                2));
+    }
+    if (weight.has_value()) {
+        normalized = ttnn::multiply(normalized, weight.value(), std::nullopt, output_mem_config);
+    }
+    if (bias.has_value()) {
+        normalized = ttnn::add(normalized, bias.value(), std::nullopt, output_mem_config);
+    }
+    return normalized;
 }
 
 // hardtanh
