@@ -53,14 +53,16 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
     this->reset_semaphore_value();
 }
 
-std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
+std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     return std::make_unique<GlobalSemaphore>(device, cores, initial_value, buffer_type);
 }
-std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
+std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return std::make_unique<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type);
 }
+
+Device* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 

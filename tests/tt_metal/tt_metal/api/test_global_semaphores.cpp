@@ -53,7 +53,7 @@ TEST_F(DispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     }
     for (auto device : devices_) {
         {
-            std::vector<std::unique_ptr<tt::tt_metal::GlobalSemaphore>> global_semaphores;
+            std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> global_semaphores;
             global_semaphores.reserve(cores.size());
             std::vector<DeviceAddr> addresses;
             addresses.reserve(cores.size());

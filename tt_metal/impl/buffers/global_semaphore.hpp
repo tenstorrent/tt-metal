@@ -32,11 +32,13 @@ public:
     GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
     GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
 
-    static std::unique_ptr<GlobalSemaphore> create(
+    static std::shared_ptr<GlobalSemaphore> create(
         Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
-    static std::unique_ptr<GlobalSemaphore> create(
+    static std::shared_ptr<GlobalSemaphore> create(
         Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+
+    Device* device() const;
 
     DeviceAddr address() const;
 
