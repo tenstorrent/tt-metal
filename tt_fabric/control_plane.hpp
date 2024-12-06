@@ -15,10 +15,10 @@ class ControlPlane {
    public:
     ControlPlane(const std::string& mesh_graph_desc_yaml_file);
     ~ControlPlane() = default;
-    void initialize_from_cluster_desc_yaml_file(const std::string& cluster_desc_yaml_file);
+    void initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file);
 
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
-    void convert_fabric_routing_table_to_chip_routing_table(std::uint32_t num_ports_per_chip);
+    void convert_fabric_routing_table_to_chip_routing_table();
 
     void write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const;
     void configure_routing_tables() const;
@@ -40,7 +40,10 @@ class ControlPlane {
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        uint32_t mesh_ns_size, uint32_t mesh_ew_size, uint32_t num_ports_per_side, uint32_t nw_chip_physical_chip_id);
+        std::uint32_t mesh_ns_size,
+        std::uint32_t mesh_ew_size,
+        std::uint32_t num_ports_per_side,
+        std::uint32_t nw_chip_physical_chip_id);
 
     chan_id_t get_eth_chan_id(chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const {
         std::uint32_t num_eth_ports_per_direction =
