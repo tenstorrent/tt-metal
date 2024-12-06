@@ -117,7 +117,7 @@ run_t3000_llama3_accuracy_tests() {
 
   # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k attention-perf ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k perf ; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 
