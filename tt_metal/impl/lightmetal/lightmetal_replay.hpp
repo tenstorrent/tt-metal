@@ -29,6 +29,7 @@ namespace tt::target {
     struct EnqueueReadBufferCommand;
     struct FinishCommand;
     struct CreateProgramCommand;
+    struct EnqueueProgramCommand;
 
     // Forward decl for binary_generated.h
     namespace lightmetal {
@@ -70,6 +71,7 @@ public:
     void execute(tt::target::EnqueueReadBufferCommand const *command);
     void execute(tt::target::FinishCommand const *command);
     void execute(tt::target::CreateProgramCommand const *command);
+    void execute(tt::target::EnqueueProgramCommand const *command);
 
     // Object maps public accessors
     void addBufferToMap(uint32_t global_id, std::shared_ptr<::tt::tt_metal::Buffer> buffer);

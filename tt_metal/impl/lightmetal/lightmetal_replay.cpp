@@ -221,6 +221,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_CreateProgramCommand());
     break;
   }
+  case ::tt::target::CommandType::EnqueueProgramCommand: {
+    execute(command->cmd_as_EnqueueProgramCommand());
+    break;
+  }
   default:
     throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
     break;
@@ -331,6 +335,19 @@ void LightMetalReplay::execute(tt::target::CreateProgramCommand const *cmd) {
     log_info(tt::LogMetalTrace, "LightMetalReplay CreateProgramCommand(). global_id: {} ", cmd->global_id());
     auto program = CreateProgram();
     addProgramToMap(cmd->global_id(), std::make_shared<Program>(std::move(program)));
+}
+
+void LightMetalReplay::execute(tt::target::EnqueueProgramCommand const *cmd) {
+    auto program = getProgramFromMap(cmd->program_global_id());
+    if (!program) {
+        throw std::runtime_error("Program with global_id: " + std::to_string(cmd->program_global_id()) + " not previously created");
+    }
+
+    log_info(tt::LogMetalTrace, "LightMetalReplay EnqueueProgramCommand(). program_global_id: {} cq_global_id: {}", cmd->program_global_id(), cmd->cq_global_id());
+
+    // FIXME - get cq object from global CQ map instead.
+    CommandQueue &cq = this->device_->command_queue(cmd->cq_global_id());
+    EnqueueProgram(cq, *program, cmd->blocking());
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.

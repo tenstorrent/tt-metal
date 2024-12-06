@@ -59,6 +59,12 @@ table CreateProgramCommand {
     global_id: uint32;
 }
 
+table EnqueueProgramCommand {
+    cq_global_id: uint32;       // reference to CommandQueue
+    program_global_id: uint32;  // Reference to Program
+    blocking: bool;
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
@@ -69,7 +75,8 @@ union CommandType {
     EnqueueWriteBufferCommand,
     EnqueueReadBufferCommand,
     FinishCommand,
-    CreateProgramCommand
+    CreateProgramCommand,
+    EnqueueProgramCommand
 }
 
 table Command {
