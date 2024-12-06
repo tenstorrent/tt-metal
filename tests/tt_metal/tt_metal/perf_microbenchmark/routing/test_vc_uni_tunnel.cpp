@@ -270,10 +270,10 @@ int main(int argc, char **argv) {
                     tx_pkt_dest_size_choice, // 19: pkt_dest_size_choice
                     tx_data_sent_per_iter_low, // 20: data_sent_per_iter_low
                     tx_data_sent_per_iter_high, // 21: data_sent_per_iter_high
-                    input_scratch_buffers_left.at("traffic_gen_tx")[i], // 22: traffic_gen_input_scratch_buffer_addr
-                    output_scratch_buffers_left.at("traffic_gen_tx_mock")[i], // 23: traffic_gen_input_mock_remote_scratch_buffer_addr
-                    output_scratch_buffers_left.at("traffic_gen_tx")[i], // 24: traffic_gen_output_scratch_buffer_addr
-                    input_scratch_buffers_left.at("vc_packet_router")[i], // 25: traffic_gen_output_remote_scratch_buffer_addr
+                    input_scratch_buffers_left.at("traffic_gen_tx")[i], // 22: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers_left.at("traffic_gen_tx_mock")[i], // 23: traffic_gen_input_mock_remote_ptrs_addr
+                    output_scratch_buffers_left.at("traffic_gen_tx")[i], // 24: traffic_gen_output_ptrs_addr
+                    input_scratch_buffers_left.at("vc_packet_router")[i], // 25: traffic_gen_output_remote_ptrs_addr
                 };
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
@@ -315,8 +315,8 @@ int main(int argc, char **argv) {
                     dest_endpoint_start_id + i, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000 * 4, // 17: timeout_cycles
                     rx_disable_header_check, // 18: disable_header_check
-                    input_scratch_buffers_right.at("traffic_gen_rx")[i], // 19: traffic_gen_input_scratch_buffer_addr
-                    output_scratch_buffers_right.at("vc_packet_router")[i], // 20: traffic_gen_input_remote_scratch_buffer_addr
+                    input_scratch_buffers_right.at("traffic_gen_rx")[i], // 19: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers_right.at("vc_packet_router")[i], // 20: traffic_gen_input_remote_ptrs_addr
                 };
 
             log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);

@@ -4,6 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
+
+#ifdef FD_CORE_TYPE
+constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
+#endif
+
 constexpr uint32_t NUM_TUNNEL_QUEUES_BIDIR = 2;
 
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
@@ -45,10 +51,11 @@ enum DispatchPacketFlag : uint32_t {
 };
 
 enum DispatchRemoteNetworkType : uint8_t {
-    NOC0 = 0,
-    NOC1 = 1,
-    ETH = 2,
-    NONE = 3
+    SKIP = 0, // No queue. Will be skipped during queue looping
+    NOC0 = 1,
+    NOC1 = 2,
+    ETH  = 3,
+    NONE = 4,
 };
 
 
@@ -131,26 +138,26 @@ struct packet_queue_scratch_buffer_layout_t {
     static constexpr uint32_t ETH_RECV_OFFSET = 112;
 
     static volatile uint32_t* get_wptr(uint32_t base_addr) {
-        return reinterpret_cast<uint32_t*>(base_addr + WPTR_OFFSET);
+        return reinterpret_cast<volatile uint32_t*>(base_addr + WPTR_OFFSET);
     }
 
     static volatile uint32_t* get_rptr_sent(uint32_t base_addr) {
-        return reinterpret_cast<uint32_t*>(base_addr + RPTR_SENT_OFFSET);
+        return reinterpret_cast<volatile uint32_t*>(base_addr + RPTR_SENT_OFFSET);
     }
 
     static volatile uint32_t* get_rptr_cleared(uint32_t base_addr) {
-        return reinterpret_cast<uint32_t*>(base_addr + RPTR_CLEARED_OFFSET);
+        return reinterpret_cast<volatile uint32_t*>(base_addr + RPTR_CLEARED_OFFSET);
     }
 
-    static volatile uint32_t* get_shadow_remote_wptr(uint32_t base_addr) {
+    static uint32_t* get_shadow_remote_wptr(uint32_t base_addr) {
         return reinterpret_cast<uint32_t*>(base_addr + SHADOW_REMOTE_WPTR_OFFSET);
     }
 
-    static volatile uint32_t* get_shadow_remote_rptr_sent(uint32_t base_addr) {
+    static uint32_t* get_shadow_remote_rptr_sent(uint32_t base_addr) {
         return reinterpret_cast<uint32_t*>(base_addr + SHADOW_REMOTE_RPTR_SENT_OFFSET);
     }
 
-    static volatile uint32_t* get_shadow_remote_rptr_cleared(uint32_t base_addr) {
+    static uint32_t* get_shadow_remote_rptr_cleared(uint32_t base_addr) {
         return reinterpret_cast<uint32_t*>(base_addr + SHADOW_REMOTE_RPTR_CLEARED_OFFSET);
     }
 

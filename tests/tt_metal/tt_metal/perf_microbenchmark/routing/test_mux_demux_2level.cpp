@@ -106,6 +106,7 @@ int main(int argc, char **argv) {
 
     const auto output_scratch_buffers = make_buffer_addresses_for_test(output_scratch_buffer_base_addr, packet_queue_scratch_buffer_size, {
         { "traffic_gen_tx", num_src_endpoints },
+        { "traffic_gen_tx_mock", num_src_endpoints },
         { "mux_l1", num_mux_l1 },
         { "mux_l2", num_mux_l2 },
         { "demux_l1", num_demux_l2 },
@@ -196,9 +197,10 @@ int main(int argc, char **argv) {
                     0, // 19: pkt_dest_size_choice
                     0, // 20: data_sent_per_iter_low
                     0, // 21: data_sent_per_iter_high
-                    input_scratch_buffers.at("traffic_gen_tx")[i], // 22: traffic_gen_input_scratch_buffer_addr
-                    output_scratch_buffers.at("traffic_gen_tx")[i], // 23: traffic_gen_output_scratch_buffer_addr
-                    input_scratch_buffers.at("mux_l1")[i], // 24: traffic_gen_output_remote_scratch_buffer_addr
+                    input_scratch_buffers.at("traffic_gen_tx")[i], // 22: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers.at("traffic_gen_tx_mock")[i], // 23: traffic_gen_input_mock_remote_ptrs_addr
+                    output_scratch_buffers.at("traffic_gen_tx")[i], // 24: traffic_gen_output_ptrs_addr
+                    input_scratch_buffers.at("mux_l1")[i], // 25: traffic_gen_output_remote_ptrs_addr
                 };
             log_info(LogTest, "run TX {} at x={},y={} (phys x={},y={})",
                             i, tx_core[i].x, tx_core[i].y, tx_phys_core[i].x, tx_phys_core[i].y);
@@ -239,8 +241,8 @@ int main(int argc, char **argv) {
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
                     0, // 18: disable_header_check
-                    input_scratch_buffers.at("traffic_gen_rx")[i], // 19: traffic_gen_input_scratch_buffer_addr
-                    output_scratch_buffers.at("demux_l2")[i], // 20: traffic_gen_input_remote_scratch_buffer_addr
+                    input_scratch_buffers.at("traffic_gen_rx")[i], // 19: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers.at("demux_l2")[i], // 20: traffic_gen_input_remote_ptrs_addr
                 };
             log_info(LogTest, "run RX {} at x={},y={} (phys x={},y={})",
                     i, rx_core[i].x, rx_core[i].y, rx_phys_core[i].x, rx_phys_core[i].y);

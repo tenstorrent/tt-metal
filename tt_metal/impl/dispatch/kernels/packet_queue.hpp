@@ -18,8 +18,6 @@
 
 #include "risc_attribs.h"
 
-constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
 
 constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NUM_WR_CMD_BUFS-1)*(NOC_MAX_BURST_WORDS*NOC_WORD_BYTES)/PACKET_WORD_SIZE_BYTES;
@@ -122,8 +120,8 @@ public:
               uint8_t remote_y,
               uint8_t remote_queue_id,
               DispatchRemoteNetworkType remote_update_network_type,
-              uint32_t scratch_buffer_addr,
-              uint32_t remote_scratch_buffer_addr,
+              uint32_t ptrs_addr,
+              uint32_t remote_ptrs_addr,
               bool cb_mode,
               uint8_t cb_mode_local_sem_id,
               uint8_t cb_mode_remote_sem_id,
@@ -143,24 +141,24 @@ public:
         this->cb_mode_page_size_words = (((uint32_t)0x1) << cb_mode_log_page_size) / PACKET_WORD_SIZE_BYTES;
 
         WAYPOINT("PQA1");
-        ASSERT(remote_scratch_buffer_addr != 0);
+        ASSERT(remote_ptrs_addr != 0);
         WAYPOINT("PQA2");
-        ASSERT(scratch_buffer_addr != 0);
+        ASSERT(ptrs_addr != 0);
 
-        this->remote_scratch_buffer_wptr_addr         = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_wptr(remote_scratch_buffer_addr));
-        this->remote_scratch_buffer_rptr_sent_addr    = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_rptr_sent(remote_scratch_buffer_addr));
-        this->remote_scratch_buffer_rptr_cleared_addr = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_rptr_cleared(remote_scratch_buffer_addr));
-        this->remote_scratch_buffer_sent_addr         = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_eth_sent(remote_scratch_buffer_addr));
-        this->remote_scratch_buffer_recv_addr         = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_eth_recv(remote_scratch_buffer_addr));
+        this->remote_scratch_buffer_wptr_addr         = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_wptr(remote_ptrs_addr));
+        this->remote_scratch_buffer_rptr_sent_addr    = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_rptr_sent(remote_ptrs_addr));
+        this->remote_scratch_buffer_rptr_cleared_addr = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_rptr_cleared(remote_ptrs_addr));
+        this->remote_scratch_buffer_sent_addr         = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_eth_sent(remote_ptrs_addr));
+        this->remote_scratch_buffer_recv_addr         = reinterpret_cast<uint32_t>(packet_queue_scratch_buffer_layout_t::get_eth_recv(remote_ptrs_addr));
 
-        this->wptr                       = packet_queue_scratch_buffer_layout_t::get_wptr(scratch_buffer_addr);
-        this->rptr_sent                  = packet_queue_scratch_buffer_layout_t::get_rptr_sent(scratch_buffer_addr);
-        this->rptr_cleared               = packet_queue_scratch_buffer_layout_t::get_rptr_cleared(scratch_buffer_addr);
-        this->shadow_remote_wptr         = packet_queue_scratch_buffer_layout_t::get_shadow_remote_wptr(scratch_buffer_addr);
-        this->shadow_remote_rptr_sent    = packet_queue_scratch_buffer_layout_t::get_shadow_remote_rptr_sent(scratch_buffer_addr);
-        this->shadow_remote_rptr_cleared = packet_queue_scratch_buffer_layout_t::get_shadow_remote_rptr_cleared(scratch_buffer_addr);
-        this->sent                       = packet_queue_scratch_buffer_layout_t::get_eth_sent(scratch_buffer_addr);
-        this->recv                       = packet_queue_scratch_buffer_layout_t::get_eth_recv(scratch_buffer_addr);
+        this->wptr                       = packet_queue_scratch_buffer_layout_t::get_wptr(ptrs_addr);
+        this->rptr_sent                  = packet_queue_scratch_buffer_layout_t::get_rptr_sent(ptrs_addr);
+        this->rptr_cleared               = packet_queue_scratch_buffer_layout_t::get_rptr_cleared(ptrs_addr);
+        this->shadow_remote_wptr         = packet_queue_scratch_buffer_layout_t::get_shadow_remote_wptr(ptrs_addr);
+        this->shadow_remote_rptr_sent    = packet_queue_scratch_buffer_layout_t::get_shadow_remote_rptr_sent(ptrs_addr);
+        this->shadow_remote_rptr_cleared = packet_queue_scratch_buffer_layout_t::get_shadow_remote_rptr_cleared(ptrs_addr);
+        this->sent                       = packet_queue_scratch_buffer_layout_t::get_eth_sent(ptrs_addr);
+        this->recv                       = packet_queue_scratch_buffer_layout_t::get_eth_recv(ptrs_addr);
 
         // Reset local values
         *this->wptr = 0;
@@ -530,8 +528,8 @@ public:
               uint8_t remote_y,
               uint8_t remote_queue_id,
               DispatchRemoteNetworkType remote_update_network_type,
-              uint32_t scratch_buffer_addr,
-              uint32_t remote_scratch_buffer_addr,
+              uint32_t ptrs_addr,
+              uint32_t remote_ptrs_addr,
               bool packetizer_input = false,
               uint8_t packetizer_input_log_page_size = 0,
               uint8_t packetizer_input_sem_id = 0,
@@ -541,8 +539,8 @@ public:
 
         packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words, true,
                                    remote_x, remote_y, remote_queue_id, remote_update_network_type,
-                                   scratch_buffer_addr,
-                                   remote_scratch_buffer_addr,
+                                   ptrs_addr,
+                                   remote_ptrs_addr,
                                    packetizer_input,
                                    packetizer_input_sem_id,
                                    packetizer_input_remote_sem_id,
@@ -810,8 +808,8 @@ public:
               DispatchRemoteNetworkType remote_update_network_type,
               packet_input_queue_state_t* input_queue_array,
               uint32_t num_input_queues,
-              uint32_t scratch_buffer_addr,
-              uint32_t remote_scratch_buffer_addr,
+              uint32_t ptrs_addr,
+              uint32_t remote_ptrs_addr,
               bool unpacketizer_output = false,
               uint16_t unpacketizer_output_log_page_size = 0,
               uint8_t unpacketizer_output_sem_id = 0,
@@ -820,8 +818,8 @@ public:
 
         packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words, false,
                                    remote_x, remote_y, remote_queue_id, remote_update_network_type,
-                                   scratch_buffer_addr,
-                                   remote_scratch_buffer_addr,
+                                   ptrs_addr,
+                                   remote_ptrs_addr,
                                    unpacketizer_output, unpacketizer_output_sem_id,
                                    unpacketizer_output_remote_sem_id,
                                    unpacketizer_output_log_page_size);
