@@ -8,6 +8,7 @@
 
 #include "conv2d_utils.hpp"
 #include "common/constants.hpp"
+#include "common/logger.hpp"
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -50,6 +51,18 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
     while ((padded_num - num) >= (int)(padded_num / divisor)) {
         divisor = divisor - 1;
         padded_num = round_up(num, divisor);
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, uint32_t start_divisor, uint32_t mult) {
+    uint32_t divisor = start_divisor;
+    uint32_t big_divisor = divisor * mult;
+    uint32_t padded_num = round_up(num, big_divisor);
+    while ((padded_num - num) >= (int)(padded_num / big_divisor)) {
+        divisor = divisor - 1;
+        big_divisor = divisor * mult;
+        padded_num = round_up(num, big_divisor);
     }
     return divisor;
 }
@@ -136,7 +149,8 @@ ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    uint32_t act_block_h_ntiles) {
 
     uint32_t effective_tile_height = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = is_out_tiled ? tt::constants::TILE_WIDTH : 1;
@@ -148,7 +162,7 @@ ParallelConfig determine_parallel_config(
     uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
     CoreRangeSet grid;
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, max_num_cores);
+        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(out_nhw_ntiles, max_num_cores, act_block_h_ntiles);
         grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
@@ -563,6 +577,9 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
                 device->compute_with_storage_grid_size(),
                 block_shard_orientation);
         } else {
+            uint32_t act_block_h_override_ntile = conv_config.act_block_h_override == 0
+                                                      ? 1
+                                                      : conv_config.act_block_h_override / tt::constants::TILE_HEIGHT;
             optimal_parallel_config = determine_parallel_config(
                 shard_layout,
                 batch_size,
@@ -573,7 +590,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
                 device->compute_with_storage_grid_size(),
                 block_shard_orientation,
                 !is_mm_conv,
-                !use_non_tile_height);
+                !use_non_tile_height,
+                act_block_h_override_ntile);
         }
 
         if (conv_config.override_sharding_config) {
