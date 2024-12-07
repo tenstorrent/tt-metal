@@ -163,7 +163,7 @@ def test_time_sharded_attnention_hwb(
         height_per_core = seq_len // 64
         output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
         output_shard_spec = ttnn.ShardSpec(
-            output_shard_grid, [height_per_core, seq_len], ttnn.ShardOrientation.ROW_MAJOR, False
+            output_shard_grid, [height_per_core, seq_len], ttnn.ShardOrientation.ROW_MAJOR
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
@@ -537,7 +537,7 @@ def test_cross_attnention(
         else:
             output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
             output_shard_spec = ttnn.ShardSpec(
-                output_shard_grid, [height_per_core, kv_len], ttnn.ShardOrientation.COL_MAJOR, False
+                output_shard_grid, [height_per_core, kv_len], ttnn.ShardOrientation.COL_MAJOR
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
@@ -744,7 +744,7 @@ def test_attention(
         else:
             output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
             output_shard_spec = ttnn.ShardSpec(
-                output_shard_grid, [height_per_core, seq_len], ttnn.ShardOrientation.COL_MAJOR, False
+                output_shard_grid, [height_per_core, seq_len], ttnn.ShardOrientation.COL_MAJOR
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec

@@ -37,9 +37,7 @@ def test_ttnn_reallocate(device, mem_config, num_allocs):
 
     # If sharded, creat actual memory config
     if mem_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-        shard_spec = ttnn.ShardSpec(
-            shard_grid, [batch * height * depth // 8, width], ttnn.ShardOrientation.ROW_MAJOR, False
-        )
+        shard_spec = ttnn.ShardSpec(shard_grid, [batch * height * depth // 8, width], ttnn.ShardOrientation.ROW_MAJOR)
         mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,

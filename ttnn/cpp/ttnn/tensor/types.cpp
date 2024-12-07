@@ -291,7 +291,6 @@ void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_
         }
         output_stream.write(reinterpret_cast<const char*>(&shard_spec.shape), sizeof(std::array<uint32_t, 2>));
         output_stream.write(reinterpret_cast<const char*>(&shard_spec.orientation), sizeof(ShardOrientation));
-        output_stream.write(reinterpret_cast<const char*>(&shard_spec.halo), sizeof(bool));
     }
 }
 
@@ -322,7 +321,6 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
         std::set<CoreRange> core_ranges;
         std::array<uint32_t, 2> shape;
         ShardOrientation orientation;
-        bool halo;
 
         input_stream.read(reinterpret_cast<char*>(&num_core_ranges), sizeof(std::size_t));
         for (auto index = 0; index < num_core_ranges; index++) {
@@ -332,8 +330,7 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
         }
         input_stream.read(reinterpret_cast<char*>(&shape), sizeof(std::array<uint32_t, 2>));
         input_stream.read(reinterpret_cast<char*>(&orientation), sizeof(ShardOrientation));
-        input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
-        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation, halo};
+        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation};
     }
     return MemoryConfig{memory_layout, buffer_type, shard_spec};
 }

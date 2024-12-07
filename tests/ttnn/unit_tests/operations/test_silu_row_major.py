@@ -97,7 +97,7 @@ def test_silu_multi_core(device, input_shape, shard_strategy):
         pytest.skip("Shard sizes that are not multiples of 1024 are not supported.")
     shard_shape = (shard_height, shard_width)
     logger.debug(f"shard_shape={shard_shape}")
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     logger.debug(f"in_shard_mem_config: {in_sharded_mem_config}")

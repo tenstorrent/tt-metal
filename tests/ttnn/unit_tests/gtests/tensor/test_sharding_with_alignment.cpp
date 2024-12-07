@@ -767,7 +767,6 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(48 * 56, 48), grid_size, /*row_wise=*/true),
                             {48, 32},
                             ShardOrientation::ROW_MAJOR,
-                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -791,7 +790,6 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(48 * 56, 64), grid_size, /*row_wise=*/true),
                             {64, 32},
                             ShardOrientation::ROW_MAJOR,
-                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -837,7 +835,6 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(5, 1), grid_size, /*row_wise=*/true),
                             {20, 1},
                             ShardOrientation::ROW_MAJOR,
-                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -861,7 +858,6 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(5, 4), grid_size, /*row_wise=*/true),
                             {20, 4},
                             ShardOrientation::ROW_MAJOR,
-                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -906,8 +902,7 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(8 * 36, 48) * tt::div_up(32, 10), grid_size, /*row_wise=*/true),
                             {48, 10},
                             {64, 48},
-                            ShardOrientation::ROW_MAJOR,
-                            false}
+                            ShardOrientation::ROW_MAJOR}
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
@@ -930,8 +925,7 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(2 * 10, 5) * tt::div_up(5, 2), grid_size, /*row_wise=*/true),
                             {5, 2},
                             {7, 3},
-                            ShardOrientation::ROW_MAJOR,
-                            false}
+                            ShardOrientation::ROW_MAJOR}
                     }
             },
             CreateShardedTensorWithAlignmentExpected{

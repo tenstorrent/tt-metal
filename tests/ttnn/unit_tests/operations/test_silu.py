@@ -89,7 +89,7 @@ def run_elt_silu_relu(
     logger.debug(f"shard_grid={shard_grid}")
     logger.debug(f"input_shard_height={shard_height}, input_shard_width={shard_width}")
 
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     logger.debug(f"shard_memory_layout={in_sharded_mem_config}")
