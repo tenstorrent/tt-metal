@@ -13,19 +13,23 @@ namespace tt::tt_metal {
 
 enum DispatchWorkerType : uint32_t {
     PREFETCH = 0,
-    PREFETCH_D = 1,
-    DISPATCH = 2,
-    DISPATCH_D = 3,
-    DISPATCH_S = 4,
-    MUX = 5,
-    MUX_D = 6,
-    DEMUX = 7,
-    DEMUX_D = 8,
-    US_TUNNELER_LOCAL = 9,
-    US_TUNNELER_REMOTE = 10,
-    DS_TUNNELER_LOCAL = 11,
-    DS_TUNNELER_REMOTE = 12,
-    COUNT = 13
+    PREFETCH_HD = 1,
+    PREFETCH_H = 2,
+    PREFETCH_D = 3,
+    DISPATCH = 4,
+    DISPATCH_HD = 5,
+    DISPATCH_H = 6,
+    DISPATCH_D = 7,
+    DISPATCH_S = 8,
+    MUX = 9,
+    MUX_D = 10,
+    DEMUX = 11,
+    DEMUX_D = 12,
+    US_TUNNELER_LOCAL = 13,
+    US_TUNNELER_REMOTE = 14,
+    PACKET_ROUTER_MUX = 15,
+    PACKET_ROUTER_DEMUX = 16,
+    COUNT = 17
 };
 
 enum DispatchCoreType : uint32_t {
