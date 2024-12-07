@@ -128,8 +128,7 @@ OptimizedConvBlockConfig get_opt_block_config(
         in_channels,
         get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
 
-    uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-        conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t nhw_out_padded_ntile = conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
 
     return determine_per_core_conv_block_config(
         parallel_config,

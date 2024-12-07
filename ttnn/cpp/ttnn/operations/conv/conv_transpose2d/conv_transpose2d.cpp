@@ -248,7 +248,7 @@ Result conv_transpose2d(
             parallel_config,
             opt_conv_op_parallel_config,
             in_channels_padded,
-            (input_tensor_post_tm.shard_spec().value().shape[0] * get_num_cores_nhw_from_parallel_config(parallel_config)) / tt::constants::TILE_HEIGHT,
+            input_tensor_post_tm.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT,
             conv_config.act_block_h_override,
             conv_config.act_block_w_div,
             kernel_size[0],
