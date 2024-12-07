@@ -51,7 +51,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::IDENTITY_UINT32: defines["SFPU_OP_IDENTITY_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR:
         case UnaryOpType::FLOOR_FLOAT32: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
-        case UnaryOpType::CEIL: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
+        case UnaryOpType::CEIL:
         case UnaryOpType::CEIL_FLOAT32: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
         case UnaryOpType::RDIV: break;
         case UnaryOpType::RSUB: defines["SFPU_OP_REVERSE_FAMILY_INCLUDE"] = "1";
@@ -282,6 +282,11 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
         case UnaryOpType::SIGNBIT:
             op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
+            break;
+        case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
+        case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
+        case UnaryOpType::ISFINITE:
+            op_init_and_name = {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)};
             break;
         case UnaryOpType::ISINF: op_init_and_name = {"isinf_tile_init();", fmt::format("isinf_tile({});", idst)}; break;
         case UnaryOpType::ISPOSINF:
