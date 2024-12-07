@@ -119,7 +119,6 @@ def run_reduce_scatter_test(
             shard_grid,
             input_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         input_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
@@ -133,7 +132,6 @@ def run_reduce_scatter_test(
             shard_grid,
             output_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         output_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
@@ -616,7 +614,6 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
         shard_grid,
         tuple(input_shard_shape),
         orientation,
-        False,
     )
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(

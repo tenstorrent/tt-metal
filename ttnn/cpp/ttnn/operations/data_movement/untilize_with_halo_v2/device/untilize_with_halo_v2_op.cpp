@@ -77,7 +77,6 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(
     auto out_mem_config = out_mem_config_;
     out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], ncores_nhw_);
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
-    out_mem_config.shard_spec->halo = true;
     return {create_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config)};
 }
 
