@@ -77,6 +77,32 @@ struct BinaryDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
+    struct ElementWiseMultiCoreSfpu {
+        struct shared_variables_t {
+            KernelHandle binary_reader_kernel_id;
+            KernelHandle unary_writer_kernel_id;
+            KernelHandle eltwise_binary_kernel_id;
+            CBHandle cb_src0;
+            CBHandle cb_src1;
+            CBHandle cb_output;
+            CoreCoord compute_with_storage_grid_size;
+            uint32_t src0_single_tile_size;
+            uint32_t src1_single_tile_size;
+            uint32_t dst_single_tile_size;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
     struct BroadcastWidthMultiCore {
         struct shared_variables_t {
             KernelHandle binary_reader_kernel_id;
@@ -192,6 +218,7 @@ struct BinaryDeviceOperation {
 
     using program_factory_t = std::variant<
         ElementWiseMultiCore,
+        ElementWiseMultiCoreSfpu,
         BroadcastWidthMultiCore,
         BroadcastHeightMultiCore,
         BroadcastHeightAndWidthMultiCore,
