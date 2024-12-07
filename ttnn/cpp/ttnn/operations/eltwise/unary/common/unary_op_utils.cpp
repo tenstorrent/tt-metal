@@ -49,7 +49,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::DIV_UNARY_SFPU: defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1"; break;
         case UnaryOpType::IDENTITY:
         case UnaryOpType::IDENTITY_UINT32: defines["SFPU_OP_IDENTITY_INCLUDE"] = "1"; break;
-        case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
+        case UnaryOpType::FLOOR:
         case UnaryOpType::FLOOR_FLOAT32: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
         case UnaryOpType::RDIV: break;
         case UnaryOpType::RSUB: defines["SFPU_OP_REVERSE_FAMILY_INCLUDE"] = "1";
