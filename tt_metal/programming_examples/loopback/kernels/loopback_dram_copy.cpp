@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "debug/dprint.h"  // required in all kernels using DPRINT
+
 
 void kernel_main() {
     std::uint32_t l1_buffer_addr        = get_arg_val<uint32_t>(0);
@@ -16,6 +18,9 @@ void kernel_main() {
     std::uint32_t dram_dst_noc_y        = get_arg_val<uint32_t>(6);
 
     std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(7);
+    DPRINT << "KCM Inside kernel l1_buffer_addr: " << l1_buffer_addr << ENDL();
+    DPRINT << "KCM Inside kernel dram_buffer_src_addr: " << dram_buffer_src_addr << ENDL();
+    DPRINT << "KCM Inside kernel dram_buffer_dst_addr: " << dram_buffer_dst_addr << ENDL();
 
     std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
     noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
