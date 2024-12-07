@@ -23,4 +23,9 @@ inline void llk_math_eltwise_unary_sfpu_floor(uint dst_index, int vector_mode = 
         ckernel::sfpu::calculate_floor<APPROXIMATE>, dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_floor_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_floor_float32<APPROXIMATE>, dst_index, vector_mode);
+}
 }  // namespace ckernel
