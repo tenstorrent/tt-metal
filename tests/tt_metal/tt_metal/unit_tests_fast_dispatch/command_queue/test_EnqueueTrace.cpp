@@ -83,6 +83,38 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
     return program;
 }
 
+// Single RISC, no CB's here. Very simple.
+Program create_simple_datamovement_program(Buffer& input, Buffer& output, Buffer &l1_buffer) {
+
+    Program program = CreateProgram();
+    Device* device = input.device();
+    CoreCoord worker = {0, 0};
+
+    auto dram_copy_kernel = CreateKernel(
+        program,
+        "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+        worker,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+    );
+
+    // Handle Runtime Args
+    const std::vector<uint32_t> runtime_args = {
+        l1_buffer.address(),
+        input.address(),
+        static_cast<uint32_t>(input.noc_coordinates().x),
+        static_cast<uint32_t>(input.noc_coordinates().y),
+        output.address(),
+        static_cast<uint32_t>(output.noc_coordinates().x),
+        static_cast<uint32_t>(output.noc_coordinates().y),
+        input.size()
+    };
+
+    // FIXE - This is different interface than above and doesn't take Buffer.
+    SetRuntimeArgs(program, dram_copy_kernel, worker, runtime_args);
+
+    return program;
+}
+
 // Just write, limited error checking.
 bool writeBlobToFile(const std::string& filename, const std::vector<uint8_t>& blob) {
     log_info(tt::LogTest, "Writing blob of {} bytes to file: {}", blob.size(), filename);
@@ -310,6 +342,61 @@ TEST_F(SingleDeviceTraceFixture, WriteReadSanity) {
         }
     }
 
+    Finish(command_queue);
+
+    if (lightmetal_capture) {
+        auto blob = LightMetalEndCapture(this->device_);
+        writeBlobToFile(trace_bin_path, blob);
+        if (lightmetal_run) {
+            TearDown();
+            runLightMetalBinary(blob);
+        }
+    }
+}
+
+// Simple bringup sanity test case.
+TEST_F(SingleDeviceTraceFixture, DataMovementSanity) {
+    Setup(2048);
+
+    bool lightmetal_capture = std::getenv("LIGHTMETAL_CAPTURE");
+    bool lightmetal_run = std::getenv("LIGHTMETAL_RUN");
+    std::string trace_bin_path = "/tmp/light_metal_trace_capture_ttmetal.bin";
+
+    if (lightmetal_capture) {
+        LightMetalBeginCapture(this->device_);
+    }
+
+    // TODO - Add loop for further testing once initial case here works.
+
+    uint32_t size_bytes = 64; // 16 elements.
+    auto input = CreateBuffer(InterleavedBufferConfig{this->device_, size_bytes, size_bytes, BufferType::DRAM});
+    auto output = CreateBuffer(InterleavedBufferConfig{this->device_, size_bytes, size_bytes, BufferType::DRAM});
+    auto l1_buffer = CreateBuffer(InterleavedBufferConfig{this->device_, size_bytes, size_bytes, BufferType::L1});
+    log_info(tt::LogTest, "Created 3 Buffers. input: 0x{:x} output: 0x{:x} l1_buffer: 0x{:x}", input->address(), output->address(), l1_buffer->address());
+
+    CommandQueue& command_queue = this->device_->command_queue();
+
+    Program simple_program = create_simple_datamovement_program(*input, *output, *l1_buffer);
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
+
+    vector<uint32_t> eager_output_data;
+    eager_output_data.resize(input_data.size());
+
+    // Write data to buffer, enqueue program, then readback and verify.
+    EnqueueWriteBuffer(command_queue, *input, input_data.data(), true);
+    EnqueueProgram(command_queue, simple_program, true);
+    EnqueueReadBuffer(command_queue, *output, eager_output_data.data(), true);
+    EXPECT_TRUE(eager_output_data == input_data);
+
+    // For dev/debug go ahead and print the results
+    for (size_t i = 0; i < eager_output_data.size(); i++) {
+        log_info(tt::LogMetalTrace, "i: {:3d} input: {} output: {}", i, input_data[i], eager_output_data[i]);
+    }
+
+    // Done
     Finish(command_queue);
 
     if (lightmetal_capture) {
