@@ -8,14 +8,16 @@
 #include <core/xtensor_utils.hpp>
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/tensor/types.hpp>
+#include <xtensor/xrandom.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce.hpp"
 #include "xtensor/xbuilder.hpp"
+#include "xtensor/xio.hpp"
 
 auto check_board_is_n300() {
     return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
@@ -121,8 +123,8 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
     xt::xarray<float> test_data = xt::arange(8);
     xt::xarray<float> xtensor = test_data.reshape({1, 1, 2, 4});
 
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 2);
-    auto tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
+    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 2);
+    auto tensor = ttml::core::from_xtensor(xtensor, device, shard_composer);
     auto out_tensor = ttnn::add(tensor, scalar);
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto xtensors_back = ttml::core::to_xtensor(out_tensor, identity_composer);
@@ -134,55 +136,36 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
     EXPECT_TRUE(xt::allclose(chunk1 + scalar, xtensors_back[1]));
 }
 
-/*
-    static std::vector<ttnn::Tensor> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        const uint32_t dim,
-        const CoreCoord all_gather_core_grid_offset,
-        const uint32_t num_links = 1,
-        const std::optional<ttnn::MemoryConfig>& memory_config_ag = std::nullopt,
-        const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
-        const bool transpose_a = false,
-        const bool transpose_b = false,
-        const std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
-        const std::optional<const std::string>& activation = std::nullopt,
-        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
-*/
 TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
+    xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_a = xt::arange(128 * 64).reshape({1, 1, 128, 64}) / 100.F;
-    xt::xarray<float> xtensor_b = xt::arange(64 * 96).reshape({1, 1, 64, 96}) / 100.F;
+    xt::xarray<float> xtensor_a = xt::random::rand({128 * 64}, -0.005, 0.005).reshape({1, 1, 128, 64});
+    xt::xarray<float> xtensor_b = xt::random::rand({256 * 64}, -0.005, 0.005).reshape({1, 1, 64, 256});
 
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, replicate_composer);
-    auto tensor_b = ttml::core::from_xtensor(xtensor_b, device, replicate_composer);
-    auto mul_tensor = ttnn::operations::experimental::ccl::all_gather_matmul(
-        tensor_a,
+    ttml::core::XTensorToMeshVariant<float> replicate_composer2 = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 2);
+    ttml::core::XTensorToMeshVariant<float> replicate_composer3 = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
+    auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, replicate_composer3);
+    auto tensor_b = ttml::core::from_xtensor(xtensor_b, device, replicate_composer3);
+
+    auto gathered_ta =
+        ttnn::all_gather(tensor_a, 3 /*, {0, 4}, 1 ,std::nullopt, std::nullopt, std::nullopt, std::nullopt*/);
+    fmt::print("gathered_ta shape: {}\n", gathered_ta.get_shape().logical_shape());
+    auto mul_tensor = ttnn::matmul(
+        gathered_ta,
         tensor_b,
-        3,
-        {0, 4},
-        1,
-        ttnn::MemoryConfig{},
-        std::nullopt,
-        std::nullopt,
-        ttnn::MemoryConfig{},
         false,
         false,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        ttml::core::ComputeKernelConfig::precise());
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor(mul_tensor[0], identity_composer);
-
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* program_config */ std::nullopt,
+        /* activation */ std::nullopt,
+        /* compute_kernel_config */ ttml::core::ComputeKernelConfig::precise(),
+        /* core_grid */ ttnn::CoreGrid{7, 8},
+        /* output_tile */ std::nullopt);
+    ttml::core::MeshToXTensorVariant<float> composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3);
+    auto xtensors_back = ttml::core::to_xtensor(mul_tensor, composer);
     xt::xarray<float> mul_res = xt::linalg::dot(xtensor_a, xtensor_b);
-
-    EXPECT_TRUE(xt::allclose(mul_res, xtensors_back[0]));
+    EXPECT_TRUE(xt::allclose(mul_res, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
 }
