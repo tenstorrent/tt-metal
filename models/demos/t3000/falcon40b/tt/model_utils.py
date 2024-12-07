@@ -60,7 +60,6 @@ def memcfg_1d_width_sharded_from_tensor_shape(shape, grid=ttnn.CoreGrid(x=8, y=8
                 shard_width,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 

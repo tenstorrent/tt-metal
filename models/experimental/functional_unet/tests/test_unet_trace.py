@@ -59,7 +59,6 @@ def test_unet_trace(
             ttnn_input.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     dram_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -148,7 +147,6 @@ def test_unet_trace_2cq(
             ttnn_input.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     dram_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -280,7 +278,6 @@ def test_unet_trace_2cq_multi_device(
             ttnn_input.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     dram_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -391,7 +388,6 @@ def test_unet_trace_2cq_same_io(
             ttnn_input.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     dram_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -421,7 +417,6 @@ def test_unet_trace_2cq_same_io(
             output_tensor.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     dram_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec

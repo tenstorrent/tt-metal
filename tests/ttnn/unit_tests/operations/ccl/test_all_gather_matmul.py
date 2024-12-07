@@ -507,7 +507,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
                         128,  # shard width
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             ),
             ttnn.MemoryConfig(
@@ -527,7 +526,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
                         8192 // 8,  # shard_width_hidden_dim_across_8_cores
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             ),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1),

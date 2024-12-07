@@ -146,7 +146,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             }
         )
         n_cores = 64
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
