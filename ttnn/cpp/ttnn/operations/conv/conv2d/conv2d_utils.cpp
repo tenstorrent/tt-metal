@@ -328,7 +328,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const ParallelConfig& parallel_config,
     const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
-    uint32_t padded_output_height_ntiles,
+    uint32_t padded_output_height_ntiles_per_core,
     uint32_t act_block_h_override,
     uint32_t act_block_w_div,
     uint32_t window_h,
@@ -349,15 +349,17 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
             log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
         } else {
             uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles % act_block_h_override_ntiles == 0) {
+            if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
                 act_block_h_ntiles = act_block_h_override_ntiles;
             } else {
+                act_block_h_ntiles = find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
                 log_info(
                     LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles {}, override will "
-                    "be ignored",
+                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
+                    "instead {} was selected as closest valid option!",
                     act_block_h_override_ntiles,
-                    padded_output_height_ntiles);
+                    padded_output_height_ntiles_per_core,
+                    act_block_h_ntiles);
             }
         }
     }
