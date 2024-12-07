@@ -291,7 +291,6 @@ void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_
         }
         output_stream.write(reinterpret_cast<const char*>(&shard_spec.shape), sizeof(std::array<uint32_t, 2>));
         output_stream.write(reinterpret_cast<const char*>(&shard_spec.orientation), sizeof(ShardOrientation));
-        output_stream.write(reinterpret_cast<const char*>(&shard_spec.halo), sizeof(bool));
     }
 }
 

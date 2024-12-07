@@ -47,7 +47,6 @@ struct ShardSpec {
 
     /* The sequence order of the grid cores that the shards are layed out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
-    bool halo = false;
 
     // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt
     ShardMode mode = ShardMode::PHYSICAL;
@@ -59,7 +58,7 @@ struct ShardSpec {
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false,
         const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
     }
 
     ShardSpec(
@@ -68,7 +67,7 @@ struct ShardSpec {
         const std::array<uint32_t, 2> &physical_shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
         TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
     }
 
@@ -78,9 +77,9 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode", "physical_shard_shape");
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "mode", "physical_shard_shape");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo, this->mode, this->physical_shard_shape);
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->mode, this->physical_shard_shape);
     }
 };
 
@@ -112,7 +111,6 @@ struct ShardSpecBuffer {
     CoreRangeSet grid() const { return tensor_shard_spec.grid; }
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
-    bool halo() const { return tensor_shard_spec.halo; }
     void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
     /* Shape in pages of the full tensor, not per core */
