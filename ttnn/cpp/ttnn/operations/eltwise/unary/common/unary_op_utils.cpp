@@ -51,7 +51,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::IDENTITY_UINT32: defines["SFPU_OP_IDENTITY_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR:
         case UnaryOpType::FLOOR_FLOAT32: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
-        case UnaryOpType::CEIL: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
+        case UnaryOpType::CEIL:
         case UnaryOpType::CEIL_FLOAT32: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
         case UnaryOpType::RDIV: break;
         case UnaryOpType::RSUB: defines["SFPU_OP_REVERSE_FAMILY_INCLUDE"] = "1";
