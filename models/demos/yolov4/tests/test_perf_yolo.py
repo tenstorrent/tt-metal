@@ -52,7 +52,7 @@ def test_yolov4(
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-    ttnn_model = TtYOLOv4(weights_pth)
+    ttnn_model = TtYOLOv4(weights_pth, device)
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
 
@@ -91,7 +91,7 @@ def test_yolov4(
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov4(batch_size, model_name):
+def test_perf_device_bare_metal_yolov4(device, batch_size, model_name):
     subdir = model_name
     num_iterations = 1
     margin = 0.03
