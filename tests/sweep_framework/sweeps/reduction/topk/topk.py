@@ -31,9 +31,9 @@ parameters = {
         + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
         + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
         "dim": [-1, -2, -3, -4],
-        "largest": [True],
+        "largest": [True, False],
         "k": [32],  # only k = 32 is supported for now
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
