@@ -73,6 +73,13 @@ table CreateKernelCommand {
     config: KernelConfig;
 }
 
+table SetRuntimeArgsCommand {
+    program_global_id: uint32;  // Reference to Program
+    kernel_global_id: uint32;   // Reference to KernelHandle
+    core_spec: CoreSpec;
+    args: [uint32];             // Arguments to be passed to kernel
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
@@ -85,7 +92,8 @@ union CommandType {
     FinishCommand,
     CreateProgramCommand,
     EnqueueProgramCommand,
-    CreateKernelCommand
+    CreateKernelCommand,
+    SetRuntimeArgsCommand
 }
 
 table Command {
