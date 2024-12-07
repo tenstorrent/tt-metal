@@ -1196,6 +1196,11 @@ void SetRuntimeArgs(
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     stl::Span<const uint32_t> runtime_args) {
+
+    for (uint32_t i=0; i<runtime_args.size(); i++) {
+        log_info(tt::LogMetalTrace, "KCM SetRuntimeArgs i: {} arg: {}", i, runtime_args[i]);
+    }
+
     TRACE_FUNCTION_CALL(captureSetRuntimeArgs, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
     TT_FATAL(
