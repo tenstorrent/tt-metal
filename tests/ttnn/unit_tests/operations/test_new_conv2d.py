@@ -162,7 +162,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -181,6 +181,8 @@ def run_conv(
         debug=debug,
         groups=groups,
         memory_config=memory_config,
+        return_weights_and_bias=True,
+        return_output_dim=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -306,7 +308,7 @@ def run_conv_with_split(
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         # tt_input_tensor_on_device = convs[i].copy_input_to_device(tt_input_tensor)
         # tt_output_tensor_on_device = convs[i](tt_input_tensor_on_device)
-        [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+        [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
             weight_tensor=tt_weight_tensor,
             in_channels=split_input_channels,
@@ -321,6 +323,8 @@ def run_conv_with_split(
             input_width=input_width,
             conv_config=conv_config,
             conv_op_cache=reader_patterns_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
         torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
@@ -638,7 +642,7 @@ def test_conv_ws(
         act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
     )
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -655,6 +659,8 @@ def test_conv_ws(
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -2730,7 +2736,7 @@ def test_shallow_conv_with_tiled_input(device):
 
     tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
 
-    tt_out, out_height, out_width, _, _ = ttnn.conv2d(
+    [tt_out, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_kernel,
         in_channels=in_channels,
@@ -2746,6 +2752,8 @@ def test_shallow_conv_with_tiled_input(device):
         input_width=img_w,
         groups=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_out)
