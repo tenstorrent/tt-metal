@@ -5,6 +5,8 @@
 #include "command_generated.h"
 #include "tt_metal/common/logger.hpp"
 
+#include "tt_metal/tt_stl/span.hpp"
+
 // KCM - Temporary hack for bringup.
 #define ENABLE_TRACING 1
 
@@ -471,4 +473,25 @@ inline void captureCreateKernel(
     auto cmd_offset = tt::target::CreateCreateKernelCommand(fbb, kernel_global_id, program_global_id,
         filename_offset, core_spec_type, core_spec_offset, config_type, config_offset);
     captureCommand(tt::target::CommandType::CreateKernelCommand, cmd_offset.Union());
+}
+
+inline void captureSetRuntimeArgs(
+    const Program &program,
+    KernelHandle kernel_id,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    tt::stl::Span<const uint32_t> runtime_args)
+{
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+
+    uint32_t program_global_id = ctx.getGlobalId(&program);
+    uint32_t kernel_global_id = ctx.getGlobalId(kernel_id);
+    log_info(tt::LogMetalTrace, "captureSetRuntimeArgs: kernel_global_id: {} program_global_id: {} rt_args: {}", kernel_global_id, program_global_id, runtime_args.size());
+
+    auto& fbb = ctx.getBuilder();
+    auto [core_spec_type, core_spec_offset] = toFlatbuffer(fbb, core_spec);
+    auto rt_args_offset = fbb.CreateVector(runtime_args.data(), runtime_args.size());
+
+    auto cmd_offset = tt::target::CreateSetRuntimeArgsCommand(fbb, program_global_id, kernel_global_id, core_spec_type, core_spec_offset, rt_args_offset);
+    captureCommand(tt::target::CommandType::SetRuntimeArgsCommand, cmd_offset.Union());
 }

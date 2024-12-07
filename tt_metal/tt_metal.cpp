@@ -1196,6 +1196,7 @@ void SetRuntimeArgs(
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     stl::Span<const uint32_t> runtime_args) {
+    TRACE_FUNCTION_CALL(captureSetRuntimeArgs, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
