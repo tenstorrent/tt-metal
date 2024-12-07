@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks Pad::create_program(
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         if (input_tensor.is_sharded()) {
-            return detail::pad_rm_sharded(
+            return detail::pad_rm_sharded_stickwise(
                 input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
         } else {
             if (use_multicore) {
