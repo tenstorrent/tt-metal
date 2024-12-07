@@ -136,6 +136,55 @@ def padding_with_torch_padding(padding):
     return (padding, torch_padding)
 
 
+import math
+
+
+def to_wh_sharded(tensor, device):
+    assert tensor.shape.rank == 4, "tensor must be 4D"
+    n, c, h, w = tensor.shape
+    num_cores_x = 8
+    num_cores_y = 8
+    if num_cores_y > device.core_grid.y:
+        num_cores_y = device.core_grid.y
+    shard_h = math.ceil(n * c * h / (num_cores_x * num_cores_y))
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR, False)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)  # ensure we're in RM first.
+    return ttnn.to_memory_config(tensor, sharded_mem_config)
+
+
+# @pytest.mark.parametrize("input_shape",
+#                          [
+#                             (1, 1, 64, 64),
+#                             (1, 1, 128, 128)
+#                          ])
+# @pytest.mark.parametrize("padding,torch_padding", [padding_with_torch_padding([(0, 0), (0, 0), (0, 0), (0, 0)])])
+# @pytest.mark.parametrize("value", [3])
+# @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR])
+def test_pad_rm_sharded_stickwise_first(device, input_shape, padding, torch_padding, value, shard_orient):
+    a = torch.ones(1, 1, 12, 8)
+    b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    b = to_wh_sharded(b, device)
+    c = ttnn.pad(b, [1, 1, 12, 64], [0, 0, 0, 0], 3)
+    print(c)
+    assert 3.0 in ttnn.to_torch(c.cpu()).flatten().tolist()
+
+
+def test_pad_rm_sharded_stickwise_second(device):
+    input_shape = (1, 2, 3, 4)
+    a = torch.ones(input_shape)
+    b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    b = to_wh_sharded(b, device)
+    c = ttnn.pad(b, [1, 2, 32, 32], [0, 0, 0, 0], value=3)
+    print(c)
+    assert 3.0 in ttnn.to_torch(c.cpu()).flatten().tolist()
+
+
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [64])
