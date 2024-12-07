@@ -107,11 +107,25 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
     // of active devices. TODO: read this out of YAML instead of the structs above?
     uint32_t total_devices = tt::Cluster::instance().number_of_user_devices();
+    TT_ASSERT(total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8, "Galaxy not implemented.");
     uint32_t num_devices = device_ids.size();
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
     tt::log_warning("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
     std::vector<dispatch_kernel_node_t> nodes;
+
+    std::set<chip_id_t> mmio_devices;
+    std::set<chip_id_t> remote_devices;
+    for (auto id : device_ids) {
+        if (tt::Cluster::instance().get_associated_mmio_device(id) == id) {
+            mmio_devices.insert(id);
+        } else {
+            remote_devices.insert(id);
+        }
+    }
+    // Supported grid either has one remote per mmio or none
+    tt::log_warning("FD Config: mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
+    TT_ASSERT(mmio_devices.size() == remote_devices.size() or remote_devices.empty(), "Unexpected device grid");
 
     // Helper function to get nodes for single device
     auto populate_single_device = [&]() {
@@ -130,63 +144,50 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
         }
     };
 
-    if (total_devices == 1) { // E150, N150
-        nodes = populate_single_device();
-    } else if (total_devices == 2) { // N300
-        if (num_devices == 1) {
-            nodes = populate_single_device();
-        } else {
-            nodes = (num_hw_cqs == 1) ? two_card_arch_1cq : two_card_arch_2cq;
+    if (remote_devices.empty()) {
+        // MMIO devices only, just replicate a single card arch for each
+        std::vector<dispatch_kernel_node_t> nodes_for_one_mmio = populate_single_device();
+        uint32_t index_offset = 0;
+        for (auto id : mmio_devices) {
+            for (auto node : nodes_for_one_mmio) {
+                node.device_id = id;
+                increment_node_ids(node, index_offset);
+                nodes.push_back(node);
+            }
+            index_offset += nodes_for_one_mmio.size();
         }
-    } else if (total_devices == 8) { // T3K
-        // Need to determine the submesh of devices that are being used. TODO: user to pass in the correct architecture?
-        std::set<chip_id_t> mmio_devices;
-        std::set<chip_id_t> remote_devices;
-        for (auto id : device_ids) {
-            if (tt::Cluster::instance().get_associated_mmio_device(id) == id)
-                mmio_devices.insert(id);
-            else
-                remote_devices.insert(id);
-        }
-        tt::log_warning("T3000, mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
+    } else {
+        // Should be paired mmio/remote devices
+        const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &two_card_arch_1cq : &two_card_arch_2cq;
+        uint32_t index_offset = 0;
+        for (auto mmio_device_id : mmio_devices) {
+            // Find the corresponding remote chip. TODO: update for Galaxy
+            chip_id_t remote_device_id;
+            bool found_remote = false;
+            for (auto id : remote_devices) {
+                if (tt::Cluster::instance().get_associated_mmio_device(id) == mmio_device_id) {
+                    remote_device_id = id;
+                    found_remote = true;
+                    break;
+                }
+            }
+            TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
 
-        // Supported grid either has one remote per mmio or none
-        TT_ASSERT(mmio_devices.size() == remote_devices.size() or remote_devices.empty(), "Unexpected device grid");
-        if (remote_devices.empty()) {
-            // All mmio chips, replicate as required
-            std::vector<dispatch_kernel_node_t> nodes_for_one_mmio = populate_single_device();
-            uint32_t index_offset = 0;
-            for (auto id : mmio_devices) {
-                for (auto node : nodes_for_one_mmio) {
-                    node.device_id = id;
-                    increment_node_ids(node, index_offset);
-                    nodes.push_back(node);
+            // Add dispatch kernels for the mmio/remote pair
+            for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
+                TT_ASSERT(node.device_id == 0 || node.device_id == 1);
+                if (node.device_id == 0) {
+                    node.device_id = mmio_device_id;
+                } else {
+                    node.device_id = remote_device_id;
                 }
-                index_offset += nodes_for_one_mmio.size();
+                increment_node_ids(node, index_offset);
+                nodes.push_back(node);
             }
-        } else {
-            // Paired mmio/remote chips
-            // Here we assume that the mmio chips are enumerated first, and the remote chips are enumerated afterwards
-            // in the same order as they are connected. TODO: This seems to always be the case, but may need to change in the future.
-            const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &two_card_arch_1cq : &two_card_arch_2cq;
-            uint32_t num_mmio_devices = 4;
-            uint32_t index_offset = 0;
-            for (auto mmio_device_id : mmio_devices) {
-                for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
-                    TT_ASSERT(node.device_id == 0 || node.device_id == 1);
-                    if (node.device_id == 0)
-                        node.device_id = mmio_device_id;
-                    else
-                        node.device_id = mmio_device_id + num_mmio_devices;
-                    increment_node_ids(node, index_offset);
-                    nodes.push_back(node);
-                }
-                index_offset += nodes_for_one_mmio->size();
-            }
+            index_offset += nodes_for_one_mmio->size();
         }
-    } else { // TG, TGG
-        TT_FATAL(false, "Not yet implemented!");
     }
+
 #if 0
     for (auto &node : nodes) {
         std::string upstream = "";
